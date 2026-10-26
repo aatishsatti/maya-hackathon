@@ -38,6 +38,7 @@
   const modeNote = $('modeNote');
 
   let call = null;   // active call, or null
+  let mode = 'mock'; // from /api/config
   let gen = 0;       // bumped on every start/end; stale async work checks it
 
   function setState(state, statusKey) {
@@ -71,8 +72,22 @@
 
   // ---- Speaking ----
 
+  let player = null; // current ElevenLabs audio element
+
   function stopSpeaking() {
+    if (player) { player.onended = null; player.onerror = null; player.pause(); player = null; }
     if (window.speechSynthesis) speechSynthesis.cancel();
+  }
+
+  // Real voice: server returns base64 mp3 from ElevenLabs. Resolves true if it played.
+  function playServerAudio(data, myGen, done) {
+    return new Promise((resolve) => {
+      const a = new Audio(`data:${data.audioType};base64,${data.audio}`);
+      player = a;
+      a.onended = () => { player = null; done(); resolve(true); };
+      a.onerror = () => { player = null; resolve(false); };
+      a.play().catch(() => { player = null; resolve(false); });
+    });
   }
 
   // Mock-mode voice. Only a clear female en-US voice is used; never the system default,
@@ -106,12 +121,25 @@
     });
   }
 
-  async function speak(text, myGen) {
+  async function speak(data, myGen) {
+    const text = data.reply;
     setState('speaking');
     captionEl.textContent = `Maya: ${text}`;
     const done = () => {
-      if (myGen === gen && call && orb.dataset.state === 'speaking') setState('listening');
+      if (myGen === gen && call && orb.dataset.state === 'speaking') {
+        if (call.rec) call.heard = '';
+        setState('listening');
+      }
     };
+    if (data.audio) {
+      if (await playServerAudio(data, myGen, done)) return;
+      data = { ...data, ttsError: 'Audio could not be played' };
+    }
+    if (data.ttsError) {
+      // ElevenLabs failed: browser voice, clearly labelled. Never silent, never fake.
+      captionEl.textContent = `Maya (MOCK voice, ElevenLabs failed): ${text}`;
+      showError(`ElevenLabs voice failed: ${data.ttsError}`);
+    }
     if (!window.speechSynthesis) { setTimeout(done, 2500); return; }
     await voiceReady();
     if (myGen !== gen || !call || orb.dataset.state !== 'speaking') return; // ended or interrupted
@@ -141,11 +169,15 @@
     if (orb.dataset.state === 'speaking') stopSpeaking();     // barge-in over Maya
     if (c.fetchAbort) { c.fetchAbort.abort(); c.fetchAbort = null; } // barge-in while thinking
     const u = { chunks: [], discard: false, recorder: null, startedAt: Date.now() };
-    const mime = pickMime();
-    u.recorder = new MediaRecorder(c.stream, mime ? { mimeType: mime } : undefined);
-    u.recorder.ondataavailable = (e) => { if (e.data && e.data.size) u.chunks.push(e.data); };
-    u.recorder.onstop = () => onUtteranceStopped(u, c.gen);
-    u.recorder.start();
+    if (c.rec) {
+      c.heard = ''; // real mode: browser recognition supplies the words
+    } else {
+      const mime = pickMime();
+      u.recorder = new MediaRecorder(c.stream, mime ? { mimeType: mime } : undefined);
+      u.recorder.ondataavailable = (e) => { if (e.data && e.data.size) u.chunks.push(e.data); };
+      u.recorder.onstop = () => onUtteranceStopped(u, c.gen);
+      u.recorder.start();
+    }
     c.utterance = u;
     c.lastVoice = Date.now();
     setState('listening', 'hearing');
@@ -157,7 +189,58 @@
     c.utterance = null;
     c.onsetTicks = 0;
     setState('thinking');
+    if (c.rec) { sendTranscript(c, u); return; }
     if (u.recorder.state !== 'inactive') u.recorder.stop();
+  }
+
+  // Real mode: wait briefly for the recognizer's final words, then send the text.
+  async function sendTranscript(c, u) {
+    const myGen = c.gen;
+    await new Promise((r) => setTimeout(r, 700));
+    if (myGen !== gen || !call) return;
+    const transcript = c.heard.trim();
+    c.heard = '';
+    if (!transcript) { setState('listening'); return; } // nothing recognised; keep listening
+    c.turn += 1;
+    const ac = new AbortController();
+    c.fetchAbort = ac;
+    try {
+      const data = await api('/api/turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript }),
+        signal: ac.signal,
+      });
+      if (myGen !== gen) return;
+      c.fetchAbort = null;
+      speak(data, myGen);
+    } catch (e) {
+      if (e.name === 'AbortError' || myGen !== gen) return;
+      endCall(`Something went wrong: ${e.message}`);
+    }
+  }
+
+  // Ears (real mode): the browser's own speech recognition, running for the whole call.
+  function startRecognition(c, myGen) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
+    rec.onresult = (e) => {
+      let text = '';
+      for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript + ' ';
+      c.heard = text;
+    };
+    rec.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        if (myGen === gen) endCall('Speech recognition is blocked in this browser. Please allow it and try again.');
+      }
+    };
+    rec.onend = () => { if (myGen === gen && call === c) { c.heard = c.utterance ? c.heard : ''; try { rec.start(); } catch { /* already running */ } } };
+    try { rec.start(); } catch { return null; }
+    return rec;
   }
 
   async function onUtteranceStopped(u, myGen) {
@@ -177,7 +260,7 @@
       });
       if (myGen !== gen) return;
       c.fetchAbort = null;
-      speak(data.reply, myGen);
+      speak(data, myGen);
     } catch (e) {
       if (e.name === 'AbortError' || myGen !== gen) return;
       endCall(`Something went wrong: ${e.message}`);
@@ -240,8 +323,12 @@
       gen: myGen, stream, ctx, analyser,
       buf: new Float32Array(analyser.fftSize),
       utterance: null, fetchAbort: null, timer: null,
-      onsetTicks: 0, lastVoice: 0, turn: 0,
+      onsetTicks: 0, lastVoice: 0, turn: 0, rec: null, heard: '',
     };
+    if (mode === 'real') {
+      call.rec = startRecognition(call, myGen);
+      if (!call.rec) { endCall('This browser has no speech recognition. Please use Chrome or Safari.'); return; }
+    }
     stream.getAudioTracks().forEach((t) => {
       t.onended = () => { if (myGen === gen) endCall('The microphone stopped working. The call has ended.'); };
     });
@@ -252,7 +339,7 @@
       const greet = await api('/api/greet', { method: 'POST' });
       if (myGen !== gen) return;
       if (call.utterance) return; // person started talking first; do not talk over them
-      speak(greet.reply, myGen);
+      speak(greet, myGen);
     } catch (e) {
       if (myGen === gen) endCall(`Something went wrong: ${e.message}`);
     }
@@ -270,6 +357,7 @@
         c.utterance.discard = true;
         if (c.utterance.recorder.state !== 'inactive') c.utterance.recorder.stop();
       }
+      if (c.rec) { c.rec.onend = null; try { c.rec.abort(); } catch { /* ignore */ } }
       c.stream.getTracks().forEach((t) => { t.onended = null; t.stop(); });
       c.ctx.close().catch(() => {});
     }
@@ -288,6 +376,7 @@
   window.addEventListener('pagehide', () => endCall());
 
   api('/api/config').then((cfg) => {
+    mode = cfg.mode;
     if (cfg.mode === 'mock') {
       modeNote.textContent = 'Mock mode: Maya’s replies are practice lines, not real understanding yet.';
       modeNote.hidden = false;
