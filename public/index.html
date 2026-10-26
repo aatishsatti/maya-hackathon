@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maya</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="call">
+    <h1>Maya</h1>
+    <div id="orb" class="orb" data-state="idle" role="img" aria-label="Maya is not on a call">
+      <span class="layer l1"></span>
+      <span class="layer l2"></span>
+      <span class="layer l3"></span>
+    </div>
+    <p id="status" class="status" aria-live="polite">Press the button to talk with Maya.</p>
+    <p id="caption" class="caption" aria-live="polite"></p>
+    <p id="error" class="error" role="alert" hidden></p>
+    <button id="callBtn" class="call-btn" type="button">Call Maya</button>
+    <p id="modeNote" class="mode-note" hidden></p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

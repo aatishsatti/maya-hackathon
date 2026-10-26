@@ -1,0 +1,12 @@
+{
+  "name": "maya",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Maya, a warm voice companion for seniors.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20.12"
+  }
+}

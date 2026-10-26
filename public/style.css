@@ -1,0 +1,117 @@
+:root {
+  --ink: #1f2933;
+  --soft: #52606d;
+  --btn: #2f6f4f;
+  --btn-end: #b3392f;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; background: #fff; color: var(--ink); }
+
+body {
+  font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 22px;
+  line-height: 1.4;
+}
+
+.call {
+  width: 100%;
+  max-width: 500px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+h1 { margin: 0 0 24px; font-size: 34px; font-weight: 600; }
+
+/* Orb: all motion lives inside the circle. No glow, no rings, nothing outside the edge. */
+.orb {
+  position: relative;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  overflow: hidden;
+  clip-path: circle(50%);
+  background: #f3e3cf;
+  flex: none;
+  transition: background-color 0.8s ease;
+}
+
+.orb .layer {
+  position: absolute;
+  width: 130%;
+  height: 130%;
+  border-radius: 50%;
+  filter: blur(22px);
+  opacity: 0.85;
+  transition: background-color 0.8s ease;
+}
+.orb .l1 { background: #e9a46a; top: -25%; left: -30%; animation: drift1 14s ease-in-out infinite alternate; }
+.orb .l2 { background: #d9777f; top: 5%;   left: 15%;  animation: drift2 17s ease-in-out infinite alternate; }
+.orb .l3 { background: #f6d28b; top: 20%;  left: -20%; animation: drift3 11s ease-in-out infinite alternate; }
+
+@keyframes drift1 { to { transform: translate(30%, 22%) scale(0.9); } }
+@keyframes drift2 { to { transform: translate(-28%, -18%) scale(1.1); } }
+@keyframes drift3 { to { transform: translate(24%, -26%) scale(0.85); } }
+@keyframes breathe { 50% { transform: scale(1.18); } }
+
+/* Idle: very slow, calm. */
+.orb[data-state='idle'] .layer { animation-duration: 28s, 28s, 28s; opacity: 0.6; }
+
+/* Listening: cool, attentive colours. */
+.orb[data-state='listening'] { background: #dbe9ee; }
+.orb[data-state='listening'] .l1 { background: #7fb7c9; }
+.orb[data-state='listening'] .l2 { background: #9ec9a8; }
+.orb[data-state='listening'] .l3 { background: #e4eec5; }
+
+/* Thinking: slower, muted lavender. */
+.orb[data-state='thinking'] { background: #e6e0ee; }
+.orb[data-state='thinking'] .l1 { background: #a99bc9; animation-duration: 22s; }
+.orb[data-state='thinking'] .l2 { background: #c9a0b8; animation-duration: 26s; }
+.orb[data-state='thinking'] .l3 { background: #d8d3ec; animation-duration: 18s; }
+
+/* Speaking: warm colours, inner layers breathe faster. Still inside the circle. */
+.orb[data-state='speaking'] .l1 { animation: drift1 6s ease-in-out infinite alternate, breathe 3.2s ease-in-out infinite; }
+.orb[data-state='speaking'] .l2 { animation: drift2 7s ease-in-out infinite alternate, breathe 4s ease-in-out infinite; }
+.orb[data-state='speaking'] .l3 { animation: drift3 5s ease-in-out infinite alternate, breathe 2.6s ease-in-out infinite; }
+
+.status { margin: 28px 0 8px; font-size: 26px; font-weight: 600; min-height: 1.4em; }
+.caption { margin: 0; color: var(--soft); min-height: 3em; }
+
+.error {
+  margin: 12px 0 0;
+  padding: 12px 16px;
+  border: 2px solid var(--btn-end);
+  border-radius: 12px;
+  color: var(--btn-end);
+  font-weight: 600;
+}
+
+.call-btn {
+  margin-top: auto;
+  width: 100%;
+  min-height: 84px;
+  padding: 20px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--btn);
+  color: #fff;
+  font: inherit;
+  font-size: 30px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.call-btn:focus-visible { outline: 4px solid #1f2933; outline-offset: 3px; }
+.call-btn[data-live='true'] { background: var(--btn-end); }
+.call-btn:disabled { opacity: 0.6; cursor: default; }
+
+.mode-note { margin: 16px 0 0; font-size: 16px; color: var(--soft); }
+
+@media (prefers-reduced-motion: reduce) {
+  .orb .layer { animation: none !important; }
+}
