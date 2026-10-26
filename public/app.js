@@ -75,17 +75,60 @@
     if (window.speechSynthesis) speechSynthesis.cancel();
   }
 
-  function speak(text, myGen) {
+  // Mock-mode voice. Only a clear female en-US voice is used; never the system default,
+  // which can be a male or novelty voice. Order: Samantha (Mac), Google US English
+  // (Chrome), then the first en voice with a known female name.
+  const VOICE_VOLUME = 1.0;
+  const VOICE_RATE = 0.95;
+  const VOICE_PITCH = 1.0;
+  const FEMALE_NAMES = ['Samantha', 'Google US English', 'Ava', 'Allison', 'Susan', 'Karen',
+    'Victoria', 'Zira', 'Aria', 'Jenny', 'Joanna', 'Moira', 'Tessa', 'Serena', 'Female'];
+
+  function pickVoice() {
+    const en = speechSynthesis.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang));
+    for (const name of FEMALE_NAMES) {
+      const us = en.find((v) => /^en[-_]US$/i.test(v.lang) && v.name.startsWith(name));
+      if (us) return us;
+    }
+    for (const name of FEMALE_NAMES) {
+      const any = en.find((v) => v.name.startsWith(name));
+      if (any) return any;
+    }
+    return null;
+  }
+
+  // Voices load asynchronously in Chrome; wait briefly for them.
+  function voiceReady() {
+    return new Promise((resolve) => {
+      if (speechSynthesis.getVoices().length) return resolve();
+      const t = setTimeout(resolve, 1500);
+      speechSynthesis.addEventListener('voiceschanged', () => { clearTimeout(t); resolve(); }, { once: true });
+    });
+  }
+
+  async function speak(text, myGen) {
     setState('speaking');
     captionEl.textContent = `Maya: ${text}`;
     const done = () => {
       if (myGen === gen && call && orb.dataset.state === 'speaking') setState('listening');
     };
     if (!window.speechSynthesis) { setTimeout(done, 2500); return; }
+    await voiceReady();
+    if (myGen !== gen || !call || orb.dataset.state !== 'speaking') return; // ended or interrupted
+    const voice = pickVoice();
+    if (!voice) {
+      // Fail visibly rather than speak in an unknown, possibly male or distorted voice.
+      showError('No clear female English voice was found on this device, so Maya\u2019s reply is shown as text only.');
+      setTimeout(done, 2500);
+      return;
+    }
     stopSpeaking();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US';
-    u.rate = 0.85; // slow and patient
+    u.voice = voice;
+    u.lang = voice.lang;
+    u.volume = VOICE_VOLUME;
+    u.rate = VOICE_RATE;
+    u.pitch = VOICE_PITCH;
     u.onend = done;
     u.onerror = (e) => { if (e.error !== 'canceled' && e.error !== 'interrupted') done(); };
     speechSynthesis.speak(u);
@@ -126,7 +169,7 @@
     const ac = new AbortController();
     c.fetchAbort = ac;
     try {
-      const data = await api(`/api/turn?turn=${c.turn}`, {
+      const data = await api(`/api/turn`, {
         method: 'POST',
         headers: { 'Content-Type': blob.type },
         body: blob,

@@ -20,15 +20,11 @@ const TYPES = {
 };
 
 // Mock persona: warm, patient, slow, short concrete sentences, one idea at a time.
-// Mock replies never claim facts, weather, history, or abilities Maya does not have.
-const MOCK_GREETING = 'Hello. I am Maya. I am here with you. What would you like to talk about?';
-const MOCK_REPLIES = [
-  'I heard you. Thank you for telling me. Take your time.',
-  'That sounds important. Tell me a little more.',
-  'I am listening. There is no rush.',
-  'Thank you. Would you like to say more about that?',
-  'I am still here. Go on when you are ready.',
-];
+// Mock has no speech-to-text, so it never guesses what was said and never claims
+// facts, weather, history, or abilities Maya does not have. Greeting-aware replies
+// are tested in real mode, not here.
+const MOCK_GREETING = 'Hello. I am Maya. I am here with you.';
+const MOCK_REPLY = 'I heard you. I am here.';
 
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -45,9 +41,9 @@ function mockEars(audioBytes) {
   return { transcript: null, note: `mock: received ${audioBytes} bytes of audio, no transcription` };
 }
 
-// Brain: reply. Mock cycles canned lines by client-supplied turn number.
-function mockBrain(turn) {
-  return MOCK_REPLIES[Math.abs(turn) % MOCK_REPLIES.length];
+// Brain: reply. Mock is always neutral.
+function mockBrain() {
+  return MOCK_REPLY;
 }
 
 function readBody(req, limit) {
@@ -78,9 +74,8 @@ async function handleApi(req, res, url) {
     try { audio = await readBody(req, MAX_AUDIO_BYTES); }
     catch (e) { return sendJson(res, e.status || 400, { error: e.message }); }
     if (audio.length === 0) return sendJson(res, 400, { error: 'No audio received' });
-    const turn = Number(url.searchParams.get('turn')) || 0;
     const ears = mockEars(audio.length);
-    return sendJson(res, 200, { transcript: ears.transcript, note: ears.note, reply: mockBrain(turn), mock: true });
+    return sendJson(res, 200, { transcript: ears.transcript, note: ears.note, reply: mockBrain(), mock: true });
   }
   return sendJson(res, 404, { error: 'Not found' });
 }
