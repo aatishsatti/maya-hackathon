@@ -76,9 +76,9 @@ test('1 greeting: short once the profile is known, warm on first calls, callback
   const id = newSenior();
   const mk = (extra) => Object.assign(Object.create(Call.prototype), { profile: memory.load(id), outreach: null, shortGreeting: false, hadActiveFlag: false }, extra);
   const warm = Call.prototype.greetingNote.call(mk({}), 10);
-  assert.match(warm, /warm and slightly bright/);
+  assert.match(warm, /Warm and (slightly|a little) bright/); assert.match(warm, /before they have said a word/); assert.match(warm, /Never say or imply you heard them/);
   const short = Call.prototype.greetingNote.call(mk({ shortGreeting: true }), 10);
-  assert.match(short, /very short/); assert.doesNotMatch(short, /slightly bright/);
+  assert.match(short, /nine words or fewer/); assert.doesNotMatch(short, /slightly bright/);
   const cb = Call.prototype.greetingNote.call(mk({ outreach: { kind: 'callback' } }), 10);
   assert.match(cb, /rang .* back/);
   for (let i = 0; i < 3; i++) care.callStarted(id, {}, null), care.callEnded(id, care.liveCalls.get(id));
@@ -389,7 +389,7 @@ test('7 dashboard view: flags and alerts separate; no transcript/topic fields an
   await failSequence(id, { talked: false });
   const v = care.view(id);
   assert.equal(v.flags.length, 1); assert.equal(v.alerts.length, 0);
-  assert.deepEqual(Object.keys(v.flags[0]).sort(), ['attempts', 'createdAt', 'id', 'lastCallAt', 'lastSeenAt', 'lastSeenSource', 'level', 'mode', 'name', 'notified', 'quietHours', 'resolvedAt', 'returnAt', 'status', 'task', 'trigger']);
+  assert.deepEqual(Object.keys(v.flags[0]).sort(), ['attempts', 'createdAt', 'id', 'lastCallAt', 'lastSeenAt', 'lastSeenSource', 'level', 'mode', 'name', 'notified', 'quietHours', 'resolvedAt', 'returnAt', 'status', 'task', 'timeline', 'trigger']);
   assert.doesNotMatch(JSON.stringify(v), /transcript|topics|audio|location/i);
   assert.equal(v.mode, 'standard'); assert.ok(v.modes.ultra);
   slow();
@@ -428,8 +428,8 @@ test('C1 Tier A cut: rings in 5 s (scaled), Accept -> worried carry-over greetin
   assert.equal(card(id).callbackState, 'answered'); assert.equal(card(id).status, 'active', 'accept does not resolve the alert');
   const c = mkCall(); c.profile = memory.load(id); c.outreach = info;
   const note = Call.prototype.greetingNote.call(Object.assign(Object.create(Call.prototype), { profile: c.profile, outreach: info, shortGreeting: false, hadActiveFlag: false }), 10);
-  assert.match(note, /so glad they picked up, you were worried/); assert.match(note, /ask if they are okay right now/); assert.match(note, /still here/);
-  assert.match(note, /Never accusing, never ask why they hung up, do not announce anything about telling their family/);
+  assert.match(note, /glad they picked up, you were worried/); assert.match(note, /still here/);
+  assert.match(note, /Never accusing, never ask why they hung up, do not mention telling their family/);
   assert.doesNotMatch(note, /slightly bright|rang .* back a moment ago because the line had gone quiet/);
   // the greeting goes through the 3-day no-repeat pool and the new call is not in safety mode
   sparkQueue.length = 0; sparkQueue.push('I am so glad you picked up, I was worried. Are you okay?'); sparkSeen.length = 0;
@@ -523,8 +523,8 @@ test('D1 safety context rides in EVERY roster of a later call while the alert is
   const c = mkCall(); c.profile = memory.load(id); // a brand-new call (the call-back): safety is false here
   assert.equal(c.safety, undefined);
   const r = c.roster('x');
-  assert.match(r, /SAFETY CONTEXT/); assert.match(r, /Never deny it, never say you have not alerted anyone, never say you cannot alert or call anyone/);
-  assert.match(r, /If they ask why you alerted their family, confirm truthfully/); assert.match(r, /Do not bring it up unprompted in a greeting/);
+  assert.match(r, /SAFETY CONTEXT/); assert.match(r, /Never deny it, never say you did not tell anyone, never say you cannot alert anyone or let their family know/);
+  assert.match(r, /answer truthfully in fresh words/); assert.match(r, /not in a greeting/);
   // reaches the cold question, the greeting and the silence lines (all go through roster)
   sparkQueue.length = 0; sparkQueue.push('Hi, I am glad you picked up.'); sparkSeen.length = 0;
   await c.dynamicLine({ pool: 'greeting', what: 'greet' });
@@ -569,8 +569,8 @@ test('E1 safety history after family resolution: topic-only fact in later calls;
   const c = mkCall(); c.profile = memory.load(id);
   const r = c.roster('x');
   assert.match(r, /EARLIER SAFETY CONCERN/); assert.match(r, /their family was alerted through the app about a safety concern after they said they might harm themselves/);
-  assert.match(r, /answer truthfully from this: yes, you let their family know/); assert.match(r, /do not know that person by name, but their family was told, and you cannot call someone you do not know/);
-  assert.match(r, /Never say you told no one, never say you cannot make calls or cannot let family know, never invent a daughter/);
+  assert.match(r, /answer truthfully in fresh words: yes, you let their family know/); assert.match(r, /do not know that person by name, but their family was told, and you cannot call someone you do not know/);
+  assert.match(r, /never say you did not tell anyone, never say you cannot alert anyone or let their family know/); assert.match(r, /Never invent a daughter/);
   assert.match(r, /not in a greeting/);
   assert.doesNotMatch(r, /SAFETY CONTEXT/, 'no longer the active-alert text');
   assert.doesNotMatch(JSON.stringify(care.get(id).safetyHistory), /kill|hurt|daughter|words|transcript/i);
@@ -667,12 +667,12 @@ test('H1 safety wording: "alerted" / "let your family know", never "reminded" - 
   const id = newSenior('standard');
   const c = mkCall(); c.profile = memory.load(id); c.callId = 'x';
   const n = c.careNotes("I'm going to kill myself");
-  assert.match(n, /"alerted" or "let your family know" and never "reminded"/);
+  assert.match(n, /Say "alerted" or "let your family know", never "reminded"/);
   const later = mkCall(); later.profile = memory.load(id);
-  assert.match(later.roster(''), /as "alerted" or "let your family know", never "reminded"/);
+  assert.match(later.roster(''), /Say "alerted" or "let your family know", never "reminded"/);
   care.markNotif(id, care.get(id).flags[0].notifId, 'seen');
   const after = mkCall(); after.profile = memory.load(id);
-  assert.match(after.roster(''), /Say it as "alerted" or "let your family know", never "reminded"/);
+  assert.match(after.roster(''), /Say "alerted" or "let your family know", never "reminded"/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'brain.js'), 'utf8'), /you alerted or let their family know, never "reminded" them/);
 });
 
@@ -730,7 +730,7 @@ test('A safety: Tier A alerts at once (any mode, quiet hours, recent activity), 
     const fam = family();
     const c = mkCall(); c.profile = memory.load(id); c.callId = 'x';
     const n1 = c.careNotes(harm[0]);
-    assert.match(n1, /letting their family know right now/); assert.match(n1, /fresh words every time/);
+    assert.match(n1, /the app has just alerted their family, once/); assert.match(n1, /words you have not used before/);
     const a = active(id);
     assert.equal(a.length, 1, `${mode}: one alert`); assert.equal(a[0].level, 'alert'); assert.equal(a[0].safety, true);
     const push = fam.filter((e) => e.ev === 'notify');
@@ -738,7 +738,7 @@ test('A safety: Tier A alerts at once (any mode, quiet hours, recent activity), 
     assert.match(push[0].data.text, /^Urgent: something .* said worried Maya about their safety/);
     assert.doesNotMatch(push[0].data.text, /kill|suicid|die|emergency|911|999|\d{3}|transcript|location/i);
     const n2 = c.careNotes(harm[1]);
-    assert.match(n2, /already been told; do not announce it again/);
+    assert.match(n2, /already been alerted for this and no second alert is made. Do not announce it again/);
     const n3 = c.careNotes(harm[2]);
     assert.equal(fam.filter((e) => e.ev === 'notify').length, 1, 'no duplicate alert');
     assert.equal(active(id).length, 1);
@@ -757,9 +757,9 @@ test('A safety: notes carry pivot + confirm rules, never "call someone" repeats,
   const c = mkCall(); c.profile = memory.load(id); c.callId = 'x';
   c.careNotes(harm[0]);
   const note = c.careNotes("No I won't call anyone");
-  assert.match(note, /do not ask them to call someone again/); assert.match(note, /alerting their family anyway/);
-  assert.match(note, /you may tell their family, or ask you to, say in fresh words that you have let them know/);
-  assert.match(note, /do not give any phone number and do not tell them to call emergency services|Do not give any phone number and do not tell them to call emergency services/);
+  assert.match(note, /do not keep urging them to call someone/); assert.match(note, /their family has been alerted, and that you are staying/);
+  assert.match(note, /it is already done/);
+  assert.match(note, /No phone number, and do not tell them to call emergency services/);
   assert.doesNotMatch(c.careNotes('You can alert my family'), /ESCALATION/);
   assert.equal(active(id).length, 1);
 });
@@ -792,7 +792,7 @@ test('A safety: Spark crisis tag halts the first attempt, then the reply is writ
   await c.speakReply(fixedReply('[[feel: emotion=crisis intensity=5 intent=share]] x'), null, 1, { record: true });
   assert.equal(c.safety, true);
   assert.equal(active(id)[0].safety, true); assert.equal(fam.filter((e) => e.ev === 'notify').length, 1);
-  assert.ok(sparkSeen.some((r) => /SAFETY: this person has spoken of hurting themselves/.test(r)), 'rewritten with the safety note');
+  assert.ok(sparkSeen.some((r) => /SAFETY \(instructions for you/.test(r)), 'rewritten with the safety note');
   assert.match(c.history[c.history.length - 1].content, /letting your family know/);
 });
 

@@ -34,6 +34,8 @@ const cfg = {
   quietStart: 22, quietEnd: 7,      // local hours; asleep is not an alarm
   lineWindowMs: 3 * 24 * 60 * MIN,  // dynamic lines never repeat inside this window
   reminderLateMs: 30 * MIN,         // a reminder missed by more than this (server down) is marked Missed, never called late
+  expireCriticalMs: 3 * 24 * 60 * MIN * SCALE, // a safety / medical ticket the family never sees closes after this (NOT confirmed safe)
+  expireLightMs: 2 * 24 * 60 * MIN * SCALE,    // a Flag / gentle-note ticket the family never sees closes after this
   resolveWithinMs: Infinity,        // any return-and-talk resolves; see onSeniorSpoke
 };
 
@@ -160,9 +162,14 @@ function callStarted(id, call, tz) {
   if (o && o.state !== 'answered') { if (o.safety) { const f = safetyFlag(p); if (f) f.callbackState = 'answered'; } closeOutreach(o, 'answered'); } // they called Maya themselves: stop ringing
   save(id);
 }
-function callEnded(id, call) {
+// how: 'quiet' (Maya hung up after silence), 'safety' (a safety concern was raised in it), 'left' (the senior ended it), 'normal'.
+// Kept so the next call's greeting and Maya's notes know how the last one ended (a fact, never a script).
+function callEnded(id, call, how = 'normal') {
   if (liveCalls.get(id) === call) liveCalls.delete(id);
+  const p = get(id);
+  if (p) { p.lastCall = { at: Date.now(), how, talked: Boolean(call && call.userTurns > 0) }; save(id); }
 }
+const lastCall = (id) => (get(id) || {}).lastCall || null;
 const callCount = (id) => (get(id) || { callCount: 0 }).callCount;
 
 // ---------------------------------------------------------------- SSE hubs
@@ -195,8 +202,8 @@ const appOpen = (id) => (seniorClients.get(id) || new Set()).size > 0;
 
 // ---------------------------------------------------------------- notifications (status language)
 const ORDER = ['sent', 'delivered', 'seen', 'replied'];
-function makeNotif(p, { to, kind, text, ref = null }) {
-  const n = { id: uid(), to, kind, text, ref, channel: 'app', waStatus: null, status: 'sent', noReply: false, played: false, times: { sent: Date.now() } };
+function makeNotif(p, { to, kind, text, ref = null, incident = null }) {
+  const n = { id: uid(), to, kind, text, ref, incident, channel: 'app', waStatus: null, status: 'sent', noReply: false, played: false, times: { sent: Date.now() } };
   p.notifications.unshift(n);
   p.notifications.length = Math.min(p.notifications.length, 80);
   save(p.id);
@@ -223,14 +230,44 @@ function markNotif(id, nid, status) {
   if (!n || !['delivered', 'seen'].includes(status)) return false;
   advance(p, n, status);
   if (status === 'seen' && n.to === 'family') {
-    for (const f of p.flags) if (f.safety && f.status === 'active' && f.notifId === n.id) { f.status = 'resolved'; f.resolvedAt = Date.now(); f.resolvedBy = 'family';
-      // Keep only the FACT that it happened (no words, no names, no place) so later calls never deny it. Lives here, not in
-      // memory.js: the memory file is rewritten from each call's words, which would drop it.
-      (p.safetyHistory = p.safetyHistory || []).push({ date: memory.today(p.tz), resolvedAt: f.resolvedAt, callsSince: 0 });
-    }
+    for (const f of p.flags) if (f.safety && f.status === 'active' && f.notifId === n.id) resolveSafety(p, f, 'family');
   }
   pushFamily('refresh', { id });
   return true;
+}
+
+// The ticket closes only when the family sees it (dashboard Seen, WhatsApp Read or Reply) or it expires unseen (closeUnseen). Calm
+// talk never closes it; it only means no ring while the call is live. Keeps only the FACT that it happened (no words, names or place) so later calls never deny it. Lives
+// here, not in memory.js: the memory file is rewritten from each call's words, which would drop it.
+function resolveSafety(p, f, by) {
+  f.status = 'resolved'; f.resolvedAt = Date.now(); f.resolvedBy = by;
+  (p.safetyHistory = p.safetyHistory || []).push({ date: memory.today(p.tz), resolvedAt: f.resolvedAt, callsSince: 0 });
+  // Handled: a safety call-back still ringing or waiting for its next try stops.
+  const o = activeByProfile.get(p.id);
+  if (o && o.safety && o.state !== 'answered') closeOutreach(o, by === 'family' ? 'family_seen' : 'safe');
+  save(p.id);
+  // A live call learns it at once (call.js tells the person in fresh words).
+  const live = liveCalls.get(p.id);
+  if (live && live.onTicketClosed) live.onTicketClosed(by);
+}
+
+// An unseen ticket does not stay open for ever. After cfg.expireCriticalMs (safety / medical) or cfg.expireLightMs (Flag / gentle
+// note) it closes UNSEEN: rings stop, the family gets one final note, and it is never shown or remembered as safe or resolved. A new
+// mention afterwards opens a new ticket.
+function closeUnseen(p, f, now = Date.now()) {
+  f.status = 'expired'; f.expiredAt = now; f.resolvedBy = null;
+  const days = Math.max(1, Math.round((now - f.createdAt) / (24 * 60 * MIN * SCALE)));
+  f.expiredDays = days;
+  if (f.safety) (p.safetyHistory = p.safetyHistory || []).push({ date: memory.today(p.tz), resolvedAt: now, callsSince: 0, unseen: true });
+  const o = activeByProfile.get(p.id);
+  if (o && Boolean(o.safety) === Boolean(f.safety) && o.state !== 'answered') closeOutreach(o, 'expired');
+  if (f.safety || f.notified !== 'none') {
+    const text = `The ${f.safety ? 'alert' : 'note'} about ${nameOf(p.id)} from ${fmtTime(f.createdAt, p.tz)} was never marked seen. It has closed after ${days} ${days === 1 ? 'day' : 'days'}, closed unseen. Maya could not confirm ${nameOf(p.id)} is safe.`;
+    const n = makeNotif(p, { to: 'family', kind: 'expired', text, ref: f.id, incident: f.id });
+    if (pushFamily('notify', { id: p.id, notifId: n.id, kind: 'expired', text })) advance(p, n, 'delivered');
+  }
+  console.log('care expired', JSON.stringify({ profile: p.id, safety: Boolean(f.safety), days }));
+  save(p.id); pushFamily('refresh', { id: p.id });
 }
 
 // ---------------------------------------------------------------- outreach (call-back / reminder ring)
@@ -249,7 +286,7 @@ function startOutreach(id, { kind, reminderId = null, talked = false, delayMs = 
     return null;
   }
   const o = { id: uid(), profileId: id, kind, reminderId, talked, safety, attempts: 0, state: 'pending', timer: null, notif: null, startedAt: Date.now() };
-  o.notif = makeNotif(p, { to: 'senior', kind, text: kind === 'reminder' ? 'Maya is calling with a reminder from your family.' : 'Maya is calling to check on you.', ref: o.id });
+  o.notif = makeNotif(p, { to: 'senior', kind, text: kind === 'reminder' ? 'Maya is calling with a reminder from your family.' : 'Maya is calling to check on you.', ref: o.id, incident: safety && safetyFlag(p) ? safetyFlag(p).id : null });
   outreaches.set(o.id, o);
   activeByProfile.set(id, o);
   if (safety) { const f = safetyFlag(p); if (f) Object.assign(f, { callbackState: 'pending', callbackAttempts: 0, callbackOf: cfg.maxAttempts, callbackReached: false }); }
@@ -294,7 +331,7 @@ function claim(id, oid) {
   const p = get(id);
   if (!o || !p || o.profileId !== id || o.state !== 'ringing') return null;
   const info = { kind: o.kind, reminderId: o.reminderId, talked: o.talked, safety: o.safety };
-  if (o.safety) { const f = safetyFlag(p); if (f) f.callbackState = 'answered'; } // the alert itself is NOT resolved by this
+  if (o.safety) { const f = safetyFlag(p); if (f) { f.callbackState = 'answered'; f.answers = (f.answers || 0) + 1; } } // answering does NOT close the ticket
   advance(p, o.notif, o.kind === 'reminder' ? 'seen' : 'replied');
   if (o.reminderId) { const r = p.reminders.find((x) => x.id === o.reminderId); if (r && r.active) r.active.state = 'answered'; } // picked up; waiting for the acknowledgement
   closeOutreach(o, 'answered');
@@ -330,7 +367,7 @@ function exhausted(o) {
   if (o.reminderId) { const r = p.reminders.find((x) => x.id === o.reminderId); task = r && r.task; finishOccurrence(p, o.reminderId, 'unanswered'); }
   const a = assess(p, { sudden: o.kind === 'callback' && o.talked });
   console.log('care assess', JSON.stringify({ profile: o.profileId, level: a.level, notify: a.notify, long: a.long, quiet: a.quiet, sudden: a.sudden }));
-  if (a.level !== 'green') raise(p, a, { trigger: o.kind, attempts: o.attempts, task });
+  if (a.level !== 'green') { const f = raise(p, a, { trigger: o.kind, attempts: o.attempts, task }); o.notif.incident = f.id; }
   pushFamily('refresh', { id: p.id });
 }
 
@@ -378,7 +415,8 @@ function raise(p, a, { trigger, attempts, task = null }) {
     const text = a.notify === 'alert'
       ? `Maya couldn't reach ${name} ${how}${when ? `, last active at ${when}` : ', no recent activity seen'}.`
       : `Maya couldn't reach ${name}. This is not an emergency.${when ? ` Last seen at ${when}.` : ''} Maya will check in as soon as ${name} is back.`;
-    const n = makeNotif(p, { to: 'family', kind: a.notify, text, ref: f.id });
+    const n = makeNotif(p, { to: 'family', kind: a.notify, text, ref: f.id, incident: f.id });
+    f.notifId = n.id;
     if (pushFamily('notify', { id: p.id, notifId: n.id, kind: a.notify, text })) advance(p, n, 'delivered'); // 'Sent' until a family page is open to receive it
   }
   console.log('care raise', JSON.stringify({ profile: p.id, level: f.level, mode: p.mode, notified: f.notified, trigger }));
@@ -400,25 +438,31 @@ function suddenSilence(id, { worry = true } = {}) {
 // Clear intent to hurt themselves (Tier A, decided in call.js). Safety overrides everything: any mode, any hour, even
 // recent activity. Topic-only: no words, no audio, no diagnosis, no location, no emergency number. Maya never calls
 // emergency services; the family decides. Stays active until the family sees it (not cleared by the senior talking).
-function selfHarmAlert(id) {
+function selfHarmAlert(id, { kind = 'self_harm' } = {}) {
   const p = get(id);
   if (!p) return { isNew: false };
   let f = p.flags.find((x) => x.status === 'active' && x.safety);
-  if (f) return { isNew: false, flag: f };
+  if (f) { f.repeats = (f.repeats || 0) + 1; save(id); return { isNew: false, flag: f }; } // same incident: no second alert, no second note to family
   const now = Date.now();
-  f = { id: uid(), level: 'alert', mode: p.mode, createdAt: now, trigger: 'safety', safety: true, task: null, attempts: 0, lastCallAt: now, lastSeenAt: now, lastSeenSource: 'maya', status: 'active', resolvedAt: null, returnAt: null, notified: 'alert', quietHours: false, notifId: null };
+  f = { id: uid(), level: 'alert', mode: p.mode, createdAt: now, trigger: 'safety', safety: true, task: null, attempts: 0, lastCallAt: now, lastSeenAt: now, lastSeenSource: 'maya', status: 'active', resolvedAt: null, returnAt: null, notified: 'alert', quietHours: false, notifId: null, kind };
   p.flags.unshift(f);
   p.flags.length = Math.min(p.flags.length, 50);
   const name = nameOf(id);
-  const text = `Urgent: something ${name} said worried Maya about their safety. Maya is staying on the call with them. Please contact ${name} now.`;
-  const n = makeNotif(p, { to: 'family', kind: 'alert', text, ref: f.id });
+  const text = kind === 'health'
+    ? `Urgent: something ${name} described worried Maya about their wellbeing. Maya is staying on the call with them. Please contact ${name} now.`
+    : `Urgent: something ${name} said worried Maya about their safety. Maya is staying on the call with them. Please contact ${name} now.`;
+  const n = makeNotif(p, { to: 'family', kind: 'alert', text, ref: f.id, incident: f.id });
   f.notifId = n.id;
   if (pushFamily('notify', { id, notifId: n.id, kind: 'alert', text })) advance(p, n, 'delivered');
   console.log('care safety alert', JSON.stringify({ profile: id, mode: p.mode }));
   save(id);
   return { isNew: true, flag: f };
 }
-// The senior asked Maya to let the family know (no distress needed). A gentle, honest note; never an emergency.
+// An emergency Maya judged from context (fall with injury, chest pain...): the same persistent ticket as a safety concern (rings
+// again whenever a call ends, closes on Seen / WhatsApp Read or Reply), topic-only, no diagnosis.
+const healthAlert = (id) => selfHarmAlert(id, { kind: 'health' });
+
+// Plain ask ("tell my family I'd like to hear from them"): a gentle, honest note. Not an alert, not an emergency.
 function familyAsk(id) {
   const p = get(id);
   if (!p) return false;
@@ -428,17 +472,70 @@ function familyAsk(id) {
   if (pushFamily('notify', { id, notifId: n.id, kind: 'gentle', text })) advance(p, n, 'delivered');
   return true;
 }
+// Maya was unsure whether something was serious, asked, and the senior said yes: a topic-only alert for the dashboard and WhatsApp.
+// Not a ticket and not an emergency (an urgent emergency is healthAlert). Not sent twice within 10 minutes.
+function concernAlert(id) {
+  const p = get(id);
+  if (!p) return false;
+  const now = Date.now();
+  if (p.notifications.some((n) => n.to === 'family' && n.ref === 'asked' && now - n.times.sent < 10 * MIN)) return false;
+  const name = nameOf(id);
+  const text = `${name} told Maya something is not right and said yes to letting you know. ${name} would like to hear from you.`;
+  const n = makeNotif(p, { to: 'family', kind: 'alert', text, ref: 'asked' });
+  if (pushFamily('notify', { id, notifId: n.id, kind: 'alert', text })) advance(p, n, 'delivered');
+  return true;
+}
+
+// WhatsApp status of a family alert (Feature 6 will report real receipts through here; until then it is a mock entry point).
+// Delivered alone is NOT Seen (read receipts can be switched off). Read, or any reply from the family ("ok", "I'll call"), is.
+function whatsappStatus(id, nid, status) {
+  const p = get(id);
+  const n = p && p.notifications.find((x) => x.id === nid && x.to === 'family');
+  if (!n || !['delivered', 'read', 'replied'].includes(status)) return false;
+  n.channel = 'whatsapp'; n.waStatus = status;
+  if (status === 'delivered') advance(p, n, 'delivered');
+  else {
+    advance(p, n, status === 'replied' ? 'replied' : 'seen');
+    for (const f of p.flags) if (f.safety && f.status === 'active' && f.notifId === n.id) resolveSafety(p, f, status === 'replied' ? 'whatsapp_reply' : 'whatsapp_read');
+  }
+  save(id);
+  pushFamily('refresh', { id });
+  return true;
+}
 
 // The senior ended a call (closed the page, dropped, pressed End) after Tier A. Ring them back like the silence call-back
 // (5 s, in-app only, Accept/Decline, 3 tries 1-2 min apart) while the safety Alert is still active. Nothing here resolves it.
 // If their page is closed the ring cannot reach them: that is expected and the family Alert is the safety net.
-function safetyCut(id) {
+function safetyCut(id, { kind = 'with_talk' } = {}) {
   const p = get(id);
-  // CORRECT BY DESIGN, do not "fix": once the family pressed "I've seen this" the alert is resolved, so there is no
-  // call-back (the family is handling it). Active alert + no Seen + cut -> ring in 5 s.
-  if (!p || !safetyFlag(p)) return null;
-  return startOutreach(id, { kind: 'callback', talked: true, safety: true });
+  // CORRECT BY DESIGN, do not "fix": once the ticket is closed (family Seen) there is no call-back (the family is handling it).
+  // While it is open, EVERY end of a call rings again, whatever happened in that call (0 turns, mid-talk, after a call-back
+  // pickup, no repeat of the words): answering once does not close a ticket.
+  const f = p && safetyFlag(p);
+  if (!f) return null;
+  f.cuts = (f.cuts || 0) + 1; f.lastCut = { at: Date.now(), kind };
+  (f.events = f.events || []).push({ at: Date.now(), kind: 'cut', how: kind });
+  save(id);
+  return startOutreach(id, { kind: 'callback', talked: kind !== 'no_talk', safety: true });
 }
+// Pain ladder facts: when (not what) the senior mentioned pain or discomfort, last 3 days. Spark tags each turn pain=1; Maya is told
+// how many times it came up BEFORE the current turn, so she decides first-time vs repeat from facts, not from a keyword list.
+function painCount(id, now = Date.now()) {
+  const p = get(id);
+  if (!p) return 0;
+  p.pain = (p.pain || []).filter((t) => now - t < cfg.lineWindowMs);
+  return p.pain.length;
+}
+function painMention(id, now = Date.now()) {
+  const p = get(id);
+  if (!p) return 0;
+  const before = painCount(id, now);
+  p.pain.push(now); p.pain = p.pain.slice(-20); save(id);
+  return before;
+}
+
+// Maya asked whether they are safe (once per incident is the aim; this is the fact she is given).
+function safeAsked(id) { const p = get(id), f = p && safetyFlag(p); if (f) { f.safeAsked = (f.safeAsked || 0) + 1; save(id); } }
 
 // Silence hang-up: Maya rings back in 5 s, in-app. `talked` = the senior said something during the call.
 function silenceHangup(id, { talked }) { return startOutreach(id, { kind: 'callback', talked: Boolean(talked) }); }
@@ -454,7 +551,7 @@ function onSeniorSpoke(id) {
     f.status = 'resolved'; f.resolvedAt = f.returnAt = Date.now(); resolved += 1;
     if (f.notified !== 'none') {
       const text = `${nameOf(id)} is back and okay now (${fmtTime(f.returnAt, p.tz)}).`;
-      const n = makeNotif(p, { to: 'family', kind: 'resolved', text, ref: f.id });
+      const n = makeNotif(p, { to: 'family', kind: 'resolved', text, ref: f.id, incident: f.id });
       if (pushFamily('notify', { id, notifId: n.id, kind: 'resolved', text })) advance(p, n, 'delivered');
     }
   }
@@ -469,6 +566,39 @@ function safetyHistoryNote(id) {
 }
 const hasActiveSafety = (id) => Boolean(get(id) && safetyFlag(get(id)));
 const hasActiveFlag = (id) => Boolean(get(id) && get(id).flags.some((f) => f.status === 'active' && !f.safety));
+
+// What the app is doing right now, as plain FACTS for Maya's notes (never a script, never read out as written). She decides the
+// wording; nothing here says an action happened unless the code did it. Topic-only for safety: no words, diagnosis or place.
+function appFacts(id, now = Date.now()) {
+  const p = get(id);
+  if (!p) return '';
+  const name = nameOf(id), tz = p.tz;
+  const ago = (t) => { const m = Math.round((now - t) / MIN); return m < 2 ? 'moments ago' : m < 90 ? `${m} minutes ago` : m < 36 * 60 ? `${Math.round(m / 60)} hours ago` : `${Math.round(m / 1440)} days ago`; };
+  const f = [`Mode set by their family: ${MODES[p.mode].label}; quiet hours ${cfg.quietStart}:00 to ${cfg.quietEnd}:00 (asleep is not an alarm).`];
+  const lc = p.lastCall;
+  const HOW = { quiet: 'it went quiet and you hung up, then rang back', safety: 'they said something that worried you about their safety', left: 'they ended it themselves', normal: 'it ended normally' };
+  if (lc) f.push(`Last call with you: ${ago(lc.at)}; ${HOW[lc.how] || HOW.normal}. This is call number ${p.callCount}.`); else f.push(`This is call number ${p.callCount || 1}; there is no earlier call.`);
+  const act = p.flags.find((x) => x.status === 'active' && x.safety);
+  const lastSafe = p.flags.find((x) => x.safety && (x.status === 'resolved' || x.status === 'expired'));
+  const CUTW = { no_talk: 'no talking', mid_talk: 'mid-conversation', with_talk: 'after talking' };
+  if (act) {
+    f.push(`A safety ticket for ${name} is open (topic only), open since ${fmtTime(act.createdAt, tz)} (${ago(act.createdAt)}). Their family has been told, once, by the app. The family has NOT yet seen it (not marked seen, not read, not replied). Calls cut so far: ${act.cuts || 0}${act.lastCut ? `; the last cut was ${CUTW[act.lastCut.kind]}, ${ago(act.lastCut.at)}` : ''}. Rings you made that they answered: ${act.answers || 0}. They have raised it again ${act.repeats || 0} time(s) since it opened, which made no second alert. You have asked whether they are safe ${act.safeAsked || 0} time(s).`);
+  } else if (lastSafe && lastSafe.status === 'expired') {
+    f.push(`The last safety ticket for ${name} (opened ${ago(lastSafe.createdAt)}) closed unseen after ${lastSafe.expiredDays} days: their family never saw it, and nobody has confirmed ${name} is safe. Your care for them goes on: check in gently and ask how they are.`);
+  } else if (lastSafe) {
+    f.push(`The last safety ticket for ${name} (opened ${ago(lastSafe.createdAt)}) is closed: ${{ whatsapp_read: 'their family read the alert on WhatsApp', whatsapp_reply: 'their family replied to the alert on WhatsApp' }[lastSafe.resolvedBy] || 'their family marked it seen'} at ${fmtTime(lastSafe.resolvedAt, tz)} (${ago(lastSafe.resolvedAt)}). That only stopped the alerting; your care for them goes on: you still check in gently and ask how they are.`);
+  }
+  const pc = painCount(id, now);
+  f.push(pc ? `They have mentioned pain or discomfort ${pc} time${pc > 1 ? 's' : ''} before this turn in the last 3 days (not counting what they say next).` : 'They have not mentioned pain or discomfort in the last 3 days.');
+  const fl = p.flags.find((x) => x.status === 'active' && !x.safety);
+  if (fl) f.push(`Earlier you could not reach them (${fl.level === 'alert' ? 'family was alerted' : fl.notified === 'gentle' ? 'family got a gentle note' : 'only noted, family not alerted'}); they have not been back since.`);
+  const rem = p.reminders.filter((r) => r.dueAt).sort((a, b) => a.dueAt - b.dueAt)[0];
+  if (rem) f.push(`Next family reminder: "${rem.task}" at ${fmtTime(rem.dueAt, tz)}${rem.dueAt - now > 20 * 3600000 ? ' (not today)' : ''}. Information only, only the family's words.`);
+  const msgs = p.notifications.filter((n) => n.to === 'senior' && n.kind === 'family_message' && n.status !== 'replied' && n.status !== 'seen').length;
+  if (msgs) f.push(`${msgs} family message${msgs > 1 ? 's' : ''} waiting for ${name} that they have not opened yet.`);
+  if (p.lastActivity.whatsapp) f.push(`Last seen on WhatsApp ${ago(p.lastActivity.whatsapp)}.`);
+  return f.join(' ');
+}
 
 // ---------------------------------------------------------------- reminders (information only, as the family wrote them)
 const PERIOD = { daily: 24 * 60 * MIN, weekly: 7 * 24 * 60 * MIN };
@@ -554,6 +684,7 @@ function fireReminder(p, r, now) {
 let ticker = null;
 function tick(now = Date.now()) {
   for (const p of cache.values()) {
+    for (const f of p.flags) if (f.status === 'active' && now - f.createdAt >= (f.safety ? cfg.expireCriticalMs : cfg.expireLightMs)) closeUnseen(p, f, now);
     for (const r of p.reminders) {
       if (r.dueAt == null || r.dueAt > now || r.active) continue;
       if (now - r.dueAt > cfg.reminderLateMs) {
@@ -590,11 +721,32 @@ function sendMessage(id, text) {
   return n;
 }
 
+// One incident = one flag/alert. Its alert note, gentle note, call-back tries and resolution are steps of ONE timeline, so the
+// dashboard shows one card, never three or four look-alike notifications.
+function timeline(p, f) {
+  const RANK = { alert: 0, gentle: 0, cut: 1, callback: 2, resolved: 3, seen: 3, expired: 3 };
+  const steps = [];
+  const mine = p.notifications.filter((n) => n.incident === f.id).reverse(); // list is newest first
+  for (const n of mine) {
+    if (n.to === 'family' && n.kind === 'alert') steps.push({ at: n.times.sent, kind: 'alert', label: 'Alert sent to you' });
+    else if (n.to === 'family' && n.kind === 'gentle') steps.push({ at: n.times.sent, kind: 'gentle', label: 'Gentle note sent to you' });
+    else if (n.to === 'senior') steps.push({ at: n.times.sent, kind: 'callback', label: n.status === 'replied' ? 'Call-back answered' : n.noReply ? 'Call-back not answered' : n.status === 'seen' ? 'Call-back declined' : 'Call-back ringing' });
+    else if (n.kind === 'resolved' && !f.safety) steps.push({ at: n.times.sent, kind: 'resolved', label: 'Back and okay' }); // a safety ticket's closing step is added below
+  }
+  const CUT = { no_talk: 'Call ended with no talking', mid_talk: 'Call cut mid-conversation', with_talk: 'Call ended' };
+  for (const e of f.events || []) if (e.kind === 'cut') steps.push({ at: e.at, kind: 'cut', label: CUT[e.how] || 'Call ended' });
+  if (f.status === 'expired') steps.push({ at: f.expiredAt, kind: 'expired', label: `Closed unseen after ${f.expiredDays} ${f.expiredDays === 1 ? 'day' : 'days'}, NOT confirmed safe` });
+  else if (f.safety && f.status === 'resolved') steps.push({ at: f.resolvedAt, kind: 'seen', label: f.resolvedBy === 'whatsapp_read' ? 'You read this on WhatsApp' : f.resolvedBy === 'whatsapp_reply' ? 'You replied on WhatsApp' : 'You saw this' });
+  else if (f.status === 'resolved' && f.resolvedAt && !steps.some((x) => x.kind === 'resolved')) steps.push({ at: f.resolvedAt, kind: 'resolved', label: 'Back and okay' });
+  const seq = new Map(steps.map((x, i) => [x, i]));
+  return steps.sort((x, y) => x.at - y.at || RANK[x.kind] - RANK[y.kind] || seq.get(x) - seq.get(y));
+}
+
 function view(id) {
   const p = get(id);
   if (!p) return null;
   const seen = lastSeen(p);
-  const fl = (f) => ({ ...f, name: nameOf(id) });
+  const fl = (f) => ({ ...f, name: nameOf(id), timeline: timeline(p, f) });
   const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat,
     active: r.active && { ...r.active, label: OCC_LABEL[r.active.state] },
     last: r.last && { ...r.last, label: OCC_LABEL[r.last.state] } });
@@ -605,18 +757,18 @@ function view(id) {
     flags: p.flags.filter((f) => f.level === 'flag').map(fl),
     alerts: p.flags.filter((f) => f.level === 'alert').map(fl),
     reminders: p.reminders.map(rem),
-    notifications: p.notifications.slice(0, 30).map((n) => ({ id: n.id, to: n.to, kind: n.kind, text: n.text, channel: n.channel, status: n.status, label: statusLabel(n), times: n.times })),
+    notifications: p.notifications.filter((n) => !n.incident).slice(0, 30).map((n) => ({ id: n.id, to: n.to, kind: n.kind, text: n.text, channel: n.channel, status: n.status, label: statusLabel(n), times: n.times })),
   };
 }
 function overview() { return memory.listProfiles().map((x) => { const v = view(x.id); return { id: x.id, name: x.name, mode: v.mode, flags: v.flags.filter((f) => f.status === 'active').length, alerts: v.alerts.filter((f) => f.status === 'active').length }; }); }
 
 module.exports = {
   cfg, MODES, get, remove, start, stop, tick,
-  touch, lastSeen, callStarted, callEnded, callCount, liveCalls,
+  touch, lastSeen, callStarted, callEnded, callCount, liveCalls, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
   recentLines, isRepeatLine, addLine,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, familyAsk, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
   addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

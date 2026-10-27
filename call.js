@@ -9,7 +9,7 @@
 //   audioEnd{timing}, stopped, ttsFailed{text,error}, error{message}
 const { openTranscribe, Resampler } = require('./transcribe');
 const { streamSpeech, sparkStream } = require('./brain');
-const { startReply, fixedReply, ChunkSplitter, stripTags } = require('./reply');
+const { startReply, fixedReply, ChunkSplitter, stripTags, isQuestion } = require('./reply');
 const { mapEmotionToDelivery, selfHarmText, INTENTS } = require('./emotion');
 const memory = require('./memory');
 const care = require('./care');
@@ -70,7 +70,7 @@ const SILENCE_FIRST_MIN_MS = 20000, SILENCE_FIRST_MAX_MS = 30000;
 const SILENCE_WAIT_MS = [null, 10000, 8000]; // null = this call's own random first wait
 const firstSilenceWait = () => SILENCE_FIRST_MIN_MS + Math.floor(Math.random() * (SILENCE_FIRST_MAX_MS - SILENCE_FIRST_MIN_MS + 1));
 // A greeting shortens ("Hi Mike") once a known profile has had this many calls; first calls keep the warm greeting.
-const SHORT_GREETING_AFTER_CALLS = 3;
+const SHORT_GREETING_AFTER_CALLS = 1;
 // In-call timer ("remind me in 30 seconds"): spoken at the time, after a pause if possible, never talking over for long.
 const TIMER_MAX_WAIT_MS = 12000;
 const TIMER_MAX_SECONDS = 30 * 60;
@@ -101,6 +101,9 @@ const isFamilyMessage = (task) => MESSAGE_CUES.test(String(task || ''));
 // care.selfHarmAlert tells the family at once (any mode, any hour, topic-only, no emergency number; Maya never calls
 // anyone). Tier B = fear of dying / being old with no intent: ordinary empathetic talk, no alert, no crisis wording
 // (brain.js prompt). Asking Maya to tell the family is honoured as a gentle note (FAMILY_ASK).
+// Answers to "do you want me to let your family know?" (she asked because she was unsure).
+const CONCERN_NO = /\b(no|nope|nah|don'?t|do not|no need|not needed|not necessary|leave it|i'?m fine|i am fine|it'?s fine|it is fine|it'?s nothing|it is nothing|nothing serious|just normal|it'?s normal)\b/i;
+const CONCERN_YES = /\b(yes|yeah|yep|yup|please|go ahead|do that|tell them|let them know|call them|i think you should|maybe you should|that would be good)\b/i;
 const FAMILY_ASK = /\b(tell|let|call|alert|notify|contact|message|text|ring|inform)\b[^.?!]{0,30}\b(my |the )?(family|daughter|son|kids|children|wife|husband|sister|brother|grandson|granddaughter)\b/i;
 // Barge-in: only real speech may stop Maya. A system ding, a click or Maya's own voice coming back
 // through the mic must not. All of these must hold: (1) Transcribe produced actual words, not sound
@@ -152,6 +155,28 @@ function scale(buf, g) {
 // Greetings and check-in lines are written by Spark each time. What is passed along is wording only: the lines
 // this profile heard in the last 3 days (care.js keeps them), so none repeats. Names, topics and everything
 // else about a person come from that profile's own memory, never from here.
+// A greeting is spoken before the person has said a word, so it can never claim to have heard them.
+const HEARD_YOU = /\bto hear (you|your voice)\b|\bhear(ing)? (you|your voice)\b/i;
+const sameOpening = (a, b) => { const w = (t) => String(t).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).join(' '); return w(a) === w(b); };
+const GREETING_BAD = /\b(how can i help|what can i do for you|can i help you|what'?s your name|your name|who am i (talking|speaking)|see you|good to see|weather|lovely day|nice day|beautiful day|sunny|rainy|raining|how'?s the day)\b/i;
+const firstSentences = (text, n) => { let out = '', rest = text.trim(); for (let i = 0; i < n && rest; i++) { const s1 = firstSentence(rest); out += `${out ? ' ' : ''}${s1}`; rest = rest.slice(rest.indexOf(s1) + s1.length).trim(); } return out; };
+// Diversity seeds, NOT scripts: a random angle or topic handed to Spark so the same situation does not come out in the same shape
+// every time. Spark still writes every word.
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const OPEN_SEEDS = ['open with a hello that fits the time of day', 'open with a plain, quick hello', 'open with a warm little remark that it is nice to be talking', 'open with their name and a hello', 'open with a bright one-word welcome of your own choosing'];
+const ASK_SEEDS = ['how they slept', 'how their day has gone so far', 'what they have been up to', 'how they are feeling in themselves', 'whether anything nice is planned for today', 'how they are getting on', 'what is on their mind this morning or afternoon'];
+const CHECK_OPEN_SEEDS = ['say you are glad they picked up', 'say you were thinking about them', 'say you are relieved to reach them', 'begin with their name', 'begin with a soft sound of relief'];
+const CHECK_ASK_SEEDS = ['how they are feeling now', 'how they are doing at this moment', 'how things are with them', 'whether they are okay right now', 'how it is going for them just now'];
+const SAFETY_ANGLES = ['reflect how heavy that sounded', 'say plainly that you are staying and then say little else', 'gently ask what is happening for them right now', 'acknowledge how hard it was to say that', 'ask what has made things feel this way today', 'ask about something small and near them right now, such as where they are sitting', 'say what you notice about their courage in talking to you'];
+const SAFETY_SHAPES = ['one short sentence only', 'two short sentences', 'two short sentences, the second one a gentle statement', 'three short sentences, plain and slow'];
+// Stock lines a friend would never say twice. A normal reply may not open with one that already opened a recent reply
+// (last 3, kept per profile), and the "who I am" line may be said once per call. Matching is on the reply's first piece.
+const IDENTITY_LINE = /\b(i['’]?m|i am|my name is) maya\b/i;
+const STOCK_OPENINGS = [IDENTITY_LINE, /\bi['’]?m (right )?here with you\b/i, /\bi['’]?m right (here )?beside you\b/i, /\bi['’]?m right here\b/i];
+const openWords = (t) => String(t).toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, ' ').trim().split(/\s+/);
+const SEEN_ANGLES = ['lead with reassurance', 'lead with how glad you are to be with them', 'lead with the fact that their family knows', 'lead with saying they are not alone'];
+// "Samantha, hello" / "Hello Samantha": name and hello side by side overlap when spoken.
+const nameNextToHello = (text, name) => { const n = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); return new RegExp(`(^|[.!?]\\s+)${n}[,!]?\\s+(hello|hi|hey|good (morning|afternoon|evening))\\b|\\b(hello|hi|hey|hello again|hi again|good (morning|afternoon|evening))[,!]?\\s+${n}\\b`, 'i').test(text); };
 const firstSentence = (text) => { const m = /^[\s\S]*?[.!?](?=\s|$)/.exec(text.trim()); return (m ? m[0] : text).trim(); };
 // Byte offset of the first / end of the last sample above the silence threshold (even offsets).
 function firstLoud(buf) { for (let i = 0; i + 1 < buf.length; i += 2) if (Math.abs(buf.readInt16LE(i)) >= SILENT) return i; return buf.length; }
@@ -213,10 +238,16 @@ class Call {
     this.reminderPending = null;
     this.reminderFacts = null;   // { task, turns }: what the family wrote is all she knows about a reminder just given
     this.quietPrefetch = null;   // the next silence line, written ahead while the countdown runs
-    this.openings = [];          // first words of Maya's last replies
+    this.identitySaid = false;   // 'I'm Maya' already spoken this call
+    this.repeatRetried = false;  // one rewrite per reply when it opens like a recent one
     this.openedWithInterjection = false;
     this.greeted = false;        // a call is greeted once, at its start, never again
     this.replyCount = 0;         // normal replies so far
+    this.lastReplyAsked = false; // her last reply ended in a question
+    this.askHistory = [];        // whether each of her last replies asked one
+    this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
+    this.pendingConcern = null;  // she was unsure and asked; waiting for the answer
+    this.ticketInCall = false;   // a safety ticket was open at the start of this call or opened in it
     this.askedName = false;
     this.lastNameUse = -10;      // reply number that last used the person's name
     this.willAskName = Math.random() < 0.6; // decided per call, so asking is neither fixed nor every call
@@ -241,10 +272,11 @@ class Call {
 
   end() {
     if (this.closed) return;
+    const cutKind = this.userTurns === 0 ? 'no_talk' : (this.responding || this.pending.length || (this.curTurn && this.curTurn.partial)) ? 'mid_talk' : 'with_talk';
     this.closed = true;
     if (this.profile && this.awaitAck) care.reminderNoAck(this.profile.id, this.awaitAck);
-    if (this.profile && this.registered) care.callEnded(this.profile.id, this);
-    if (this.profile && this.registered && this.safety) care.safetyCut(this.profile.id); // Tier A call ended by them (a Maya silence hang-up never happens after Tier A)
+    if (this.profile && this.registered) care.callEnded(this.profile.id, this, this.safety ? 'safety' : this.hungUpQuiet ? 'quiet' : 'left');
+    if (this.profile && this.registered) care.safetyCut(this.profile.id, { kind: cutKind }); // an open ticket rings again whenever ANY call ends, whether or not this call had safety words
     for (const t of this.timers) clearTimeout(t.handle);
     this.saveMemory();
     clearTimeout(this.holdTimer);
@@ -300,6 +332,7 @@ class Call {
         this.hadActiveFlag = care.hasActiveFlag(this.profile.id);
         care.callStarted(this.profile.id, this, this.tz);
         this.registered = true;
+        this.ticketInCall = care.hasActiveSafety(this.profile.id);
         this.openMeta(m, rate);
       });
       return;
@@ -606,18 +639,18 @@ class Call {
   roster(note = '') {
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
-    return `${memory.profileNote(this.profile, this.tz)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
+    return `${memory.profileNote(this.profile, this.tz)} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
   }
 
   // A safety alert from an earlier call is still active (the call-back is a NEW call, so this call has no memory of it).
   // Every Spark request in this call carries it, so Maya never denies having told the family. Never spoken as written.
   safetyContext() {
-    const past = care.safetyHistoryNote(this.profile.id);
-    if (!care.hasActiveSafety(this.profile.id) && past) {
-      return ` EARLIER SAFETY CONCERN (instructions, never spoken as written): on ${past.date} their family was alerted through the app about a safety concern after they said they might harm themselves; you stayed with them and the family decided what to do next. You let the family know you were worried; you did not share their exact words. If they ask whether you told their daughter, their family or anyone anything, answer truthfully from this: yes, you let their family know when they said they might harm themselves, and you did not repeat their exact words. If they name a person (such as a daughter) who is not in your notes, say you do not know that person by name, but their family was told, and you cannot call someone you do not know. Say it as "alerted" or "let your family know", never "reminded". Never say you told no one, never say you cannot make calls or cannot let family know, never invent a daughter or any other person, never claim you told a particular person you did not. Do not bring it up unprompted, and not in a greeting.`;
-    }
-    if (!care.hasActiveSafety(this.profile.id)) return '';
-    return ' SAFETY CONTEXT (instructions, never spoken as written): a safety alert for this person is already active from an earlier call, and you (Maya) have already let their family know through the app. Say what you did as "alerted" or "let your family know", never "reminded" (a reminder is a different, routine thing). Never deny it, never say you have not alerted anyone, never say you cannot alert or call anyone. If they ask why you alerted their family, confirm truthfully in fresh words: yes, you let them know because they said they might hurt themselves or end their life, because you care about them, and then ask whether they are safe right now. You still never call emergency services or give a phone number. Do not bring it up unprompted in a greeting.';
+    const id = this.profile.id;
+    const past = care.safetyHistoryNote(id);
+    const truth = 'If they ask whether you told anyone, or why, answer truthfully in fresh words: yes, you let their family know because they said they might hurt themselves and you care about them, and you did not repeat their exact words; then ask whether they are safe now. Never deny it, never say you did not tell anyone, never say you cannot alert anyone or let their family know. Say "alerted" or "let your family know", never "reminded". If they name someone not in your notes, say you do not know that person by name, but their family was told, and you cannot call someone you do not know. Never invent a daughter or any other person, never claim you told a particular person you did not. You never call anyone and never give a phone number. Do not bring any of this up unprompted, and not in a greeting.';
+    if (!care.hasActiveSafety(id) && past) return ` EARLIER SAFETY CONCERN (facts, never spoken as written): on ${past.date} their family was alerted through the app about a safety concern after they said they might harm themselves; ${past.unseen ? 'their family never marked it seen and nobody confirmed they were safe' : 'you stayed with them and the family decided what to do next'}. ${truth}`;
+    if (!care.hasActiveSafety(id)) return '';
+    return ` SAFETY CONTEXT (facts, never spoken as written): a safety alert from an earlier call is still active and their family has already been told by you; that was done once and is not repeated. ${truth}`;
   }
 
   // Notes Spark gets with every normal reply: how not to repeat the openings it just used.
@@ -626,7 +659,7 @@ class Call {
     bits.push('The conversation is already under way: do not greet them or begin with Hello, Hi or a Good morning/evening.');
     if (this.names.size) {
       const ago = this.replyCount - this.lastNameUse;
-      bits.push(ago < 3 ? 'You used their name recently, so do not use it in this reply.' : 'If this reply comforts or encourages them (sadness, loneliness, worry), start it with their name once, like "Mike, I\'m right here with you." For ordinary chat or happy news leave their name out.');
+      bits.push(ago < 3 ? 'You used their name recently, so do not use it in this reply.' : 'If this reply comforts or encourages them (sadness, loneliness, worry), start it with their actual name once, in fresh comfort words never copied from before. For ordinary chat or happy news leave their name out.');
     } else if (this.profile) {
       bits.push('Do not ask for their name.');
     } else if (this.willAskName && !this.askedName && this.replyCount === 1) {
@@ -634,33 +667,62 @@ class Call {
     } else {
       bits.push('Do not ask for their name in this reply.');
     }
-    return bits.join(' ') + ' ' + (this.openings.length
-      ? `Your last reply openings were: ${this.openings.map((o) => `"${o}"`).join(', ')}. Open this reply differently, in fresh words chosen from the feeling. Do not begin with any of these word pairs: ${[...new Set(this.openings.map((o) => o.split(' ').slice(0, 2).join(' ')))].map((p) => `"${p}"`).join(', ')}.`
+    bits.push(this.lastReplyAsked ? `Your last reply asked a question (of your last ${this.askHistory.length} replies, ${this.askHistory.filter(Boolean).length} asked one), so make this reply a statement, a reflection or a warm acknowledgement with no question.` : this.askHistory.filter(Boolean).length >= 2 ? 'You have been asking a lot; do not add a follow-up question unless you truly need the answer.' : 'Do not add a follow-up question by default; a friend listens more than she asks. Ask only when you genuinely need to know.');
+    const openings = this.recentOpenings();
+    if (this.identitySaid) bits.push('You have already said who you are in this call; do not say your name or what you are again, in any words.');
+    bits.push('Never use a stock comfort or identity phrase (not "I\'m here with you", "I\'m right beside you", "I\'m right here with you", not "I\'m Maya, your companion"); a friend makes up new words each time.');
+    return bits.join(' ') + ' ' + (openings.length
+      ? `Your last reply openings were: ${openings.map((o) => `"${o}"`).join(', ')}. Open this reply differently, in fresh words chosen from the feeling. Do not begin with any of these word pairs: ${[...new Set(openings.map((o) => o.split(' ').slice(0, 2).join(' ')))].map((p) => `"${p}"`).join(', ')}.`
       : '');
   }
 
-  // What Spark is asked for as the first words of a call. Kinds: call-back pickup, short greeting (known profile after
-  // a few calls), warm greeting (first / unknown). The 3-day no-repeat list is added by dynamicLine.
+  // The first words of this profile's last 3 normal replies (kept across calls, like the dynamic lines).
+  recentOpenings() {
+    return this.profile ? care.recentLines(this.profile.id, 'open').slice(-3) : [];
+  }
+
+  // True when a reply that starts with this piece repeats a recent opening, a stock phrase already used, or the identity line.
+  repeatsOpening(piece) {
+    const w = openWords(piece);
+    const recent = this.recentOpenings();
+    if (STOCK_OPENINGS.some((re) => re.test(piece) && (re === IDENTITY_LINE ? this.identitySaid : recent.some((o) => re.test(o))))) return true;
+    return recent.some((o) => { const x = openWords(o); const n = Math.min(3, x.length, w.length); return n > 0 && x.slice(0, n).join(' ') === w.slice(0, n).join(' '); });
+  }
+
+  // What Spark is asked for as the first words of a call. The greeting is written BEFORE the person has said anything, so
+  // it can never claim she heard them. Principles and facts only; Spark chooses the words, the 3-day no-repeat list is
+  // added by dynamicLine.
   greetingNote(hour) {
     const h = Number.isInteger(hour) && hour >= 0 && hour < 24 ? hour : null;
     const part = h === null ? null : h < 5 ? 'late at night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 21 ? 'evening' : 'night';
     const name = this.profile.name;
-    const bits = [];
+    const prev = care.lastCall(this.profile.id);
+    const past = care.safetyHistoryNote(this.profile.id);
+    const afterSafety = !this.outreach && ((prev && prev.how === 'safety') || care.hasActiveSafety(this.profile.id) || (past && (past.callsSince <= 2 || Date.now() - past.resolvedAt < 48 * 3600000)));
+    const afterQuiet = !this.outreach && (this.hadActiveFlag || (prev && prev.how === 'quiet'));
+    const useName = Math.random() < this.nameChance;
+    const bits = ['The call has just connected and you speak first, before they have said a word: so you have not heard anything yet. Never say or imply you heard them ("lovely to hear you", "hear your voice"); say it is nice to talk to them instead. You cannot see them either, and you know nothing about the weather or how their day is going, so say nothing about those. One short warm greeting, then one gentle open question (how they are, how their day has been going, what they have been up to; different every time). Two short sentences in all, never more.'];
     if (this.outreach && this.outreach.safety) {
-      bits.push(`You rang ${name} back because the call ended suddenly while they were very upset, and they picked up. Write exactly ONE short sentence (under fifteen words), relieved and worried and warm: you are so glad they picked up, you were worried about them, and you ask if they are okay right now, with the sense that you are still here with them. Never accusing, never ask why they hung up, do not announce anything about telling their family. Do not introduce yourself.`);
+      bits.push(`You rang ${name} back because the call ended suddenly while they were very upset, and they picked up. Under fifteen words in all: relieved, worried, warm; you are glad they picked up, you were worried, and you are still here; the check on how they are is the question, add no other. Never accusing, never ask why they hung up, do not mention telling their family. Do not introduce yourself.`);
     } else if (this.outreach && this.outreach.kind === 'callback') {
-      bits.push(`You rang ${name} back a moment ago because the line had gone quiet, and they picked up. Write exactly ONE short, gentle, relieved sentence (under fifteen words) saying you just wanted to check on them. Never accusing, no lecture, no question about why. Do not introduce yourself.`);
+      bits.push(`You rang ${name} back a moment ago and they picked up. Under fifteen words in all: gentle and relieved, you just wanted to check on them; that check is the question, add no other. Do not say the line went quiet, do not accuse, do not ask why. Do not introduce yourself.`);
+    } else if (afterSafety) {
+      bits.push(`Their last call was a heavy one and you were worried about their safety. Greet them gently and with concern, under twenty words in all, the sense that you are glad they are back and have been thinking about them, then one soft open question about how they are feeling now. Do NOT mention any incident, alert, family or what they said unless they bring it up. Do not introduce yourself.`);
+    } else if (afterQuiet) {
+      bits.push(`Earlier you could not reach ${name} and were worried. Greet them under twenty words in all, worried and relieved, never an ordinary greeting, with one gentle question about how they are. Do not say the line went quiet, do not accuse, do not ask why. Do not introduce yourself.`);
     } else if (this.shortGreeting) {
-      bits.push(`The call has just connected and you greet first. ${name} knows you well by now, so keep it very short: two to six words, like "Hi ${name}" or "Hello ${name}" or "Good ${part === 'night' || part === 'late at night' ? 'evening' : part || 'to hear you'}, ${name}", but chosen fresh in your own words. Use their name. No question, nothing else, do not introduce yourself.`);
+      this.greetingPlain = true;
+      bits.push(`This is a return call and ${name} knows you: speak like a friend who is glad they rang, short and natural, a few words of hello and then one gentle open question, nine words or fewer in all. Vary it naturally with the time of day, how the last call went and the mood; it should not sound like a routine you repeat each call. ${useName ? `You may use their name (${name}) this time.` : 'Leave their name out this time.'} Never ask for their name (you already know it), never "how can I help", never sound like an assistant. Never put their name right next to the hello (not "Name, hello" and not "Hello Name"): the name, if used at all, comes later in the sentence. Do not introduce yourself. Let a little gladness show in the wording, a touch happier than a plain hello.`);
     } else {
-      bits.push('The call has just connected and you greet first. Write exactly ONE short sentence (under fifteen words): warm and slightly bright, joyful but never loud, theatrical or over-excited. Fresh every time. Do not ask their name or any question.');
-      bits.push(`This call is on ${name}'s profile; the caller is probably ${name}. ${this.profile.memory.topics.length ? 'Do NOT introduce yourself and do not say your own name.' : 'This is their first call: say your name, Maya, once in the sentence (for example "I\'m Maya").'} You may greet them by that name, or just warmly without it; do not do it every time.`);
+      this.greetingPlain = true;
+      bits.push(`Warm and a little bright, joyful but never loud or over-excited, under twenty words in all. ${useName ? `You may use their name (${name}).` : 'Leave their name out this time.'} Never ask for their name, never "how can I help". Never put their name right next to the hello (not "Name, hello", not "Hello Name"); if used, it comes later in the sentence. ${this.profile.memory.topics.length ? 'Do NOT introduce yourself or say your own name.' : 'This is their very first call: this one time you may be a little warmer and say your name, Maya, once.'}`);
       const topics = this.profile.memory.topics;
       if (this.profile.lastCallHeavy) bits.push('Their last call ended on a heavy topic. Greet them extra gently and do not mention specifics unless they do.');
       else if (topics.length) bits.push(`Their last call was about: "${topics[topics.length - 1].text}". You may refer to it briefly if it fits, but never add details you were not told.`);
     }
-    if (part && !(this.outreach && (this.outreach.kind === 'callback' || this.outreach.safety))) bits.push(`It is ${part} where they are; you may mention it naturally, but not every time. "Good night" is a goodbye, never a hello: for the late evening or night use "Hello" or "Good evening".`);
-    if (this.hadActiveFlag && !this.outreach) bits.push('Earlier the line went quiet and you could not reach them. Sound glad to hear them; do not ask what happened yet and do not accuse.');
+    const checkIn = this.outreach || afterSafety || afterQuiet;
+    bits.push(`For variety this time (a nudge, not words to copy): ${pick(checkIn ? CHECK_OPEN_SEEDS : OPEN_SEEDS)}${checkIn ? `; for the question, ask ${pick(CHECK_ASK_SEEDS)}` : `; for the question, ask about ${pick(ASK_SEEDS)}`}.`);
+    if (part && !this.outreach) bits.push(`It is ${part} where they are; you may let that colour the greeting, but not every time. "Good night" is a goodbye, never a hello.`);
     return bits.join(' ');
   }
 
@@ -699,7 +761,7 @@ class Call {
 
   // One short line written by Spark. It is asked again (up to 4 tries) if it repeats a line this profile heard in the
   // last 3 days or fails `check`; a line is never taken from a fixed list. Only the first sentence is used.
-  async dynamicLine({ pool, what, signal, check = null }) {
+  async dynamicLine({ pool, what, signal, check = null, sentences = 1 }) {
     const id = this.profile.id;
     const recentList = care.recentLines(id, pool).slice(-12);
     let note = `${what} Do not say you are an AI.`;
@@ -709,14 +771,18 @@ class Call {
     let said;
     for (let attempt = 0; attempt < 4; attempt++) {
       full = await sparkStream(ask, this.roster(note), signal, () => {});
-      said = firstSentence(stripTags(full));
+      said = sentences === 1 ? firstSentence(stripTags(full)) : firstSentences(stripTags(full), sentences);
       if (/good night/i.test(said) && pool === 'greeting') { note += ' "Good night" is only a goodbye. Use "Hello" or "Good evening".'; continue; }
+      if (pool === 'greeting' && nameNextToHello(said, this.profile.name)) { note += ' Do not put their name right next to the hello; leave the name out or place it later in the sentence.'; continue; }
+      if (pool === 'greeting' && GREETING_BAD.test(said)) { note += ' Say nothing about seeing them, the weather or the day; you know none of that.'; continue; }
+      if (pool === 'greeting' && HEARD_YOU.test(said)) { note += ' You have not heard them yet: do not say you hear them. Say it is nice to talk to them.'; continue; }
+      if (pool === 'greeting' && recentList.length && sameOpening(said, recentList[recentList.length - 1])) { note += ' That opens the same way as your last greeting. Open differently.'; continue; }
       const bad = care.isRepeatLine(id, pool, said) ? 'That repeats a recent line. Write something clearly different.' : check && check(said);
       if (!bad) break;
       if (attempt === 3) console.warn(`dynamic line still repeats after retries (${pool})`);
       note += ` ${bad}`;
     }
-    if (pool === 'greeting') said = said.replace(/good night/gi, 'Good evening'); // last-resort guard: it is never a hello
+    if (pool === 'greeting') said = said.replace(/good night/gi, 'Good evening').replace(HEARD_YOU, (m) => (/voice/i.test(m) ? 'to talk to you' : 'to talk to you')); // last-resort guards: never a hello, never claims to have heard them
     return { full, said };
   }
 
@@ -779,6 +845,7 @@ class Call {
     setTimeout(() => {
       if (this.closed) return;
       console.log('hangup: silence');
+      this.hungUpQuiet = true;
       const id = this.profile.id;
       const talked = this.userTurns > 0;
       try { this.send({ type: 'hangup' }); } catch { /* socket gone */ }
@@ -801,7 +868,7 @@ class Call {
     const rem = this.outreach && this.outreach.kind === 'reminder' ? care.findReminder(this.profile.id, this.outreach.reminderId) : null;
     try {
       if (rem) line = await this.reminderLine(rem, this.abort.signal);
-      else line = await this.dynamicLine({ pool: 'greeting', signal: this.abort.signal, what: this.greetingNote(hour) });
+      else line = await this.dynamicLine({ pool: 'greeting', signal: this.abort.signal, what: this.greetingNote(hour), sentences: 2 });
     } catch (e) {
       if (myGen !== this.gen || this.closed) return;
       return this.fatal(e.message);
@@ -810,7 +877,7 @@ class Call {
     care.addLine(this.profile.id, rem ? 'reminder' : 'greeting', line.said);
     this.history.push({ role: 'assistant', content: line.said });
     if (this.outreach && this.outreach.kind === 'reminder') { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
-    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true });
+    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem ? 1 : 2, bright: !rem && this.greetingPlain === true });
   }
 
   // ---- Reminders and timers: information only, as the family (or the person) wrote it ----
@@ -958,11 +1025,17 @@ class Call {
     this.userTurns += 1;
     const notes = [];
     if (selfHarmText(heard)) this.enterSafety();
+    if (this.health) notes.push(this.healthNote());
     if (this.safety) notes.push(this.safetyNote());
-    else if (FAMILY_ASK.test(heard) && !this.familyAsked) {
+    else if (this.pendingConcern && !this.health) {
+      // Maya was unsure and asked. Decide from the answer: yes -> alert; no -> nothing; neither -> she may lean in once more.
+      if (CONCERN_NO.test(heard)) { this.pendingConcern = null; notes.push('FACT: they said it is fine or normal. No alert was made and none will be. Take them at their word, carry on warmly, and do not ask about it again.'); }
+      else if (CONCERN_YES.test(heard) || FAMILY_ASK.test(heard)) { this.pendingConcern = null; this.familyAsked = true; care.concernAlert(id); notes.push('FACT: they said yes, so the app has now sent their family an alert (topic only) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.'); }
+      else { this.pendingConcern.left -= 1; if (this.pendingConcern.left <= 0) this.pendingConcern = null; notes.push('FACT: you asked whether to let their family know and they have not answered that yet. Respond to what they said; if it is still unclear, you may ask once more, gently. Do not alert on a guess.'); }
+    } else if (FAMILY_ASK.test(heard) && !this.familyAsked) {
       this.familyAsked = true;
       care.familyAsk(id);
-      notes.push('They asked you to let their family know. You have sent their family a gentle note asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.');
+      notes.push('FACT: they asked you to let their family know, and the app has sent their family a gentle note (not an alert) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.');
     }
     if (this.reminderFacts && this.reminderFacts.turns > 0) {
       this.reminderFacts.turns -= 1;
@@ -998,6 +1071,7 @@ class Call {
   // Tier A: first time in this call, the family is told at once. `safetyFresh` makes the next reply say so out loud.
   enterSafety() {
     this.safety = true;
+    this.ticketInCall = true;
     this.escalations += 1;
     this.prevDelivery = null;
     const r = care.selfHarmAlert(this.profile.id);
@@ -1005,15 +1079,41 @@ class Call {
     console.log('safety', JSON.stringify({ count: this.escalations, newAlert: r.isNew })); // no words logged
   }
 
-  // Instructions for every reply once Tier A has begun. Spark writes the words; none of this is spoken as given.
+  // The ticket closed while this call is live (care.js calls this). The roster is rebuilt for every Spark request, so she
+  // already holds the new facts; this also makes her say it, once, in fresh words. Only when this call had the ticket open.
+  onTicketClosed(by) {
+    if (this.closed || !this.ticketInCall || this.ticketTold) return;
+    this.ticketTold = true;
+    this.ticketInCall = false;
+    this.speakWhenFree(async (signal) => { const l = await this.dynamicLine({ pool: 'seen', signal, sentences: 2, what: `FACT: a moment ago their family looked at the worry about them and now knows. You are already mid-conversation: do NOT greet them, do NOT say hello, do NOT introduce yourself or say your name. Tell them so in one or two short, warm, fresh sentences: their family knows, someone will check on them, and you are with them, so they need not worry (${pick(SEEN_ANGLES)}). If you use a name, use ONLY the name in your notes for them, never any other name. Never say "let them sort things out" or leave it to others; never copy a comfort phrase. Never promise an exact time or a call, never name a button, page, app, notification or anything technical, do not ask a question, do not repeat what they said earlier.`
+      }); care.addLine(this.profile.id, 'seen', l.said); return l; }).catch(() => {});
+  }
+
+  // An emergency judged from context (Spark tagged concern=urgent). The app alerts the family now; Spark is told as a fact.
+  enterHealth() {
+    this.health = true; this.ticketInCall = true; this.pendingConcern = null;
+    const r = care.healthAlert(this.profile.id);
+    this.healthFresh = r.isNew;
+    console.log('health', JSON.stringify({ newAlert: r.isNew })); // no words logged
+  }
+
+  // Facts for every reply once an emergency ticket is open (no scripted line).
+  healthNote() {
+    const fresh = this.healthFresh; this.healthFresh = false;
+    return fresh ? 'FACT: what they described looks like an emergency, and the app has just alerted their family, once (topic only). You may tell them briefly, in your own words, this one time. Stay calm and with them; no diagnosis, no medical advice, no phone number, you never call anyone yourself.' : 'FACT: their family has already been alerted about this and no second alert is made. Do not announce it again; stay calm and with them, ask only what you truly need to know, no diagnosis, no medical advice, no phone number.';
+  }
+
+  // Notes for every reply once Tier A has begun: principles and FACTS only. The app created the alert (or it already existed);
+  // Spark decides the words and varies them. `fresh` is true only for the first reply after a NEW alert was created.
   safetyNote() {
     const fresh = this.safetyFresh;
     this.safetyFresh = false;
+    const recent = care.recentLines(this.profile.id, 'safety').slice(-6);
+    let angle = pick(SAFETY_ANGLES); if (angle === this.lastAngle) angle = pick(SAFETY_ANGLES); this.lastAngle = angle;
     return [
-      'SAFETY: this person has spoken of hurting themselves or ending their life. Stay calm, warm and present. Reply to exactly what they just said, in fresh words every time; never repeat an earlier line or the shape of one. Two or three short sentences, no lists, no lecture, no diagnosis, no exclamation marks.',
-      'Say what you did with the words "alerted" or "let your family know" and never "reminded" (a reminder is a different, routine thing). Do not give any phone number and do not tell them to call emergency services; you never call anyone yourself. Keep them talking and gently find out whether they are safe right now and whether someone is near them.',
-      fresh ? 'In THIS reply, tell them calmly and honestly that you are letting their family know right now, so they are not alone with this. It is not a secret.' : 'Their family has already been told; do not announce it again unless they ask or push back.',
-      'If they say you may tell their family, or ask you to, say in fresh words that you have let them know and that you are staying right here with them. If they refuse or push back about calling someone or about telling family, do not ask them to call someone again: say in fresh words that you understand, that you are alerting their family anyway because you care, and that you are staying with them.',
+      `For this reply (a nudge for variety, not words to copy): ${angle}; length: ${pick(SAFETY_SHAPES)}.${recent.length ? ` Lines you used with them in the last 3 days, none to be repeated or closely echoed: ${recent.map((q) => `"${q}"`).join('; ')}.` : ''}`,
+      'SAFETY (instructions for you, never read out): this person has spoken of hurting themselves or ending their life. Stay calm, warm and present, reply to exactly what they just said in words you have not used before in this call or the last one; never reuse an earlier line or its shape. Two or three short sentences, no lists, no lecture, no diagnosis, no exclamation marks. Keep them talking. Your facts say how many times you have already asked whether they are safe: ask it (and whether someone is near) only if you have not yet, or something new was said; otherwise reflect, stay and listen. No phone number, and do not tell them to call emergency services; you never call anyone yourself. Say "alerted" or "let your family know", never "reminded". If they say you may tell their family, or ask you to, it is already done: say so in fresh words and that you are staying. If they push back or refuse to call anyone, do not keep urging them to call someone; be honest that you care, that their family has been alerted, and that you are staying with them.',
+      fresh ? 'FACT: the app has just alerted their family, once, so they are not alone with this; it is not a secret. You may tell them so, calmly and briefly, in your own words, this one time.' : 'FACT: their family has already been alerted for this and no second alert is made. Do not announce it again and do not thank them for telling you again; de-escalate in fresh words, ask whether they are safe, and stay. Only if they ask or push back, confirm truthfully in fresh words that the family knows, why, and that you are staying with them.',
     ].join(' ');
   }
 
@@ -1027,7 +1127,7 @@ class Call {
   // Streams Spark's text into the voice sentence by sentence. Each sentence is sent to the voice
   // as soon as it is complete (requests run side by side, audio goes out in order), so speech
   // starts while Spark is still writing. Plain text, with an excited opening phrase for happy news.
-  async speakReply(rs, timing, myGen, { record = false, greeting = false, hangup = false, stripGreeting = false, holdBack = false } = {}) {
+  async speakReply(rs, timing, myGen, { record = false, greeting = false, hangup = false, stripGreeting = false, holdBack = false, maxSentences = 1, bright = false } = {}) {
     const signal = this.abort.signal;
     this.sayingText = '';
     this.playUntil = 0;
@@ -1044,6 +1144,7 @@ class Call {
     let excited = false;
     let delivery = null;
     let feel = null;
+    let repeated = null;
     const splitter = new ChunkSplitter({
       stripInterjection: record && this.openedWithInterjection,
       stripGreeting,
@@ -1056,13 +1157,21 @@ class Call {
         const intent = raw && String(raw.intent).toLowerCase();
         const lastUser = ([...this.history].reverse().find((m) => m.role === 'user') || { content: '' }).content;
         if (!greeting && ((intent === 'story' && STORY_ASK.test(lastUser)) || (intent === 'recall' && RECALL_ASK.test(lastUser)))) { d.maxSentences = Infinity; d.moments = 3; }
+        if (this.lastExclaimed) d.maxExclaim = 0; // never an exclamation mark on two replies in a row
+        if (this.safety || this.health || this.pendingConcern || (raw && (/^(1|yes|true)$/i.test(String(raw.pain || '')) || ['unsure', 'urgent'].includes(String(raw.concern || '').toLowerCase())))) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; if (d.openingTone === 'bright') d.openingTone = null; } // pain, worry, safety: no [happy], no brightness, no exclamation
         if (this.safety) { d.escalate = false; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.maxSentences = 3; } // safety replies are calm and plain, and never halted
-        if (greeting) { d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.maxSentences = 1; }          // a greeting is one warm sentence, never theatrical
+        if (greeting) { d.excitedOpening = false; d.openingTone = null; d.moments = bright ? 1 : 0; d.openingTone = bright ? 'bright' : null; d.maxSentences = maxSentences; }          // a greeting is a short warm line (plus one gentle question), never theatrical
+        const concern = String((raw && raw.concern) || '').toLowerCase();
+        if (!greeting && raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
+        d.noQuestion = !greeting && this.lastReplyAsked && concern !== 'unsure'; // asking because she genuinely does not know is the one exception
+        if (!greeting && concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
+        else if (!greeting && concern === 'unsure' && !this.health && !this.safety) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear', whisperPieces: d.whisperPieces };
         return d;
       },
       onPiece: (text, kind, next) => {
+        if (record && !jobs.length && !this.repeatRetried && !this.safety && this.repeatsOpening(text)) { repeated = text; splitter.halted = true; return; } // nothing spoken yet: write it again
         const job = { chunks: [], done: false, err: null, tone: Boolean(kind), kind };
         jobs.push(job);
         if (!tEnqueue) tEnqueue = Date.now();
@@ -1145,6 +1254,19 @@ class Call {
     }
     await producer;
     if (myGen !== this.gen || this.closed) { keep(); return; }
+    if (splitter.halted && repeated) {
+      // The reply opened like a recent one (or said who she is again) before a word was spoken: ask for it again, once.
+      this.abort.abort();
+      this.repeatRetried = true;
+      const gen2 = ++this.gen;
+      this.abort = new AbortController();
+      this.responding = true;
+      const again = `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`;
+      const rs2 = startReply(this.history, this.roster(`${this.replyNote()} ${again}`), this.abort.signal);
+      const r = await this.speakReply(rs2, timing, gen2, { record: true, stripGreeting: true, holdBack });
+      this.repeatRetried = false;
+      return r;
+    }
     if (splitter.halted) {
       // Spark read the person as in crisis before saying anything: Tier A. Write the reply again with the safety note.
       this.abort.abort();
@@ -1165,15 +1287,20 @@ class Call {
     }
     keep();
     this.responding = false;
+    if (IDENTITY_LINE.test(said.join(' '))) this.identitySaid = true;
     if (record && said.length) {
       // Remember how this reply opened, so the next one can open differently.
-      const first = said[0].toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').trim().split(/\s+/).slice(0, 4).join(' ');
-      this.openings = [...this.openings, first].slice(-3);
+      if (this.profile) care.addLine(this.profile.id, 'open', openWords(said[0]).slice(0, 8).join(' '));
       this.openedWithInterjection = /^(oh|well|ah|hmm|um)\b/i.test(said[0]);
       const all = said.join(' ');
       if (/\b(your name|what should i call you|what to call you|call you\?|who am i (talking|speaking) (to|with))\b/i.test(all)) this.askedName = true;
       for (const n of this.names.values()) if (new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(all)) this.lastNameUse = this.replyCount;
       this.replyCount += 1;
+      this.lastReplyAsked = isQuestion(all);
+      this.lastExclaimed = /!/.test(all);
+      if (this.safety) care.addLine(this.profile.id, 'safety', all);
+      this.askHistory = [...this.askHistory, this.lastReplyAsked].slice(-4);
+      if (this.safety && /\bsafe\b/i.test(all) && isQuestion(all)) care.safeAsked(this.profile.id);
     }
     if (hangup) this.hangUp(); else this.armSilence();
     if (timing) {

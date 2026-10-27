@@ -95,6 +95,7 @@ async function handleCare(req, res, url) {
     if (b === 'messages') return sendJson(res, 200, { notification: { id: care.sendMessage(a, body.text).id } });
     if (b === 'activity') return sendJson(res, 200, { ok: care.touch(a, 'app', Date.now(), /^[\w/+\-]{1,60}$/.test(body.tz || '') ? body.tz : null) });
     if (b === 'outreach' && c && d === 'decline') return care.decline(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
+    if (b === 'notifications' && c && d === 'whatsapp') return care.whatsappStatus(a, c, body.status) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); // mock entry for WhatsApp receipts until Feature 6
     if (b === 'notifications' && c && d) return care.markNotif(a, c, d) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
   } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
   return sendJson(res, 404, { error: 'Not found' });

@@ -19,7 +19,16 @@
   function showErr(m) { $('err').textContent = m || ''; $('err').hidden = !m; }
 
   // Safety alert: urgent, topic-only (no words, audio or place). Stays until a family member says they have seen it.
+  function expiredCard(f, name) {
+    const c = el('div', 'card');
+    const head = el('div', 'row');
+    head.append(el('span', 'badge', 'Closed unseen'), el('b', null, f.safety ? `Alert about ${name} closed after ${f.expiredDays} days` : `Note about ${name} closed after ${f.expiredDays} days`));
+    c.append(head, el('div', 'status', `Nobody marked this seen. This is NOT confirmation that ${name} is safe.`));
+    const tl = timelineEl(f); if (tl) c.append(tl);
+    return c;
+  }
   function safetyCard(f, name) {
+    if (f.status === 'expired') return expiredCard(f, name);
     const seen = f.status === 'resolved';
     const c = el('div', `card ${seen ? 'resolved' : 'alert'}`);
     const head = el('div', 'row');
@@ -31,12 +40,19 @@
         no_answer: `Maya tried to call back ${n} ${n === 1 ? 'time' : 'times'}, no answer.${f.callbackReached ? '' : ` ${name}'s page was not open, so the ring could not reach them.`}` }[f.callbackState];
       c.append(el('div', 'status', `Call-back: ${msg}`));
     }
+    const tl = timelineEl(f); if (tl) c.append(tl);
     if (!seen) { const b = el('button', 'primary', "I've seen this"); b.addEventListener('click', () => api(`/api/care/${id}/notifications/${f.notifId}/seen`, 'POST', {}).then(load)); c.append(b); }
     return c;
+  }
+  // One incident, one timeline: alert, gentle note, call-back tries and resolution are steps of the same card.
+  function timelineEl(f) {
+    if (!f.timeline || f.timeline.length < 2) return null;
+    return el('div', 'meta', f.timeline.map((s) => `${s.label} (${t(s.at)})`).join(' → '));
   }
   function flagCard(f, name) {
     const resolved = f.status === 'resolved';
     if (f.safety) return safetyCard(f, name);
+    if (f.status === 'expired') return expiredCard(f, name);
     const c = el('div', `card ${resolved ? 'resolved' : f.level}`);
     const head = el('div', 'row');
     head.append(el('span', 'badge', resolved ? 'Resolved' : f.level === 'alert' ? 'Alert' : 'Flag'), el('b', null, resolved ? `${name} is back, okay now` : `Couldn't reach ${name}`));
@@ -45,6 +61,8 @@
     else c.append(el('div', 'status', `Last call at ${t(f.lastCallAt)}, last seen at ${t(f.lastSeenAt)}${f.lastSeenSource ? ` (${SRC[f.lastSeenSource]})` : ''}, hasn't replied yet`));
     const bits = [`Mode: ${f.mode}`, f.attempts ? `${f.attempts} ${f.attempts === 1 ? 'try' : 'tries'}` : 'during a call', f.trigger === 'reminder' && f.task ? `reminder: ${f.task}` : null, f.quietHours ? 'quiet hours' : null, `raised ${t(f.createdAt)}`].filter(Boolean);
     c.append(el('div', 'meta', bits.join(' · ')));
+    const tl = timelineEl(f); if (tl) c.append(tl);
+    if (!resolved && f.notifId) { const b = el('button', null, 'Close'); b.addEventListener('click', () => api(`/api/care/${id}/notifications/${f.notifId}/seen`, 'POST', {}).then(load)); c.append(b); }
     return c;
   }
   function list(node, items, empty) { node.replaceChildren(...(items.length ? items : [el('div', 'empty', empty)])); }
@@ -61,7 +79,7 @@
       l.append(r, b, el('div', 'meta', m.blurb));
       return l;
     }));
-    const act = (a) => a.filter((f) => f.status === 'active'), done = (a) => a.filter((f) => f.status === 'resolved').slice(0, 5);
+    const act = (a) => a.filter((f) => f.status === 'active'), done = (a) => a.filter((f) => f.status === 'resolved' || f.status === 'expired').slice(0, 5);
     list($('alerts'), [...act(v.alerts), ...done(v.alerts)].map((f) => flagCard(f, v.name)), 'No alerts.');
     list($('flags'), [...act(v.flags), ...done(v.flags)].map((f) => flagCard(f, v.name)), 'No flags.');
     const rem = v.reminders.map((r) => {

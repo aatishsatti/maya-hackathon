@@ -317,13 +317,30 @@
 
   const THINK_TIMEOUT_MS = 30000; // fail fast: a turn that never gets an answer ends the call
 
+  // Two soft rising notes (about 0.4 s), played the moment the line is live, so there is no dead silence while Maya's
+  // first words are written. A sound only: it does not pretend she has heard anything.
+  function chime(c) {
+    try {
+      const t0 = c.ctx.currentTime + 0.02;
+      [[523.25, 0], [659.25, 0.16]].forEach(([hz, at]) => {
+        const o = c.ctx.createOscillator(), g = c.ctx.createGain();
+        o.type = 'sine'; o.frequency.value = hz;
+        g.gain.setValueAtTime(0.0001, t0 + at);
+        g.gain.exponentialRampToValueAtTime(0.06, t0 + at + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.3);
+        o.connect(g); g.connect(c.master || c.ctx.destination);
+        o.start(t0 + at); o.stop(t0 + at + 0.32);
+      });
+    } catch { /* no audio context: skip the cue */ }
+  }
+
   function onServerEvent(c, ev) {
     clearTimeout(c.thinkTimer);
     if (ev.type === 'thinking' || ev.type === 'speechEnd') {
       c.thinkTimer = setTimeout(() => { if (call === c) endCall('Maya did not answer in time. Please call again.'); }, THINK_TIMEOUT_MS);
     }
     switch (ev.type) {
-      case 'ready': c.ready = true; break;
+      case 'ready': c.ready = true; chime(c); break; // an instant soft cue while the greeting is being written; it says nothing and claims nothing
       case 'speak':
         stopPlayback(); c.voiceDone = false;
         c.ducked = false; clearTimeout(c.duckFailsafe); setMaster(c, 1, 0.01);

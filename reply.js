@@ -133,7 +133,7 @@ class ChunkSplitter {
     if (!flat) return;
     const ends = (flat.match(/[.!?]+(\s|$)/g) || []).length; // clause pieces ('Oh dear,') are not sentences
     if (this.sentences >= d.maxSentences) return;             // enough said: keep it short
-    if (flat.includes('?')) { if (this.asked) return; this.asked = true; } // one question at a time
+    if (isQuestion(flat)) { if (this.asked || (d.noQuestion && this.sentences > 0)) return; this.asked = true; } // one question at a time, and none right after one she just asked
     this.sentences += ends;
 
     // Whispers are off. If Spark writes [[whisper: words]] anyway, the words are spoken normally.
@@ -142,6 +142,7 @@ class ChunkSplitter {
     if (this.pieceCount === 0) said = openingInterjection(said, this.stripInterjection);
     let tone = null;
     said = said.replace(TONE_MARK, (_, k) => { tone = tone || k.toLowerCase(); return ' '; });
+    if (tone === 'bright' && d.noBright) tone = null; // never bright over a sad, anxious or grieving moment, or in a safety reply
     const parts = [{ t: said, k: null }];
 
     let live = [];
@@ -225,4 +226,9 @@ function stripTags(full) {
   return plain(t.replace(TONE_MARK, ' ').replace(/\[\[whisper:\s*([^\]]*)\]\]/gi, '$1'));
 }
 
-module.exports = { ReplyStream, startReply, fixedReply, ChunkSplitter, plain, stripTags };
+// Spark sometimes leaves the "?" off a question ("Are you safe right now, is someone near you"), so a sentence that opens like
+// a question counts as one too.
+const QUESTION_OPEN = /(^|[.!]\s+)(are|is|do|does|did|can|could|would|will|what|how|why|who|where|when|have|has|shall|should|isn't|aren't)\b/i;
+const isQuestion = (t) => /\?/.test(t) || QUESTION_OPEN.test(String(t).trim());
+
+module.exports = { isQuestion, ReplyStream, startReply, fixedReply, ChunkSplitter, plain, stripTags };

@@ -35,27 +35,34 @@ function mapEmotionToDelivery(emotion, intensity, prev) {
   // whatever Spark wrote); the rest of the reply is normal voice. 
   // openingTone: the person is clearly heavy-hearted (words only, intensity 3+): the reply's first phrase is soft.
   // moments: how many delivery moments (tagged pieces) a whole reply may hold; call.js lifts it to 3 for a story/recall.
-  const d = { emotion: e, intensity: n, whisperPieces: 0, excitedOpening: false, openingTone: null, moments: 1, maxSentences: 3, maxExclaim: 1, escalate: false };
+  const d = { emotion: e, intensity: n, whisperPieces: 0, excitedOpening: false, openingTone: null, moments: 1, maxSentences: 4, maxExclaim: 1, escalate: false, noBright: false };
   if (e === 'crisis') d.escalate = true;                     // handled by the safety path, never a sadness reply
   if (HEARTFELT.has(e)) {
+    d.noBright = true; d.maxSentences = 3;
     d.maxExclaim = 0;           // sad stays soft through wording: gentle, short, no exclamations
     d.whisperPieces = 0;        // whispers are removed for now
     if (n >= 3) d.openingTone = 'soft';
   } else if (SETTLING.has(e)) {
+    d.noBright = true;
     d.maxExclaim = 0;
     d.maxSentences = 2;
     if (n >= 3) d.openingTone = 'soft';
   } else if (e === 'happy' || e === 'excited') {
-    d.excitedOpening = n >= 3; // never falls through to neutral; a mild 'happy' (intensity 1-2) stays the warm baseline
+    // Cheerful trial: the opening phrase of a happy reply is the gentle [happy] tone (not [excited]) from intensity 2; real excitement
+    // (intensity 4+, emotion excited) keeps the excited opening. Gain for [happy] stays 0.62 (call.js TONES).
+    if (n >= 2) d.openingTone = 'bright';
+    d.excitedOpening = e === 'excited' && n >= 4;
   } else if (e === 'neutral') {
     d.maxExclaim = 1;
   }
   // Context override: right after heavy news, a bare "Okay" must not get a bright reply or a whisper.
   if (prev && (HEARTFELT.has(prev.emotion) || SETTLING.has(prev.emotion)) && prev.intensity >= 3) {
-    if (e === 'neutral' || (d.excitedOpening && n <= 2)) {
+    if (e === 'neutral' || (d.excitedOpening && n <= 2) || (d.openingTone === 'bright' && n <= 3)) {
       d.maxExclaim = 0;
       d.whisperPieces = 0;
       d.excitedOpening = false;
+      if (d.openingTone === 'bright') d.openingTone = null;
+      d.noBright = true;
     }
   }
   return d;
