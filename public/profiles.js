@@ -20,10 +20,12 @@
     store.set(p.id);
     $('switchBtn').textContent = `Talking with ${p.name}. Change`;
     picker.hidden = true; callScreen.hidden = false;
+    window.dispatchEvent(new Event('maya-profile'));
   }
   function showPicker() {
     if (window.mayaEndCall) window.mayaEndCall(); // a call in progress ends cleanly before the picker shows
     api.id = null; api.name = null;
+    window.dispatchEvent(new Event('maya-profile'));
     callScreen.hidden = true; picker.hidden = false;
     form.hidden = true; $('addBtn').hidden = false; err.hidden = true;
     list.replaceChildren(...profiles.map((p) => {

@@ -12,6 +12,7 @@ const { streamSpeech, sparkStream } = require('./brain');
 const { startReply, fixedReply, ChunkSplitter, stripTags } = require('./reply');
 const { mapEmotionToDelivery, selfHarmText, INTENTS } = require('./emotion');
 const memory = require('./memory');
+const care = require('./care');
 
 // Seniors pause mid-thought. Meta has no endpointing settings, so after Meta says a turn is
 // complete we wait before answering: short if it ended like a sentence, long if it trailed off.
@@ -62,14 +63,45 @@ function looksComplete(text) {
   const words = t.toLowerCase().match(/[\p{L}\p{N}'\u2019]+/gu) || [];
   return words.length >= 3 && !DANGLING.has(words[words.length - 1]);
 }
-// Silence flow: after Maya finishes speaking, wait this long for the person before the next step.
-// The first wait is the longest because older people pause; follow-ups are shorter; the last wait
-// before hanging up is a little longer again. Index = how many steps have already been taken.
-const SILENCE_WAIT_MS = [8000, 4500, 4500, 5500];
-// Said instead of any normal reply when someone talks about harming themselves or ending their life.
-// No phone number is given because none may be invented. The real escalation policy (who is told,
-// which service is named) is not defined yet and belongs to the owner.
-const ESCALATION = "I'm really glad you told me, and I'm worried about you. You matter. Please tell someone who is near you right now, or call your local emergency number. I'm here with you.";
+// Silence flow: after Maya finishes speaking, wait for the person before the next step. The first wait is
+// random 20-30 s per call (older people pause, and a fixed number would be predictable); then she reconfirms
+// after 10 s, then 8 s later says goodbye and hangs up. Index = how many steps have already been taken.
+const SILENCE_FIRST_MIN_MS = 20000, SILENCE_FIRST_MAX_MS = 30000;
+const SILENCE_WAIT_MS = [null, 10000, 8000]; // null = this call's own random first wait
+const firstSilenceWait = () => SILENCE_FIRST_MIN_MS + Math.floor(Math.random() * (SILENCE_FIRST_MAX_MS - SILENCE_FIRST_MIN_MS + 1));
+// A greeting shortens ("Hi Mike") once a known profile has had this many calls; first calls keep the warm greeting.
+const SHORT_GREETING_AFTER_CALLS = 3;
+// In-call timer ("remind me in 30 seconds"): spoken at the time, after a pause if possible, never talking over for long.
+const TIMER_MAX_WAIT_MS = 12000;
+const TIMER_MAX_SECONDS = 30 * 60;
+const NUM_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, fifteen: 15, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60 };
+const TIMER_RE = /\bremind me\b(?:\s+(?:to|about|that)\s+([^.?!]+?))?\s*\b(?:in|after)\s+(\d+(?:\.\d+)?|[a-z]+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b(?:\s+(?:to|about|that)\s+([^.?!]+))?/i;
+// { seconds, task } from "remind me in 30 seconds [to X]" / "remind me to X in 5 minutes"; null if it is not a timer request.
+function parseTimer(text) {
+  const m = TIMER_RE.exec(String(text || ''));
+  if (!m) return null;
+  const n = /^\d/.test(m[2]) ? Number(m[2]) : NUM_WORDS[m[2].toLowerCase()];
+  if (!n) return null;
+  const unit = m[3].toLowerCase();
+  const seconds = Math.round(n * (unit.startsWith('s') ? 1 : unit.startsWith('m') ? 60 : 3600));
+  return { seconds, task: (m[1] || m[4] || '').trim().replace(/\s*,?\s*please$/i, '').replace(/[.?!,]+$/, '') || null };
+}
+// The senior acknowledging a reminder. "not now / later / not yet" wins over any thanks.
+const ACK_YES = /\b(ok|okay|yes|yeah|yep|sure|alright|all right|got it|thank(s| you)|will do|i will|i'll|i have|i did|done|already|noted|right away)\b/i;
+const ACK_NO = /\b(not now|later|not yet|don'?t want|in a (bit|minute|moment|while)|after (a bit|lunch|dinner|breakfast))\b/i;
+const isAck = (text) => ACK_YES.test(text) && !ACK_NO.test(text);
+// A reminder the family typed as a message to the senior rather than a task: it speaks to them as Mom/Dad/Grandma, says who
+// it is from, is quoted, or speaks as "me". Such text is delivered as a message (no task template, no first name).
+const MESSAGE_CUES = /^\s*["'\u201c]|^\s*(mom|mum|mama|mommy|dad|daddy|papa|grandma|grandpa|nana|nani|nanu|dadi|dada)\b|\b(it'?s|this is) (me|your (daughter|son|grandson|granddaughter|wife|husband|sister|brother|family|niece|nephew))\b|\bfrom your (daughter|son|grandson|granddaughter|family|wife|husband|sister|brother)\b|\byour (daughter|son|grandson|granddaughter|wife|husband|sister|brother|niece|nephew)\b(?!['’]s)|\b(call|phone|text|ring|visit|tell|see|write to|come see) me\b|\b(i|we) (love|miss) you\b/i;
+// How the family addresses the senior at the start or end of a task ("... mom"); not part of what to do.
+const stripAddressee = (task) => String(task || '').replace(/[\s,.!-]+(mom|mum|mama|mommy|dad|daddy|papa|grandma|grandpa|nana|nani|dadi|dada|ma|amma|appa)[\s.!]*$/i, '').trim() || String(task || '');
+const isFamilyMessage = (task) => MESSAGE_CUES.test(String(task || ''));
+// Safety (two tiers, never a fixed line). Tier A = clear intent to hurt themselves or end their life (selfHarmText on
+// their words, or Spark's crisis tag): Maya stays, Spark writes a fresh calm reply every turn from safetyNote(), and
+// care.selfHarmAlert tells the family at once (any mode, any hour, topic-only, no emergency number; Maya never calls
+// anyone). Tier B = fear of dying / being old with no intent: ordinary empathetic talk, no alert, no crisis wording
+// (brain.js prompt). Asking Maya to tell the family is honoured as a gentle note (FAMILY_ASK).
+const FAMILY_ASK = /\b(tell|let|call|alert|notify|contact|message|text|ring|inform)\b[^.?!]{0,30}\b(my |the )?(family|daughter|son|kids|children|wife|husband|sister|brother|grandson|granddaughter)\b/i;
 // Barge-in: only real speech may stop Maya. A system ding, a click or Maya's own voice coming back
 // through the mic must not. All of these must hold: (1) Transcribe produced actual words, not sound
 // words like "ding"; (2) at least two real words (or one clear stop word like "stop"); (3) they
@@ -117,10 +149,9 @@ function scale(buf, g) {
   return out;
 }
 
-// Greetings are written by Spark each call. Only real things from this server process are passed
-// along: the last few greetings and silence lines (so none repeats; wording only, no personal facts).
-// Names, topics and everything else about a person come from that profile's own memory, never from here.
-const recent = { greetings: [], quiet: [] };
+// Greetings and check-in lines are written by Spark each time. What is passed along is wording only: the lines
+// this profile heard in the last 3 days (care.js keeps them), so none repeats. Names, topics and everything
+// else about a person come from that profile's own memory, never from here.
 const firstSentence = (text) => { const m = /^[\s\S]*?[.!?](?=\s|$)/.exec(text.trim()); return (m ? m[0] : text).trim(); };
 // Byte offset of the first / end of the last sample above the silence threshold (even offsets).
 function firstLoud(buf) { for (let i = 0; i + 1 < buf.length; i += 2) if (Math.abs(buf.readInt16LE(i)) >= SILENT) return i; return buf.length; }
@@ -169,7 +200,18 @@ class Call {
     this.playUntil = 0;          // when the browser finishes playing the audio sent so far (24 kHz s16 = 48 bytes/ms)
     this.recoverTimer = null;
     this.silenceTimer = null;
-    this.silenceStage = 0;       // 0,1: check-in lines; 2: 'I will wait'; 3: hang up
+    this.silenceStage = 0;       // 0: check-in; 1: reconfirm ('I am still here'); 2: goodbye + hang up
+    this.firstSilenceMs = firstSilenceWait(); // this call's random first wait, 20-30 s
+    this.userTurns = 0;          // turns the person has actually spoken this call (talked-then-quiet vs never answered)
+    this.outreach = null;        // { kind:'callback'|'reminder', reminderId } when Maya rang them and they accepted
+    this.awaitAck = null;        // reminder id spoken and not yet acknowledged
+    this.askWhat = false;        // a flag/alert just resolved: the next reply warmly asks what happened
+    this.timers = [];            // in-call timers the person asked for
+    this.suddenReported = false;
+    this.nameChance = 0.25;      // chance a task reminder uses the person's name (sparing, tests set it)
+    this.reminderReply = null;   // { gen, said }: the reply that is giving a reminder (to re-speak it if they talk over it)
+    this.reminderPending = null;
+    this.reminderFacts = null;   // { task, turns }: what the family wrote is all she knows about a reminder just given
     this.quietPrefetch = null;   // the next silence line, written ahead while the countdown runs
     this.openings = [];          // first words of Maya's last replies
     this.openedWithInterjection = false;
@@ -200,6 +242,10 @@ class Call {
   end() {
     if (this.closed) return;
     this.closed = true;
+    if (this.profile && this.awaitAck) care.reminderNoAck(this.profile.id, this.awaitAck);
+    if (this.profile && this.registered) care.callEnded(this.profile.id, this);
+    if (this.profile && this.registered && this.safety) care.safetyCut(this.profile.id); // Tier A call ended by them (a Maya silence hang-up never happens after Tier A)
+    for (const t of this.timers) clearTimeout(t.handle);
     this.saveMemory();
     clearTimeout(this.holdTimer);
     clearTimeout(this.staleTimer);
@@ -243,11 +289,17 @@ class Call {
       const rate = Number(m.sampleRate);
       if (!(rate >= 8000 && rate <= 96000)) return this.fatal('Bad microphone sample rate');
       this.starting = true;
+      // Maya rang them and they pressed Accept: the id must match a live ring for THIS profile, else it is an ordinary call.
+      if ((m.reason === 'callback' || m.reason === 'reminder') && typeof m.outreachId === 'string') this.outreach = care.claim(this.profile.id, m.outreachId);
       // Words a crashed or unfinished earlier call left behind are filed first, so this call knows them.
       memory.flushPending(this.profile.id).then(() => {
         if (this.closed) return;
         memory.startCall(this.profile.id, this.callId, this.tz);
         this.callStarted = true;
+        this.shortGreeting = care.callCount(this.profile.id) >= SHORT_GREETING_AFTER_CALLS && !this.outreach; // decided before this call counts
+        this.hadActiveFlag = care.hasActiveFlag(this.profile.id);
+        care.callStarted(this.profile.id, this, this.tz);
+        this.registered = true;
         this.openMeta(m, rate);
       });
       return;
@@ -290,6 +342,8 @@ class Call {
 
   interrupt() {
     if (!this.isSpeaking()) return;
+    // They talked over a reminder: it is still owed. It is given again right after the interruption, confidently.
+    if (this.reminderReply && this.reminderReply.gen === this.gen && this.awaitAck) this.reminderPending = this.reminderReply;
     this.gen += 1;
     if (this.abort) this.abort.abort();
     this.responding = false;
@@ -299,13 +353,14 @@ class Call {
     this.send({ type: 'stopped' });
     // If what stopped her never turns into a usable question, say so instead of going quiet.
     clearTimeout(this.recoverTimer);
-    this.recoverTimer = setTimeout(() => this.recoverFromInterrupt(), RECOVER_AFTER_MS);
+    this.recoverTimer = setTimeout(() => this.recoverFromInterrupt(), this.reminderPending ? 3000 : RECOVER_AFTER_MS);
   }
 
   recoverFromInterrupt() {
     if (this.closed || this.isSpeaking()) return;
     if (this.curTurn || this.pending.length) { this.recoverTimer = setTimeout(() => this.recoverFromInterrupt(), 3000); return; } // still listening to them
     console.log('recovery: interrupted with nothing usable heard');
+    if (this.reminderPending && this.awaitAck) { const r = this.reminderPending; this.reminderPending = null; this.reminderReply = null; this.speak(r.said); return; } // the reminder, not "can you say that again"
     this.speak(INTERRUPTED);
   }
 
@@ -551,7 +606,18 @@ class Call {
   roster(note = '') {
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
-    return `${memory.profileNote(this.profile, this.tz)}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
+    return `${memory.profileNote(this.profile, this.tz)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
+  }
+
+  // A safety alert from an earlier call is still active (the call-back is a NEW call, so this call has no memory of it).
+  // Every Spark request in this call carries it, so Maya never denies having told the family. Never spoken as written.
+  safetyContext() {
+    const past = care.safetyHistoryNote(this.profile.id);
+    if (!care.hasActiveSafety(this.profile.id) && past) {
+      return ` EARLIER SAFETY CONCERN (instructions, never spoken as written): on ${past.date} their family was alerted through the app about a safety concern after they said they might harm themselves; you stayed with them and the family decided what to do next. You let the family know you were worried; you did not share their exact words. If they ask whether you told their daughter, their family or anyone anything, answer truthfully from this: yes, you let their family know when they said they might harm themselves, and you did not repeat their exact words. If they name a person (such as a daughter) who is not in your notes, say you do not know that person by name, but their family was told, and you cannot call someone you do not know. Say it as "alerted" or "let your family know", never "reminded". Never say you told no one, never say you cannot make calls or cannot let family know, never invent a daughter or any other person, never claim you told a particular person you did not. Do not bring it up unprompted, and not in a greeting.`;
+    }
+    if (!care.hasActiveSafety(this.profile.id)) return '';
+    return ' SAFETY CONTEXT (instructions, never spoken as written): a safety alert for this person is already active from an earlier call, and you (Maya) have already let their family know through the app. Say what you did as "alerted" or "let your family know", never "reminded" (a reminder is a different, routine thing). Never deny it, never say you have not alerted anyone, never say you cannot alert or call anyone. If they ask why you alerted their family, confirm truthfully in fresh words: yes, you let them know because they said they might hurt themselves or end their life, because you care about them, and then ask whether they are safe right now. You still never call emergency services or give a phone number. Do not bring it up unprompted in a greeting.';
   }
 
   // Notes Spark gets with every normal reply: how not to repeat the openings it just used.
@@ -573,38 +639,57 @@ class Call {
       : '');
   }
 
+  // What Spark is asked for as the first words of a call. Kinds: call-back pickup, short greeting (known profile after
+  // a few calls), warm greeting (first / unknown). The 3-day no-repeat list is added by dynamicLine.
   greetingNote(hour) {
     const h = Number.isInteger(hour) && hour >= 0 && hour < 24 ? hour : null;
     const part = h === null ? null : h < 5 ? 'late at night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 21 ? 'evening' : 'night';
-    const bits = ['The call has just connected and you greet first. Write exactly ONE short sentence (under fifteen words): warm and slightly bright, joyful but never loud, theatrical or over-excited. Fresh every time. Do not ask their name or any question. Do not say you are an AI.'];
     const name = this.profile.name;
-    {
-      const usedLast = recent.greetings.length && new RegExp(`\\b${name}\\b`, 'i').test(recent.greetings[recent.greetings.length - 1]);
-      bits.push(`This call is on ${name}'s profile; the caller is probably ${name}. ${this.profile.memory.topics.length ? 'Do NOT introduce yourself and do not say your own name.' : 'This is their first call: say your name, Maya, once in the sentence (for example "I\'m Maya").'} ${usedLast ? 'You used their name in your last greeting, so leave it out this time and just greet them warmly.' : 'You may greet them by that name, or just warmly without it; do not do it every time.'}`);
+    const bits = [];
+    if (this.outreach && this.outreach.safety) {
+      bits.push(`You rang ${name} back because the call ended suddenly while they were very upset, and they picked up. Write exactly ONE short sentence (under fifteen words), relieved and worried and warm: you are so glad they picked up, you were worried about them, and you ask if they are okay right now, with the sense that you are still here with them. Never accusing, never ask why they hung up, do not announce anything about telling their family. Do not introduce yourself.`);
+    } else if (this.outreach && this.outreach.kind === 'callback') {
+      bits.push(`You rang ${name} back a moment ago because the line had gone quiet, and they picked up. Write exactly ONE short, gentle, relieved sentence (under fifteen words) saying you just wanted to check on them. Never accusing, no lecture, no question about why. Do not introduce yourself.`);
+    } else if (this.shortGreeting) {
+      bits.push(`The call has just connected and you greet first. ${name} knows you well by now, so keep it very short: two to six words, like "Hi ${name}" or "Hello ${name}" or "Good ${part === 'night' || part === 'late at night' ? 'evening' : part || 'to hear you'}, ${name}", but chosen fresh in your own words. Use their name. No question, nothing else, do not introduce yourself.`);
+    } else {
+      bits.push('The call has just connected and you greet first. Write exactly ONE short sentence (under fifteen words): warm and slightly bright, joyful but never loud, theatrical or over-excited. Fresh every time. Do not ask their name or any question.');
+      bits.push(`This call is on ${name}'s profile; the caller is probably ${name}. ${this.profile.memory.topics.length ? 'Do NOT introduce yourself and do not say your own name.' : 'This is their first call: say your name, Maya, once in the sentence (for example "I\'m Maya").'} You may greet them by that name, or just warmly without it; do not do it every time.`);
+      const topics = this.profile.memory.topics;
+      if (this.profile.lastCallHeavy) bits.push('Their last call ended on a heavy topic. Greet them extra gently and do not mention specifics unless they do.');
+      else if (topics.length) bits.push(`Their last call was about: "${topics[topics.length - 1].text}". You may refer to it briefly if it fits, but never add details you were not told.`);
     }
-    if (part) bits.push(`It is ${part} where they are; you may mention it naturally, but not every time. "Good night" is a goodbye, never a hello: for the late evening or night use "Hello" or "Good evening".`);
-    if (recent.greetings.length) bits.push(`Your recent greetings were: ${recent.greetings.map((g) => `"${g}"`).join('; ')}. Use clearly different wording and a different opening.`);
-    const topics = this.profile.memory.topics;
-    if (this.profile.lastCallHeavy) bits.push('Their last call ended on a heavy topic. Greet them extra gently and do not mention specifics unless they do.');
-    else if (topics.length) bits.push(`Their last call was about: "${topics[topics.length - 1].text}". You may refer to it briefly if it fits, but never add details you were not told.`);
+    if (part && !(this.outreach && (this.outreach.kind === 'callback' || this.outreach.safety))) bits.push(`It is ${part} where they are; you may mention it naturally, but not every time. "Good night" is a goodbye, never a hello: for the late evening or night use "Hello" or "Good evening".`);
+    if (this.hadActiveFlag && !this.outreach) bits.push('Earlier the line went quiet and you could not reach them. Sound glad to hear them; do not ask what happened yet and do not accuse.');
     return bits.join(' ');
   }
 
   // ---- Silence flow ----
-  // After Maya finishes speaking (greeting or reply), 8 s of nothing (then 4.5, 4.5, 5.5) triggers the next step:
-  // check-in, check-in, "I'll wait", then hang up. Wording is written by Spark each time (never the
-  // same line twice in a row); the timing is fixed. The next line is written ahead during the
-  // countdown so it is ready on time. Any real words from the person cancel it and reset the steps.
+  // After Maya finishes speaking, a random 20-30 s of nothing (this call's own number) triggers a check-in, 10 s more
+  // a reconfirm, 8 s more a goodbye and hang-up. Every line is written by Spark fresh and never repeats one this
+  // profile heard in the last 3 days. The next line is written ahead during the countdown so it is ready on time.
+  // Any real words from the person cancel it and reset the steps. After something worrying was said she never
+  // hangs up: the call stays open and the family is told through care.js (sudden silence).
   cancelSilence() {
     clearTimeout(this.silenceTimer);
     if (this.quietPrefetch) { this.quietPrefetch.abort.abort(); this.quietPrefetch = null; }
   }
 
+  // Something worrying was said: a self-harm escalation, or heavy feeling on the last turn.
+  isWorried() {
+    const d = this.prevDelivery;
+    return this.escalations > 0 || Boolean(d && (d.emotion === 'crisis' || (['sad', 'lonely', 'grief', 'anxious'].includes(d.emotion) && d.intensity >= 3)));
+  }
+
+  silenceWait(stage) {
+    return stage === 0 ? this.firstSilenceMs : SILENCE_WAIT_MS[Math.min(stage, SILENCE_WAIT_MS.length - 1)];
+  }
+
   armSilence() {
     this.cancelSilence();
-    if (this.closed || this.escalations > 0) return; // never hang up on someone who has just said something worrying
+    if (this.closed || this.suddenReported) return;
     const stage = this.silenceStage;
-    const wait = Math.max(0, this.playUntil - Date.now()) + SILENCE_WAIT_MS[Math.min(stage, SILENCE_WAIT_MS.length - 1)];
+    const wait = Math.max(0, this.playUntil - Date.now()) + this.silenceWait(stage);
     const abort = new AbortController();
     const promise = this.quietLine(stage, abort.signal);
     promise.catch(() => {});
@@ -612,26 +697,44 @@ class Call {
     this.silenceTimer = setTimeout(() => this.fireSilence(), wait);
   }
 
-  async quietLine(stage, signal) {
-    const kind = stage < 2 ? 'check' : stage === 2 ? 'wait' : 'hangup';
-    const what = {
-      check: 'The person has been silent for a few seconds. In one short, warm sentence gently check whether they are still there (the idea of "are you there?", but choose your own words).',
-      wait: 'The person is still silent. In one short, warm sentence say that if no one is there you will just wait quietly for them to speak. Choose your own words.',
-      hangup: 'The person is still silent. In one or two short, kind sentences say it seems the call was placed by mistake, or was a pocket dial, so you are going to hang up now, and say a gentle goodbye. Choose your own words.',
-    }[kind];
-    let note = `${what} Do not ask their name. Do not say you are an AI. This is not a greeting: do not start with Hello, Hi or Good morning/evening.`;
-    if (recent.quiet.length) note += ` Lines you used recently: ${recent.quiet.map((q) => `"${q}"`).join('; ')}. Do not repeat or closely echo any of them.`;
-    const ask = [{ role: 'user', content: '(The person has said nothing. Write your short line now.)' }];
+  // One short line written by Spark. It is asked again (up to 4 tries) if it repeats a line this profile heard in the
+  // last 3 days or fails `check`; a line is never taken from a fixed list. Only the first sentence is used.
+  async dynamicLine({ pool, what, signal, check = null }) {
+    const id = this.profile.id;
+    const recentList = care.recentLines(id, pool).slice(-12);
+    let note = `${what} Do not say you are an AI.`;
+    if (recentList.length) note += ` Lines you used in the last 3 days: ${recentList.map((q) => `"${q}"`).join('; ')}. Do not repeat or closely echo any of them.`;
+    const ask = [{ role: 'user', content: '(Write your short line now.)' }];
     let full;
     let said;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
       full = await sparkStream(ask, this.roster(note), signal, () => {});
-      said = stripTags(full);
-      const norm = said.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-      if (!recent.quiet.slice(-2).some((q) => q.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim() === norm)) break;
-      note += ' That repeats a recent line. Write something clearly different.';
+      said = firstSentence(stripTags(full));
+      if (/good night/i.test(said) && pool === 'greeting') { note += ' "Good night" is only a goodbye. Use "Hello" or "Good evening".'; continue; }
+      const bad = care.isRepeatLine(id, pool, said) ? 'That repeats a recent line. Write something clearly different.' : check && check(said);
+      if (!bad) break;
+      if (attempt === 3) console.warn(`dynamic line still repeats after retries (${pool})`);
+      note += ` ${bad}`;
     }
-    return { full, said, kind };
+    if (pool === 'greeting') said = said.replace(/good night/gi, 'Good evening'); // last-resort guard: it is never a hello
+    return { full, said };
+  }
+
+  async quietLine(stage, signal) {
+    const kind = stage === 0 ? 'check' : stage === 1 ? 'wait' : 'hangup';
+    const worried = this.isWorried();
+    const waitingAck = Boolean(this.awaitAck);
+    const what = {
+      check: waitingAck ? `You just gave them a reminder (about "${this.awaitTask}") and have not heard back. In one short, warm sentence ask in your own words whether they heard it or got it. Do not repeat the reminder word for word.` : 'The person has been silent for a little while. In one short, warm sentence gently check whether they are still there (the idea of "are you there?", but choose your own words).',
+      wait: waitingAck ? `You gave them a reminder (about "${this.awaitTask}") and are still waiting to hear they got it. In one short, warm sentence say you are still here and will wait a moment for them. Your own words.` : worried
+        ? 'The person is still silent, and they told you something heavy a moment ago. In one short, warm sentence say you are staying right here with them and will not go anywhere. Choose your own words.'
+        : 'The person is still silent. In one short, warm sentence say you are still here and will wait quietly for them to speak. Choose your own words.',
+      hangup: this.userTurns > 0
+        ? 'The person has gone quiet and has not answered. In one short, kind sentence say you are going to hang up for now and will call right back in a moment to check they are alright, with a gentle goodbye-for-now. Choose your own words.'
+        : 'The person has said nothing at all. In one short, kind sentence say it seems the call was a mistake or a pocket dial, so you are hanging up for now and will call right back in a moment to check, with a gentle goodbye-for-now. Choose your own words.',
+    }[kind];
+    const line = await this.dynamicLine({ pool: 'quiet', signal, what: `${what} Do not ask their name. This is not a greeting: do not start with Hello, Hi or Good morning/evening.` });
+    return { ...line, kind };
   }
 
   async fireSilence() {
@@ -643,37 +746,50 @@ class Call {
     }
     const pre = this.quietPrefetch;
     this.quietPrefetch = null;
+    const stage = this.silenceStage;
+    // Last step with something worrying said: keep the line open and tell the family; never hang up on them.
+    const worriedEnd = stage >= 2 && this.isWorried();
+    if (worriedEnd && pre) pre.abort.abort(); // the hang-up line prepared ahead is not used
     this.silenceStage += 1;
     const myGen = ++this.gen;
     this.abort = new AbortController();
     this.responding = true;
     let line;
     try {
-      line = await (pre ? pre.promise : this.quietLine(this.silenceStage - 1, this.abort.signal));
+      line = await (pre && !worriedEnd ? pre.promise : this.quietLine(worriedEnd ? 1 : stage, this.abort.signal));
     } catch (e) {
       if (myGen !== this.gen || this.closed) return;
       return this.fatal(e.message);
     }
     if (myGen !== this.gen || this.closed) return;
-    recent.quiet = [...recent.quiet, line.said].slice(-6);
+    care.addLine(this.profile.id, 'quiet', line.said);
     this.history.push({ role: 'assistant', content: line.said });
-    console.log('silence step', JSON.stringify({ step: this.silenceStage, kind: line.kind }));
-    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, hangup: line.kind === 'hangup', stripGreeting: true });
+    console.log('silence step', JSON.stringify({ step: this.silenceStage, kind: worriedEnd ? 'stay' : line.kind }));
+    if (worriedEnd) {
+      this.suddenReported = true;
+      if (!this.safety) care.suddenSilence(this.profile.id, { worry: true }); // a safety alert is already up
+    }
+    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, hangup: line.kind === 'hangup' && !worriedEnd, stripGreeting: true });
   }
 
-  // After the goodbye has actually been played, end the call: the browser stops the mic and audio.
+  // After the goodbye has actually been played, end the call: the browser stops the mic and audio. Then Maya rings back
+  // in 5 s (care.js), in-app only.
   hangUp() {
     const wait = Math.max(0, this.playUntil - Date.now()) + 600;
     setTimeout(() => {
       if (this.closed) return;
       console.log('hangup: silence');
+      const id = this.profile.id;
+      const talked = this.userTurns > 0;
       try { this.send({ type: 'hangup' }); } catch { /* socket gone */ }
       this.end();
       this.ws.close(1000);
+      care.silenceHangup(id, { talked });
     }, wait);
   }
 
-  // Spark writes the greeting. If it repeats a recent one it is asked once more; no fixed fallback text exists.
+  // The first words of a call. Written by Spark; a call-back or reminder pickup has its own purpose, a known profile
+  // gets a short greeting, a first/unknown call stays warm. Never repeats a greeting from the last 3 days.
   async greet(hour) {
     if (this.greeted) return; // once per call, at the start only
     this.greeted = true;
@@ -681,28 +797,113 @@ class Call {
     this.abort = new AbortController();
     this.responding = true;
     this.send({ type: 'thinking' });
-    const ask = [{ role: 'user', content: '(The call has just connected. Greet the person now.)' }];
-    let note = this.greetingNote(hour);
-    let full;
-    let said;
+    let line;
+    const rem = this.outreach && this.outreach.kind === 'reminder' ? care.findReminder(this.profile.id, this.outreach.reminderId) : null;
     try {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        full = await sparkStream(ask, this.roster(note), this.abort.signal, () => {});
-        said = firstSentence(stripTags(full));
-        const norm = said.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-        if (/good night/i.test(said)) { note += ' You used "Good night" as a hello. It is only a goodbye. Use "Hello" or "Good evening".'; continue; }
-        if (!recent.greetings.some((g) => g.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim() === norm)) break;
-        note += ' That greeting repeats an earlier one. Write something clearly different.';
-      }
+      if (rem) line = await this.reminderLine(rem, this.abort.signal);
+      else line = await this.dynamicLine({ pool: 'greeting', signal: this.abort.signal, what: this.greetingNote(hour) });
     } catch (e) {
       if (myGen !== this.gen || this.closed) return;
       return this.fatal(e.message);
     }
     if (myGen !== this.gen || this.closed) return;
-    said = said.replace(/good night/gi, 'Good evening'); // last-resort guard: it is never a hello
-    recent.greetings = [...recent.greetings, said].slice(-4);
-    this.history.push({ role: 'assistant', content: said });
-    await this.speakReply(fixedReply(full), null, myGen, { greeting: true });
+    care.addLine(this.profile.id, rem ? 'reminder' : 'greeting', line.said);
+    this.history.push({ role: 'assistant', content: line.said });
+    if (this.outreach && this.outreach.kind === 'reminder') { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
+    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true });
+  }
+
+  // ---- Reminders and timers: information only, as the family (or the person) wrote it ----
+  // The task is named FIRST. Maya never advises, diagnoses or recommends anything about it.
+  async reminderLine(rem, signal, { inCall = false } = {}) {
+    const task = rem.task;
+    const name = this.profile.name;
+    const message = isFamilyMessage(task);
+    // The name is used SPARINGLY (about one reminder in four), never as a template: she already knows who she is talking to.
+    const useName = Math.random() < this.nameChance;
+    const shownTask = message ? task : stripAddressee(task); // "Take you back meds mom": "mom" is how the family addresses her, not part of the task
+    const ADVICE = /\b(should|must|need to|recommend|advise|dose|dosage|doctor|mg|milligram|tablets?|pills? (with|before|after)|with food|empty stomach)\b/i;
+    const nameRe = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    // Code only guards the rules; the natural wording is Spark's. Task: reminder first, name second. Message: delivered as
+    // the family's message, no task template, no "Please", no first name tacked on unless the family wrote it.
+    const CONDITION = /\b(back|heart|blood pressure|pressure|diabetes|diabetic|sugar|pain|cholesterol|thyroid|arthritis|joint|stomach|cough|cold|allergy|asthma|breathing|sleep|nerve|kidney|liver|eye|ear|bone|cancer|infection|headache|migraine|memory|anxiety|depression|insulin|statin|aspirin|paracetamol|tylenol|ibuprofen)\b/i;
+    const check = (said) => {
+      const cond = CONDITION.exec(said);
+      if (cond && !new RegExp(`\\b${cond[0]}\\b`, 'i').test(task)) return `Remove "${cond[0]}": the family did not write that. Say only what their words say; never fill in which medicine or what it is for.`;
+      if (!message && !useName && nameRe.test(said)) return `Leave their name out: it is not needed.`;
+      if (!message && /\bplease\b/i.test(said) && !/\bplease\b/i.test(task)) return 'Do not use "please": say it as a caring companion, not as an order.';
+      if (message && nameRe.test(said) && !nameRe.test(task)) return `Do not use the name ${name}: the family member would not call them that. Use only what the message itself uses.`;
+      if (message && /^\s*please\b/i.test(said)) return 'Do not begin with "Please": you are passing on a message, not giving an order.';
+      if (/^\s*(hi|hello|hey|good (morning|afternoon|evening)|oh|well)\b/i.test(said)) return 'No greeting or small talk: begin with the reminder itself.';
+      const bad = ADVICE.exec(said);
+      if (bad && !new RegExp(`\\b${bad[0]}\\b`, 'i').test(task)) return `Remove "${bad[0]}": pass on only what the family wrote, no advice, doses or instructions of your own.`;
+      return null;
+    };
+    const lead = inCall ? 'You are already talking, so say it as a short natural interruption.' : 'You just connected the call yourself to give it.';
+    const what = message
+      ? `Their family left a message for them, written as: "${task}". ${lead} Deliver it AS A MESSAGE from the family, in ONE or at most two short warm sentences, keeping who is speaking and who is addressed: if the text says who it is from (for example "your daughter"), say so, then give the message in natural words as that family member would say it to them, using what they call them in the message (for example "Mom"). Example of style only: "Your daughter left a message for you: 'Mom, call me whenever you want.'". Do NOT begin with "Please", do NOT use their first name, do not turn it into an instruction from you, do not invent who it is from, no dose, advice or anything about health. No greeting, no small talk.`
+      : `A reminder their family set up is due now. The family wrote it as: "${shownTask}". ${lead} Understand what the family means and say it the way a caring companion would say it aloud, in ONE short warm sentence, with the reminder FIRST. ${useName ? `You may add their name, ${name}, once at the end.` : 'Do not use their name.'} Never "please", never an order or an instruction from you: say what it is time for. Examples (for style only): "meds" becomes "It's time for your medicine${useName ? `, ${name}` : ''}."; "form" becomes "It's time to fill that form."; "take some sleep and meds" becomes "It's time to take a rest and take your medicine."; "take your back meds mom" becomes "It's time for your back medicine.". Use ONLY the family's words for what and which: never fill in which medicine it is or what it is for from your notes, from memory or from earlier reminders. If they wrote only "meds", "medicine" or "tablets", say just "your medicine", nothing more specific. Keep the same task: never invent a different one, never add a dose, advice, instruction or anything about health. If the family's words are truly unclear and you cannot tell what is meant, use their exact words instead of guessing. No greeting, no small talk.`;
+    const line = await this.dynamicLine({ pool: 'reminder', signal, what, check });
+    if (check(line.said)) { // last resort after retries: plainly, in the family's own words
+      const said = message ? `A message from your family: ${task}` : `Reminder: ${shownTask}.`;
+      return { full: said, said };
+    }
+    this.awaitTask = message ? 'the message from their family' : shownTask;
+    this.reminderFacts = { task, turns: 4 }; // what the family wrote is ALL she knows about it, for the next few turns
+    return line;
+  }
+
+  // Waits for a pause (never over Maya's own reply, and not over the person for long), then speaks `makeLine()`.
+  async speakWhenFree(makeLine, { maxWaitMs = TIMER_MAX_WAIT_MS, reminder = false } = {}) {
+    const started = Date.now();
+    const abort = new AbortController();
+    let line;
+    const lineP = makeLine(abort.signal).then((l) => { line = l; }, (e) => { line = { error: e }; });
+    const personTalking = () => this.pending.length || (this.curTurn && this.curTurn.partial);
+    for (;;) {
+      if (this.closed) return false;
+      const waited = Date.now() - started;
+      const mayaBusy = this.responding || this.isSpeaking();
+      if (line && !mayaBusy && (!personTalking() || waited >= maxWaitMs)) break;
+      if (waited >= maxWaitMs + 15000) break; // never wait forever
+      await sleep(250);
+    }
+    await lineP;
+    if (this.closed || !line || line.error) { if (line && line.error) console.error('Timed line failed:', line.error.message); return false; }
+    this.cancelSilence();
+    this.history.push({ role: 'assistant', content: line.said });
+    const myGen = ++this.gen;
+    this.abort = new AbortController();
+    this.responding = true;
+    if (reminder) this.reminderReply = { gen: myGen, said: line.said };
+    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, stripGreeting: true });
+    return line;
+  }
+
+  // A family reminder came due while this call is live (care.js tick).
+  deliverReminder(rem) {
+    if (this.closed || this.awaitAck) return false;
+    this.speakWhenFree((signal) => this.reminderLine(rem, signal, { inCall: true }), { reminder: true }).then((line) => {
+      if (line) { care.addLine(this.profile.id, 'reminder', line.said); this.awaitAck = rem.id; }
+      else care.reminderNoAck(this.profile.id, rem.id);
+    });
+    return true;
+  }
+
+  setTimerFromWords(t) {
+    const handle = setTimeout(() => this.fireTimer(t), t.seconds * 1000);
+    t.handle = handle;
+    this.timers.push(t);
+  }
+
+  async fireTimer(t) {
+    this.timers = this.timers.filter((x) => x !== t);
+    if (this.closed) return;
+    const what = t.task
+      ? `The timer they asked for is up. They asked you to remind them: "${t.task}". In ONE short warm sentence say it plainly as a reminder, in your own words. Pass on only what they asked; never advise or add anything.`
+      : 'The timer they asked you to set is up. In ONE short warm sentence tell them the time they asked for has come, in your own words. Add nothing else.';
+    const line = await this.speakWhenFree((signal) => this.dynamicLine({ pool: 'timer', signal, what }));
+    if (line) care.addLine(this.profile.id, 'timer', line.said);
   }
 
   async respond(holdMs) {
@@ -712,8 +913,9 @@ class Call {
     const turns = this.pending;
     this.pending = [];
     if (!turns.length || this.closed) return;
+    const extra = this.careNotes(turns.map((t) => t.text).join(' '));
     let spec = null;
-    if (this.spec && this.spec.textKey === this.textKey(turns)) {
+    if (!extra && this.spec && this.spec.textKey === this.textKey(turns)) {
       const labels = new Set(turns.flatMap((t) => this.attribute(t).map((p) => p.label)));
       const [only] = labels;
       if (labels.size === 1 && this.spec.byLabel.has(only)) {
@@ -735,12 +937,6 @@ class Call {
 
     if (this.abort) this.abort.abort(); // never two replies at once
     this.lastAnswered = { key: this.textKey(turns), at: Date.now() };
-    if (turns.some((t) => selfHarmText(t.text))) {
-      // Safety first, decided by code from the person's own words: no Spark reply, no sadness script.
-      this.dropSpec();
-      this.history.push({ role: 'assistant', content: ESCALATION });
-      return this.escalate('words', timing);
-    }
     const myGen = ++this.gen;
     this.abort = new AbortController();
     this.responding = true;
@@ -750,16 +946,75 @@ class Call {
       this.abort.signal.addEventListener('abort', () => spec.abort.abort(), { once: true });
       rs = spec.rs;
     } else {
-      rs = startReply(this.history, this.roster(this.replyNote()), this.abort.signal);
+      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}`.trim()), this.abort.signal);
     }
     await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack: turns.some((t) => t.synthetic) });
   }
 
-  escalate(reason, timing) {
+  // Care effects of the words just heard, and notes for the reply that must be true: a flag resolving (so Maya warmly asks
+  // what happened), a reminder acknowledged, an in-call timer set. Returns the note text ('' when none).
+  careNotes(heard) {
+    const id = this.profile.id;
+    this.userTurns += 1;
+    const notes = [];
+    if (selfHarmText(heard)) this.enterSafety();
+    if (this.safety) notes.push(this.safetyNote());
+    else if (FAMILY_ASK.test(heard) && !this.familyAsked) {
+      this.familyAsked = true;
+      care.familyAsk(id);
+      notes.push('They asked you to let their family know. You have sent their family a gentle note asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.');
+    }
+    if (this.reminderFacts && this.reminderFacts.turns > 0) {
+      this.reminderFacts.turns -= 1;
+      notes.push(`REMINDER FACTS: the family wrote exactly "${this.reminderFacts.task}" and that is ALL you know about it. Never name, guess or hint at which medicine it is, what it is for, a dose, or any health condition unless those words are in what they wrote; never take it from your notes, memory or earlier reminders. If they ask which one, what for or how much, answer honestly in fresh words: their family only wrote "${this.reminderFacts.task}" and did not say which, so they should please check with their family or their medicine box, because you do not want to guess. Do not advise.`);
+    }
+    if (this.reminderPending) {
+      const r = this.reminderPending;
+      this.reminderPending = null;
+      if (this.awaitAck && !isAck(heard)) notes.push(`You were in the middle of giving them a reminder when they spoke over you: "${r.said}". It is still owed. If they asked a question, answer it in one short sentence first. Then, in this same reply, give the reminder again plainly and with confidence, as the reminder itself (the same meaning, short, worded a little differently is fine). If they ask what you said or what that was, they mean the reminder: tell them. You know exactly what it is: never say "I think", never hedge, never ask them to check anything.`);
+    }
+    if (care.onSeniorSpoke(id).resolved) this.askWhat = true;
+    if (this.askWhat) {
+      this.askWhat = false;
+      notes.push('Earlier the line went quiet, you could not reach them, and you were worried. Now, after answering what they just said, warmly ask what happened, saying you were worried, in your own fresh words. Gentle and relieved, never accusing or scolding; one short question; do not repeat it later.');
+    }
+    if (this.awaitAck && isAck(heard)) {
+      care.reminderAck(id, this.awaitAck);
+      this.awaitAck = null;
+      notes.push('They acknowledged the reminder you just gave. Reply very briefly and warmly. Do not repeat the reminder and do not add any advice about it.');
+    }
+    const tm = parseTimer(heard);
+    if (tm) {
+      if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS) {
+        this.setTimerFromWords({ seconds: tm.seconds, task: tm.task });
+        notes.push(`They asked you to remind them in ${tm.seconds < 90 ? `${tm.seconds} seconds` : `${Math.round(tm.seconds / 60)} minutes`}${tm.task ? ` about "${tm.task}"` : ''}. A timer is set for it right now. Confirm in one short sentence that you will remind them then. Promise nothing else.`);
+      } else {
+        notes.push('They asked for a timer that is too long or unclear. Say kindly you can only remind them within about half an hour during a call, and that their family can set longer reminders. Promise nothing else.');
+      }
+    }
+    return notes.join(' ');
+  }
+
+  // Tier A: first time in this call, the family is told at once. `safetyFresh` makes the next reply say so out loud.
+  enterSafety() {
+    this.safety = true;
     this.escalations += 1;
-    console.log('escalation', JSON.stringify({ reason, count: this.escalations })); // no words logged
     this.prevDelivery = null;
-    return this.speak(ESCALATION);
+    const r = care.selfHarmAlert(this.profile.id);
+    if (r.isNew) this.safetyFresh = true;
+    console.log('safety', JSON.stringify({ count: this.escalations, newAlert: r.isNew })); // no words logged
+  }
+
+  // Instructions for every reply once Tier A has begun. Spark writes the words; none of this is spoken as given.
+  safetyNote() {
+    const fresh = this.safetyFresh;
+    this.safetyFresh = false;
+    return [
+      'SAFETY: this person has spoken of hurting themselves or ending their life. Stay calm, warm and present. Reply to exactly what they just said, in fresh words every time; never repeat an earlier line or the shape of one. Two or three short sentences, no lists, no lecture, no diagnosis, no exclamation marks.',
+      'Say what you did with the words "alerted" or "let your family know" and never "reminded" (a reminder is a different, routine thing). Do not give any phone number and do not tell them to call emergency services; you never call anyone yourself. Keep them talking and gently find out whether they are safe right now and whether someone is near them.',
+      fresh ? 'In THIS reply, tell them calmly and honestly that you are letting their family know right now, so they are not alone with this. It is not a secret.' : 'Their family has already been told; do not announce it again unless they ask or push back.',
+      'If they say you may tell their family, or ask you to, say in fresh words that you have let them know and that you are staying right here with them. If they refuse or push back about calling someone or about telling family, do not ask them to call someone again: say in fresh words that you understand, that you are alerting their family anyway because you care, and that you are staying with them.',
+    ].join(' ');
   }
 
   recordName(label, name) {
@@ -801,6 +1056,7 @@ class Call {
         const intent = raw && String(raw.intent).toLowerCase();
         const lastUser = ([...this.history].reverse().find((m) => m.role === 'user') || { content: '' }).content;
         if (!greeting && ((intent === 'story' && STORY_ASK.test(lastUser)) || (intent === 'recall' && RECALL_ASK.test(lastUser)))) { d.maxSentences = Infinity; d.moments = 3; }
+        if (this.safety) { d.escalate = false; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.maxSentences = 3; } // safety replies are calm and plain, and never halted
         if (greeting) { d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.maxSentences = 1; }          // a greeting is one warm sentence, never theatrical
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear', whisperPieces: d.whisperPieces };
@@ -890,10 +1146,14 @@ class Call {
     await producer;
     if (myGen !== this.gen || this.closed) { keep(); return; }
     if (splitter.halted) {
-      // Spark read the person as in crisis before saying anything: use the safety reply instead.
+      // Spark read the person as in crisis before saying anything: Tier A. Write the reply again with the safety note.
       this.abort.abort();
-      this.history.push({ role: 'assistant', content: ESCALATION });
-      return this.escalate('feel', timing);
+      this.enterSafety();
+      const gen2 = ++this.gen;
+      this.abort = new AbortController();
+      this.responding = true;
+      const rs2 = startReply(this.history, this.roster(`${this.replyNote()} ${this.safetyNote()}`), this.abort.signal);
+      return this.speakReply(rs2, timing, gen2, { record: true, stripGreeting: true });
     }
     if (producerErr && !(producerErr.empty && !said.length)) return this.fatal(producerErr.message);
     if (!said.length) {
@@ -936,4 +1196,4 @@ class Call {
   }
 }
 
-module.exports = { Call };
+module.exports = { Call, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

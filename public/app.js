@@ -379,7 +379,7 @@
     c.ctx.createMediaStreamSource(c.stream).connect(tap);
     tap.connect(mute).connect(c.ctx.destination);
     tap.port.onmessage = (e) => { if (c.ready && ws.readyState === WebSocket.OPEN) ws.send(e.data.buffer); };
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'start', sampleRate: c.ctx.sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id }));
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'start', sampleRate: c.ctx.sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId }));
     ws.onmessage = (m) => {
       if (myGen !== gen) return;
       if (typeof m.data === 'string') { try { onServerEvent(c, JSON.parse(m.data)); } catch { /* ignore */ } return; }
@@ -391,7 +391,8 @@
 
   // ---- Call lifecycle ----
 
-  async function startCall() {
+  // opts: { reason: 'callback'|'reminder', outreachId } when Maya rang and the person pressed Accept.
+  async function startCall(opts = {}) {
     if (!window.mayaProfile || !window.mayaProfile.id) { showError('Please pick who is talking first.'); return; } // no profile, no call
     const myGen = ++gen;
     showError('');
@@ -424,6 +425,7 @@
       buf: new Float32Array(analyser.fftSize),
       utterance: null, fetchAbort: null, timer: null,
       onsetTicks: 0, lastVoice: 0, turn: 0, ws: null, tap: null, ready: false,
+      reason: opts.reason, outreachId: opts.outreachId,
     };
     stream.getAudioTracks().forEach((t) => {
       t.onended = () => { if (myGen === gen) endCall('The microphone stopped working. The call has ended.'); };
@@ -477,6 +479,8 @@
   });
   window.addEventListener('pagehide', () => endCall());
   window.mayaEndCall = () => endCall();
+  window.mayaStartCall = (opts) => { if (!call) startCall(opts); };
+  window.mayaInCall = () => Boolean(call);
 
   api('/api/config').then((cfg) => {
     mode = cfg.mode;

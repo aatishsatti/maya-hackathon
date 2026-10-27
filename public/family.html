@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maya Family</title>
+  <style>
+    :root { --ink: #1f2933; --soft: #52606d; --line: #d5dbe0; --green: #2f6f4f; --yellow-bg: #fff6d6; --yellow: #9a6b00; --red-bg: #fde8e6; --red: #b3392f; --ok-bg: #e6f4ea; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 16px/1.45 -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: var(--ink); background: #fff; }
+    main { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px; }
+    h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 18px; margin: 28px 0 8px; }
+    .sub { color: var(--soft); margin: 0 0 16px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    select, input, button { font: inherit; padding: 8px 10px; border: 1px solid var(--soft); border-radius: 8px; background: #fff; color: inherit; }
+    button { cursor: pointer; } button.primary { background: var(--green); border-color: var(--green); color: #fff; }
+    .card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 8px 0; }
+    .card.flag { background: var(--yellow-bg); border-color: #e6c75a; } .card.alert { background: var(--red-bg); border-color: #e39a93; }
+    .card.resolved { background: var(--ok-bg); border-color: #9fd1ae; }
+    .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 99px; background: #fff; border: 1px solid currentColor; }
+    .flag .badge { color: var(--yellow); } .alert .badge { color: var(--red); } .resolved .badge { color: var(--green); }
+    .meta { color: var(--soft); font-size: 14px; }
+    .mode { display: block; border: 2px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 6px 0; cursor: pointer; }
+    .mode.on { border-color: var(--green); background: var(--ok-bg); }
+    .status { font-weight: 600; } .empty { color: var(--soft); }
+    .err { color: var(--red); font-weight: 600; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Maya · Family</h1>
+  <p class="sub">Information only. Maya never diagnoses or recommends. Calls ring the senior's page only while it is open; she cannot ring a closed app or a locked phone.</p>
+  <div class="row"><label>Senior <select id="who"></select></label> <span id="presence" class="meta"></span></div>
+  <p id="err" class="err" role="alert" hidden></p>
+  <div id="body" hidden>
+    <h2>Mode <span id="modeNow" class="badge" style="color:var(--green)"></span></h2>
+    <div id="modes"></div>
+
+    <h2>Alerts</h2><div id="alerts"></div>
+    <h2>Flags</h2><div id="flags"></div>
+
+    <h2>Reminders</h2>
+    <form id="remForm" class="row">
+      <input id="task" placeholder="Task, e.g. medicine" maxlength="80" required>
+      <input id="at" type="datetime-local" required>
+      <select id="repeat"><option value="none">Once</option><option value="daily">Every day</option><option value="weekly">Every week</option></select>
+      <button class="primary" type="submit">Add reminder</button>
+    </form>
+    <div id="reminders"></div>
+
+    <h2>Send a message</h2>
+    <form id="msgForm" class="row"><input id="msg" placeholder="A short note for them" maxlength="300" required style="flex:1;min-width:200px"><button class="primary" type="submit">Send</button></form>
+
+    <h2>Notifications</h2><div id="notifs"></div>
+  </div>
+</main>
+<script src="family.js"></script>
+</body>
+</html>

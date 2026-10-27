@@ -1,10 +1,10 @@
 # Progress
-- Done: F1 voice loop, F2 memory (per-profile, picker, dynamic length), global emotions. Next: Feature 3 (calling-first/reminders).
-- Stack: Meta Transcribe + Spark, ElevenLabs Hope eleven_v4_turbo. Keys in server .env only. Files: server.js call.js brain.js reply.js emotion.js memory.js transcribe.js ws.js public/{app,profiles,mic-worklet}.js.
-- F2 storage: data/profiles/<id>.json per profile (git-ignored), pending words in <id>.pending.jsonl (disk only), Spark files them at call end/start. No transcripts kept. Gender only for pronouns.
-- Length: normal chat 1-3 sentences; story (default 150-300 words; "full story" expands the SAME story) and recall lift the cap only when Spark intent AND the person's words match; "do you remember X?" is intent=check, short answer only.
-- Emotions: global, sparing, from words only. Sad/lonely/grief/anxious/frustrated/angry at 3+ -> soft first phrase; happy/excited -> excited opening; neutral -> warm baseline. Spark may mark [[soft]]/[[warm]]/[[bright]]: max 1 per normal reply, 3 per story/recall, 4 pieces apart, none in greetings/silence. Whispers OFF; speed/style ignored.
-- Tags [sympathetic]/[warmly]/[happy]/[excited], gains 0.85/0.8/0.62/0.6; fade+gap after tone pieces (excited 80+100 ms, others 30+40 ms).
-- WATCH: live excited overlap was heard 2 of 5-6 before the fade fix; clips sound clean but live re-test after the fix is pending. If it returns, it is a streaming/duck issue, not a join issue.
-- Not done: reminders (F3), self-harm escalation is a placeholder fixed reply, two-real-speaker diarization and non-English quality untested.
-- Known limits: Spark first token 2-4 s; Transcribe is text only; late speech can interrupt the hang-up line.
+- Done: F1 voice loop, F2 memory (per-profile), global emotions, F3 calling-first (committed). Next: wellness loop / app phase after AI is perfect, then F4 scam shield.
+- Stack: Meta Transcribe + Spark, ElevenLabs. Keys in server .env only. data/ (profiles, care) git-ignored; no transcripts kept.
+- F3 calls: silence 20-30 s, then 10 s, 8 s, hang up (never after worrying words). Call-back 5 s after silence hang-up, in-app ring only while the app is open, Accept/Decline, 3 tries 1-2 min apart. Reminders from /family.html, task named first, Spark-worded, only the family's words (no dose/advice).
+- F3 alerts: Green=nothing; Standard=Flag, Alert on talked-then-quiet; Cautious=Flag+note, Alert after 3 h; Ultra=Alert always; quiet hours cap at Flag. Family push = dashboard + event to an open /family.html only. No phone push, no locked-phone ringing.
+- Safety: self-harm intent -> Spark-written reply + urgent topic-only Alert, cleared only by family "I've seen this". safetyCut after family Seen = NO ring on purpose (family is handling it); active + no Seen + cut = ring in 5 s. Tier B (fear of dying) = empathy only.
+- Messages: family text that is a message ("its leena your daughter", "your son ...") is delivered as a message, not a task.
+- Voice: first TTS piece ends at a sentence end (comma only after "Oh dear,"/"Oh,"); ~3 s avg speechEnd->firstAudio, safety rewrites are slower (known).
+- Tests: node --test test/*.test.js (59, Spark stubbed). MAYA_CARE_SCALE shrinks timers for manual tests.
+- Not done: closed-app ringing, WhatsApp video, live video seeing, fall detection, non-English quality, two-speaker diarization.

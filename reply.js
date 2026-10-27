@@ -90,14 +90,17 @@ class ChunkSplitter {
       this.headDone = true;
       if (!this.delivery) this.delivery = this.onFeel(null); // Spark gave no usable read: neutral defaults
     }
-    // Speed: the very first piece of a reply goes to the voice at its first clause end ("Oh dear," /
-    // "That sounds hard,") or after five words, not after a whole sentence; the rest streams behind it.
+    // Speed: the very first piece of a reply goes to the voice at its first SENTENCE end (two or more words), not after the whole
+    // reply; the rest streams behind it. A comma is a cut point only for an opening interjection ("Oh dear,", "Oh,"): a piece
+    // boundary inside a sentence is heard as a pause followed by a rush. A very long sentence with no end in sight (30+ words)
+    // is cut at its last comma so the voice is never left waiting.
     if (this.pieceCount === 0 && this.buf.trim()) {
-      const clause = /[,;:.!?\u2026]["')\]]*\s/.exec(this.buf);
-      const words = this.buf.trimStart().split(/\s+/);
+      const sentence = /[.!?\u2026]["')\]]*\s/.exec(this.buf);
+      const interj = /^\s*(?:oh dear|oh|well|ah|hmm|um)\s*,\s/i.exec(this.buf);
       let cut = -1;
-      if (clause && this.buf.slice(0, clause.index).trim().split(/\s+/).length >= 2) cut = clause.index + clause[0].length;
-      else if (words.length > 5 && /\s$/.test(this.buf)) cut = this.buf.length;
+      if (interj) cut = interj[0].length;
+      else if (sentence && this.buf.slice(0, sentence.index).trim().split(/\s+/).length >= 2) cut = sentence.index + sentence[0].length;
+      else if (this.buf.trimStart().split(/\s+/).length > 30) { const c = this.buf.lastIndexOf(', '); if (c > 0) cut = c + 2; }
       if (cut > 0) {
         const piece = this.buf.slice(0, cut);
         if ((piece.match(/\[/g) || []).length === (piece.match(/\]/g) || []).length) { this.buf = this.buf.slice(cut); this.emit(piece); }

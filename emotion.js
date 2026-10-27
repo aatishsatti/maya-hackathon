@@ -62,7 +62,7 @@ function mapEmotionToDelivery(emotion, intensity, prev) {
 }
 
 // Deterministic safety check on the person's own words, independent of what Spark says.
-const SELF_HARM = /\b(kill myself|killing myself|end my life|end it all|want to die|wanna die|wish i (was|were) dead|suicid\w*|hurt myself|harm myself|don'?t want to (live|be here)|no reason to live|better off without me)\b/i;
+const SELF_HARM = /\b(kill myself|killing myself|end my life|end it all|want to die|wanna die|wish i (was|were) dead|suicid\w*|take my own life|taking my own life|hurt myself|harm myself|don'?t want to (live|be here)|no reason to live|better off without me)\b/i;
 function selfHarmText(text) { return SELF_HARM.test(String(text || '')); }
 
 module.exports = { mapEmotionToDelivery, parseFeel, selfHarmText, EMOTIONS, INTENTS };

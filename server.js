@@ -7,6 +7,7 @@ const { accept } = require('./ws');
 const { Call } = require('./call');
 const { requireRealEnv } = require('./brain');
 const memory = require('./memory');
+const care = require('./care');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env: use defaults */ }
 
@@ -59,6 +60,46 @@ function readBody(req, limit) {
   });
 }
 
+// ---- Care (Feature 3): senior presence stream, call-back / reminder rings, family dashboard data ----
+// Same-origin only for anything that changes state or opens a stream (no cross-site page may drive these).
+const sameOrigin = (req) => !req.headers.origin || req.headers.origin === `http://${req.headers.host}`;
+function openStream(req, res, attach) {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
+  res.write(': open\n\n');
+  const detach = attach(res);
+  const beat = setInterval(() => { try { res.write(': beat\n\n'); } catch { /* closed */ } }, 20000);
+  req.on('close', () => { clearInterval(beat); if (detach) detach(); });
+}
+async function readJson(req, limit = 4096) {
+  try { return JSON.parse((await readBody(req, limit)).toString('utf8') || '{}'); } catch { return null; }
+}
+async function handleCare(req, res, url) {
+  if (!sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
+  const parts = url.pathname.split('/').filter(Boolean).slice(2); // after /api/care
+  const [a, b, c, d] = parts;
+  if (req.method === 'GET' && a === 'overview') return sendJson(res, 200, { seniors: care.overview() });
+  if (req.method === 'GET' && a === 'events') return openStream(req, res, (r) => care.attachFamily(r));
+  if (!/^[a-f0-9]{8}$/.test(a || '') || !care.get(a)) return sendJson(res, 404, { error: 'Not found' });
+  if (req.method === 'GET' && !b) return sendJson(res, 200, care.view(a));
+  if (req.method === 'GET' && b === 'events') {
+    const tz = url.searchParams.get('tz');
+    return openStream(req, res, (r) => care.attachSenior(a, r, /^[\w/+\-]{1,60}$/.test(tz || '') ? tz : null));
+  }
+  if (req.method === 'DELETE' && b === 'reminders' && c) return care.deleteReminder(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
+  if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+  const body = await readJson(req);
+  if (!body) return sendJson(res, 400, { error: 'Bad request' });
+  try {
+    if (b === 'mode') return sendJson(res, 200, { mode: care.setMode(a, body.mode) });
+    if (b === 'reminders' && !c) return sendJson(res, 200, { reminder: care.addReminder(a, body) });
+    if (b === 'messages') return sendJson(res, 200, { notification: { id: care.sendMessage(a, body.text).id } });
+    if (b === 'activity') return sendJson(res, 200, { ok: care.touch(a, 'app', Date.now(), /^[\w/+\-]{1,60}$/.test(body.tz || '') ? body.tz : null) });
+    if (b === 'outreach' && c && d === 'decline') return care.decline(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
+    if (b === 'notifications' && c && d) return care.markNotif(a, c, d) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
+  } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
+  return sendJson(res, 404, { error: 'Not found' });
+}
+
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { mode: MODE });
@@ -72,7 +113,8 @@ async function handleApi(req, res, url) {
     catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
   }
   const del = /^\/api\/profiles\/([a-f0-9]{8})$/.exec(url.pathname);
-  if (del && req.method === 'DELETE') return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
+  if (del && req.method === 'DELETE') { care.remove(del[1]); return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); }
+  if (url.pathname.startsWith('/api/care')) return handleCare(req, res, url);
   // Real mode runs over the /ws call socket; these HTTP endpoints are mock only.
   if (MODE === 'real') return sendJson(res, 404, { error: 'Not found' });
   if (url.pathname === '/api/greet' && req.method === 'POST') {
@@ -123,6 +165,7 @@ if (MODE === 'real') {
   try { requireRealEnv(); } catch (e) { console.error(e.message); process.exit(1); }
   memory.recoverAll(); // file any words a crash left in a pending file
 }
+care.start(); // reminder scheduler (also runs in mock mode; rings need the page open)
 server.on('upgrade', (req, socket) => {
   const url = new URL(req.url, 'http://localhost');
   // Same-origin only, so other web pages cannot open a call on this machine.
