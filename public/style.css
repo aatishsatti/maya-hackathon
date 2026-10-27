@@ -115,3 +115,21 @@ h1 { margin: 0 0 24px; font-size: 34px; font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   .orb .layer { animation: none !important; }
 }
+
+/* Profile picker (family setup). The call screen itself stays one big button. */
+.picker .pick-title { margin: 0 0 16px; }
+.profile-list { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.pick-btn { font: inherit; font-size: 24px; padding: 16px; border-radius: 14px; border: 2px solid var(--btn); background: #fff; color: var(--ink); cursor: pointer; }
+.pick-btn:hover, .pick-btn:focus-visible { background: #eaf4ee; }
+.link-btn { font: inherit; font-size: 18px; background: none; border: none; color: var(--soft); text-decoration: underline; cursor: pointer; margin-top: 16px; }
+.add-form { display: flex; flex-direction: column; gap: 14px; width: 100%; text-align: left; margin-top: 16px; }
+.add-form input[type=text] { font: inherit; width: 100%; padding: 10px; border: 2px solid var(--soft); border-radius: 10px; }
+.add-form fieldset { border: 2px solid #d5dbe0; border-radius: 10px; }
+.add-form legend { font-size: 16px; color: var(--soft); }
+.add-form fieldset label { display: block; padding: 4px 0; }
+
+/* display:flex on .call would otherwise beat the hidden attribute and stack the screens. */
+[hidden] { display: none !important; }
+.profile-row { display: flex; gap: 8px; align-items: stretch; }
+.profile-row .pick-btn { flex: 1; }
+.del-btn { font: inherit; font-size: 16px; padding: 0 12px; border-radius: 14px; border: 2px solid #d5dbe0; background: #fff; color: var(--btn-end); cursor: pointer; }

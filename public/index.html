@@ -7,7 +7,25 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="call">
+  <main id="picker" class="call picker" hidden>
+    <h1>Maya</h1>
+    <p class="pick-title">Who is Maya talking with?</p>
+    <div id="profileList" class="profile-list"></div>
+    <button id="addBtn" class="link-btn" type="button">+ Add a person</button>
+    <form id="addForm" class="add-form" hidden>
+      <label>Name <input id="nameIn" type="text" maxlength="30" autocomplete="off" required></label>
+      <fieldset>
+        <legend>Gender (only for how Maya refers to them)</legend>
+        <label><input type="radio" name="gender" value="female" required> Female</label>
+        <label><input type="radio" name="gender" value="male"> Male</label>
+        <label><input type="radio" name="gender" value="prefer-not"> Prefer not to say</label>
+      </fieldset>
+      <button id="saveBtn" class="pick-btn" type="submit">Save</button>
+      <button id="cancelBtn" class="link-btn" type="button">Cancel</button>
+    </form>
+    <p id="pickError" class="error" role="alert" hidden></p>
+  </main>
+  <main id="callScreen" class="call" hidden>
     <h1>Maya</h1>
     <div id="orb" class="orb" data-state="idle" role="img" aria-label="Maya is not on a call">
       <span class="layer l1"></span>
@@ -19,7 +37,9 @@
     <p id="error" class="error" role="alert" hidden></p>
     <button id="callBtn" class="call-btn" type="button">Call Maya</button>
     <p id="modeNote" class="mode-note" hidden></p>
+    <button id="switchBtn" class="link-btn" type="button"></button>
   </main>
+  <script src="profiles.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,10 +1,10 @@
 # Progress
-- Feature 1 (voice loop, full-duplex feel) done. Next: Feature 2 memory (not started).
-- Files: server.js, call.js, brain.js, reply.js, emotion.js, transcribe.js, ws.js, public/app.js, public/mic-worklet.js.
-- Stack: Meta Transcribe (ears) + Meta Spark (brain) + ElevenLabs Hope, eleven_v4_turbo 0.45/0.75/boost. Keys in server .env only.
-- Passed (synthetic + owner ear test): varied short greeting, silence flow 8.0/4.5/4.5/5.5 s + hang-up, ding dips not stops,
-  barge-in dip 165-198 ms (hard stop 973-1543 ms), own turn-end 0.88-0.98 s, "Okay." not stuck, 2 s dangling pause waits, piece gaps 249 -> 86 ms.
-- Behaviour: whispers OFF, happy/excited first phrase only, varied empathy openings, self-harm words use a fixed safety reply (real escalation policy still to be defined).
-- Known limits: Spark first token 2.0-3.9 s (dominates latency); Transcribe is text only, so no tone from voice;
-  two-real-speaker diarization never tested on real people; a pause longer than ~1.2 s after a complete sentence still gets an answer;
-  hang-up line can be interrupted by late speech (edge case, untested); names and last topic live in server memory only until Feature 2.
+- Feature 1 (voice loop) done, owner ear-tested. Feature 2 (memory + profile picker + dynamic length) done. Next: Feature 3 (calling-first/reminders), then global emotions.
+- Stack: Meta Transcribe + Spark, ElevenLabs Hope eleven_v4_turbo. Keys in server .env only. Files: server.js call.js brain.js reply.js emotion.js memory.js transcribe.js ws.js public/{app,profiles,mic-worklet}.js.
+- F2 storage: data/profiles/<id>.json per profile (git-ignored), only that profile loaded per call, no transcripts. Columns people/events/preferences/current/topics, each fact dated; Spark gets date/time every turn.
+- Per-turn words go to <id>.pending.jsonl (disk only); Spark extracts at call end, server start, next call start. Corrections replace old facts and drop stale topics. Pending words deleted after filing.
+- Picker: separate screens, Save goes straight to call, duplicate names 409, per-profile Delete, no profile = no call. Gender only for pronouns; Maya voice stays Hope.
+- Length: normal chat 1-3 sentences; story/recall lifts cap only when Spark intent AND the person's words match (token cap 4000, stream timeout 120 s, stories keep 1500 chars).
+- languageBias English, Spanish, French, Portuguese, Hindi; non-English quality untested, not claimed.
+- Not done: reminder execution (F3), self-harm escalation is a placeholder fixed reply (policy: de-escalate aloud, calmly tell senior family is alerted, topic-only alert, family decides, never call emergency, literal intent + context not keywords), two-real-speaker diarization untested.
+- Known limits: Spark first token 2-4 s; Transcribe is text only (no tone); late speech can interrupt the hang-up line.

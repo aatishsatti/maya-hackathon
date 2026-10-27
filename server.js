@@ -6,6 +6,7 @@ const path = require('node:path');
 const { accept } = require('./ws');
 const { Call } = require('./call');
 const { requireRealEnv } = require('./brain');
+const memory = require('./memory');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env: use defaults */ }
 
@@ -62,6 +63,16 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { mode: MODE });
   }
+  // Profiles (family setup). Names and gender only; each profile has its own memory file.
+  if (url.pathname === '/api/profiles' && req.method === 'GET') return sendJson(res, 200, { profiles: memory.listProfiles() });
+  if (url.pathname === '/api/profiles' && req.method === 'POST') {
+    let body;
+    try { body = JSON.parse((await readBody(req, 2048)).toString('utf8')); } catch { return sendJson(res, 400, { error: 'Bad request' }); }
+    try { return sendJson(res, 200, { profile: memory.createProfile(body.name, body.gender) }); }
+    catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
+  }
+  const del = /^\/api\/profiles\/([a-f0-9]{8})$/.exec(url.pathname);
+  if (del && req.method === 'DELETE') return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
   // Real mode runs over the /ws call socket; these HTTP endpoints are mock only.
   if (MODE === 'real') return sendJson(res, 404, { error: 'Not found' });
   if (url.pathname === '/api/greet' && req.method === 'POST') {
@@ -110,6 +121,7 @@ const server = http.createServer((req, res) => {
 
 if (MODE === 'real') {
   try { requireRealEnv(); } catch (e) { console.error(e.message); process.exit(1); }
+  memory.recoverAll(); // file any words a crash left in a pending file
 }
 server.on('upgrade', (req, socket) => {
   const url = new URL(req.url, 'http://localhost');

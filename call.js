@@ -1,6 +1,7 @@
 // One live call: browser socket <-> Meta Transcribe (ears) -> Spark (brain) -> ElevenLabs (voice).
-// Everything here is per call and in memory; speaker labels are session-scoped, so the
-// label->name map and the short history die with the call. Nothing is kept across calls.
+// Speaker labels are session-scoped, so the label->name map and the short history die with the call.
+// What carries across calls is the picked profile's memory file (memory.js): it is loaded at the start
+// and updated from this call's words after it ends. The words themselves are never stored.
 //
 // Browser -> server: text {type:'start', sampleRate} | {type:'bargein'}; binary = Float32 mono mic.
 // Server -> browser: text events below; binary = PCM16 24 kHz mono of Maya's voice.
@@ -10,6 +11,7 @@ const { openTranscribe, Resampler } = require('./transcribe');
 const { streamSpeech, sparkStream } = require('./brain');
 const { startReply, fixedReply, ChunkSplitter, stripTags } = require('./reply');
 const { mapEmotionToDelivery, selfHarmText, INTENTS } = require('./emotion');
+const memory = require('./memory');
 
 // Seniors pause mid-thought. Meta has no endpointing settings, so after Meta says a turn is
 // complete we wait before answering: short if it ended like a sentence, long if it trailed off.
@@ -95,13 +97,16 @@ function scale(buf, g) {
 }
 
 // Greetings are written by Spark each call. Only real things from this server process are passed
-// along: the last few greetings (so none repeats) and how the previous call in this process ended.
-// Nothing is invented and nothing survives a restart; real memory is Feature 2.
-const recent = { greetings: [], topic: null, heavy: false, name: null, quiet: [] };
+// along: the last few greetings and silence lines (so none repeats; wording only, no personal facts).
+// Names, topics and everything else about a person come from that profile's own memory, never from here.
+const recent = { greetings: [], quiet: [] };
 const firstSentence = (text) => { const m = /^[\s\S]*?[.!?](?=\s|$)/.exec(text.trim()); return (m ? m[0] : text).trim(); };
 // Byte offset of the first / end of the last sample above the silence threshold (even offsets).
 function firstLoud(buf) { for (let i = 0; i + 1 < buf.length; i += 2) if (Math.abs(buf.readInt16LE(i)) >= SILENT) return i; return buf.length; }
 function lastLoud(buf) { for (let i = buf.length - 2; i >= 0; i -= 2) if (Math.abs(buf.readInt16LE(i)) >= SILENT) return i + 2; return 0; }
+// Words that must be in the person's last turn before a reply may run long (see onFeel).
+const STORY_ASK = /\b(stor(y|ies)|tale)\b/i;
+const RECALL_ASK = /\b(tell|told|remember|recall|mention|said|stor(y|ies)|what (was|happened|did|is|were)|then what)\b/i;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
 
@@ -120,6 +125,10 @@ class Call {
     this.names = new Map();      // label -> name, this call only
     this.seen = new Set();       // labels heard this call
     this.history = [];
+    this.profile = null;         // the picked profile (memory.js), set at 'start'
+    this.tz = null;              // browser time zone, for the date/time Spark is given
+    this.callId = require('node:crypto').randomBytes(4).toString('hex');
+    this.callStarted = false;    // memory.startCall done: turns are being appended to the pending file
     this.holdTimer = null;
     this.abort = null;           // aborts the in-flight reply
     this.lastAnswered = null;    // { key, at } of the last turn Maya replied to
@@ -169,7 +178,7 @@ class Call {
   end() {
     if (this.closed) return;
     this.closed = true;
-    this.noteLastTopic();
+    this.saveMemory();
     clearTimeout(this.holdTimer);
     clearTimeout(this.staleTimer);
     clearTimeout(this.duckTimer);
@@ -180,15 +189,11 @@ class Call {
     if (this.meta) this.meta.close();
   }
 
-  // What the next greeting may know about this call: its last thing said, unless it was heavy.
-  noteLastTopic() {
-    const lastUser = [...this.history].reverse().find((m) => m.role === 'user');
-    if (!lastUser) return;
-    const heavy = this.escalations > 0 || (this.prevDelivery && (this.prevDelivery.emotion === 'sad' || this.prevDelivery.emotion === 'lonely' || this.prevDelivery.emotion === 'grief' || this.prevDelivery.emotion === 'anxious'));
-    const named = [...this.names.values()];
-    if (named.length) recent.name = named[0]; // a name the person gave in this process, passed to the next greeting
-    recent.heavy = Boolean(heavy);
-    recent.topic = heavy ? null : lastUser.content.replace(/^[^:]*:\s*/, '').slice(0, 120);
+  // After the call: its pending words are filed into the profile's memory by Spark in the background.
+  saveMemory() {
+    if (!this.profile || !this.callStarted) return;
+    const heavy = this.escalations > 0 || (this.prevDelivery && ['sad', 'lonely', 'grief', 'anxious'].includes(this.prevDelivery.emotion));
+    memory.endCall(this.profile.id, this.callId, { heavy: Boolean(heavy) });
   }
 
   onBrowser(data, isBinary) {
@@ -209,9 +214,27 @@ class Call {
     }
     let m;
     try { m = JSON.parse(data); } catch { return; }
-    if (m.type === 'start' && !this.meta) {
+    if (m.type === 'start' && !this.meta && !this.starting) {
+      this.profile = memory.load(m.profileId);
+      if (!this.profile) return this.fatal('Please pick a profile first.');
+      try { new Intl.DateTimeFormat('en-US', { timeZone: m.tz }); this.tz = m.tz; } catch { this.tz = null; }
       const rate = Number(m.sampleRate);
       if (!(rate >= 8000 && rate <= 96000)) return this.fatal('Bad microphone sample rate');
+      this.starting = true;
+      // Words a crashed or unfinished earlier call left behind are filed first, so this call knows them.
+      memory.flushPending(this.profile.id).then(() => {
+        if (this.closed) return;
+        memory.startCall(this.profile.id, this.callId, this.tz);
+        this.callStarted = true;
+        this.openMeta(m, rate);
+      });
+      return;
+    }
+    this.onBrowserMessage(m);
+  }
+
+  openMeta(m, rate) {
+    {
       this.resampler = new Resampler(rate);
       this.meta = openTranscribe(this.apiKey, {
         onReady: () => { this.send({ type: 'ready' }); this.greet(Number(m.localHour)); },
@@ -221,7 +244,11 @@ class Call {
           this.fatal(code === 1000 ? 'The listening connection ended.' : `Listening failed (${code}) ${reason}`.trim());
         },
       });
-    } else if (m.type === 'duck') {
+    }
+  }
+
+  onBrowserMessage(m) {
+    if (m.type === 'duck') {
       // The browser dipped Maya's volume because of loud sound. Give real words DUCK_CONFIRM_MS to arrive
       // (considerBargeIn then stops her); if none do, her volume goes back and she carries on.
       if (this.isSpeaking()) {
@@ -502,7 +529,7 @@ class Call {
   roster(note = '') {
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
-    return `People heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
+    return `${memory.profileNote(this.profile, this.tz)}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
   }
 
   // Notes Spark gets with every normal reply: how not to repeat the openings it just used.
@@ -512,7 +539,7 @@ class Call {
     if (this.names.size) {
       const ago = this.replyCount - this.lastNameUse;
       bits.push(ago < 3 ? 'You used their name recently, so do not use it in this reply.' : 'If this reply comforts or encourages them (sadness, loneliness, worry), start it with their name once, like "Mike, I\'m right here with you." For ordinary chat or happy news leave their name out.');
-    } else if (recent.name) {
+    } else if (this.profile) {
       bits.push('Do not ask for their name.');
     } else if (this.willAskName && !this.askedName && this.replyCount === 1) {
       bits.push('If the moment is light, end this reply by asking what you should call them, once, gently. If it is a heavy or sad moment, do not ask.');
@@ -528,16 +555,16 @@ class Call {
     const h = Number.isInteger(hour) && hour >= 0 && hour < 24 ? hour : null;
     const part = h === null ? null : h < 5 ? 'late at night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 21 ? 'evening' : 'night';
     const bits = ['The call has just connected and you greet first. Write exactly ONE short sentence (under fifteen words): warm and slightly bright, joyful but never loud, theatrical or over-excited. Fresh every time. Do not ask their name or any question. Do not say you are an AI.'];
-    if (recent.name) {
-      const usedLast = recent.greetings.length && new RegExp(`\\b${recent.name}\\b`, 'i').test(recent.greetings[recent.greetings.length - 1]);
-      bits.push(`The person on the last call in this session said their name is ${recent.name}. Do NOT introduce yourself and do not say your own name. ${usedLast ? 'You used their name in your last greeting, so leave it out this time and just greet them warmly.' : 'You may greet them by that name, or just warmly without it; do not do it every time.'}`);
-    } else {
-      bits.push('You do not know their name. Say your name, Maya, once in the sentence (for example "I\'m Maya").');
+    const name = this.profile.name;
+    {
+      const usedLast = recent.greetings.length && new RegExp(`\\b${name}\\b`, 'i').test(recent.greetings[recent.greetings.length - 1]);
+      bits.push(`This call is on ${name}'s profile; the caller is probably ${name}. ${this.profile.memory.topics.length ? 'Do NOT introduce yourself and do not say your own name.' : 'This is their first call: say your name, Maya, once in the sentence (for example "I\'m Maya").'} ${usedLast ? 'You used their name in your last greeting, so leave it out this time and just greet them warmly.' : 'You may greet them by that name, or just warmly without it; do not do it every time.'}`);
     }
     if (part) bits.push(`It is ${part} where they are; you may mention it naturally, but not every time. "Good night" is a goodbye, never a hello: for the late evening or night use "Hello" or "Good evening".`);
     if (recent.greetings.length) bits.push(`Your recent greetings were: ${recent.greetings.map((g) => `"${g}"`).join('; ')}. Use clearly different wording and a different opening.`);
-    if (recent.heavy) bits.push('Their last call ended on a heavy topic. Greet them extra gently and do not mention specifics unless they do.');
-    else if (recent.topic) bits.push(`Their last call was about: "${recent.topic}". You may refer to it briefly if it fits, but never add details you were not told.`);
+    const topics = this.profile.memory.topics;
+    if (this.profile.lastCallHeavy) bits.push('Their last call ended on a heavy topic. Greet them extra gently and do not mention specifics unless they do.');
+    else if (topics.length) bits.push(`Their last call was about: "${topics[topics.length - 1].text}". You may refer to it briefly if it fits, but never add details you were not told.`);
     return bits.join(' ');
   }
 
@@ -675,6 +702,7 @@ class Call {
     this.dropSpec(); // aborts every other guess
     this.history.push({ role: 'user', content: this.userMessage(turns) });
     this.history = this.history.slice(-MAX_HISTORY);
+    for (const t of turns) for (const pt of this.attribute(t)) memory.appendTurn(this.profile.id, this.callId, { label: pt.label, text: pt.text, userSaid: true });
     const t0 = turns[turns.length - 1];
     const timing = {
       holdMs,
@@ -716,7 +744,7 @@ class Call {
     // The first turn of a call can be answered before Transcribe has sent any speaker label; a name
     // given then belongs to the only voice there is.
     if (!this.seen.size && /^[A-H]$/.test(label)) this.seen.add(label);
-    if (this.seen.has(label) && NAME_OK.test(name)) this.names.set(label, name);
+    if (this.seen.has(label) && NAME_OK.test(name)) { this.names.set(label, name); memory.noteNames(this.profile.id, this.callId, Object.fromEntries(this.names)); }
   }
 
   // Streams Spark's text into the voice sentence by sentence. Each sentence is sent to the voice
@@ -746,6 +774,11 @@ class Call {
       onFeel: (raw) => {
         // Spark's read goes through the deterministic map; nothing else from it is used.
         const d = mapEmotionToDelivery(raw && raw.emotion, raw && raw.intensity, this.prevDelivery);
+        // Length follows the request: only an explicit story or memory-recall ask lifts the short-reply cap.
+        // Spark names the intent, and the person's own last words must also look like such an ask.
+        const intent = raw && String(raw.intent).toLowerCase();
+        const lastUser = ([...this.history].reverse().find((m) => m.role === 'user') || { content: '' }).content;
+        if (!greeting && ((intent === 'story' && STORY_ASK.test(lastUser)) || (intent === 'recall' && RECALL_ASK.test(lastUser)))) d.maxSentences = Infinity;
         if (greeting) { d.excitedOpening = false; d.maxSentences = 1; }          // a greeting is one warm sentence, never theatrical
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear', whisperPieces: d.whisperPieces };
@@ -782,7 +815,7 @@ class Call {
       } catch (e) { producerErr = e; } finally { producerDone = true; }
     })();
 
-    const keep = () => { if (record && said.length) this.history.push({ role: 'assistant', content: said.join(' ') }); };
+    const keep = () => { if (record && said.length) { this.history.push({ role: 'assistant', content: said.join(' ') }); memory.appendTurn(this.profile.id, this.callId, { who: 'Maya', text: said.join(' ') }); } };
     for (;;) {
       if (myGen !== this.gen || this.closed) { keep(); return; } // interrupted
       const head = jobs[0];

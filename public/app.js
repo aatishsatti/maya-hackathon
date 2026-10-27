@@ -55,6 +55,7 @@
   function setLive(live) {
     callBtn.dataset.live = String(live);
     callBtn.textContent = live ? 'End Call' : 'Call Maya';
+    if (window.mayaProfile) window.mayaProfile.setLive(live);
   }
 
   function pickMime() {
@@ -378,7 +379,7 @@
     c.ctx.createMediaStreamSource(c.stream).connect(tap);
     tap.connect(mute).connect(c.ctx.destination);
     tap.port.onmessage = (e) => { if (c.ready && ws.readyState === WebSocket.OPEN) ws.send(e.data.buffer); };
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'start', sampleRate: c.ctx.sampleRate, localHour: new Date().getHours() }));
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'start', sampleRate: c.ctx.sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id }));
     ws.onmessage = (m) => {
       if (myGen !== gen) return;
       if (typeof m.data === 'string') { try { onServerEvent(c, JSON.parse(m.data)); } catch { /* ignore */ } return; }
@@ -391,6 +392,7 @@
   // ---- Call lifecycle ----
 
   async function startCall() {
+    if (!window.mayaProfile || !window.mayaProfile.id) { showError('Please pick who is talking first.'); return; } // no profile, no call
     const myGen = ++gen;
     showError('');
     captionEl.textContent = '';
@@ -474,6 +476,7 @@
     else startCall();
   });
   window.addEventListener('pagehide', () => endCall());
+  window.mayaEndCall = () => endCall();
 
   api('/api/config').then((cfg) => {
     mode = cfg.mode;

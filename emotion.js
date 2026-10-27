@@ -9,7 +9,7 @@
 // settings: stability, similarity, speaker boost and speed stay identical on every request,
 // which keeps one consistent voice across all emotions.
 const EMOTIONS = ['neutral', 'happy', 'excited', 'sad', 'lonely', 'grief', 'anxious', 'frustrated', 'angry', 'crisis', 'unclear'];
-const INTENTS = ['share', 'ask', 'request', 'chat', 'ack', 'farewell', 'unclear'];
+const INTENTS = ['share', 'ask', 'request', 'chat', 'ack', 'farewell', 'story', 'recall', 'unclear'];
 const HEARTFELT = new Set(['sad', 'lonely', 'grief']);   // heavy feelings: soft wording, no exclamations, no cheer straight after
 const SETTLING = new Set(['anxious', 'frustrated', 'angry']);
 

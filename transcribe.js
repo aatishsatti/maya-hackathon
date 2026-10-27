@@ -60,7 +60,12 @@ class Resampler {
 }
 
 // Opens a session. Calls onReady(), onEvent(obj), onClose(code, reason). Fails fast.
-function openTranscribe(apiKey, { onReady, onEvent, onClose }) {
+// languageBias is a priority-ordered list of language names (docs: "a list of languages, not free-form
+// context", example ["English", "French"]; the speech-to-text page lists 25 supported languages including
+// Spanish, French, Portuguese and Hindi). Target markets are US/UK: English first. Other languages are
+// best-effort only, not a feature claim.
+const DEFAULT_BIAS = ['English', 'Spanish', 'French', 'Portuguese', 'Hindi'];
+function openTranscribe(apiKey, { onReady, onEvent, onClose, languageBias = DEFAULT_BIAS }) {
   const ws = new WebSocket(URL);
   ws.binaryType = 'arraybuffer';
   let ready = false;
@@ -76,7 +81,7 @@ function openTranscribe(apiKey, { onReady, onEvent, onClose }) {
       mode: 'DIARIZATION',
       partialMode: 'CUMULATIVE',
       emitAudioProgress: false,
-      languageBias: ['English'],
+      languageBias,
     }));
   });
   ws.addEventListener('message', (m) => {
