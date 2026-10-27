@@ -89,7 +89,28 @@ const realTokens = (text) => tokens(text).filter((w) => !NOISE_WORDS.has(w));
 const RECOVERY = "Sorry, I didn't catch that, can you say that again?";
 // Measured: [excited] came out about twice as loud as normal speech on this voice. Scale it down so
 // the first phrase does not jump out; this changes level only, not the voice.
-const EXCITED_GAIN = 0.7;
+const EXCITED_GAIN = 0.6; // measured: [excited] RMS 707 vs plain 397; 0.6 levels it to about plain
+// Delivery moments. Tag names are from the ElevenLabs v4 audio-tag docs (non-exhaustive list; [sympathetic], [warmly],
+// [happy] are used in their examples). Measured on this voice: none is read aloud (same duration as plain text);
+// they raise level (RMS vs plain 397: sympathetic 494, warmly 559, happy 671), so each gets a gain that levels it out.
+const TONES = { excited: ['[excited]', EXCITED_GAIN], soft: ['[sympathetic]', 0.85], warm: ['[warmly]', 0.8], bright: ['[happy]', 0.62] };
+// Clean boundary around a tone piece: its tail fades out over 30 ms (a tagged piece can end while still loud, which
+// sounds like its last word running into the next piece's first), 40 ms of silence follows, and its start fades in
+// over 8 ms. The browser already plays pieces strictly one after another (nextPlayTime), so they cannot overlap there.
+// Excited is loud and ends abruptly more often, so it alone gets a longer fade (80 ms) and gap (100 ms); other tones keep 30/40.
+const FADE_OUT_BYTES = { excited: 80 * 48, other: 30 * 48 }, FADE_IN_BYTES = 8 * 48;
+const TONE_GAP = { excited: Buffer.alloc(100 * 48), other: Buffer.alloc(40 * 48) };
+function fadeOut(buf, kind) {
+  const key = kind === 'excited' ? 'excited' : 'other';
+  const n = Math.min(FADE_OUT_BYTES[key], buf.length) & ~1, out = Buffer.from(buf);
+  for (let i = 0; i < n; i += 2) { const o = out.length - n + i; out.writeInt16LE(Math.round(out.readInt16LE(o) * (1 - (i + 2) / n)), o); }
+  return Buffer.concat([out, TONE_GAP[key]]);
+}
+function fadeIn(buf) {
+  const n = Math.min(FADE_IN_BYTES, buf.length) & ~1, out = Buffer.from(buf);
+  for (let i = 0; i < n; i += 2) out.writeInt16LE(Math.round(out.readInt16LE(i) * (i / n)), i);
+  return out;
+}
 function scale(buf, g) {
   const out = Buffer.alloc(buf.length);
   for (let i = 0; i + 1 < buf.length; i += 2) out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(buf.readInt16LE(i) * g))), i);
@@ -106,7 +127,8 @@ function firstLoud(buf) { for (let i = 0; i + 1 < buf.length; i += 2) if (Math.a
 function lastLoud(buf) { for (let i = buf.length - 2; i >= 0; i -= 2) if (Math.abs(buf.readInt16LE(i)) >= SILENT) return i + 2; return 0; }
 // Words that must be in the person's last turn before a reply may run long (see onFeel).
 const STORY_ASK = /\b(stor(y|ies)|tale)\b/i;
-const RECALL_ASK = /\b(tell|told|remember|recall|mention|said|stor(y|ies)|what (was|happened|did|is|were)|then what)\b/i;
+// A bare "do you remember / do you know X?" is a check (short answer), not a recall: it does not match here.
+const RECALL_ASK = /\b(tell me|stor(y|ies)|what (was|happened|did|is|were)|then what)\b/i;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
 
@@ -778,14 +800,14 @@ class Call {
         // Spark names the intent, and the person's own last words must also look like such an ask.
         const intent = raw && String(raw.intent).toLowerCase();
         const lastUser = ([...this.history].reverse().find((m) => m.role === 'user') || { content: '' }).content;
-        if (!greeting && ((intent === 'story' && STORY_ASK.test(lastUser)) || (intent === 'recall' && RECALL_ASK.test(lastUser)))) d.maxSentences = Infinity;
-        if (greeting) { d.excitedOpening = false; d.maxSentences = 1; }          // a greeting is one warm sentence, never theatrical
+        if (!greeting && ((intent === 'story' && STORY_ASK.test(lastUser)) || (intent === 'recall' && RECALL_ASK.test(lastUser)))) { d.maxSentences = Infinity; d.moments = 3; }
+        if (greeting) { d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.maxSentences = 1; }          // a greeting is one warm sentence, never theatrical
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear', whisperPieces: d.whisperPieces };
         return d;
       },
       onPiece: (text, kind, next) => {
-        const job = { chunks: [], done: false, err: null };
+        const job = { chunks: [], done: false, err: null, tone: Boolean(kind), kind };
         jobs.push(job);
         if (!tEnqueue) tEnqueue = Date.now();
         if (kind === 'excited') excited = true;
@@ -793,8 +815,9 @@ class Call {
         // [excited] is an ElevenLabs v4 audio tag (docs); it covers only its own short opening piece.
         // The excited piece is quieter-scaled below: in measurement the tag roughly doubled loudness.
         const spoken = text.replace(/^[,;:\s]+/, ''); // a piece cut after an opening phrase can start with its comma
-        const tagged = kind === 'excited' ? `[excited] ${spoken}` : spoken;
-        const gain = kind === 'excited' ? EXCITED_GAIN : 1;
+        const tone = TONES[kind];
+        const tagged = tone ? `${tone[0]} ${spoken}` : spoken;
+        const gain = tone ? tone[1] : 1;
         streamSpeech(tagged, signal, (c) => job.chunks.push(gain === 1 ? c : scale(c, gain)), said.length ? said.join(' ').slice(-300) : undefined, next || undefined)
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });
         said.push(text);
@@ -826,12 +849,13 @@ class Call {
       if (head.buf && !head.leadDone && (head.done || head.buf.length >= 120 * 48)) {
         head.leadDone = true;
         head.buf = head.buf.subarray(Math.max(0, firstLoud(head.buf) - PAD_LEAD_BYTES));
+        if (head.tone) head.buf = fadeIn(head.buf);
       }
       if (head.buf && head.leadDone) {
         const mayFollow = !producerDone || jobs.length > 1;
         const keepBack = head.done ? head.buf.length : (mayFollow ? TAIL_HOLD_BYTES : 0);
         let out = null;
-        if (head.done) { out = head.buf.subarray(0, Math.min(head.buf.length, lastLoud(head.buf) + PAD_TAIL_BYTES)); head.buf = null; }
+        if (head.done) { out = head.buf.subarray(0, Math.min(head.buf.length, lastLoud(head.buf) + PAD_TAIL_BYTES)); head.buf = null; if (head.tone) out = fadeOut(out, head.kind); }
         else if (head.buf.length > keepBack) { const n = (head.buf.length - keepBack) & ~1; out = head.buf.subarray(0, n); head.buf = head.buf.subarray(n); }
         if (out && out.length) {
           if (!sentAny && timing) {

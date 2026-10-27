@@ -41,6 +41,11 @@ function fixedReply(text) { const rs = new ReplyStream(); rs.push(text); rs.fini
 const NAME_TAG = /^\s*\[\[name:\s*([A-Za-z0-9])\s*=\s*([^\]]{1,40}?)\s*\]\]\s*/i;
 const FEEL_TAG = /^\s*\[\[feel:\s*([^\]]{1,120}?)\s*\]\]\s*/i;
 const MAX_EXCITED_WORDS = 8;   // the opening phrase only
+// Delivery moments (global, sparing): Spark may put [[soft]], [[warm]] or [[bright]] before ONE short sentence at a
+// natural moment; code grants it only within the reply's budget (delivery.moments) and never on pieces close together.
+// Each is one whole piece (a sentence), never per-sentence-by-default. Tags that map to audio are in call.js.
+const TONE_MARK = /\[\[\s*(soft|warm|bright)\s*\]\]/gi;
+const MOMENT_GAP = 4;  // at least this many pieces between two moments
 const MIN_CHUNK = 25; // shorter pieces are joined to the next sentence so the voice does not stutter
 
 function plain(text) {
@@ -56,6 +61,8 @@ class ChunkSplitter {
     this.halted = false;     // set when the mapped delivery says escalate: nothing more is emitted
     this.pieceCount = 0;
     this.excitedDone = false;
+    this.moments = 0;
+    this.lastMomentAt = -Infinity;
     this.sentences = 0;
     this.exclaims = 0;
     this.asked = false;
@@ -130,6 +137,8 @@ class ChunkSplitter {
     let said = raw.replace(/\[\[whisper:\s*([^\]]*)\]\]/gi, '$1');
     if (this.pieceCount === 0 && this.stripGreeting) said = withoutGreeting(said);
     if (this.pieceCount === 0) said = openingInterjection(said, this.stripInterjection);
+    let tone = null;
+    said = said.replace(TONE_MARK, (_, k) => { tone = tone || k.toLowerCase(); return ' '; });
     const parts = [{ t: said, k: null }];
 
     let live = [];
@@ -140,13 +149,22 @@ class ChunkSplitter {
       if (d.excitedOpening && !this.excitedDone && i === firstSpoken && this.pieceCount === 0 && p.k === null) {
         // Happy news: just the opening phrase is excited, with the reply's single exclamation; the rest is normal.
         this.excitedDone = true;
+        this.moments += 1; this.lastMomentAt = this.pieceCount;
         const { phrase, rest } = openingPhrase(t);
         this.exclaims = d.maxExclaim;
         live.push({ t: phrase.replace(/[,.;:!?\s]+$/, '') + '!', k: 'excited' });
         t = rest;
       }
       t = this.shape(t);
-      if (t) live.push({ t, k: p.k });
+      let k = p.k;
+      if (t && k === null) {
+        // Heavy-hearted person: the very first phrase is soft (once). Otherwise Spark's own marker, if the budget allows.
+        const want = (this.pieceCount === 0 && d.openingTone && !this.moments) ? d.openingTone : tone;
+        if (want && this.moments < d.moments && this.pieceCount + live.length - this.lastMomentAt >= MOMENT_GAP) {
+          k = want; this.moments += 1; this.lastMomentAt = this.pieceCount + live.length;
+        }
+      }
+      if (t) live.push({ t, k });
     });
     live.forEach((p) => {
       const text = p.t;
@@ -201,7 +219,7 @@ function stripTags(full) {
     if (!m) break;
     t = t.slice(m[0].length);
   }
-  return plain(t.replace(/\[\[whisper:\s*([^\]]*)\]\]/gi, '$1'));
+  return plain(t.replace(TONE_MARK, ' ').replace(/\[\[whisper:\s*([^\]]*)\]\]/gi, '$1'));
 }
 
 module.exports = { ReplyStream, startReply, fixedReply, ChunkSplitter, plain, stripTags };

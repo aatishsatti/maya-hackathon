@@ -9,7 +9,7 @@
 // settings: stability, similarity, speaker boost and speed stay identical on every request,
 // which keeps one consistent voice across all emotions.
 const EMOTIONS = ['neutral', 'happy', 'excited', 'sad', 'lonely', 'grief', 'anxious', 'frustrated', 'angry', 'crisis', 'unclear'];
-const INTENTS = ['share', 'ask', 'request', 'chat', 'ack', 'farewell', 'story', 'recall', 'unclear'];
+const INTENTS = ['share', 'ask', 'request', 'chat', 'ack', 'farewell', 'story', 'recall', 'check', 'unclear'];
 const HEARTFELT = new Set(['sad', 'lonely', 'grief']);   // heavy feelings: soft wording, no exclamations, no cheer straight after
 const SETTLING = new Set(['anxious', 'frustrated', 'angry']);
 
@@ -33,14 +33,18 @@ function mapEmotionToDelivery(emotion, intensity, prev) {
   // whisperPieces is 0 for every emotion: whispers are switched off for now (kept as a field so a
   // later feature can turn them back on in one place). excitedOpening: only the first short phrase is delivered with excitement (code enforces it,
   // whatever Spark wrote); the rest of the reply is normal voice. 
-  const d = { emotion: e, intensity: n, whisperPieces: 0, excitedOpening: false, maxSentences: 3, maxExclaim: 1, escalate: false };
+  // openingTone: the person is clearly heavy-hearted (words only, intensity 3+): the reply's first phrase is soft.
+  // moments: how many delivery moments (tagged pieces) a whole reply may hold; call.js lifts it to 3 for a story/recall.
+  const d = { emotion: e, intensity: n, whisperPieces: 0, excitedOpening: false, openingTone: null, moments: 1, maxSentences: 3, maxExclaim: 1, escalate: false };
   if (e === 'crisis') d.escalate = true;                     // handled by the safety path, never a sadness reply
   if (HEARTFELT.has(e)) {
     d.maxExclaim = 0;           // sad stays soft through wording: gentle, short, no exclamations
     d.whisperPieces = 0;        // whispers are removed for now
+    if (n >= 3) d.openingTone = 'soft';
   } else if (SETTLING.has(e)) {
     d.maxExclaim = 0;
     d.maxSentences = 2;
+    if (n >= 3) d.openingTone = 'soft';
   } else if (e === 'happy' || e === 'excited') {
     d.excitedOpening = n >= 3; // never falls through to neutral; a mild 'happy' (intensity 1-2) stays the warm baseline
   } else if (e === 'neutral') {
