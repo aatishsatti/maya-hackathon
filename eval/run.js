@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Maya evaluation: runs the suites against REAL Meta Spark (text only: no voice, no ElevenLabs), scores them, checks the guard rails, compares with
 // docs/eval/baseline.json and prints the Meta usage table. Each suite runs in its own child process on throwaway data folders (never your real data).
-//   node eval/run.js [--suites conversation,memory,trends,scam] [--runs 2] [--out file] [--no-compare] [--update-baseline]
+//   node eval/run.js [--suites conversation,memory,trends,scam,hearing] [--runs 2] [--out file] [--no-compare] [--update-baseline]
 // Exit code 1 when a guard rail fails or a number has regressed from the baseline.
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const SUITES = ['conversation', 'memory', 'trends', 'scam'];
+const SUITES = ['conversation', 'memory', 'trends', 'scam', 'hearing'];
 const BASELINE = path.join(ROOT, 'docs', 'eval', 'baseline.json');
 
 function parseArgs(argv) {

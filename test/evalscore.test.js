@@ -64,13 +64,13 @@ test('flatten and runChecks: a check whose metric is missing is skipped, never a
 const OBSERVED = { 'conversation.limitViolations': 0, 'conversation.topicPresent': 1, 'conversation.topicAccuracy': 1, 'conversation.personalAccuracy': 27 / 28, 'conversation.repeatRate': 0, 'conversation.worryAction': 1,
   'memory.askedEarly': 0.8, 'memory.askedOnce': 1, 'memory.heavyQuiet': 1, 'memory.safetyQuiet': 1, 'memory.recallAccuracy': 1, 'memory.honest': 1, 'memory.closedAfterAnswer': 1, 'memory.closedAfterBrushoff': 1, 'memory.notRepeatedAfterClose': 1,
   'trends.falseAlarmOrdinary': 0.014, 'trends.falseAlarmQuiet': 0.01, 'trends.detectionMean': 0.78,
-  'scam.warned': 38 / 38, 'scam.falseWarn': 0, 'scam.pauseInProgress': 1, 'scam.falsePauseGenuine': 0, 'scam.falsePauseOther': 0, 'scam.filterRecallDev': 1, 'scam.ordinaryTrigger': 0, 'meta.realFailureRate': 0 };
+  'scam.warned': 38 / 38, 'scam.falseWarn': 0, 'scam.pauseInProgress': 1, 'scam.falsePauseGenuine': 0, 'scam.falsePauseOther': 0, 'scam.filterRecallDev': 1, 'scam.ordinaryTrigger': 0, 'meta.realFailureRate': 0, 'hearing.wer': 0.02, 'hearing.termSurvival': 0.97, 'hearing.scamTermSurvival': 0.97, 'hearing.failed': 0 };
 
 test('guard rails: every check passes on the numbers this project observed, ids are unique, and each fails on clearly worse numbers', () => {
   assert.equal(new Set(rules.CHECKS.map((c) => c.id)).size, rules.CHECKS.length);
   assert.deepEqual(S.runChecks(OBSERVED, rules.CHECKS).filter((r) => r.status !== 'pass'), []);
   const worse = { ...OBSERVED, 'conversation.limitViolations': 2, 'conversation.topicPresent': 0.8, 'conversation.topicAccuracy': 0.6, 'conversation.personalAccuracy': 0.5, 'conversation.repeatRate': 0.4, 'conversation.worryAction': 0.3,
-    'memory.askedEarly': 0.2, 'memory.askedOnce': 0.5, 'memory.heavyQuiet': 0.75, 'memory.recallAccuracy': 0.5, 'memory.honest': 0.5, 'memory.closedAfterAnswer': 0.5, 'meta.realFailureRate': 0.2, 'trends.falseAlarmOrdinary': 0.2, 'trends.detectionMean': 0.4,
+    'memory.askedEarly': 0.2, 'memory.askedOnce': 0.5, 'memory.heavyQuiet': 0.75, 'memory.recallAccuracy': 0.5, 'memory.honest': 0.5, 'memory.closedAfterAnswer': 0.5, 'meta.realFailureRate': 0.2, 'hearing.wer': 0.3, 'hearing.termSurvival': 0.5, 'hearing.failed': 2, 'trends.falseAlarmOrdinary': 0.2, 'trends.detectionMean': 0.4,
     'scam.warned': 0.7, 'scam.falseWarn': 0.05, 'scam.pauseInProgress': 0.2, 'scam.filterRecallDev': 0.9 };
   const failed = S.runChecks(worse, rules.CHECKS).filter((r) => r.status === 'FAIL').map((r) => r.id);
   assert.deepEqual(failed.sort(), rules.CHECKS.map((c) => c.id).sort(), 'every guard rail catches its own regression');
@@ -81,4 +81,19 @@ test('guard rails: every check passes on the numbers this project observed, ids 
 
 test('rules: every comparison rule names a direction and a positive tolerance', () => {
   for (const [k, r] of Object.entries(rules.RULES)) { assert.match(k, /^[a-z]+\.\w+$/); assert.ok(['higher', 'lower'].includes(r.dir) && r.tol > 0, k); }
+});
+
+test('hearing scoring: word error rate (substitutions, insertions, deletions over the words said) and key terms that survive, with alternate spellings', () => {
+  assert.deepEqual(S.normWords("Hello, Maya! It's  £200."), ['hello', 'maya', "it's", '200']);
+  assert.equal(S.wer('the roses are finished', 'The roses are finished.'), 0, 'case and punctuation do not count');
+  assert.equal(S.wer('the roses are finished', 'the rose are finished'), 0.25, 'one substitution in four words');
+  assert.equal(S.wer('the roses are finished', 'the roses finished'), 0.25, 'one deletion');
+  assert.equal(S.wer('the roses are finished', 'the old roses are finished'), 0.25, 'one insertion');
+  assert.equal(S.wer('one two', ''), 1); assert.equal(S.wer('', ''), 0); assert.equal(S.wer('', 'something'), 1);
+  assert.equal(S.wer('a b c d', 'x y z w'), 1);
+  const t = S.termsFound('A man wanted my Medicare number and my date of birth.', [['medicare'], ['date of birth'], ['gift cards', 'gift card'], ['two hundred pounds', '200 pounds', '200']]);
+  assert.deepEqual(t, { found: 2, total: 4, missed: ['gift cards', 'two hundred pounds'] });
+  assert.equal(S.termsFound('He wants 200 pounds today', [['two hundred pounds', '200 pounds']]).found, 1, 'an alternate spelling counts');
+  assert.equal(S.termsFound('the cardigans are warm', [['card']]).found, 0, 'whole words only, not part of a word');
+  assert.deepEqual(S.termsFound('anything', []), { found: 0, total: 0, missed: [] });
 });

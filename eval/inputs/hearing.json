@@ -1,0 +1,29 @@
+{
+  "about": "Fixed sentences for the hearing suite, spoken by the Mac's built-in `say` voices (SYNTHETIC, CLEAN speech: not real older voices, no background noise, no accent or hesitation) and heard by Meta Transcribe. Written by the Maya team; no real people. terms = key words that must survive (each entry lists acceptable spellings). wer: false means the sentence has numbers or amounts, whose written form varies, so it is scored on its key terms only.",
+  "sentences": [
+    { "text": "Good morning Maya, I am just having my tea and looking at the garden.", "terms": [["maya"], ["tea"], ["garden"]], "wer": true },
+    { "text": "My granddaughter Priya is coming to visit for the weekend.", "terms": [["priya"], ["granddaughter"], ["weekend"]], "wer": true },
+    { "text": "My son Ravi lives in Chicago and he rings me every Sunday.", "terms": [["ravi"], ["chicago"], ["sunday"]], "wer": true },
+    { "text": "I would like a cup of ginger tea and a slice of toast please.", "terms": [["ginger tea"], ["toast"]], "wer": true },
+    { "text": "My knee is a bit sore on the stairs today but it is not too bad.", "terms": [["knee"], ["stairs"], ["sore"]], "wer": true },
+    { "text": "I have a doctor appointment next Thursday at the surgery.", "terms": [["doctor", "doctors"], ["appointment"], ["thursday"]], "wer": true },
+    { "text": "Please tell my family that I called and that I am feeling fine.", "terms": [["family"], ["called"]], "wer": true },
+    { "text": "I do not want to live alone and I feel very lonely in the evenings.", "terms": [["lonely"], ["evenings", "evening"]], "wer": true },
+    { "text": "Can you remind me to take my tablets after lunch.", "terms": [["remind"], ["tablets", "tablet"], ["lunch"]], "wer": true },
+    { "text": "The roses are finished and the petals are all over the path.", "terms": [["roses"], ["petals"], ["path"]], "wer": true },
+    { "text": "A man phoned and told me to buy gift cards or I would be arrested.", "terms": [["gift cards", "gift card"], ["arrested", "arrest"], ["phoned", "called"]], "wer": true, "scam": true },
+    { "text": "A lady rang from my bank and asked me to read out the code from my text message.", "terms": [["bank"], ["code"], ["text message", "text"]], "wer": true, "scam": true },
+    { "text": "Someone wanted my Medicare number and my date of birth over the phone.", "terms": [["medicare"], ["date of birth"], ["phone"]], "wer": true, "scam": true },
+    { "text": "He said I must not tell my son and that I have to pay by bank transfer today.", "terms": [["bank transfer"], ["tell my son"]], "wer": true, "scam": true },
+    { "text": "They told me to install a program so they could see my computer screen.", "terms": [["install"], ["program", "programme"], ["screen"]], "wer": true, "scam": true },
+    { "text": "I got a message saying I have won a prize but I have to pay a fee first.", "terms": [["prize"], ["fee"], ["won"]], "wer": true, "scam": true },
+    { "text": "A parcel could not be delivered and they want my card details to try again.", "terms": [["parcel"], ["card details", "card"]], "wer": true, "scam": true },
+    { "text": "My account has been locked and I must verify my details at once.", "terms": [["account"], ["locked"], ["verify"]], "wer": true, "scam": true },
+    { "text": "The tax office says I owe money and a warrant will be issued.", "terms": [["tax"], ["warrant"]], "wer": true, "scam": true },
+    { "text": "I am on my way to the shop right now to get the vouchers he asked for.", "terms": [["vouchers", "voucher"], ["shop"]], "wer": true, "scam": true },
+    { "text": "He wants two hundred pounds sent by the end of today.", "terms": [["two hundred pounds", "200 pounds", "£200", "200"], ["today"]], "wer": false, "scam": true },
+    { "text": "My telephone number ends in four seven two one.", "terms": [["four seven two one", "4721", "4 7 2 1"]], "wer": false },
+    { "text": "The refund is for three hundred and fifty dollars they said.", "terms": [["refund"], ["three hundred and fifty dollars", "350 dollars", "$350", "350"]], "wer": false, "scam": true },
+    { "text": "I was born on the third of May nineteen forty eight.", "terms": [["third of may", "3rd of may", "may 3rd", "3 may", "may 3"], ["1948", "nineteen forty eight", "nineteen forty-eight"]], "wer": false }
+  ]
+}

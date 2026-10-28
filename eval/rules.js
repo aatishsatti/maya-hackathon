@@ -14,6 +14,9 @@ module.exports.CHECKS = [
   { id: 'mem.recall', text: 'trimmed memory still answers son / tea / where he lives (at least 90%)', test: (m) => m['memory.recallAccuracy'] === undefined ? null : m['memory.recallAccuracy'] >= 0.9 },
   { id: 'mem.honest', text: 'nothing is invented about a daughter or a job that are not in memory (at least 75%: one unlucky reply of eight is noise)', test: (m) => m['memory.honest'] === undefined ? null : m['memory.honest'] >= 0.75 },
   { id: 'mem.closing', text: 'an answered follow-up is closed, a brushed-off one is closed at least 75% of the time, and a closed one is not asked again', test: (m) => m['memory.closedAfterAnswer'] === undefined ? null : m['memory.closedAfterAnswer'] >= 0.75 && m['memory.closedAfterBrushoff'] >= 0.75 && m['memory.notRepeatedAfterClose'] === 1 },
+  { id: 'hear.wer', text: 'Meta Transcribe: word error rate on clean synthetic speech at most 8%', test: (m) => m['hearing.wer'] === undefined || m['hearing.wer'] === null ? null : m['hearing.wer'] <= 0.08 },
+  { id: 'hear.terms', text: 'Meta Transcribe: at least 90% of the key words survive, and at least 90% of the scam words', test: (m) => m['hearing.termSurvival'] === undefined || m['hearing.termSurvival'] === null ? null : m['hearing.termSurvival'] >= 0.9 && m['hearing.scamTermSurvival'] >= 0.9 },
+  { id: 'hear.failures', text: 'Meta Transcribe: no sentence fails to come back', test: (m) => m['hearing.failed'] === undefined ? null : m['hearing.failed'] === 0 },
   { id: 'meta.noFailures', text: 'real errors from Meta or the network are at most 2% of calls (cancelled replies are not errors)', test: (m) => m['meta.realFailureRate'] === undefined || m['meta.realFailureRate'] === null ? null : m['meta.realFailureRate'] <= 0.02 },
   { id: 'trend.falseAlarm', text: 'ordinary life is wrongly flagged at most 4% of the time (3% for pure noise)', test: (m) => m['trends.falseAlarmOrdinary'] === undefined ? null : m['trends.falseAlarmOrdinary'] <= 0.04 && m['trends.falseAlarmQuiet'] <= 0.03 },
   { id: 'trend.detect', text: 'slow drifts are noticed within two weeks at least 72% of the time on average', test: (m) => m['trends.detectionMean'] === undefined ? null : m['trends.detectionMean'] >= 0.72 },
@@ -25,7 +28,7 @@ module.exports.CHECKS = [
 module.exports.RULES = {
   'conversation.repeatRate': { dir: 'lower', tol: 0.08 }, 'conversation.thatSounds': { dir: 'lower', tol: 4 }, 'conversation.questionRate': { dir: 'lower', tol: 0.15 },
   'conversation.topicAccuracy': { dir: 'higher', tol: 0.08 }, 'conversation.personalAccuracy': { dir: 'higher', tol: 0.1 }, 'conversation.worryAction': { dir: 'higher', tol: 0.15 },
-  'memory.askedEarly': { dir: 'higher', tol: 0.25 }, 'meta.liveCancelledShare': { dir: 'lower', tol: 0.1 }, 'meta.liveTokensInPerCall': { dir: 'lower', tol: 600 }, 'memory.recallAccuracy': { dir: 'higher', tol: 0.12 }, 'memory.closedAfterBrushoff': { dir: 'higher', tol: 0.2 },
+  'memory.askedEarly': { dir: 'higher', tol: 0.25 }, 'hearing.wer': { dir: 'lower', tol: 0.04 }, 'hearing.termSurvival': { dir: 'higher', tol: 0.05 }, 'meta.liveCancelledShare': { dir: 'lower', tol: 0.1 }, 'meta.liveTokensInPerCall': { dir: 'lower', tol: 600 }, 'memory.recallAccuracy': { dir: 'higher', tol: 0.12 }, 'memory.closedAfterBrushoff': { dir: 'higher', tol: 0.2 },
   'trends.falseAlarmOrdinary': { dir: 'lower', tol: 0.02 }, 'trends.detectionMean': { dir: 'higher', tol: 0.05 },
   'scam.warned': { dir: 'higher', tol: 0.06 }, 'scam.falseWarn': { dir: 'lower', tol: 0.03 }, 'scam.pauseInProgress': { dir: 'higher', tol: 0.25 },
 };

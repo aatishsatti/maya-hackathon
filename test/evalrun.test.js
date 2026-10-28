@@ -40,7 +40,7 @@ test('reasoning comparison rows and the printed tables carry the numbers and the
 test('safety of the runner: children always get throwaway data folders and the ledger, the voice cannot be reached, and the held-out scam half is never read', () => {
   const run = fs.readFileSync(path.join(__dirname, '..', 'eval', 'run.js'), 'utf8');
   assert.match(run, /process\.env\.MAYA_DATA_DIR = path\.join\(tmp/); assert.match(run, /process\.env\.MAYA_META_LEDGER = '1'/); assert.match(run, /fs\.mkdtempSync\(path\.join\(os\.tmpdir\(\)/);
-  const all = ['run.js', 'score.js', 'rules.js', 'suites/common.js', 'suites/conversation.js', 'suites/memory.js', 'suites/scam.js', 'suites/trends.js'].map((f) => fs.readFileSync(path.join(__dirname, '..', 'eval', f), 'utf8').replace(/\/\/.*$/gm, '')).join('\n');
+  const all = ['run.js', 'score.js', 'rules.js', 'suites/common.js', 'suites/conversation.js', 'suites/memory.js', 'suites/scam.js', 'suites/trends.js', 'suites/hearing.js'].map((f) => fs.readFileSync(path.join(__dirname, '..', 'eval', f), 'utf8').replace(/\/\/.*$/gm, '')).join('\n');
   assert.doesNotMatch(all, /api\.elevenlabs|ELEVENLABS_|xi-api-key|streamSpeech\(/i, 'no ElevenLabs address, key or voice call anywhere in the evaluation'); assert.match(fs.readFileSync(path.join(__dirname, '..', 'eval', 'suites', 'common.js'), 'utf8'), /brain\.streamSpeech = async \(\) => \{\}/);
   const scam = fs.readFileSync(path.join(__dirname, '..', 'eval', 'suites', 'scam.js'), 'utf8');
   assert.match(scam, /i\.split === 'dev'/); assert.doesNotMatch(scam.replace(/\/\/.*$/gm, ''), /split === 'held'/);

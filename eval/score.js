@@ -67,6 +67,30 @@ function costMetrics(rows) {
   return { calls: rows.length, failed: rows.filter((r) => !r.ok).length, avgMs: Math.round(mean(ok.map((r) => r.ms))), medianMs: median(ok.map((r) => r.ms)), p90Ms: pctile(ok.map((r) => r.ms), 0.9), avgTokensIn: Math.round(mean(rows.map((r) => r.tokensIn || 0))), avgTokensOut: Math.round(mean(rows.map((r) => r.tokensOut || 0))) };
 }
 
+// ---------------------------------------------------------------- hearing (Transcribe)
+// Words as compared for accuracy: lower case, no punctuation (apostrophes kept), the pound / dollar signs dropped. Pure.
+const normWords = (t) => String(t || '').toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[^a-z0-9'\s]/g, ' ').split(/\s+/).filter(Boolean);
+// Word error rate: word-level edit distance (substitutions + insertions + deletions) divided by the number of words said. 0 = perfect. Pure.
+function wer(reference, heard) {
+  const r = normWords(reference), h = normWords(heard);
+  if (!r.length) return h.length ? 1 : 0;
+  let prev = Array.from({ length: h.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= r.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= h.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (r[i - 1] === h[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[h.length] / r.length;
+}
+// terms: [[alternative spellings of one key term]]. Returns { found, total, missed:[first spelling of each missed term] }. A term is found if any spelling appears as whole words.
+function termsFound(heard, terms) {
+  const h = ` ${normWords(heard).join(' ')} `;
+  const missed = [];
+  let found = 0;
+  for (const alts of terms || []) { const ok = alts.some((a) => h.includes(` ${normWords(a).join(' ')} `)); if (ok) found += 1; else missed.push(alts[0]); }
+  return { found, total: (terms || []).length, missed };
+}
+
 // ---------------------------------------------------------------- comparing with a baseline
 // rules: { 'suite.metric': { dir:'higher'|'lower', tol:number } }: worse than the baseline by more than tol is a regression. null on either side = not comparable.
 function compare(metrics, baseline, rules) {
@@ -85,4 +109,4 @@ function runChecks(metrics, checks) {
 }
 const flatten = (suiteMetrics) => { const out = {}; for (const [s, m] of Object.entries(suiteMetrics)) for (const [k, v] of Object.entries(m || {})) if (typeof v === 'number' || v === null) out[`${s}.${k}`] = v; return out; };
 
-module.exports = { mean, frac, sentences, words, median, pctile, conversationMetrics, worryAction, mentionsFollowUp, admitsNotKnowing, inventsProfession, scamMetrics, costMetrics, flagged, compare, runChecks, flatten };
+module.exports = { normWords, wer, termsFound, mean, frac, sentences, words, median, pctile, conversationMetrics, worryAction, mentionsFollowUp, admitsNotKnowing, inventsProfession, scamMetrics, costMetrics, flagged, compare, runChecks, flatten };
