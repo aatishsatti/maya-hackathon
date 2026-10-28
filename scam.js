@@ -32,7 +32,7 @@ const ASK_TALK = [
   ...DEFS,
   '- remoteAccess: it asks them to install a program or app, give someone control of their computer or phone, open a page or link the other person gives them, or read out a code or number that was sent to them or shown on their screen;',
   '- happeningNow: the other person is contacting or pressing them right now (still on the phone or at the door, waiting for an answer), not something that already ended;',
-  '- aboutToAct: because of this, the person says they are about to, or on their way to, pay, send money, buy gift cards or vouchers, hand over card or account details, read out a code, or install or click something.',
+  '- aboutToAct: because of this, the person says they are about to, on their way to, or already in the middle of: paying, sending money, buying gift cards or vouchers, handing over card or account details, reading out a code, or installing or clicking something the other person told them to.',
   'An ordinary message (a bill from a known sender with a normal due date, an appointment, a reminder, a note from family or a friend, a genuine bank alert that says never to share a code) has all eight false. A payment the person chose to make themselves, to someone they know, for something they asked for (their own bill, a purchase, a gift, rent they agreed) is not a scam: aboutToAct on its own does not make anything one. Do not guess: if you cannot tell, set the signs to false and say so in "reading".',
 ].join('\n');
 

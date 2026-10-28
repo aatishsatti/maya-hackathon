@@ -1,7 +1,7 @@
 // Scam-shield bench (NOT part of `node --test`; the pure statistics are tested in test/scambench.test.js).
 // Runs a detector over docs/scam-testset.json with REAL Meta Spark (text only: no voice, no ElevenLabs) and reports hit / false-alarm rates
 // with 95% confidence intervals. Usage:
-//   node test/scam-bench.js run <results.json> [dev|held|t1|t2|all]     run the detector (needs META_API_KEY in .env)
+//   node test/scam-bench.js run <results.json> [dev|held|t1|t2|all] [baseline|talk]     run the detector (needs META_API_KEY in .env)
 //   node test/scam-bench.js report <results.json>                 print the rates; held-out items are only ever shown as totals
 const fs = require('node:fs');
 const path = require('node:path');
@@ -37,7 +37,17 @@ async function runWith(detect, outFile, which = 'all') {
   return out;
 }
 
-// The detector under test: today this is the original five-signal prompt (scam.ASK) read on text, the baseline.
+// The detector under test (second argument to `run`): 'baseline' is the original five-signal prompt read on text; 'talk' is scam.assessText
+// (the five signals plus remote access, happening now and about to act, with the pause level decided in code).
+async function talkDetect(item) {
+  const scam = require('../scam');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { const r = await scam.assessText(item.text); return { level: r.level, count: r.count, signals: r.signals, reads: r.reads }; }
+    catch (e) { if (attempt === 2) return { error: e.message, level: 'none', signals: {} }; }
+  }
+}
+
+// The original detector: today this is the original five-signal prompt (scam.ASK) read on text, the baseline.
 async function baselineDetect(item) {
   const brain = require('../brain'); const scam = require('../scam');
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -62,6 +72,10 @@ function report(file) {
   console.log(`hard scams warned: ${fmt(hard('scam').filter((i) => isWarn(byId[i.id])).length, hard('scam').length)} | hard normal wrongly warned: ${fmt(hard('normal').filter((i) => isWarn(byId[i.id])).length, hard('normal').length)}`);
   const now = have.filter((i) => i.now), lp = have.filter((i) => i.legitpay);
   console.log(`in progress warned: ${fmt(now.filter((i) => isWarn(byId[i.id])).length, now.length)} (pause: ${now.filter((i) => byId[i.id].level === 'pause').length}) | genuine payments wrongly warned: ${fmt(lp.filter((i) => isWarn(byId[i.id])).length, lp.length)} (pause: ${lp.filter((i) => byId[i.id].level === 'pause').length})`);
+  const pausedOf = (list) => list.filter((i) => byId[i.id].level === 'pause').length;
+  const scamsAll = have.filter((i) => i.label === 'scam'), normAll = have.filter((i) => i.label === 'normal');
+  const notNow = scamsAll.filter((i) => !i.now), notLegit = normAll.filter((i) => !i.legitpay);
+  console.log(`PAUSE  scams in progress paused: ${fmt(pausedOf(now), now.length)} | genuine payments in progress wrongly paused: ${fmt(pausedOf(lp), lp.length)} | other normal wrongly paused: ${fmt(pausedOf(notLegit), notLegit.length)} | other scams paused: ${pausedOf(notNow)}/${notNow.length}`);
   console.log('DEV scams not warned:'); for (const i of have.filter((x) => x.split === 'dev' && x.label === 'scam' && !isWarn(byId[x.id]))) console.log(`  ${i.id} [${i.category}/${i.channel}] ${byId[i.id].level}: ${i.text.slice(0, 90)}`);
   console.log('DEV normal wrongly flagged:'); for (const i of have.filter((x) => x.split === 'dev' && x.label === 'normal' && byId[x.id].level !== 'none')) console.log(`  ${i.id} [${i.category}/${i.channel}] ${byId[i.id].level}: ${i.text.slice(0, 90)}`);
 }
@@ -72,7 +86,7 @@ if (require.main === module) {
   const [cmd, file, which] = process.argv.slice(2);
   if (cmd === 'run') {
     try { process.loadEnvFile(path.join(ROOT, '.env')); } catch { /* no .env */ }
-    runWith(baselineDetect, file, which || 'all').then((o) => console.log('done', o.length, 'items,', o.filter((x) => x.error).length, 'errors'));
+    runWith(process.argv[5] === 'talk' ? talkDetect : baselineDetect, file, which || 'all').then((o) => console.log('done', o.length, 'items,', o.filter((x) => x.error).length, 'errors'));
   } else if (cmd === 'report') report(file);
-  else console.log('usage: node test/scam-bench.js run <results.json> [dev|held|t1|t2|all] | report <results.json>');
+  else console.log('usage: node test/scam-bench.js run <results.json> [dev|held|t1|t2|all] [baseline|talk] | report <results.json>');
 }
