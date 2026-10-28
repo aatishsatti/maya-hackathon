@@ -101,6 +101,11 @@ function typeLabel(raw, signals) {
 
 // One Spark vision call. Throws on a Meta error (the caller decides what a failed check means; nothing is invented).
 async function assess(buf, mime, signal) {
+  const brain = require('./brain'), lm = require('./meta').begin('scam-photo', brain.liveModel()), note = { usage: null };
+  try { const out = await assessCore(note, buf, mime, signal); lm.done(true, { usage: note.usage }); return out; }
+  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+}
+async function assessCore(note, buf, mime, signal) {
   const brain = require('./brain');
   const r = await fetch(brain.META_URL, {
     method: 'POST',
@@ -115,6 +120,7 @@ async function assess(buf, mime, signal) {
   });
   if (!r.ok) { let d = ''; try { d = (await r.text()).slice(0, 300); } catch { /* ignore */ } throw new Error(`Meta Spark failed (HTTP ${r.status}) ${d}`.trim()); }
   const d = await r.json();
+  note.usage = d.usage || null;
   const text = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
   const o = parse(text);
   if (!o) throw new Error('Meta Spark returned no usable scam check');
@@ -124,6 +130,11 @@ async function assess(buf, mime, signal) {
 
 // One Spark text call for spoken or typed talk (see ASK_TALK). Throws on a Meta error: the caller decides what a failed check means; nothing is invented.
 async function assessText(text, signal) {
+  const brain = require('./brain'), lm = require('./meta').begin('scam-text', brain.liveModel()), note = { usage: null };
+  try { const out = await assessTextCore(note, text, signal); lm.done(true, { usage: note.usage }); return out; }
+  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+}
+async function assessTextCore(note, text, signal) {
   const brain = require('./brain');
   const r = await fetch(brain.META_URL, {
     method: 'POST',
@@ -138,6 +149,7 @@ async function assessText(text, signal) {
   });
   if (!r.ok) { let d = ''; try { d = (await r.text()).slice(0, 300); } catch { /* ignore */ } throw new Error(`Meta Spark failed (HTTP ${r.status}) ${d}`.trim()); }
   const d = await r.json();
+  note.usage = d.usage || null;
   const o = parse(d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content);
   if (!o) throw new Error('Meta Spark returned no usable scam check');
   const { count, level } = levelOf(o.signals, o.reads);

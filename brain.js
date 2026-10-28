@@ -21,6 +21,7 @@
 //   is the same for every emotion.
 //   previous_text / next_text (body, documented) give each piece the context before and after it, so
 //   the pieces of one reply join up in tone.
+const meta = require('./meta');   // usage ledger: counts only, off unless MAYA_META_LEDGER=1
 const META_URL = 'https://api.meta.ai/v1/chat/completions';
 const META_MODEL = 'muse-spark-1.3';
 // Test-only switches (unset in normal use, so Maya stays on Spark): MAYA_BRAIN_MODEL picks the live-voice model,
@@ -72,6 +73,12 @@ async function upstreamError(name, r) {
 // Streams (stream:true, Accept: text/event-stream, chunks carry choices[0].delta.content,
 // stream ends with "data: [DONE]"). onDelta(text) is called as text arrives; returns the full text.
 async function sparkStreamOnce(history, roster, signal, onDelta) {
+  const lm = meta.begin('live-reply', liveModel());
+  const note = { usage: null };
+  try { const text = await sparkStreamCore(lm, note, history, roster, signal, onDelta); lm.done(true, { usage: note.usage }); return text; }
+  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+}
+async function sparkStreamCore(lm, note, history, roster, signal, onDelta) {
   const t0 = Date.now();
   const st = process.env.MAYA_BRAIN_STATS ? { model: liveModel(), firstMs: null, totalMs: null, usage: null } : null;
   const r = await fetch(META_URL, {
@@ -105,8 +112,9 @@ async function sparkStreamOnce(history, roster, signal, onDelta) {
       let d;
       try { d = JSON.parse(payload); } catch { continue; }
       const delta = d.choices && d.choices[0] && d.choices[0].delta && d.choices[0].delta.content;
-      if (typeof delta === 'string' && delta) { text += delta; if (st && st.firstMs === null) st.firstMs = Date.now() - t0; onDelta(delta); }
+      if (typeof delta === 'string' && delta) { text += delta; lm.first(); if (st && st.firstMs === null) st.firstMs = Date.now() - t0; onDelta(delta); }
       if (st && d.usage) st.usage = d.usage;
+      if (d.usage) note.usage = d.usage;
     }
   }
   if (st) { st.totalMs = Date.now() - t0; stats.push(st); }
@@ -177,6 +185,12 @@ async function streamSpeech(text, signal, onChunk, previousText, nextText) {
 // One-shot, non-streaming Spark call with its own instructions (no Maya persona). Used for memory
 // extraction after a call. Reply text: choices[0].message.content (same endpoint/format as above).
 async function sparkComplete(instructions, userText, signal) {
+  const lm = meta.begin('memory-filing', memoryModel());
+  const note = { usage: null };
+  try { const text = await sparkCompleteCore(note, instructions, userText, signal); lm.done(true, { usage: note.usage }); return text; }
+  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+}
+async function sparkCompleteCore(note, instructions, userText, signal) {
   const r = await fetch(META_URL, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${process.env.META_API_KEY}`, 'Content-Type': 'application/json' },
@@ -190,6 +204,7 @@ async function sparkComplete(instructions, userText, signal) {
   });
   if (!r.ok) throw await upstreamError('Meta Spark', r);
   const d = await r.json();
+  note.usage = d.usage || null;
   if (process.env.MAYA_BRAIN_STATS) stats.push({ model: memoryModel(), kind: 'memory', usage: d.usage });
   const text = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('Meta Spark returned no text');
@@ -203,6 +218,12 @@ async function sparkComplete(instructions, userText, signal) {
 // blue/yellow PNG: HTTP 200, correct colours. Returns a plain description for the brain; never a reply to the person.
 const VISION_ASK = 'Describe what is plainly visible in this photo in two or three short, factual sentences, for a friend who cannot see it. Read any clearly visible text. Do not name or guess who a person is, and do not guess feelings, illness, injury causes or anything you cannot see. If it is unclear or you cannot tell, say so.';
 async function describeImage(buf, mime, signal) {
+  const lm = meta.begin('vision-describe', liveModel());
+  const note = { usage: null };
+  try { const text = await describeImageCore(note, buf, mime, signal); lm.done(true, { usage: note.usage }); return text; }
+  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+}
+async function describeImageCore(note, buf, mime, signal) {
   const r = await fetch(META_URL, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${process.env.META_API_KEY}`, 'Content-Type': 'application/json' },
@@ -216,6 +237,7 @@ async function describeImage(buf, mime, signal) {
   });
   if (!r.ok) throw await upstreamError('Meta vision', r);
   const d = await r.json();
+  note.usage = d.usage || null;
   const text = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('Meta vision returned no description');
   return text.trim();

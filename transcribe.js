@@ -28,6 +28,7 @@
 //   reached": 60 min, no resume token, open a new session), 1013 rate limited.
 const URL = 'wss://api.meta.ai/v1/asr/realtime';
 const MODEL = 'muse-voice-transcribe-1.0';
+const meta = require('./meta');   // usage ledger: counts only, off unless MAYA_META_LEDGER=1
 const ACK_TIMEOUT_MS = 8000;
 const RATE = 24000;
 
@@ -70,7 +71,7 @@ function openTranscribe(apiKey, { onReady, onEvent, onClose, languageBias = DEFA
   ws.binaryType = 'arraybuffer';
   let ready = false;
   let done = false;
-  const fail = (msg) => { if (!done) { done = true; try { ws.close(); } catch { /* ignore */ } onClose(1011, msg); } };
+  const fail = (msg) => { if (!done) { done = true; meta.record({ purpose: 'transcribe-call', model: MODEL, ok: false }); try { ws.close(); } catch { /* ignore */ } onClose(1011, msg); } };
   const ackTimer = setTimeout(() => fail('Meta Transcribe did not accept the session in time'), ACK_TIMEOUT_MS);
 
   ws.addEventListener('open', () => {
@@ -90,6 +91,7 @@ function openTranscribe(apiKey, { onReady, onEvent, onClose, languageBias = DEFA
     try { ev = JSON.parse(m.data); } catch { return; }
     if (!ready && !ev.type && ev.sessionId) { ready = true; clearTimeout(ackTimer); onReady(ev.sessionId); return; }
     if (ev.type === 'error') { fail(`Meta Transcribe error: ${ev.message}`); return; }
+    if (ev.type === 'speechComplete') meta.record({ purpose: 'transcribe-call', model: MODEL, ok: true, audioMs: ev.audioProcessedMs });   // one finished turn: a count and its audio length, never the words
     if (ev.type) onEvent(ev);
   });
   ws.addEventListener('error', () => fail('Could not connect to Meta Transcribe'));
@@ -115,6 +117,11 @@ function openTranscribe(apiKey, { onReady, onEvent, onClose, languageBias = DEFA
 //   { sessionId, transcript, audioDurationMs, turns }. The words are in `transcript` ("" when nothing was said).
 const FILE_URL = 'https://api.meta.ai/v1/asr/transcribe';
 async function transcribeWav(apiKey, wav, signal) {
+  const lm = meta.begin('transcribe-voice-note', MODEL), note = {};
+  try { const words = await transcribeWavCore(note, apiKey, wav, signal); lm.done(true, { audioMs: note.audioMs }); return words; }
+  catch (e) { lm.done(false); throw e; }
+}
+async function transcribeWavCore(note, apiKey, wav, signal) {
   const fd = new FormData();
   fd.append('request', new Blob([JSON.stringify({ model: MODEL, audioEncoding: 'WAV', mode: 'PUSH_TO_TALK' })], { type: 'application/json' }), 'request.json');
   fd.append('audio', new Blob([wav], { type: 'audio/wav' }), 'note.wav');
@@ -125,6 +132,7 @@ async function transcribeWav(apiKey, wav, signal) {
     throw new Error(`Meta Transcribe failed (HTTP ${r.status}) ${detail}`.trim());
   }
   const d = await r.json();
+  note.audioMs = d.audioDurationMs;
   if (typeof d.transcript !== 'string') throw new Error('Meta Transcribe returned no transcript field');
   return d.transcript.trim();
 }
