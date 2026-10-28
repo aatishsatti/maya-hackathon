@@ -4,7 +4,7 @@
 // letter has all five false, so a normal letter never gets a warning. Nothing from the image is kept: only the kind of scam (a few
 // plain words) can ever reach the family, never the letter's text, never the photo.
 const SIGNALS = ['urgency', 'money', 'impersonation', 'secrecy', 'payment'];
-const READS = ['remoteAccess', 'happeningNow', 'aboutToAct'];   // extra reads for spoken / typed talk (ASK_TALK); the photo path (ASK) is unchanged
+const READS = ['remoteAccess', 'idDetails', 'happeningNow', 'aboutToAct'];   // extra reads for spoken / typed talk (ASK_TALK); the photo path (ASK) is unchanged
 const WARN_AT = 2;       // two or more signals: "this looks like a scam"
 const CAUTION_AT = 1;    // one signal: be careful, check first (not called a scam)
 
@@ -27,13 +27,14 @@ const DEFS = ASK.split('\n').filter((l) => /^- (urgency|money|impersonation|secr
 const ASK_TALK = [
   'You are helping an older person. They have either received a message, or they are telling you about a message, phone call, visit or web page. Read it as a careful, fair friend would.',
   'Reply with ONLY one JSON object and no other text:',
-  '{"reading":"<one or two short plain sentences saying what it is and what it wants, with no names, phone numbers or account numbers>","type":"<two to four plain words for the kind of message, for example payment scam, prize scam, bank impersonation scam, or ordinary message>","urgency":true|false,"money":true|false,"impersonation":true|false,"secrecy":true|false,"payment":true|false,"remoteAccess":true|false,"happeningNow":true|false,"aboutToAct":true|false}',
-  'Judge each of the eight from this message\'s own context, not from single words:',
+  '{"reading":"<one or two short plain sentences saying what it is and what it wants, with no names, phone numbers or account numbers>","type":"<two to four plain words for the kind of message, for example payment scam, prize scam, bank impersonation scam, or ordinary message>","urgency":true|false,"money":true|false,"impersonation":true|false,"secrecy":true|false,"payment":true|false,"remoteAccess":true|false,"idDetails":true|false,"happeningNow":true|false,"aboutToAct":true|false}',
+  'Judge each of the nine from this message\'s own context, not from single words:',
   ...DEFS,
   '- remoteAccess: it asks them to install a program or app, give someone control of their computer or phone, open a page or link the other person gives them, or read out a code or number that was sent to them or shown on their screen;',
+  '- idDetails: someone who contacted them (a caller, a message, a visitor) asks them to give identity numbers (national insurance, Medicare, passport or ID numbers), a date of birth together with other personal details, or security answers. Do not count an ordinary check by a service they themselves called or were expecting, such as a clinic confirming a date of birth for an appointment they booked;',
   '- happeningNow: the other person is contacting or pressing them right now (still on the phone or at the door, waiting for an answer), not something that already ended;',
   '- aboutToAct: because of this, the person says they are about to, on their way to, or already in the middle of: paying, sending money, buying gift cards or vouchers, handing over card or account details, reading out a code, or installing or clicking something the other person told them to.',
-  'An ordinary message (a bill from a known sender with a normal due date, an appointment, a reminder, a note from family or a friend, a genuine bank alert that says never to share a code) has all eight false. A payment the person chose to make themselves, to someone they know, for something they asked for (their own bill, a purchase, a gift, rent they agreed) is not a scam: aboutToAct on its own does not make anything one. Do not guess: if you cannot tell, set the signs to false and say so in "reading".',
+  'An ordinary message (a bill from a known sender with a normal due date, an appointment, a reminder, a note from family or a friend, a genuine bank alert that says never to share a code) has all nine false. A payment the person chose to make themselves, to someone they know, for something they asked for (their own bill, a purchase, a gift, rent they agreed) is not a scam: aboutToAct on its own does not make anything one. Do not guess: if you cannot tell, set the signs to false and say so in "reading".',
 ].join('\n');
 
 // The reply is JSON, possibly wrapped in a code fence or a sentence. Returns null if it is not usable.
@@ -51,11 +52,12 @@ function parse(text) {
   return { reads, reading: String(o.reading || '').replace(/\s+/g, ' ').trim().slice(0, 400), type: String(o.type || ''), signals };
 }
 
-// reads (optional, only from ASK_TALK): remoteAccess counts as one more warning sign. 'pause' is a warn that is also about to happen: the person is
+// reads (optional, only from ASK_TALK): remoteAccess counts as one more warning sign; idDetails (asked to give identity numbers or a date of birth to
+// someone who contacted them) counts as two, so it is a warn on its own: handing those over cannot be taken back, however polite the asker. 'pause' is a warn that is also about to happen: the person is
 // about to pay, send, give a code or install something because of it, and the other side is still pressing them now (or the case is already a
 // warn). happeningNow and aboutToAct never make something a scam by themselves, so a genuine payment (no signs) is never paused.
 function levelOf(signals, reads = null) {
-  const count = SIGNALS.filter((k) => signals && signals[k]).length + (reads && reads.remoteAccess ? 1 : 0);
+  const count = SIGNALS.filter((k) => signals && signals[k]).length + (reads && reads.remoteAccess ? 1 : 0) + (reads && reads.idDetails ? 2 : 0);
   let level = count >= WARN_AT ? 'warn' : count >= CAUTION_AT ? 'caution' : 'none';
   if (reads && reads.aboutToAct && (level === 'warn' || (level === 'caution' && reads.happeningNow))) level = 'pause';
   return { count, level };
