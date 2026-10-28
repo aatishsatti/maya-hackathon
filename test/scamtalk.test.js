@@ -69,11 +69,19 @@ test('assessText: one Spark text call; the level is decided in code from the ans
   const r = await withFetch(async (url, o) => { seen = { url, o }; return reply({ reading: 'A caller wants gift cards now.', type: 'gift card scam', urgency: true, money: false, impersonation: true, secrecy: false, payment: true, remoteAccess: false, happeningNow: true, aboutToAct: true })(); }, () => S.assessText('He wants gift cards and I am going to the shop now.'));
   assert.equal(r.level, 'pause'); assert.equal(r.count, 3); assert.equal(r.type, 'gift card scam'); assert.equal(r.reads.aboutToAct, true);
   const body = JSON.parse(seen.o.body); assert.match(body.messages[0].content, /gift cards and I am going to the shop now/); assert.match(body.messages[0].content, /nine from this message/);
-  assert.equal(body.reasoning_effort, 'low'); assert.equal(seen.o.headers.Authorization, 'Bearer test-key-not-real'); assert.ok(!body.messages[0].content.includes('test-key-not-real'));
+  assert.equal(body.reasoning_effort, 'minimal', 'the live setting for the talk check'); assert.equal(S.TALK_REASONING, 'minimal'); assert.equal(seen.o.headers.Authorization, 'Bearer test-key-not-real'); assert.ok(!body.messages[0].content.includes('test-key-not-real'));
   const calm = await withFetch(reply({ reading: 'A reminder.', type: 'ordinary message', urgency: false, money: false, impersonation: false, secrecy: false, payment: false, remoteAccess: false, idDetails: false, happeningNow: false, aboutToAct: false }), () => S.assessText('Your appointment is Tuesday.'));
   assert.deepEqual([calm.level, calm.count], ['none', 0]);
   const long = await withFetch(async (u, o) => { assert.ok(JSON.parse(o.body).messages[0].content.length < S.ASK_TALK.length + 2200, 'a very long message is cut'); return reply({ reading: 'x', type: 't' })(); }, () => S.assessText('x'.repeat(9000)));
   assert.equal(long.level, 'none');
+});
+
+test('the reasoning setting: minimal by default, an explicit setting is honoured, and the photo check is unchanged (still low)', async () => {
+  process.env.META_API_KEY = 'test-key-not-real'; const seen = [];
+  const spy = async (url, o) => { seen.push(JSON.parse(o.body).reasoning_effort); return reply({ reading: 'x', type: 't', urgency: false, money: false, impersonation: false, secrecy: false, payment: false })(); };
+  await withFetch(spy, () => S.assessText('hello there my friend')); await withFetch(spy, () => S.assessText('hello there my friend', undefined, { reasoning: 'low' }));
+  await withFetch(spy, () => S.assess(Buffer.from('img'), 'image/png'));
+  assert.deepEqual(seen, ['minimal', 'low', 'low']);
 });
 
 test('assessText: a Meta error or an unusable answer throws, never a made-up verdict', async () => {

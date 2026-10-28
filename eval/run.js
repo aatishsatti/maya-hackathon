@@ -72,7 +72,7 @@ function tables({ metrics, checks, cmp, usage, reasoning }) {
   L.push('', 'META MODELS DOING THE WORK (this run)', `  ${pad('job', 24)} ${pad('model', 24)} ${pad('calls', 6)} ${pad('cancelled', 10)} ${pad('failed', 7)} ${pad('avg ms', 8)} ${pad('tokens in', 10)} tokens out`);
   for (const u of usage) { const cancelled = (u.failedBy || {}).aborted || 0; L.push(`  ${pad(u.purpose, 24)} ${pad(u.model, 24)} ${pad(u.calls, 6)} ${pad(cancelled, 10)} ${pad(u.failed - cancelled, 7)} ${pad(u.avgMs ?? 'n/a', 8)} ${pad(u.tokensIn, 10)} ${u.tokensOut}`); }
   L.push('  (cancelled = stopped on purpose by Maya, e.g. when a reply is rewritten; failed = a real error from Meta or the network)');
-  if (reasoning && reasoning.length) { L.push('', 'SCAM CHECK ON TALK: REASONING SETTING (dev half; measurement only, nothing live changed)', `  ${pad('setting', 9)} ${pad('warned', 8)} ${pad('false warn', 11)} ${pad('pause', 7)} ${pad('avg ms', 8)} ${pad('p90 ms', 8)} ${pad('tok in', 7)} tok out`); for (const r of reasoning) L.push(`  ${pad(r.setting, 9)} ${pad(pc(r.warned), 8)} ${pad(pc(r.falseWarn), 11)} ${pad(pc(r.pause), 7)} ${pad(r.avgMs, 8)} ${pad(r.p90Ms, 8)} ${pad(r.tokensIn, 7)} ${r.tokensOut}`); }
+  if (reasoning && reasoning.length) { L.push('', 'SCAM CHECK ON TALK: REASONING SETTING (dev half; minimal is live since 2026-10-28, low is the earlier setting)', `  ${pad('setting', 9)} ${pad('warned', 8)} ${pad('false warn', 11)} ${pad('pause', 7)} ${pad('avg ms', 8)} ${pad('p90 ms', 8)} ${pad('tok in', 7)} tok out`); for (const r of reasoning) L.push(`  ${pad(r.setting, 9)} ${pad(pc(r.warned), 8)} ${pad(pc(r.falseWarn), 11)} ${pad(pc(r.pause), 7)} ${pad(r.avgMs, 8)} ${pad(r.p90Ms, 8)} ${pad(r.tokensIn, 7)} ${r.tokensOut}`); }
   return L.join('\n');
 }
 

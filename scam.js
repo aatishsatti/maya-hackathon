@@ -129,7 +129,12 @@ async function assessCore(note, buf, mime, signal) {
 }
 
 // One Spark text call for spoken or typed talk (see ASK_TALK). Throws on a Meta error: the caller decides what a failed check means; nothing is invented.
-// opts.reasoning (optional, for measuring only): Spark's reasoning_effort for this one call. The default, 'low', is what runs live.
+// Spark's reasoning_effort for the scam check on typed / spoken talk. Changed from 'low' to 'minimal' on 2026-10-28, decided on the DEV half only
+// (76 items x 4 runs per setting, docs/scam-results.md): same accuracy (99% vs 100% warned, 0% false warnings, 95% vs 95% paused), about 1.7 to 2 times
+// faster and 57% fewer output tokens. The held-out half was then re-run once for the new setting and BOTH results are published. The photo check
+// (assess) was not part of that measurement and is unchanged.
+const TALK_REASONING = 'minimal';
+// opts.reasoning (optional, for measuring): Spark's reasoning_effort for this one call; the default is TALK_REASONING, which is what runs live.
 async function assessText(text, signal, opts = {}) {
   const brain = require('./brain'), lm = require('./meta').begin('scam-text', brain.liveModel()), note = { usage: null };
   try { const out = await assessTextCore(note, text, signal, opts); lm.done(true, { usage: note.usage }); return out; }
@@ -143,7 +148,7 @@ async function assessTextCore(note, text, signal, opts) {
     body: JSON.stringify({
       model: brain.liveModel(),
       messages: [{ role: 'user', content: `${ASK_TALK}\n\nWHAT THEY RECEIVED OR TOLD YOU:\n${String(text).slice(0, 2000)}` }],
-      reasoning_effort: opts && opts.reasoning ? opts.reasoning : 'low',
+      reasoning_effort: opts && opts.reasoning ? opts.reasoning : TALK_REASONING,
       max_completion_tokens: 3000,
     }),
     signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(60000)]),
@@ -175,4 +180,4 @@ function talkNote(scam) {
 }
 
 
-module.exports = { talkNote, FEEL_NOTE, needsCheck, payNow, checkPlan, READS, ASK_TALK, assessText, SIGNALS, WARN_AT, CAUTION_AT, ASK, parse, levelOf, typeLabel, assess, said };
+module.exports = { TALK_REASONING, talkNote, FEEL_NOTE, needsCheck, payNow, checkPlan, READS, ASK_TALK, assessText, SIGNALS, WARN_AT, CAUTION_AT, ASK, parse, levelOf, typeLabel, assess, said };

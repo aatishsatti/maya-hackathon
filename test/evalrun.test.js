@@ -34,7 +34,7 @@ test('reasoning comparison rows and the printed tables carry the numbers and the
   const t = R.tables({ metrics: {}, checks: [{ status: 'pass', text: 'a check' }, { status: 'FAIL', text: 'another' }], cmp: [{ key: 'scam.warned', now: 0.9, was: 1, status: 'REGRESSED' }, { key: 'x.y', now: null, was: 1, status: 'n/a' }],
     usage: [{ purpose: 'live-reply', model: 'muse-spark-1.3', calls: 8, failed: 3, failedBy: { aborted: 2 }, avgMs: 175, tokensIn: 70, tokensOut: 28 }], reasoning: rows });
   assert.match(t, /GUARD RAILS/); assert.match(t, /FAIL +another/); assert.match(t, /REGRESSED +scam\.warned +was 100% +now 90%/); assert.doesNotMatch(t, /x\.y/, 'n/a rows are not printed');
-  assert.match(t, /META MODELS DOING THE WORK/); assert.match(t, /live-reply +muse-spark-1\.3 +8 +2 +1 +175/, 'calls, cancelled on purpose, real failures, speed'); assert.match(t, /cancelled = stopped on purpose/); assert.match(t, /REASONING SETTING \(dev half; measurement only, nothing live changed\)/); assert.match(t, /minimal +97% +0% +80% +1500/);
+  assert.match(t, /META MODELS DOING THE WORK/); assert.match(t, /live-reply +muse-spark-1\.3 +8 +2 +1 +175/, 'calls, cancelled on purpose, real failures, speed'); assert.match(t, /cancelled = stopped on purpose/); assert.match(t, /REASONING SETTING \(dev half; minimal is live since 2026-10-28, low is the earlier setting\)/); assert.match(t, /minimal +97% +0% +80% +1500/);
 });
 
 test('safety of the runner: children always get throwaway data folders and the ledger, the voice cannot be reached, and the held-out scam half is never read', () => {

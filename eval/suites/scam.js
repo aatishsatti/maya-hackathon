@@ -1,6 +1,6 @@
 // Scam suite (#4): the DEV half of docs/scam-testset.json (never the held-out half) through the real detector (scam.assessText), plus the word-filter
-// numbers (offline). It also measures the detector at two reasoning settings (the live one, 'low', and 'minimal'): rates, speed and tokens, side by side,
-// MEASUREMENT ONLY: nothing live changes. Real Meta Spark, text only.
+// numbers (offline). It also measures the detector at two reasoning settings ('low' and 'minimal'): rates, speed and tokens, side by side,
+// The headline metrics are the LIVE setting (scam.TALK_REASONING); the other is kept for the side-by-side. Real Meta Spark, text only.
 const fs = require('node:fs');
 const path = require('node:path');
 const C = require('./common');
@@ -8,7 +8,7 @@ const score = require('../score');
 
 const SET = () => JSON.parse(fs.readFileSync(path.join(C.ROOT, 'docs', 'scam-testset.json'), 'utf8')).items;
 const CHAT = () => JSON.parse(fs.readFileSync(path.join(C.ROOT, 'docs', 'ordinary-chat-lines.json'), 'utf8')).lines;
-const SETTINGS = ['low', 'minimal'];   // 'low' is what runs live today
+const SETTINGS = ['low', 'minimal'];   // 'minimal' (scam.TALK_REASONING) is what runs live since 2026-10-28; 'low' is the earlier setting, kept for comparison
 
 async function detect(scam, item, reasoning) {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -19,6 +19,7 @@ async function detect(scam, item, reasoning) {
 
 async function run({ runs = 2, limit = null, settings = SETTINGS } = {}) {
   const meta = require(path.join(C.ROOT, 'meta')); const scam = require(path.join(C.ROOT, 'scam'));
+  if (!settings.includes(scam.TALK_REASONING)) settings = [...settings, scam.TALK_REASONING];
   let items = SET().filter((i) => i.split === 'dev');
   if (limit) items = [...items.filter((i) => i.label === 'scam').slice(0, limit), ...items.filter((i) => i.label === 'normal').slice(0, limit)];
   const per = {};
@@ -33,7 +34,8 @@ async function run({ runs = 2, limit = null, settings = SETTINGS } = {}) {
   }
   const avg = (setting, f) => score.mean(per[setting].map(f));
   const metrics = {};
-  for (const k of ['warned', 'cautioned', 'falseWarn', 'falseCaution', 'pauseInProgress', 'falsePauseGenuine', 'falsePauseOther']) metrics[k] = avg('low', (x) => x[k] ?? 0);
+  const live = scam.TALK_REASONING;
+  for (const k of ['warned', 'cautioned', 'falseWarn', 'falseCaution', 'pauseInProgress', 'falsePauseGenuine', 'falsePauseOther']) metrics[k] = avg(live, (x) => x[k] ?? 0);
   for (const setting of settings) for (const k of ['warned', 'falseWarn', 'pauseInProgress']) metrics[`${setting}_${k}`] = avg(setting, (x) => x[k] ?? 0);
   for (const setting of settings) { metrics[`${setting}_avgMs`] = avg(setting, (x) => x.cost.avgMs); metrics[`${setting}_p90Ms`] = avg(setting, (x) => x.cost.p90Ms ?? 0); metrics[`${setting}_tokensOut`] = avg(setting, (x) => x.cost.avgTokensOut); metrics[`${setting}_tokensIn`] = avg(setting, (x) => x.cost.avgTokensIn); }
   // the cheap word filter (offline, deterministic)
