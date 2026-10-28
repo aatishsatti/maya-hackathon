@@ -64,7 +64,7 @@ test('flatten and runChecks: a check whose metric is missing is skipped, never a
 const OBSERVED = { 'conversation.limitViolations': 0, 'conversation.topicPresent': 1, 'conversation.topicAccuracy': 1, 'conversation.personalAccuracy': 27 / 28, 'conversation.repeatRate': 0, 'conversation.worryAction': 1,
   'memory.askedEarly': 0.8, 'memory.askedOnce': 1, 'memory.heavyQuiet': 1, 'memory.safetyQuiet': 1, 'memory.recallAccuracy': 1, 'memory.honest': 1, 'memory.closedAfterAnswer': 1, 'memory.closedAfterBrushoff': 1, 'memory.notRepeatedAfterClose': 1,
   'trends.falseAlarmOrdinary': 0.014, 'trends.falseAlarmQuiet': 0.01, 'trends.detectionMean': 0.78,
-  'scam.warned': 38 / 38, 'scam.falseWarn': 0, 'scam.pauseInProgress': 1, 'scam.falsePauseGenuine': 0, 'scam.falsePauseOther': 0, 'scam.filterRecallDev': 1, 'scam.ordinaryTrigger': 0, 'meta.realFailureRate': 0, 'hearing.wer': 0.02, 'hearing.termSurvival': 0.97, 'hearing.scamTermSurvival': 0.97, 'hearing.failed': 0 };
+  'scam.warned': 38 / 38, 'scam.falseWarn': 0, 'scam.pauseInProgress': 1, 'scam.falsePauseGenuine': 0, 'scam.falsePauseOther': 0, 'scam.filterRecallDev': 1, 'scam.ordinaryTrigger': 0, 'meta.realFailureRate': 0, 'hearing.wer': 0.033, 'hearing.termSurvival': 0.992, 'hearing.scamTermSurvival': 1, 'hearing.failed': 0 };   // hearing: the first real run (48 hearings of synthetic clean speech)
 
 test('guard rails: every check passes on the numbers this project observed, ids are unique, and each fails on clearly worse numbers', () => {
   assert.equal(new Set(rules.CHECKS.map((c) => c.id)).size, rules.CHECKS.length);
