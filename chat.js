@@ -18,7 +18,7 @@ const crypto = require('node:crypto');
 const { startReply } = require('./reply');
 const { ChunkSplitter, isQuestion } = require('./reply');
 const { mapEmotionToDelivery, INTENTS, selfHarmText } = require('./emotion');
-const { Call, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE } = require('./call');
+const { Call, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, simpleAffirmation } = require('./call');
 const memory = require('./memory');
 const care = require('./care');
 
@@ -94,7 +94,7 @@ class ChatSession {
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
-    this.familyDeclined = false; this.said = []; this.reminderShown = null;   // as in call.js: a no to telling family lasts the whole chat; what they said, for recall asks
+    this.familyDeclined = false; this.said = []; this.reminderShown = null; this.seenShown = false; this.safetyAsked = new Set();   // as in call.js: a no to telling family lasts the whole chat; what they said, for recall asks
     this.prevDelivery = null; this.askWhat = false;
     this.reminderFacts = null; this.reminderPending = null; this.awaitAck = null; this.nameChance = 0;
   }
@@ -160,7 +160,7 @@ class ChatSession {
     } catch (e) {
       if (this.history.length && this.history[this.history.length - 1].role === 'user') this.history.pop(); // a failed turn cannot poison the next one
       throw e instanceof ChatError ? e : new ChatError(e.message);
-    } finally { this.scamReply = null; this.focus = null; this.reminderShown = null; this.armIdle(); }
+    } finally { this.scamReply = null; this.focus = null; this.reminderShown = null; this.seenShown = false; this.armIdle(); }
   }
 
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.
@@ -184,6 +184,8 @@ class ChatSession {
         if (this.safety) { d.escalate = false; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.maxSentences = 3; }
         const concern = String((raw && raw.concern) || '').toLowerCase();
         if (raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
+        { const lu = ([...this.history].reverse().find((m) => m.role === 'user') || { content: '' }).content; const it = String((raw && raw.intent) || '').toLowerCase();
+          if (simpleAffirmation(lu) && it !== 'story' && it !== 'recall' && !this.safety && !this.health && !this.pendingConcern && !this.scamReply && !(raw && (/^(1|yes|true)$/i.test(String(raw.pain || '')) || ['unsure', 'urgent'].includes(concern)))) d.maxSentences = 1; }   // a bare yes / okay gets one short line, as in a call
         d.noQuestion = this.lastReplyAsked && concern !== 'unsure';
         if (concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // already said no to telling family: no second ask
         if (concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
@@ -232,6 +234,7 @@ class ChatSession {
     if (this.safety) care.addLine(this.profile.id, 'safety', all);
     this.askHistory = [...this.askHistory, this.lastReplyAsked].slice(-4);
     if (this.safety && /\bsafe\b/i.test(all) && isQuestion(all)) care.safeAsked(this.profile.id);
+    if (this.safety && isQuestion(all)) this.noteSafetyAsked(all);
     this.prevDelivery = delivery;
     return { text: all, pieces, feel };
   }
@@ -244,7 +247,7 @@ class ChatSession {
     const SEEN_ANGLES = ['lead with reassurance', 'lead with how glad you are to be with them', 'lead with the fact that their family knows', 'lead with saying they are not alone'];
     this.serial(async () => {
       const l = await this.dynamicLine({ pool: 'seen', signal: AbortSignal.timeout(60000), sentences: 2, what: `FACT: a moment ago their family looked at the worry about them and now knows. You are already mid-conversation in a written chat: do NOT greet them, do NOT say hello, do NOT introduce yourself or say your name. Tell them so in one or two short, warm, fresh sentences: their family knows, someone will check on them, and you are with them, so they need not worry (${SEEN_ANGLES[Math.floor(Math.random() * SEEN_ANGLES.length)]}). If you use a name, use ONLY the name in your notes for them, never any other name. Never say "let them sort things out" or leave it to others; never copy a comfort phrase. Never promise an exact time or a call, never name a button, page, app, notification or anything technical, do not ask a question, do not repeat what they said earlier.` });
-      care.addLine(this.profile.id, 'seen', l.said);
+      care.addLine(this.profile.id, 'seen', l.said); care.clearSeenToTell(this.profile.id);
       this.history.push({ role: 'assistant', content: l.said });
       const m = this.push({ role: 'maya', kind: 'text', text: l.said, unprompted: true });
       care.pushSenior(this.profile.id, 'chat', { message: m });
@@ -252,7 +255,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['commitReminder', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'recordName', 'who', 'dynamicLine']) {
+for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'recordName', 'who', 'dynamicLine']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 
@@ -264,6 +267,18 @@ function session(profileId, tz) {
   if (!s) { s = new ChatSession(profile, tz); sessions.set(profileId, s); }
   if (tz && !s.tz) s.tz = tz;
   return s;
+}
+
+// What was SPOKEN on a call joins the same written thread (memory only, like the rest of it), so minimising the call shows the whole
+// conversation in the chat and nothing said aloud disappears. Pushed to the open app as a normal chat message. Never throws into a call.
+function mirrorSpoken(profileId, role, text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t || (role !== 'maya' && role !== 'senior')) return null;
+  try {
+    const m = session(profileId).push({ role, kind: 'text', text: t, spoken: true });
+    care.pushSenior(profileId, 'chat', { message: m });
+    return m;
+  } catch { return null; }
 }
 
 const callLive = (profileId) => care.liveCalls.has(profileId);
@@ -386,4 +401,4 @@ function forget(profileId) {
 // Test and shutdown helper: files every open chat into memory now.
 function endAll() { for (const [id, s] of sessions) { sessions.delete(id); s.finish(); } }
 
-module.exports = { deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
+module.exports = { mirrorSpoken, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };

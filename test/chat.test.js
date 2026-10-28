@@ -248,6 +248,36 @@ test('text: a failed chat turn leaves a due next-call reminder undelivered; the 
   assert.doesNotMatch(asked[0].roster, /REMINDER THEY ASKED YOU FOR/, 'not repeated');
 });
 
+const sentencesOf = (t) => (t.match(/[.!?](\s|$)/g) || []).length;
+const CRISISQ = `${tag({ emotion: 'crisis', intensity: 5, intent: 'share', concern: 'none', pain: 0 })} I am here with you. Are you alone right now? How are you feeling? Is anyone with you right now?`;
+
+test('text: a bare yes gets one short line in the chat too; a real sentence keeps its length', async () => {
+  const id = newSenior();
+  const LONGR = `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} That sounds lovely. I think it is a great plan. We can take our time with it. Tell me more.`;
+  reset(LONGR); const r = await chat.sendText(id, "Yeah okay, let's do that", null);
+  assert.equal(sentencesOf(r.messages[1].text), 1, r.messages[1].text); assert.match(asked[0].roster, /ONE short line/);
+  reset(LONGR); const r2 = await chat.sendText(id, 'I went to the market today and bought some lovely vegetables.', null);
+  assert.ok(sentencesOf(r2.messages[1].text) >= 2);
+});
+
+test('text: second self-harm message in the chat is told which questions she already asked; one alert', async () => {
+  const id = newSenior();
+  reset(CRISISQ); await chat.sendText(id, "I'm tired of being alone. I'm going to hang myself.", null);
+  assert.equal(activeSafety(id).length, 1);
+  reset(CRISISQ); await chat.sendText(id, 'I really mean it.', null);
+  assert.match(asked[0].roster, /ALREADY asked about: whether they are alone or someone is with them; how they are feeling/); assert.match(asked[0].roster, /more than once in this call/);
+  assert.equal(activeSafety(id).length, 1);
+});
+
+test('text: after the family presses Seen, the next message is answered with a fact that their family knows, once', async () => {
+  const id = newSenior();
+  const r = care.selfHarmAlert(id, { channel: 'chat' }); care.markNotif(id, r.flag.notifId, 'seen');
+  reset(PLAIN); await chat.sendText(id, 'hello again', null);
+  assert.match(asked[0].roster, /their family has seen the alert about them and knows/);
+  reset(PLAIN); await chat.sendText(id, 'and now?', null);
+  assert.doesNotMatch(asked[0].roster, /their family has seen the alert about them and knows/);
+});
+
 // ------------------------------------------------------------------------------------------ 2 voice notes
 
 const wavOf = (ms = 500) => chat.pcmToWav(Buffer.alloc(ms * 48), 24000);

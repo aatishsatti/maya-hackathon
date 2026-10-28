@@ -93,6 +93,13 @@ function parseTimer(text) {
 // The senior acknowledging a reminder. "not now / later / not yet" wins over any thanks.
 const ACK_YES = /\b(ok|okay|yes|yeah|yep|sure|alright|all right|got it|thank(s| you)|will do|i will|i'll|i have|i did|done|already|noted|right away)\b/i;
 const ACK_NO = /\b(not now|later|not yet|don'?t want|in a (bit|minute|moment|while)|after (a bit|lunch|dinner|breakfast))\b/i;
+// A bare agreement ("Yeah okay, let's do that", "sure", "sounds good"): at most seven words, no question, nothing else asked of her.
+// Such a turn gets ONE short line (code caps it; Spark is told why). Never in a heavy moment, a story or a recall.
+const SIMPLE_YES = /^(?:yeah|yes|yep|yup|ya|ok|okay|sure|alright|all right|fine|good|great|sounds (?:good|great|fine)|let'?s (?:do (?:that|it)|go|try)|let us (?:do (?:that|it)|go)|go ahead|please do|of course|exactly|right|uh huh|mm+ ?hm+|that'?s (?:fine|good|right|okay|great)|why not|i would like that|i'?d like that)\b/i;
+function simpleAffirmation(text) {
+  const t = String(text || '').replace(/^[^:]{1,40}:\s*/, '').replace(/[\u2018\u2019]/g, "'").trim();
+  return t.length > 0 && !/\?/.test(t) && t.split(/\s+/).length <= 7 && SIMPLE_YES.test(t) && !recall.heavyTalk(t) && !selfHarmText(t);
+}
 const isAck = (text) => ACK_YES.test(text) && !ACK_NO.test(text);
 // A reminder the family typed as a message to the senior rather than a task: it speaks to them as Mom/Dad/Grandma, says who
 // it is from, is quoted, or speaks as "me". Such text is delivered as a message (no task template, no first name).
@@ -185,6 +192,13 @@ const CHECK_OPEN_SEEDS = ['say you are glad they picked up', 'say you were think
 const CHECK_ASK_SEEDS = ['how they are feeling now', 'how they are doing at this moment', 'how things are with them', 'whether they are okay right now', 'how it is going for them just now'];
 const SAFETY_ANGLES = ['reflect how heavy that sounded', 'say plainly that you are staying and then say little else', 'gently ask what is happening for them right now', 'acknowledge how hard it was to say that', 'ask what has made things feel this way today', 'ask about something small and near them right now, such as where they are sitting', 'say what you notice about their courage in talking to you'];
 const SAFETY_SHAPES = ['one short sentence only', 'two short sentences', 'two short sentences, the second one a gentle statement', 'three short sentences, plain and slow'];
+// What her safety replies have already asked in this call, by topic only (code reads her own finished reply; nothing is ever put in her mouth).
+// Without it she asked the same three things on every self-harm turn: only the word "safe" was ever counted.
+const SAFETY_TOPICS = {
+  'whether they are alone or someone is with them': /\b(alone|(anyone|anybody|someone|somebody) (is )?(with|near|there|around|beside|home)|with you right now)\b/i,
+  'whether they are safe': /\bsafe\b/i,
+  'how they are feeling': /\bhow (are|do) you (feeling|feel)\b|\bhow are you (doing|holding)\b|\bwhat are you feeling\b/i,
+};
 // Stock lines a friend would never say twice. A normal reply may not open with one that already opened a recent reply
 // (last 3, kept per profile), and the "who I am" line may be said once per call. Matching is on the reply's first piece.
 const IDENTITY_LINE = /\b(i['’]?m|i am|my name is) maya\b/i;
@@ -345,6 +359,8 @@ class Call {
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
     this.pendingConcern = null;  // she was unsure and asked; waiting for the answer
+    this.safetyAsked = new Set(); // topics her safety replies have already asked about in this call (see SAFETY_TOPICS)
+    this.seenShown = false;      // the family-has-seen fact was handed to Spark for THIS reply (cleared once the reply is spoken)
     this.reminderShown = null;   // id of the next-call reminder handed to Spark for THIS reply (delivered only when the reply is spoken, see commitReminder)
     this.familyDeclined = false; // they said no to letting their family know, earlier in this call: kept for the whole call, not one turn
     this.said = [];              // what the person said in this call, in order (not yet in the filed memory); only shown to Spark for asks that need it
@@ -922,6 +938,8 @@ class Call {
     bits.push('Never use a stock comfort phrase or a stock way of introducing yourself, whether it reassures them that you are with them or says who you are; a friend makes up new words each time.');
     const beatNote = beat.note(this.beatCount);
     if (beatNote) bits.push(beatNote);
+    const lastU = [...this.history].reverse().find((m) => m.role === 'user');
+    if (lastU && simpleAffirmation(lastU.content) && !this.safety && !this.health && !this.pendingConcern) bits.push('They only said a short yes or okay. A real conversation answers that with ONE short line: act on what they agreed to in a few words, or simply carry on. No explanation, no recap of what was just said, and do not repeat a question you already asked or a line you already used.');
     const kinds = moves.blockedKinds(this.recentReplies());
     if (kinds.length) bits.push(`Recently you were already ${kinds.join(', and ')}. Do not do that again in this reply, in any words.`);
     bits.push('Answer the specific thing they just said and carry the talk forward by one small step. Do not lean on a general polite acknowledgement in place of a real response, and do not reuse any run of words from your last three replies.');
@@ -966,6 +984,7 @@ class Call {
   // The reply that carried a next-call reminder was spoken to the end (not cut off, not failed): now it counts as delivered, once, and "not
   // done yet" can reopen it. Until then the reminder stays due, so a cut reply never loses it. Chat borrows this too.
   commitReminder() {
+    if (this.seenShown && this.profile) { this.seenShown = false; care.clearSeenToTell(this.profile.id); }   // the reply that carried "your family knows" was spoken
     const tid = this.reminderShown; this.reminderShown = null;
     if (!tid || !this.profile) return;
     memory.deliverReminder(this.profile.id, tid, this.callId);
@@ -1199,6 +1218,7 @@ class Call {
     if (myGen !== this.gen || this.closed) return;
     care.addLine(this.profile.id, rem ? 'reminder' : 'greeting', line.said);
     this.history.push({ role: 'assistant', content: line.said });
+    this.mirror('maya', line.said);
     if (this.outreach && this.outreach.kind === 'reminder') { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
     if (!rem) this.startPrethink();   // Spark thinks about the likeliest routine answer while the greeting is spoken
     await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem ? 1 : 2, bright: !rem && this.greetingPlain === true });
@@ -1332,6 +1352,7 @@ class Call {
     this.history.push({ role: 'user', content: this.userMessage(turns) });
     this.history = this.history.slice(-MAX_HISTORY);
     this.said = [...this.said, ...this.userMessage(turns).split('\n').filter(Boolean)].slice(-MAX_SAID);
+    this.mirror('senior', turns.map((t) => t.text).join(' '));
     for (const t of turns) for (const pt of this.attribute(t)) memory.appendTurn(this.profile.id, this.callId, { label: pt.label, text: pt.text, userSaid: true });
     const t0 = turns[turns.length - 1];
     const timing = {
@@ -1363,7 +1384,7 @@ class Call {
       this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
-    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; this.reminderShown = null; this.scamReply = null; this.scamAskFor = null; }
+    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; this.reminderShown = null; this.seenShown = false; this.scamReply = null; this.scamAskFor = null; }
   }
 
   // Care effects of the words just heard, and notes for the reply that must be true: a flag resolving (so Maya warmly asks
@@ -1382,6 +1403,10 @@ class Call {
       else if (CONCERN_NO.test(heard)) { care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; notes.push('FACT: they said no to letting their family know about the message they showed you. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.'); }
       else if (affirmed(CONCERN_YES, heard) || affirmed(FAMILY_ASK, heard)) { care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; notes.push('FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). Confirm that in one short sentence in fresh words, saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.'); }
       else { care.scamUnclear(id); notes.push('FACT: you asked whether they would like their family to know about the message and they have not answered that yet. Answer what they just said; do not push, and do not ask the same question again word for word.'); }
+    }
+    if (care.seenToTell(id) && !care.hasActiveSafety(id)) {
+      this.seenShown = true;
+      notes.push('FACT: their family has seen the alert about them and knows (nothing more is known: not what they will do or when). They have not been told yet. In THIS reply tell them calmly, in your own words, that their family knows and is aware, and that you are still with them. Topic only: no page, button, app or technical word, nothing about what was said, no promise of a call or a time. Never deny that an alert was made.');
     }
     if (this.health) notes.push(this.healthNote());
     if (this.familyDeclined && !this.health && !this.safety) notes.push('FACT: earlier in this call they told you no to letting their family know. Take them at their word for the rest of the call: do not ask again whether to tell their family, and no alert will be made unless something truly urgent happens. You still listen and care about how they are.');
@@ -1448,7 +1473,7 @@ class Call {
     this.escalations += 1;
     this.prevDelivery = null;
     const r = care.selfHarmAlert(this.profile.id, { channel: this.channel });
-    if (r.isNew) this.safetyFresh = true;
+    if (r.isNew) { this.safetyFresh = true; this.ticketTold = false; }
     console.log('safety', JSON.stringify({ count: this.escalations, newAlert: r.isNew })); // no words logged
   }
 
@@ -1459,7 +1484,7 @@ class Call {
     this.ticketTold = true;
     this.ticketInCall = false;
     this.speakWhenFree(async (signal) => { const l = await this.dynamicLine({ pool: 'seen', signal, sentences: 2, what: `FACT: a moment ago their family looked at the worry about them and now knows. You are already mid-conversation: do NOT greet them, do NOT say hello, do NOT introduce yourself or say your name. Tell them so in one or two short, warm, fresh sentences: their family knows, someone will check on them, and you are with them, so they need not worry (${pick(SEEN_ANGLES)}). If you use a name, use ONLY the name in your notes for them, never any other name. Never say "let them sort things out" or leave it to others; never copy a comfort phrase. Never promise an exact time or a call, never name a button, page, app, notification or anything technical, do not ask a question, do not repeat what they said earlier.`
-      }); care.addLine(this.profile.id, 'seen', l.said); return l; }).catch(() => {});
+      }); care.addLine(this.profile.id, 'seen', l.said); care.clearSeenToTell(this.profile.id); return l; }).catch(() => {});
   }
 
   // An emergency judged from context (Spark tagged concern=urgent). The app alerts the family now; Spark is told as a fact.
@@ -1467,6 +1492,7 @@ class Call {
     this.health = true; this.ticketInCall = true; this.pendingConcern = null;
     const r = care.healthAlert(this.profile.id, { channel: this.channel });
     this.healthFresh = r.isNew;
+    if (r.isNew) this.ticketTold = false;
     this.healthOverrode = Boolean(this.familyDeclined);
     // Why the alert happened, for the log: Spark judged this turn urgent (rule 4: fall, injury, chest pain, cannot breathe, needs help), which
     // is the one case that alerts without asking. If they had said no earlier in the call, that is said here too, never hidden.
@@ -1486,12 +1512,26 @@ class Call {
     const fresh = this.safetyFresh;
     this.safetyFresh = false;
     const recent = care.recentLines(this.profile.id, 'safety').slice(-6);
+    const asked = [...this.safetyAsked];
+    const progress = `${this.escalations > 1 || asked.length ? 'They have now spoken of ending their life more than once in this call. ' : ''}${asked.length ? `You have ALREADY asked about: ${asked.join('; ')}. Do not ask any of those again, in any words, and do not follow a question with another of the same kind. ` : ''}Each reply must move forward from the last one: respond to what is NEW in what they just said, stay with them, and if your questions are already asked let presence and a small next step (staying on the line, what they might do in the next few minutes) carry the reply instead of another question.`;
     let angle = pick(SAFETY_ANGLES); if (angle === this.lastAngle) angle = pick(SAFETY_ANGLES); this.lastAngle = angle;
     return [
+      progress,
       `For this reply (a nudge for variety, not words to copy): ${angle}; length: ${pick(SAFETY_SHAPES)}.${recent.length ? ` Lines you used with them in the last 3 days, none to be repeated or closely echoed: ${recent.map((q) => `"${q}"`).join('; ')}.` : ''}`,
       'SAFETY (instructions for you, never read out): this person has spoken of hurting themselves or ending their life. Stay calm, warm and present, reply to exactly what they just said in words you have not used before in this call or the last one; never reuse an earlier line or its shape. Two or three short sentences, no lists, no lecture, no diagnosis, no exclamation marks. Keep them talking. Your facts say how many times you have already asked whether they are safe: ask it (and whether someone is near) only if you have not yet, or something new was said; otherwise reflect, stay and listen. No phone number, and do not tell them to call emergency services; you never call anyone yourself. Say "alerted" or "let your family know", never "reminded". If they say you may tell their family, or ask you to, it is already done: say so in fresh words and that you are staying. If they push back or refuse to call anyone, do not keep urging them to call someone; be honest that you care, that their family has been alerted, and that you are staying with them.',
-      fresh ? 'FACT: the app has just alerted their family, once, so they are not alone with this; it is not a secret. You may tell them so, calmly and briefly, in your own words, this one time.' : 'FACT: their family has already been alerted for this and no second alert is made. Do not announce it again and do not thank them for telling you again; de-escalate in fresh words, ask whether they are safe, and stay. Only if they ask or push back, confirm truthfully in fresh words that the family knows, why, and that you are staying with them.',
+      fresh ? 'FACT: the app has just alerted their family, once, so they are not alone with this; it is not a secret. In THIS reply tell them so, calmly and briefly, in your own words (topic only: that you are letting their family know, nothing about what was said). Do not ask their permission; it is already done.' : 'FACT: their family has already been alerted for this and no second alert is made. Do not announce it again and do not thank them for telling you again; de-escalate in fresh words, ask whether they are safe, and stay. Only if they ask or push back, confirm truthfully in fresh words that the family knows, why, and that you are staying with them.',
     ].join(' ');
+  }
+
+  // Spoken words also go into the written chat thread (chat.js), so minimising the call keeps the whole conversation visible.
+  mirror(role, text) {
+    if (!this.profile) return;
+    try { require('./chat').mirrorSpoken(this.profile.id, role, text); } catch { /* the call never depends on the written copy */ }
+  }
+
+  // Her finished safety reply asked a question: remember which topics, so the next reply is told not to ask them again.
+  noteSafetyAsked(text) {
+    for (const [topic, re] of Object.entries(SAFETY_TOPICS)) if (re.test(String(text || ''))) this.safetyAsked.add(topic);
   }
 
   recordName(label, name) {
@@ -1536,6 +1576,7 @@ class Call {
         const intent = raw && String(raw.intent).toLowerCase();
         const lastUser = ([...this.history].reverse().find((m) => m.role === 'user') || { content: '' }).content;
         if (!greeting && ((intent === 'story' && STORY_ASK.test(lastUser)) || (intent === 'recall' && RECALL_ASK.test(lastUser)))) { d.maxSentences = Infinity; d.moments = 3; }
+        if (!greeting && simpleAffirmation(lastUser) && intent !== 'story' && intent !== 'recall' && !this.safety && !this.health && !this.pendingConcern && !this.scamReply && !(raw && (/^(1|yes|true)$/i.test(String(raw.pain || '')) || ['unsure', 'urgent'].includes(String(raw.concern || '').toLowerCase())))) d.maxSentences = 1; // a bare yes / okay gets one short line
         if (this.lastExclaimed) d.maxExclaim = 0; // never an exclamation mark on two replies in a row
         if (this.safety || this.health || this.pendingConcern || (raw && (/^(1|yes|true)$/i.test(String(raw.pain || '')) || ['unsure', 'urgent'].includes(String(raw.concern || '').toLowerCase())))) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; if (d.openingTone === 'bright') d.openingTone = null; } // pain, worry, safety: no [happy], no brightness, no exclamation
         if (this.safety) { d.escalate = false; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.maxSentences = 3; } // safety replies are calm and plain, and never halted
@@ -1592,7 +1633,7 @@ class Call {
       } catch (e) { producerErr = e; } finally { producerDone = true; if (timing && timing.sparkDoneMs === undefined) timing.sparkDoneMs = Date.now() - tStart; }
     })();
 
-    const keep = () => { if (record && said.length) { this.history.push({ role: 'assistant', content: said.join(' ') }); memory.appendTurn(this.profile.id, this.callId, { who: 'Maya', text: said.join(' ') }); } };
+    const keep = () => { if (record && said.length) { this.history.push({ role: 'assistant', content: said.join(' ') }); memory.appendTurn(this.profile.id, this.callId, { who: 'Maya', text: said.join(' ') }); this.mirror('maya', said.join(' ')); } };
     for (;;) {
       if (myGen !== this.gen || this.closed) { keep(); return; } // interrupted
       const head = jobs[0];
@@ -1698,6 +1739,7 @@ class Call {
       if (this.safety) care.addLine(this.profile.id, 'safety', all);
       this.askHistory = [...this.askHistory, this.lastReplyAsked].slice(-4);
       if (this.safety && /\bsafe\b/i.test(all) && isQuestion(all)) care.safeAsked(this.profile.id);
+      if (this.safety && isQuestion(all)) this.noteSafetyAsked(all);
     }
     if (hangup) this.hangUp(); else this.armSilence();
     if (timing) {
@@ -1720,4 +1762,4 @@ class Call {
   }
 }
 
-module.exports = { callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

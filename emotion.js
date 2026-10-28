@@ -68,8 +68,9 @@ function mapEmotionToDelivery(emotion, intensity, prev) {
   return d;
 }
 
-// Deterministic safety check on the person's own words, independent of what Spark says.
-const SELF_HARM = /\b(kill myself|killing myself|end my life|end it all|want to die|wanna die|wish i (was|were) dead|suicid\w*|take my own life|taking my own life|hurt myself|harm myself|(do not|don['’]?t|dont|no longer|not) (want|wish) to (live|be here|be alive|exist|wake up)|wish i (wasn['’]?t|was not|weren['’]?t|were not) (here|alive|born)|no reason to live|better off without me)\b/i;
+// Deterministic safety check on the person's own words, independent of what Spark says. Clear self-directed ways of dying count too ("going to hang myself"):
+// without them the alert depended on Spark's crisis tag alone.
+const SELF_HARM = /\b(kill myself|killing myself|end my life|end it all|want to die|wanna die|wish i (was|were) dead|suicid\w*|take my own life|taking my own life|hurt myself|harm myself|(do not|don['’]?t|dont|no longer|not) (want|wish) to (live|be here|be alive|exist|wake up)|wish i (wasn['’]?t|was not|weren['’]?t|were not) (here|alive|born)|no reason to live|better off without me|(hang|hanging|shoot|shooting|drown|drowning|poison|poisoning|stab|stabbing|suffocate|suffocating|smother|starve|starving|overdose|overdosing)( on)? (myself|my self)|(going to|want to|wanna|plan to|planning to|about to|will|gonna|i['’]ll|i['’]m going to) overdose|(slit|slash|cut|cutting|slitting) (my )?(wrists?|throat|veins)|take (all )?my (pills|tablets) (to|and) (die|end)|jump(ing)? (off|from|in front of) [^.?!]{0,25}(bridge|building|roof|balcony|train|window|cliff))\b/i;
 function selfHarmText(text) { return SELF_HARM.test(String(text || '')); }
 
 module.exports = { mapEmotionToDelivery, parseFeel, selfHarmText, EMOTIONS, INTENTS };

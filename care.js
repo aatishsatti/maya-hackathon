@@ -287,6 +287,7 @@ function markNotif(id, nid, status) {
 // here, not in memory.js: the memory file is rewritten from each call's words, which would drop it.
 function resolveSafety(p, f, by) {
   f.status = 'resolved'; f.resolvedAt = Date.now(); f.resolvedBy = by;
+  if (by === 'family' || /^whatsapp/.test(String(by))) p.seenToTell = Date.now();   // the person has not been told yet that their family knows: the next thing they say is answered with it
   (p.safetyHistory = p.safetyHistory || []).push({ date: memory.today(p.tz), resolvedAt: f.resolvedAt, callsSince: 0 });
   // Handled: a safety call-back still ringing or waiting for its next try stops.
   const o = activeByProfile.get(p.id);
@@ -495,6 +496,7 @@ function selfHarmAlert(id, { kind = 'self_harm', channel = 'call' } = {}) {
   f = { id: uid(), level: 'alert', mode: p.mode, createdAt: now, trigger: 'safety', safety: true, task: null, attempts: 0, lastCallAt: now, lastSeenAt: now, lastSeenSource: 'maya', status: 'active', resolvedAt: null, returnAt: null, notified: 'alert', quietHours: false, notifId: null, kind };
   p.flags.unshift(f);
   p.flags.length = Math.min(p.flags.length, 50);
+  p.seenToTell = 0;   // a new ticket is open: the old "your family has seen it" no longer describes things
   const name = nameOf(id);
   const stay = channel === 'chat' ? 'Maya is staying in the chat with them' : 'Maya is staying on the call with them';
   const text = kind === 'health'
@@ -665,6 +667,12 @@ function painMention(id, now = Date.now()) {
   p.pain.push(now); p.pain = p.pain.slice(-20); save(id);
   return before;
 }
+
+// The family saw a safety alert (dashboard Seen, WhatsApp Read or Reply) and the person has not yet been told that their family knows.
+// True for 3 days; cleared once a reply that carried it was spoken (call.js commitReminder) or Maya said it unprompted (onTicketClosed).
+const SEEN_TELL_MS = 3 * 24 * 60 * MIN;
+const seenToTell = (id) => { const p = get(id); return Boolean(p && p.seenToTell && Date.now() - p.seenToTell < SEEN_TELL_MS); };
+function clearSeenToTell(id) { const p = get(id); if (p && p.seenToTell) { p.seenToTell = 0; save(id); } }
 
 // Maya asked whether they are safe (once per incident is the aim; this is the fact she is given).
 function safeAsked(id) { const p = get(id), f = p && safetyFlag(p); if (f) { f.safeAsked = (f.safeAsked || 0) + 1; save(id); } }
@@ -918,7 +926,7 @@ module.exports = {
   cfg, MODES, get, remove, start, stop, tick,
   trendEvent, trendTurn, trendView, localParts,
   touch, lastSeen, callStarted, callEnded, callCount, liveCalls, liveChats, pushSenior, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
-  recentLines, isRepeatLine, addLine,
+  recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
