@@ -120,7 +120,40 @@ function publishMarkdown(items, byId, baselineById, title) {
   return L.join('\n');
 }
 
-module.exports = { wilson, fmt, summarise, isWarn, runWith, throughFilter, publishMarkdown };
+// The published page when the live setting was changed after the first held-out run: BOTH runs are shown, side by side, with the change stated first.
+// runs: [{ label, byId }] (in the order they were run); baselineById: the original prompt. Nothing is hidden: every miss and false alarm of every run is listed.
+function publishComparison(items, runs, baselineById, title, changeNote) {
+  const { needsCheck } = require('../scam');
+  const view = runs.map((r) => ({ ...r, piped: throughFilter(items, r.byId, needsCheck) }));
+  const row = (map, label) => { const s = summarise(items, map); return `| ${label} | ${fmt(s.warned, s.scams)} | ${fmt(s.cautioned, s.scams)} | ${fmt(s.falseWarned, s.normal)} | ${fmt(s.falseCautioned, s.normal)} |`; };
+  const now = items.filter((i) => i.now), lp = items.filter((i) => i.legitpay), oth = items.filter((i) => i.label === 'normal' && !i.legitpay);
+  const paused = (map, list) => list.filter((i) => map[i.id] && map[i.id].level === 'pause').length;
+  const L = [`# ${title}`, '', `**Change, stated openly:** ${changeNote}`, '',
+    'Meta Spark, text only, each run once on the held-out half of docs/scam-testset.json (never used for tuning). Intervals are 95% Wilson intervals; with this few items they are wide.', '',
+    '| detector | scams warned | scams at least cautioned | normal wrongly warned | normal wrongly cautioned |', '|---|---|---|---|---|'];
+  if (baselineById) L.push(row(baselineById, 'Original five-signal prompt (baseline)'));
+  for (const v of view) L.push(row(v.byId, `${v.label}: detector alone`), row(v.piped, `${v.label}: behind the cheap word filter (what runs live)`));
+  L.push('', '## The pause moment', '');
+  for (const v of view) L.push(`- ${v.label}: scams in progress paused ${fmt(paused(v.byId, now), now.length)} (detector alone), ${fmt(paused(v.piped, now), now.length)} (behind the filter); genuine payments in progress wrongly paused ${fmt(paused(v.byId, lp), lp.length)}; other normal items wrongly paused ${fmt(paused(v.byId, oth), oth.length)}.`);
+  const wrongs = (map, f) => items.filter(f).map((i) => `- ${i.id} [${i.category}/${i.channel}${i.hard ? '/hard' : ''}] ${map[i.id] ? map[i.id].level : 'n/a'}${map[i.id] && map[i.id].filtered ? ' (the word filter did not pass it to Spark)' : ''}: ${i.text}`);
+  const orNone = (list) => (list.length ? list : ['- None.']);
+  for (const v of view) {
+    L.push('', `## ${v.label}: every held-out scam that was not warned (behind the filter)`, '', ...orNone(wrongs(v.piped, (i) => i.label === 'scam' && !isWarn(v.piped[i.id]))));
+    L.push('', `## ${v.label}: every held-out normal item wrongly flagged (warned or cautioned, behind the filter)`, '', ...orNone(wrongs(v.piped, (i) => i.label === 'normal' && v.piped[i.id] && v.piped[i.id].level !== 'none')));
+  }
+  L.push('', ...caveats());
+  return L.join('\n');
+}
+const caveats = () => ['## Caveats (please read before quoting any number)', '',
+  '- The test set was written by the same team that built the detector, so both halves are ours. Real scams in the wild may be harder, or phrased differently.',
+  '- There are only 38 scams and 38 normal items in this half. "0 wrongly warned" can hide a true rate of up to about 9%. The intervals above are the honest range.',
+  '- The same family of model reads both the examples and the checks, and the same detector run twice can differ by about two items (identical dev runs gave 36 and 38 of 38).',
+  '- Text only. Photos (the vision path) were not measured here, and the photo check is unchanged.',
+  '- Warn accuracy is not meaningfully different between the original prompt and either setting (overlapping intervals). What the new detector adds is the pause moment, coverage of typed and spoken talk, and the remote-access and identity-details reads.',
+  '- The cheap word filter that guards the live check let through 36 of 38 held-out scams: about 1 scam description in 20 gets no check and no pause moment, although Maya still replies naturally. A looser filter would check more than half of ordinary chat lines, which costs too much, so it was left as is.',
+  '- The held-out half has now been run twice with the full detector: once at reasoning "low", once at "minimal". The second run was made only to report the new live setting; no tuning followed either run.', ''];
+
+module.exports = { wilson, fmt, summarise, isWarn, runWith, throughFilter, publishMarkdown, publishComparison };
 
 if (require.main === module) {
   const [cmd, file, which] = process.argv.slice(2);
@@ -128,12 +161,19 @@ if (require.main === module) {
     try { process.loadEnvFile(path.join(ROOT, '.env')); } catch { /* no .env */ }
     runWith(process.argv[5] === 'talk' ? talkDetect : baselineDetect, file, which || 'all').then((o) => console.log('done', o.length, 'items,', o.filter((x) => x.error).length, 'errors'));
   } else if (cmd === 'report') report(file);
-  else if (cmd === 'publish') {   // node test/scam-bench.js publish <held-results.json> <out.md> [baseline-held.json]
+  else if (cmd === 'publish2') {   // node test/scam-bench.js publish2 <low-held.json> <minimal-held.json> <out.md> [baseline-held.json]
+    const held = SET().filter((i) => i.split === 'held');
+    const by = (f) => Object.fromEntries(JSON.parse(fs.readFileSync(f, 'utf8')).map((r) => [r.id, r]));
+    const base = process.argv[6] ? by(process.argv[6]) : null;
+    const note = 'On 2026-10-28 the live setting of the scam check on typed and spoken talk was changed from reasoning "low" to "minimal". The decision was made on the DEV half only (76 items, 4 runs per setting: both settings warned 99-100% of scams with 0% false warnings and paused 95% of scams in progress; "minimal" was about 1.7 to 2 times faster and used 57% fewer output tokens). The held-out half was then run once more for the new setting. Both held-out results are shown below; neither was hidden or used for tuning.';
+    fs.writeFileSync(process.argv[5], publishComparison(held, [{ label: 'Reasoning "low" (the first held-out run, the setting live before the change)', byId: by(file) }, { label: 'Reasoning "minimal" (live now)', byId: by(which) }], base, 'Scam shield: final held-out results (both settings)', note));
+    console.log('wrote', process.argv[5]);
+  } else if (cmd === 'publish') {   // node test/scam-bench.js publish <held-results.json> <out.md> [baseline-held.json]
     const held = SET().filter((i) => i.split === 'held');
     const by = (f) => Object.fromEntries(JSON.parse(fs.readFileSync(f, 'utf8')).map((r) => [r.id, r]));
     const base = process.argv[5] ? by(process.argv[5]) : null;
     fs.writeFileSync(which, publishMarkdown(held, by(file), base, 'Scam shield: final held-out results'));
     console.log('wrote', which);
   }
-  else if (cmd !== 'publish') console.log('usage: node test/scam-bench.js run <results.json> [dev|held|t1|t2|all] [baseline|talk] | report <results.json> | publish <held.json> <out.md> [baseline.json]');
+  else if (cmd !== 'publish' && cmd !== 'publish2') console.log('usage: node test/scam-bench.js run <results.json> [dev|held|t1|t2|all] [baseline|talk] | report <results.json> | publish <held.json> <out.md> [baseline.json]');
 }

@@ -50,3 +50,18 @@ test('publishMarkdown: both views, the pause numbers, and every held-out miss an
   assert.equal((calm.match(/- None\./g) || []).length, 2, 'an empty list says None, not nothing');
   assert.match(md, /## Caveats/); assert.match(md, /written by the same team that built the detector/); assert.match(md, /1 scam description in 20 gets no check/); assert.match(md, /frozen before this run/);
 });
+
+test('publishComparison: both runs side by side, the change stated first, every miss of every run listed, nothing hidden', () => {
+  const items = [
+    { id: 'S1', label: 'scam', category: 'bank', channel: 'text', text: 'urgent please send the gift cards and the code now', now: true },
+    { id: 'S2', label: 'scam', category: 'invoice', channel: 'text', hard: true, text: 'Our bank details have changed so please pay the invoice to the new account with the code' },
+    { id: 'N1', label: 'normal', category: 'bill', channel: 'text', text: 'Your bill is due, pay at the bank by Friday.' },
+  ];
+  const lo = { S1: { level: 'pause' }, S2: { level: 'warn' }, N1: { level: 'none' } }, mi = { S1: { level: 'pause' }, S2: { level: 'caution' }, N1: { level: 'none' } };
+  const md = B.publishComparison(items, [{ label: 'Reasoning "low"', byId: lo }, { label: 'Reasoning "minimal" (live now)', byId: mi }], null, 'Both', 'The setting was changed from low to minimal.');
+  assert.match(md, /^# Both/); assert.match(md, /\*\*Change, stated openly:\*\* The setting was changed from low to minimal\./);
+  assert.match(md, /Reasoning "low": detector alone \| 2\/2 = 100%/); assert.match(md, /Reasoning "minimal" \(live now\): detector alone \| 1\/2 = 50%/);
+  assert.match(md, /## Reasoning "minimal" \(live now\): every held-out scam that was not warned[^\n]*\n\n- S2 \[invoice\/text\/hard\] caution/);
+  assert.match(md, /## Reasoning "low": every held-out scam that was not warned[^\n]*\n\n- None\./, 'a run with no misses says None');
+  assert.match(md, /held-out half has now been run twice with the full detector/); assert.ok(md.indexOf('Change, stated openly') < md.indexOf('| detector |'), 'the change comes before any number');
+});

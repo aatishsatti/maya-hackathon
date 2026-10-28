@@ -1,0 +1,1370 @@
+[
+ {
+  "id": "S002",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": true,
+   "money": false,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S004",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": true,
+   "money": false,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S006",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S008",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S010",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": true,
+   "money": false,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S012",
+  "level": "warn",
+  "count": 5,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": true,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S014",
+  "level": "warn",
+  "count": 2,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S016",
+  "level": "warn",
+  "count": 5,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": true,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S018",
+  "level": "warn",
+  "count": 2,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S020",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S022",
+  "level": "warn",
+  "count": 2,
+  "signals": {
+   "urgency": true,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S024",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": true,
+   "money": false,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S026",
+  "level": "warn",
+  "count": 5,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S028",
+  "level": "warn",
+  "count": 2,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S030",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S032",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S034",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S036",
+  "level": "warn",
+  "count": 5,
+  "signals": {
+   "urgency": true,
+   "money": false,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": true,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S038",
+  "level": "warn",
+  "count": 2,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": true,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S040",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S042",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S044",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": false,
+   "secrecy": true,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S046",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S048",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S050",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S052",
+  "level": "pause",
+  "count": 3,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": true
+  }
+ },
+ {
+  "id": "S054",
+  "level": "pause",
+  "count": 4,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": true
+  }
+ },
+ {
+  "id": "S056",
+  "level": "pause",
+  "count": 2,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": true
+  }
+ },
+ {
+  "id": "N057",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N059",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N061",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N063",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N065",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N067",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N069",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N071",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N073",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N075",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N077",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N079",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N081",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N083",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N085",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N087",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N089",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N091",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N093",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N095",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N097",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N099",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N101",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N103",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N105",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N107",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N109",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": true
+  }
+ },
+ {
+  "id": "N111",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S114",
+  "level": "caution",
+  "count": 1,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S116",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S118",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S120",
+  "level": "warn",
+  "count": 5,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S122",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S124",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": true,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S126",
+  "level": "warn",
+  "count": 3,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S128",
+  "level": "warn",
+  "count": 4,
+  "signals": {
+   "urgency": true,
+   "money": true,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "S130",
+  "level": "pause",
+  "count": 2,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": true,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": true,
+   "idDetails": false,
+   "happeningNow": true,
+   "aboutToAct": true
+  }
+ },
+ {
+  "id": "S132",
+  "level": "pause",
+  "count": 2,
+  "signals": {
+   "urgency": false,
+   "money": true,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": true
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": true,
+   "aboutToAct": true
+  }
+ },
+ {
+  "id": "N134",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N136",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N138",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N140",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N142",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N144",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N146",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N148",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": false
+  }
+ },
+ {
+  "id": "N150",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": true
+  }
+ },
+ {
+  "id": "N152",
+  "level": "none",
+  "count": 0,
+  "signals": {
+   "urgency": false,
+   "money": false,
+   "impersonation": false,
+   "secrecy": false,
+   "payment": false
+  },
+  "reads": {
+   "remoteAccess": false,
+   "idDetails": false,
+   "happeningNow": false,
+   "aboutToAct": true
+  }
+ }
+]
