@@ -111,6 +111,38 @@
     if (!resolved && isAlert && sc.notifId) c.append(closeBtn(sc, "I've seen this", 'primary'));
     return c;
   }
+  // ---- What changed: a plain-facts card from daily counts only (server side: trends.js). Yellow at most, never red, never an alert. ----
+  // Everything shown is text from the server's own facts, set with textContent; nothing here judges or infers.
+  const dayName = (iso) => { const d = new Date(`${iso}T12:00:00`); return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); };
+  function trendCard(tr, name) {
+    if (!tr || !tr.status) return el('div', 'empty', 'Not available right now.');
+    if (tr.learning) {
+      const more = Math.max(1, (tr.daysNeeded || 0) - (tr.daysSoFar || 0));
+      const c = el('div', 'card');
+      c.append(cardHead('pill-plain', 'Still learning', `Maya is still learning ${name}'s usual pattern`));
+      c.append(el('div', 'status', `Nothing is judged yet: ${more} more ${more === 1 ? 'day' : 'days'} of daily counts are needed first (${tr.daysSoFar || 0} of ${tr.daysNeeded} so far).`));
+      return c;
+    }
+    if (tr.status === 'ok') {
+      const c = el('div', 'card resolved');
+      c.append(cardHead('pill-ok', 'Nothing unusual', `${name} looks like ${name}'s usual`));
+      c.append(el('div', 'status', 'Nothing has shifted from their own usual pattern over the last 8 days.'));
+      return c;
+    }
+    const c = el('div', 'card flag');
+    c.append(cardHead('pill-flag', tr.status === 'notable' ? 'Noticeable change' : 'Worth watching', `A change from ${name}'s usual`));
+    for (const line of tr.lines || []) c.append(el('div', 'detail', line));
+    c.append(chips([tr.since ? `Since ${dayName(tr.since)}` : null, 'Dashboard only', 'Counts only: no words, topics or audio']));
+    c.append(el('div', 'meta', 'This compares them with their own usual. It is not a diagnosis and not advice.'));
+    return c;
+  }
+  let lastName = 'them';
+  async function loadTrend() {
+    const mine = id;
+    try { const tr = await api(`/api/care/${mine}/trend`); if (mine === id) $('trend').replaceChildren(trendCard(tr, lastName)); }
+    catch { if (mine === id) $('trend').replaceChildren(el('div', 'empty', 'Not available right now.')); }   // never breaks the rest of the page
+  }
+
   function list(node, items, empty) { node.replaceChildren(...(items.length ? items : [el('div', 'empty', empty)])); }
 
   // Reminder state -> short pill. Done and Missed are the two the family cares about; the full sentence stays below it.
@@ -120,6 +152,7 @@
 
   function render(v) {
     $('body').hidden = false;
+    lastName = v.name || 'them';
     $('presence').textContent = `${v.inCall ? 'On a call with Maya now' : v.appOpen ? 'App is open' : 'App is not open (Maya cannot ring)'} · Last seen ${t(v.lastSeen && v.lastSeen.at)} · ${v.callCount || 0} ${v.callCount === 1 ? 'call' : 'calls'}`;
     $('modeNow').textContent = v.modes[v.mode].label;
     $('modes').replaceChildren(...Object.entries(v.modes).map(([k, m]) => {
@@ -162,6 +195,7 @@
   async function load() {
     if (!id) return;
     try { render(await api(`/api/care/${id}`)); showErr(''); } catch (e) { showErr(e.message); }
+    loadTrend();
   }
   function pick(newId) { id = newId; store.set(id); clearInterval(timer); load(); timer = setInterval(load, 3000); }
 

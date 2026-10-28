@@ -85,7 +85,7 @@ test('one screen: the header line shows last seen and the call count; no new pag
   assert.match(d.els.presence.text(), /Last seen/); assert.match(d.els.presence.text(), /0 calls/);
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
   assert.ok(!/<canvas|<svg|chart|graph|score/i.test(html + SRC), 'no charts, graphs or scores');
-  assert.equal((html.match(/<section/g) || []).length, 6, 'the same sections as before (mode, alerts, flags, reminders, message, notifications)');
+  assert.equal((html.match(/<section/g) || []).length, 7, 'the same sections as before (mode, alerts, flags, reminders, message, notifications) plus the one approved "What changed" card');
 });
 
 test.after(() => care.stop());
