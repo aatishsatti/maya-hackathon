@@ -1,0 +1,353 @@
+{
+ "generated": "2026-10-28",
+ "when": "2026-10-28",
+ "runs": 2,
+ "seconds": 266,
+ "metrics": {
+  "conversation.replies": 60,
+  "conversation.repeatRate": 0,
+  "conversation.thatSounds": 4,
+  "conversation.questionRate": 0.2,
+  "conversation.avgWords": 14.3,
+  "conversation.topicPresent": 1,
+  "conversation.topicAccuracy": 0.9423076923076923,
+  "conversation.personalPresent": 1,
+  "conversation.personalAccuracy": 1,
+  "conversation.limitViolations": 0,
+  "conversation.worryAction": 1,
+  "conversation.worrySeededAction": 1,
+  "conversation.worryColdAction": 1,
+  "memory.askedEarly": 1,
+  "memory.askedOnce": 1,
+  "memory.heavyQuiet": 1,
+  "memory.safetyQuiet": 1,
+  "memory.askedFirstInNextCall": 0.625,
+  "memory.recallAccuracy": 1,
+  "memory.honest": 0.875,
+  "memory.closedAfterAnswer": 1,
+  "memory.closedAfterBrushoff": 1,
+  "memory.notRepeatedAfterClose": 1,
+  "trends.falseAlarmQuiet": 0,
+  "trends.falseAlarmOrdinary": 0.02,
+  "trends.falseAlarmCold3": 0.06666666666666667,
+  "trends.detectionMean": 0.7849999999999999,
+  "trends.detected_lonelyDrift": 0.8,
+  "trends.medianDelay_lonelyDrift": 8,
+  "trends.detected_risingPain": 0.6,
+  "trends.medianDelay_risingPain": 8,
+  "trends.detected_missedMeds": 0.8375,
+  "trends.medianDelay_missedMeds": 7,
+  "trends.detected_withdrawal": 0.8375,
+  "trends.medianDelay_withdrawal": 7,
+  "trends.detected_moodOnly": 0.85,
+  "trends.medianDelay_moodOnly": 8,
+  "scam.warned": 1,
+  "scam.cautioned": 1,
+  "scam.falseWarn": 0,
+  "scam.falseCaution": 0.02631578947368421,
+  "scam.pauseInProgress": 1,
+  "scam.falsePauseGenuine": 0,
+  "scam.falsePauseOther": 0,
+  "scam.low_warned": 1,
+  "scam.low_falseWarn": 0,
+  "scam.low_pauseInProgress": 0.9,
+  "scam.minimal_warned": 1,
+  "scam.minimal_falseWarn": 0,
+  "scam.minimal_pauseInProgress": 1,
+  "scam.low_avgMs": 4372.5,
+  "scam.low_p90Ms": 6619,
+  "scam.low_tokensOut": 846,
+  "scam.low_tokensIn": 727,
+  "scam.minimal_avgMs": 2471,
+  "scam.minimal_p90Ms": 3000.5,
+  "scam.minimal_tokensOut": 371.5,
+  "scam.minimal_tokensIn": 727,
+  "scam.filterRecallDev": 1,
+  "scam.ordinaryTrigger": 0,
+  "hearing.sentences": 48,
+  "hearing.failed": 0,
+  "hearing.wer": 0.024908043345543345,
+  "hearing.exact": 0.725,
+  "hearing.termSurvival": 0.9916666666666667,
+  "hearing.scamTermSurvival": 1,
+  "hearing.avgMs": 1998,
+  "hearing.audioSeconds": 169,
+  "meta.realFailureRate": 0,
+  "meta.liveCancelledShare": 0.25501432664756446,
+  "meta.liveTokensInPerCall": 3545
+ },
+ "checks": [
+  {
+   "id": "conv.limits",
+   "text": "no connect / close reply asks a question, and a close is one sentence",
+   "status": "pass"
+  },
+  {
+   "id": "conv.topicTag",
+   "text": "Spark sends topic= on at least 97% of replies",
+   "status": "pass"
+  },
+  {
+   "id": "conv.topicAcc",
+   "text": "topic= is right on at least 90% of clear turns",
+   "status": "pass"
+  },
+  {
+   "id": "conv.personalAcc",
+   "text": "personal= is right on at least 85% of labelled turns",
+   "status": "pass"
+  },
+  {
+   "id": "conv.repeat",
+   "text": "repeat rate at most 15%",
+   "status": "pass"
+  },
+  {
+   "id": "conv.worry",
+   "text": "the \"nobody knows\" worry is answered with what the app does at least 80% of the time",
+   "status": "pass"
+  },
+  {
+   "id": "mem.askedEarly",
+   "text": "a due follow-up is asked at the first reply in at least 60% of runs",
+   "status": "pass"
+  },
+  {
+   "id": "mem.askedOnce",
+   "text": "a follow-up is never asked twice in one call",
+   "status": "pass"
+  },
+  {
+   "id": "mem.quiet",
+   "text": "no follow-up in a heavy moment or a safety moment",
+   "status": "pass"
+  },
+  {
+   "id": "mem.recall",
+   "text": "trimmed memory still answers son / tea / where he lives (at least 90%)",
+   "status": "pass"
+  },
+  {
+   "id": "mem.honest",
+   "text": "nothing is invented about a daughter or a job that are not in memory (at least 75%: one unlucky reply of eight is noise)",
+   "status": "pass"
+  },
+  {
+   "id": "mem.closing",
+   "text": "when she asked, an answered follow-up is closed, a brushed-off one is closed at least 75% of the time, and a closed one is not asked again",
+   "status": "pass"
+  },
+  {
+   "id": "hear.wer",
+   "text": "Meta Transcribe: word error rate on clean synthetic speech at most 8%",
+   "status": "pass"
+  },
+  {
+   "id": "hear.terms",
+   "text": "Meta Transcribe: at least 90% of the key words survive, and at least 90% of the scam words",
+   "status": "pass"
+  },
+  {
+   "id": "hear.failures",
+   "text": "Meta Transcribe: no sentence fails to come back",
+   "status": "pass"
+  },
+  {
+   "id": "meta.noFailures",
+   "text": "real errors from Meta or the network are at most 2% of calls (cancelled replies are not errors)",
+   "status": "pass"
+  },
+  {
+   "id": "trend.falseAlarm",
+   "text": "ordinary life is wrongly flagged at most 4% of the time (3% for pure noise)",
+   "status": "pass"
+  },
+  {
+   "id": "trend.detect",
+   "text": "slow drifts are noticed within two weeks at least 72% of the time on average",
+   "status": "pass"
+  },
+  {
+   "id": "scam.warn",
+   "text": "dev scams warned at least 94% (36 of 38)",
+   "status": "pass"
+  },
+  {
+   "id": "scam.falseWarn",
+   "text": "no normal item is warned or paused",
+   "status": "pass"
+  },
+  {
+   "id": "scam.pause",
+   "text": "scams in progress are paused at least 80% of the time; genuine payments and other normal items never are",
+   "status": "pass"
+  },
+  {
+   "id": "scam.filter",
+   "text": "the word filter checks every dev scam and fires on at most 2 of 30 everyday lines",
+   "status": "pass"
+  }
+ ],
+ "usage": [
+  {
+   "purpose": "live-reply",
+   "model": "muse-spark-1.3",
+   "calls": 349,
+   "failed": 89,
+   "failedBy": {
+    "aborted": 89
+   },
+   "avgMs": 1903,
+   "tokensIn": 1237233,
+   "tokensOut": 66710,
+   "audioMs": 0
+  },
+  {
+   "purpose": "memory-filing",
+   "model": "muse-spark-1.3",
+   "calls": 24,
+   "failed": 0,
+   "failedBy": {},
+   "avgMs": 10187,
+   "tokensIn": 30857,
+   "tokensOut": 46821,
+   "audioMs": 0
+  },
+  {
+   "purpose": "scam-text",
+   "model": "muse-spark-1.3",
+   "calls": 304,
+   "failed": 0,
+   "failedBy": {},
+   "avgMs": 3422,
+   "tokensIn": 220924,
+   "tokensOut": 185093,
+   "audioMs": 0
+  },
+  {
+   "purpose": "transcribe-voice-note",
+   "model": "muse-voice-transcribe-1.0",
+   "calls": 48,
+   "failed": 0,
+   "failedBy": {},
+   "avgMs": 1998,
+   "tokensIn": 0,
+   "tokensOut": 0,
+   "audioMs": 168720
+  }
+ ],
+ "hearing": {
+  "sentences": 48,
+  "failed": 0,
+  "wer": 0.024908043345543345,
+  "exact": 0.725,
+  "termSurvival": 0.9916666666666667,
+  "scamTermSurvival": 1,
+  "avgMs": 1998,
+  "audioSeconds": 169
+ },
+ "reasoning": {
+  "about": "The dev-half evidence for changing the scam check on typed and spoken talk from reasoning low to minimal: 76 dev items, 4 runs per setting (304 calls each), real Meta Spark, text only, run 2026-10-28. Speed was measured while two suites ran at once, so absolute times are higher than when the check runs alone; the comparison between the settings is the point.",
+  "when": "2026-10-28",
+  "runs": 4,
+  "liveSetting": "minimal",
+  "low": {
+   "warned": 1,
+   "falseWarn": 0,
+   "pauseInProgress": 0.95,
+   "avgMs": 4984,
+   "p90Ms": 7458,
+   "tokensIn": 727,
+   "tokensOut": 851
+  },
+  "minimal": {
+   "warned": 0.993421052631579,
+   "falseWarn": 0,
+   "pauseInProgress": 0.95,
+   "avgMs": 2881,
+   "p90Ms": 4309,
+   "tokensIn": 727,
+   "tokensOut": 367
+  }
+ },
+ "held": {
+  "low": {
+   "alone": {
+    "scams": 38,
+    "normal": 38,
+    "warned": 38,
+    "cautioned": 38,
+    "falseWarned": 0,
+    "falseCautioned": 0,
+    "pauseOnScam": 5,
+    "pauseOnNormal": 0
+   },
+   "live": {
+    "scams": 38,
+    "normal": 38,
+    "warned": 36,
+    "cautioned": 36,
+    "falseWarned": 0,
+    "falseCautioned": 0,
+    "pauseOnScam": 4,
+    "pauseOnNormal": 0
+   }
+  },
+  "minimal": {
+   "alone": {
+    "scams": 38,
+    "normal": 38,
+    "warned": 37,
+    "cautioned": 38,
+    "falseWarned": 0,
+    "falseCautioned": 0,
+    "pauseOnScam": 5,
+    "pauseOnNormal": 0
+   },
+   "live": {
+    "scams": 38,
+    "normal": 38,
+    "warned": 35,
+    "cautioned": 36,
+    "falseWarned": 0,
+    "falseCautioned": 0,
+    "pauseOnScam": 4,
+    "pauseOnNormal": 0
+   }
+  },
+  "lowMissed": [
+   {
+    "id": "S010",
+    "kind": "government",
+    "level": "none",
+    "filtered": true
+   },
+   {
+    "id": "S130",
+    "kind": "in_progress",
+    "level": "none",
+    "filtered": true
+   }
+  ],
+  "minimalMissed": [
+   {
+    "id": "S010",
+    "kind": "government",
+    "level": "none",
+    "filtered": true
+   },
+   {
+    "id": "S114",
+    "kind": "invoice_fraud",
+    "level": "caution",
+    "filtered": false
+   },
+   {
+    "id": "S130",
+    "kind": "in_progress",
+    "level": "none",
+    "filtered": true
+   }
+  ]
+ }
+}

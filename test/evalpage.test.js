@@ -12,7 +12,7 @@ const LOW = { S1: { level: 'warn' }, S2: { level: 'warn' }, S3: { level: 'pause'
 const MIN = { S1: { level: 'warn' }, S2: { level: 'caution' }, S3: { level: 'pause' }, N1: { level: 'none' }, N2: { level: 'none' } };
 const RESULTS = {
   when: '2026-10-28T20:00:00Z', runs: 2, seconds: 321,
-  metrics: { 'conversation.repeatRate': 0, 'conversation.topicAccuracy': 0.98, 'conversation.worryAction': 1, 'memory.askedEarly': 0.75, 'trends.falseAlarmOrdinary': 0.014, 'trends.detectionMean': 0.78, 'scam.warned': 0.99 },
+  metrics: { 'conversation.repeatRate': 0, 'conversation.topicAccuracy': 0.98, 'conversation.worryAction': 1, 'memory.askedEarly': 0.75, 'trends.falseAlarmOrdinary': 0.014, 'trends.detectionMean': 0.78, 'scam.warned': 0.99, 'scam.minimal_avgMs': 2471, 'scam.minimal_tokensIn': 727, 'scam.minimal_tokensOut': 371.5 },
   checks: [{ id: 'conv.limits', text: 'no connect / close reply asks a question', status: 'pass' }, { id: 'scam.warn', text: 'dev scams warned at least 94%', status: 'pass' }, { id: 'hear.wer', text: 'word error rate at most 8%', status: 'FAIL' }, { id: 'mem.recall', text: 'a <script>alert(1)</script> check', status: 'skipped' }],
   usage: [{ purpose: 'live-reply', model: 'muse-spark-1.3', calls: 100, failed: 30, failedBy: { aborted: 28, 'http-5xx': 2 }, avgMs: 2000, tokensIn: 350000, tokensOut: 20000, audioMs: 0 },
     { purpose: 'memory-filing', model: 'muse-spark-1.3', calls: 10, failed: 0, failedBy: {}, avgMs: 9000, tokensIn: 15000, tokensOut: 22000, audioMs: 0 },
@@ -35,7 +35,8 @@ test('the summary keeps the numbers, the checks and the held-out views for both 
 test('the page is self-contained: no script, no image, no link, no style sheet or font to fetch, and no web address at all', () => {
   const html = P.render(summary());
   assert.match(html, /^<!doctype html>\n<html lang="en">/); assert.match(html, /<meta name="viewport"/); assert.match(html, /<title>Maya: Meta models doing the work<\/title>/);
-  assert.doesNotMatch(html, /<script|<img|<link|<iframe|<object|<embed|@import|url\(|\bsrc=|\bhref=/i);
+  assert.doesNotMatch(html, /<script|<img|<link|<iframe|<object|<embed|@import|url\((?!#)|\bsrc=|\bhref=/i, 'the only url() allowed is a same-file #fragment (the arrowhead)');
+  assert.deepEqual([...html.matchAll(/url\(([^)]*)\)/g)].map((m) => m[1]), ['#ah']);
   assert.doesNotMatch(html, /https?:\/\//i, 'not even a printed web address that someone could mistake for a request');
   assert.ok(html.length < 40000, `small: ${html.length}`); assert.match(html, /prefers-color-scheme:dark/);
 });
@@ -59,6 +60,8 @@ test('the page says what has to be said: the Meta models and their jobs, ElevenL
 test('the numbers on the page are the numbers in the data', () => {
   const html = P.render(summary());
   assert.match(html, /<td>100<\/td><td>2\.0 s<\/td><td>3,500 \/ 200<\/td>/, 'live reply: calls, speed, tokens per call'); assert.match(html, /30% cancelled|28 cancelled and rewritten on purpose \(28%\), 2 real errors/);
+  assert.match(html, /<td>300 \(half at each setting, for the comparison\)<\/td><td>2\.5 s<\/td><td>727 \/ 372<\/td>/, 'the scam-check row shows the LIVE setting\'s speed and tokens, not a blend of both settings');
+  assert.doesNotMatch(html, /<td>2\.8 s<\/td><td>727 \/ 367<\/td><td>measured; speed/, 'never the blended average');
   assert.match(html, /<td>48<\/td><td>2\.0 s<\/td><td>169 s of audio<\/td>/); assert.match(html, /Word error rate <b>3\.3%<\/b>/); assert.match(html, /<b>99\.2%<\/b> of the key words/); assert.match(html, /<b>100%<\/b> of the words a scam turns on/);
   assert.match(html, /Twenty-four fixed sentences[^.]*48 hearings, 0 failed/); assert.match(html, /<div class="n">78%<\/div>/); assert.match(html, /<div class="n">1\.4%<\/div>/);
   assert.match(html, /<span class="pill FAIL">FAIL<\/span> word error rate at most 8%/, 'a failing rail is shown as FAIL, in words not only colour'); assert.match(html, /<span class="pill skipped">skipped<\/span>/);

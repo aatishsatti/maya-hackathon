@@ -47,7 +47,7 @@ function render(s) {
     row(['Meta model', 'Job', 'Calls in this run', 'Average speed', 'Tokens in / out per call', 'Status'], true),
     live && row([mdl('muse-spark-1.3', 'Spark'), 'Live reply: what Maya says', num(live.calls), secs(live.avgMs), `${num(Math.round(live.tokensIn / live.calls))} / ${num(Math.round(live.tokensOut / live.calls))}`, `measured; ${num(cancelled)} cancelled and rewritten on purpose (${pc(cancelled / live.calls)}), ${num(live.failed - cancelled)} real errors`]),
     mem && row([mdl('muse-spark-1.3', 'Spark'), 'Memory filing after a call', num(mem.calls), secs(mem.avgMs), `${num(Math.round(mem.tokensIn / mem.calls))} / ${num(Math.round(mem.tokensOut / mem.calls))}`, 'measured; runs in the background after a call']),
-    talk && row([mdl('muse-spark-1.3', 'Spark'), 'Scam check on typed and spoken talk', num(talk.calls), secs(talk.avgMs), `${num(Math.round(talk.tokensIn / talk.calls))} / ${num(Math.round(talk.tokensOut / talk.calls))}`, `measured; reasoning <b>${esc(R.liveSetting || 'minimal')}</b>`]),
+    talk && row([mdl('muse-spark-1.3', 'Spark'), 'Scam check on typed and spoken talk', `${num(talk.calls)} (half at each setting, for the comparison)`, secs(m['scam.minimal_avgMs']), `${num(Math.round(m['scam.minimal_tokensIn']))} / ${num(Math.round(m['scam.minimal_tokensOut']))}`, `measured; speed and tokens shown are for the live setting, reasoning <b>${esc(R.liveSetting || 'minimal')}</b>`]),
     row([mdl('muse-spark-1.3', 'Spark vision'), 'Describes a photo; checks a photo for a scam', '—', '—', '—', '<b>wired, not measured</b>: the evaluation is text only']),
     note && row([mdl('muse-voice-transcribe-1.0', 'Transcribe'), 'Hearing a recorded voice note', num(note.calls), secs(note.avgMs), `${num(Math.round(note.audioMs / 1000))} s of audio`, 'measured on <b>synthetic clean speech</b>']),
     row([mdl('muse-voice-transcribe-1.0', 'Transcribe'), 'Hearing a live call (streamed)', '—', '—', '—', 'used live; <b>not part of the evaluation</b>']),
@@ -67,7 +67,7 @@ function render(s) {
     key('dev scams warned', pc(m['scam.warned'])), key('words Transcribe got right (clean synthetic speech)', pc1(1 - (H.wer || 0))),
   ].join('');
 
-  const flow = `<svg viewBox="0 0 920 330" role="img" aria-labelledby="flowT flowD" class="flow"><title id="flowT">How a spoken turn flows through Maya</title><desc id="flowD">The person speaks; Meta Transcribe hears; Meta Spark thinks, reads photos, files memory and checks for scams; a non-Meta voice speaks the reply.</desc>
+  const flow = `<svg viewBox="0 0 920 296" role="img" aria-labelledby="flowT flowD" class="flow"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="head"/></marker></defs><title id="flowT">How a spoken turn flows through Maya</title><desc id="flowD">The person speaks; Meta Transcribe hears; Meta Spark thinks, reads photos, files memory and checks for scams; a non-Meta voice speaks the reply.</desc>
 <g class="meta"><rect x="150" y="30" width="200" height="86" rx="12"/><text x="250" y="62" text-anchor="middle" class="h">Meta Transcribe</text><text x="250" y="84" text-anchor="middle">the ears</text><text x="250" y="104" text-anchor="middle" class="s">muse-voice-transcribe-1.0</text>
 <rect x="400" y="30" width="200" height="86" rx="12"/><text x="500" y="62" text-anchor="middle" class="h">Meta Spark</text><text x="500" y="84" text-anchor="middle">the brain</text><text x="500" y="104" text-anchor="middle" class="s">muse-spark-1.3</text>
 <rect x="400" y="190" width="125" height="86" rx="12"/><text x="462" y="224" text-anchor="middle" class="h">Spark vision</text><text x="462" y="246" text-anchor="middle">reads photos</text><text x="462" y="264" text-anchor="middle" class="s">wired, not measured</text>
@@ -90,7 +90,7 @@ main{max-width:980px;margin:0 auto;padding:24px 16px 56px}h1{font-size:28px;marg
 p{margin:8px 0;max-width:78ch}.sub{color:var(--soft)}code{background:var(--other);padding:1px 5px;border-radius:5px;font-size:.92em}
 .flow{width:100%;height:auto;margin:14px 0}.flow text{fill:var(--fg);font-size:14px}.flow .h{font-weight:700;font-size:16px}.flow .s{fill:var(--soft);font-size:12px}
 .flow .meta rect{fill:var(--meta);stroke:var(--metaLine);stroke-width:2}.flow .other rect{fill:var(--other);stroke:var(--soft);stroke-width:2;stroke-dasharray:6 4}.flow .person rect{fill:var(--card);stroke:var(--line);stroke-width:2}
-.flow .arrow path{fill:none;stroke:var(--soft);stroke-width:2}
+.flow .arrow path{fill:none;stroke:var(--soft);stroke-width:2;marker-end:url(#ah)}.flow .head{fill:var(--soft);stroke:none}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:12px 0}.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}.n{font-size:26px;font-weight:700}.l{color:var(--soft);font-size:14px}
 table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:15px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{background:var(--other)}
 .wrap{overflow-x:auto}.checks{list-style:none;padding:0;margin:0}.checks li{padding:5px 0;border-bottom:1px solid var(--line)}
@@ -152,7 +152,7 @@ Maya is a voice companion for older adults. Her **ears and brain are Meta models
 |---|---|---|
 | **Spark** \`muse-spark-1.3\` (brain) | Live reply: what Maya says, plus a private read of the person's feeling, subject and pain | ${live ? `${num(live.calls)} calls, ${secs(live.avgMs)} average, ${num(Math.round(live.tokensIn / live.calls))} tokens in per call; ${pc(cancelled / live.calls)} cancelled and rewritten on purpose` : 'n/a'} |
 | **Spark** (brain) | Files memory after a call: people, events, open follow-ups (closing them when answered) | ${mem ? `${num(mem.calls)} calls, ${secs(mem.avgMs)} average, in the background` : 'n/a'} |
-| **Spark** (brain) | Scam check on typed and spoken talk: six signs plus "happening now" and "about to act", so Maya can pause someone before they pay | ${talk ? `${num(talk.calls)} calls, ${secs(talk.avgMs)} average, reasoning minimal` : 'n/a'} |
+| **Spark** (brain) | Scam check on typed and spoken talk: six signs plus "happening now" and "about to act", so Maya can pause someone before they pay | ${talk ? `${num(talk.calls)} calls (half at each reasoning setting, for the comparison); the live setting, minimal: ${secs(m['scam.minimal_avgMs'])} average` : 'n/a'} |
 | **Spark vision** | Describes a photo for Maya; checks a photo for a scam | wired and used; **not measured** (the evaluation is text only) |
 | **Transcribe** \`muse-voice-transcribe-1.0\` (ears) | Hears live calls (streamed) and recorded voice notes | ${note ? `voice notes: ${num(note.calls)} hearings, ${secs(note.avgMs)} average` : 'n/a'}; live calls: used, not part of the evaluation |
 
