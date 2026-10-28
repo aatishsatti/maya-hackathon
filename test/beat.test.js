@@ -44,3 +44,11 @@ test('beat note: principles only; empty before any beat; never a line to copy', 
   for (const n of [1, 2, 7]) { const t = B.note(n); assert.ok(t.length > 40); assert.doesNotMatch(t, /["“”]/, 'no quoted sentence'); assert.match(t, /new subject/); }
   assert.match(B.note(1), /no question/); assert.match(B.note(2), /no question/);
 });
+
+test('beat plan: a memory of, or news about, a person in their life is never counted or closed; the count holds on the same subject, restarts on a new one', () => {
+  assert.deepEqual(B.plan({ ...light, personal: true, count: 2, topic: 'same' }), { type: 'free', n: 2 }, 'no close, no count');
+  assert.deepEqual(B.plan({ ...light, personal: true, count: 2, topic: 'new' }), { type: 'free', n: 0 });
+  assert.deepEqual(B.plan({ ...light, personal: false, count: 2, topic: 'same' }), { type: 'close', n: 3 }, 'without the flag the old rule is unchanged');
+  assert.deepEqual(B.plan({ ...light, personal: undefined, count: 2, topic: 'same' }), { type: 'close', n: 3 }, 'a missing flag is not personal');
+  assert.deepEqual(B.plan({ ...light, emotion: 'lonely', personal: true, count: 2, topic: 'same' }), { type: 'free', n: 0 }, 'a heavy feeling still resets the count');
+});

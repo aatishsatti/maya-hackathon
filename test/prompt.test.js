@@ -696,6 +696,17 @@ test('B2 beats never limit a heavy moment, a question from the person, or a turn
   assert.match(said, /\?/, 'no topic tag counts as a new subject: more talk, never a cut-off'); assert.equal(c.beatCount, 1);
 });
 
+test('B5 sharing a memory about a person is never limited, and does not move the count; the tag asks Spark for personal=R', stubbed, async () => {
+  const c = mkCall(newSenior()); c.beatCount = 2;
+  const said = await beatSay(c, 'emotion=neutral intensity=1 intent=share personal=1 topic=same', 'He must have loved the sound of the trains. Did he ever take you along to see them? Those are memories worth keeping.', 1);
+  assert.match(said, /\?/, 'a question is allowed'); assert.ok((said.match(/[.!?]/g) || []).length >= 3, 'not cut to one line');
+  assert.equal(c.beatCount, 2, 'not counted');
+  c.beatCount = 2; c.lastReplyAsked = false;
+  const closed = await beatSay(c, 'emotion=neutral intensity=1 intent=share personal=0 topic=same', 'A fresh sandwich is hard to beat. Enjoy it. Take your time.', 2);
+  assert.equal((closed.match(/[.!?]/g) || []).length, 1, 'the same turn without the flag is closed as before');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'brain.js'), 'utf8'), /personal=R/);
+});
+
 test('B3 a connect or close reply that opens with a question is written again once, with a principle and no sentence to copy', stubbed, async () => {
   const c = mkCall(newSenior()); c.beatCount = 1;
   sparkQueue.length = 0; sparkSeen.length = 0; sparkQueue.push('[[feel: emotion=neutral intensity=1 intent=share topic=same]] Roses need a lot of sun.');

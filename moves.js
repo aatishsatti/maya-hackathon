@@ -4,11 +4,13 @@
 // in plain principles (see call.js replyNote), to avoid reusing the same KIND of acknowledgement.
 //
 // Two kinds of repeat are caught:
-//  1. A polite-phrase FAMILY (a kind of stock acknowledgement, any wording of it) used in either of her last 2 replies.
+//  1. A polite-phrase FAMILY (a kind of stock acknowledgement, any wording of it) used in either of her last 2 replies, or twice among her last 5.
 //  2. A run of 4 or more words in a row that also appears in any of her last 3 replies.
 // repeatRate() is the same test applied to a whole run of replies, so tests and the before/after check share one number.
 
 const FAMILY_WINDOW = 2;   // a family used in this many latest replies may not be used again
+const FAMILY_SPREAD = 5;   // ...and a family used FAMILY_SPREAD_MAX times among this many latest replies is blocked too (a crutch spread thin)
+const FAMILY_SPREAD_MAX = 2;
 const PHRASE_WINDOW = 3;   // replies searched for a shared run of words
 const PHRASE_RUN = 4;      // words in a row that count as a repeated phrase
 
@@ -57,10 +59,13 @@ function sharesRun(text, other, run = PHRASE_RUN) {
   return false;
 }
 
-// Families that may not appear in her next reply: those used in her last FAMILY_WINDOW replies. `recent` is oldest first.
+// Families that may not appear in her next reply: those used in her last FAMILY_WINDOW replies, or twice among her last FAMILY_SPREAD. `recent` is oldest first.
 function blockedFamilies(recent) {
   const out = new Set();
   for (const r of (recent || []).slice(-FAMILY_WINDOW)) for (const id of familiesOf(r)) out.add(id);
+  const tally = {};
+  for (const r of (recent || []).slice(-FAMILY_SPREAD)) for (const id of familiesOf(r)) tally[id] = (tally[id] || 0) + 1;
+  for (const [id, n] of Object.entries(tally)) if (n >= FAMILY_SPREAD_MAX) out.add(id);
   return [...out];
 }
 
@@ -86,4 +91,4 @@ function repeatRate(replies) {
   return bad / (list.length - 1);
 }
 
-module.exports = { FAMILY_WINDOW, PHRASE_WINDOW, PHRASE_RUN, familiesOf, sharesRun, blockedFamilies, blockedKinds, violations, repeatRate };
+module.exports = { FAMILY_WINDOW, FAMILY_SPREAD, FAMILY_SPREAD_MAX, PHRASE_WINDOW, PHRASE_RUN, familiesOf, sharesRun, blockedFamilies, blockedKinds, violations, repeatRate };

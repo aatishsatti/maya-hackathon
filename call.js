@@ -888,7 +888,7 @@ class Call {
     const beatNote = beat.note(this.beatCount);
     if (beatNote) bits.push(beatNote);
     const kinds = moves.blockedKinds(this.recentReplies());
-    if (kinds.length) bits.push(`In your last two replies you were already ${kinds.join(', and ')}. Do not do that again in this reply, in any words.`);
+    if (kinds.length) bits.push(`Recently you were already ${kinds.join(', and ')}. Do not do that again in this reply, in any words.`);
     bits.push('Answer the specific thing they just said and carry the talk forward by one small step. Do not lean on a general polite acknowledgement in place of a real response, and do not reuse any run of words from your last three replies.');
     return bits.join(' ') + ' ' + (openings.length
       ? `Your last reply openings were: ${openings.map((o) => `"${o}"`).join(', ')}. Open this reply differently, in fresh words chosen from the feeling. Do not begin with any of these word pairs: ${[...new Set(openings.map((o) => o.split(' ').slice(0, 2).join(' ')))].map((p) => `"${p}"`).join(', ')}.`
@@ -900,15 +900,15 @@ class Call {
     return this.profile ? care.recentLines(this.profile.id, 'open').slice(-3) : [];
   }
 
-  // Her last three spoken replies in this call (the call's own history; nothing extra is stored).
+  // Her last five spoken replies in this call (the call's own history; nothing extra is stored). The repeat rules read what they need from the end.
   recentReplies() {
-    return this.history.filter((m) => m.role === 'assistant').map((m) => String(m.content)).slice(-3);
+    return this.history.filter((m) => m.role === 'assistant').map((m) => String(m.content)).slice(-5);
   }
 
   // Decides this reply's beat from Spark's tag (topic) and the care state, then enforces its limits on the delivery (see beat.js).
   applyBeat(d, raw, special) {
     const low = (k) => String((raw && raw[k]) || '').toLowerCase();
-    const p = beat.plan({ count: this.beatCount, topic: low('topic'), emotion: d.emotion, intent: low('intent'), concern: low('concern'), pain: /^(1|yes|true)$/.test(low('pain')), special });
+    const p = beat.plan({ count: this.beatCount, topic: low('topic'), emotion: d.emotion, intent: low('intent'), concern: low('concern'), pain: /^(1|yes|true)$/.test(low('pain')), personal: /^(1|yes|true)$/.test(low('personal')), special });
     const lim = beat.limits(p.type);
     d.beat = p.type; d.beatN = p.n;
     if (lim.noQuestion) d.noQuestion = true;
@@ -925,7 +925,7 @@ class Call {
     const w = openWords(piece);
     const recent = this.recentOpenings();
     if (STOCK_OPENINGS.some((re) => re.test(piece) && (re === IDENTITY_LINE ? this.identitySaid : recent.some((o) => re.test(o))))) return true;
-    if (moves.violations(piece, this.recentReplies()).repeat) return true;   // same kind of acknowledgement within 2 replies, or 4+ words in a row from the last 3
+    if (moves.violations(piece, this.recentReplies()).repeat) return true;   // same kind of acknowledgement within 2 replies or twice in 5, or 4+ words in a row from the last 3
     return recent.some((o) => { const x = openWords(o); const n = Math.min(3, x.length, w.length); return n > 0 && x.slice(0, n).join(' ') === w.slice(0, n).join(' '); });
   }
 

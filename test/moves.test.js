@@ -32,6 +32,17 @@ test('two-reply rule: a family used in her last 2 replies is blocked, an older o
   assert.equal(M.violations('Which tea was it?', r.slice(0, 2)).repeat, false);
 });
 
+test('spread rule: a family used twice among her last five replies is blocked even when neither use was in the last two', () => {
+  const spread = ['That sounds hard.', 'Which tea?', 'That sounds lovely.', 'Roses need sun.', 'Two sugars, then.'];
+  assert.deepEqual(M.blockedFamilies(spread.slice(-2)), [], 'nothing in the last two');
+  assert.deepEqual(M.blockedFamilies(spread), ['sounds-like'], 'twice in five');
+  assert.equal(M.violations('That sounds wonderful.', spread).repeat, true);
+  assert.deepEqual(M.blockedFamilies(['That sounds hard.', 'Which tea?', 'Roses need sun.', 'Two sugars, then.', 'Sunny today.']), [], 'once in five is free');
+  assert.ok(M.blockedFamilies(['That sounds hard.', 'a', 'b', 'c', 'd', 'That sounds lovely.']).includes('sounds-like'), 'the latest use counts (it is in the last two)');
+  assert.deepEqual(M.blockedFamilies(['That sounds hard.', 'a', 'b', 'c', 'd', 'e', 'That sounds lovely.', 'f', 'g']), [], 'the first use is older than five replies');
+  assert.equal(M.repeatRate(['That sounds hard.', 'Which tea?', 'That sounds lovely.', 'Roses need sun.', 'Two sugars, then.', 'That sounds good.']), 2 / 5, 'the third repeats the last-two rule, the sixth the twice-in-five rule');
+});
+
 test('phrase rule: four words in a row shared with any of her last 3 replies is a repeat; three is not', () => {
   const recent = ['The kettle is on the stove by the window.', 'Mornings are quiet here.'];
   assert.equal(M.violations('Yes, the kettle is on again.', recent).phrase, true);

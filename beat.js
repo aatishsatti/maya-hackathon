@@ -8,6 +8,8 @@
 //   beat 3+ close        a short wrap-up, no question, room left for them to lead
 // Beats never apply to a heavy or careful moment (sad, lonely, grieving, anxious, angry, pain, any concern, safety, health, scam),
 // nor to a turn where the person asks, requests, recalls, wants a story, checks, or says goodbye: answering is the job there.
+// Nor to a turn where they share a memory of, or news about, a particular person in their life (Spark flags it: personal=1). That
+// kind of talk is never counted or closed; the count stays where it was on the same subject and restarts on a new one.
 // A missing or invalid topic counts as "new": the failure mode is more talk, never a cut-off.
 
 const HEAVY = new Set(['sad', 'lonely', 'grief', 'anxious', 'frustrated', 'angry', 'crisis']);
@@ -15,12 +17,12 @@ const FREE_INTENTS = new Set(['ask', 'request', 'story', 'recall', 'check', 'far
 
 // count: replies already given on the current subject (committed after each reply). Returns { type, n } where n is the count to
 // commit once this reply is spoken. type: 'acknowledge' | 'connect' | 'close' | 'free'.
-function plan({ count = 0, topic, emotion, intent, concern, pain, special } = {}) {
+function plan({ count = 0, topic, emotion, intent, concern, pain, personal, special } = {}) {
   const same = String(topic || '').toLowerCase() === 'same';
   const base = same ? Math.max(0, Number(count) || 0) : 0;
   const c = String(concern || 'none').toLowerCase();
   if (special || pain || (c !== 'none' && c !== '') || HEAVY.has(String(emotion || '').toLowerCase())) return { type: 'free', n: 0 };
-  if (FREE_INTENTS.has(String(intent || '').toLowerCase())) return { type: 'free', n: base };
+  if (personal || FREE_INTENTS.has(String(intent || '').toLowerCase())) return { type: 'free', n: base };   // a memory or news about a person in their life is never counted or closed
   const n = base + 1;
   return { type: n === 1 ? 'acknowledge' : n === 2 ? 'connect' : 'close', n };
 }
