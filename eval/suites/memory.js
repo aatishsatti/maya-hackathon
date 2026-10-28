@@ -33,14 +33,14 @@ async function run({ runs = 2, limit = null } = {}) {
   const SA = await C.pool(2, limit ? safetyLines.slice(0, 1) : safetyLines, async (u) => { const id = seedProfile(S); const c = C.makeCall(S, id); try { const t = await C.turn(S, c, u); return { quiet: !t.offered && thread(S, id).asked === 0 && !score.mentionsFollowUp(t.maya) && c.safety === true }; } finally { c.end(); } });
   // C: trimmed memory still answers; nothing invented
   const Q = [['Do you remember my son?', /ravi/i, 'pos'], ['Do you remember what kind of tea I like?', /ginger/i, 'pos'], ['Do you know where my son lives?', /chicago/i, 'pos'], ['Do you remember my daughter?', null, 'daughter'], ['What did Ravi tell me about his job?', null, 'job']];
-  const qJobs = []; for (let r = 0; r < (limit ? 1 : runs); r++) for (const q of (limit ? Q.slice(0, 1) : Q)) qJobs.push(q);
+  const qJobs = []; for (let r = 0; r < (limit ? 1 : 2 * runs); r++) for (const q of (limit ? Q.slice(0, 1) : Q)) qJobs.push(q);   // 2 x runs rounds: enough items that one unlucky reply cannot flip a rail
   const Cres = await C.pool(4, qJobs, async ([q, want, kind]) => {
     const id = seedProfile(S, false); const c = C.makeCall(S, id);
     try { const t = await C.turn(S, c, q); return { kind, q, said: t.maya, ok: kind === 'pos' ? want.test(t.maya) : kind === 'daughter' ? score.admitsNotKnowing(t.maya) : !score.inventsProfession(t.maya) }; } finally { c.end(); }
   });
   // D: the next calls (needs the real filing step)
   const scripts = { answered: ['Oh yes, Priya came for the weekend, we baked cookies together and she went home on Monday.', 'It was lovely.'], brushed: ['Oh, nothing much, I would rather not talk about that.', 'Let us talk about something else.'] };
-  const dJobs = []; for (const kind of ['answered', 'brushed']) for (let r = 0; r < (limit ? 1 : runs); r++) dJobs.push(kind);
+  const dJobs = []; for (const kind of ['answered', 'brushed']) for (let r = 0; r < (limit ? 1 : 2 * runs); r++) dJobs.push(kind);
   const D = await C.pool(4, limit ? dJobs.slice(0, 1) : dJobs, async (kind) => {
     const id = seedProfile(S); const log = [];
     for (let callNo = 1; callNo <= (limit ? 1 : 3); callNo++) {

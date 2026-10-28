@@ -45,3 +45,10 @@ test('safety of the runner: children always get throwaway data folders and the l
   const scam = fs.readFileSync(path.join(__dirname, '..', 'eval', 'suites', 'scam.js'), 'utf8');
   assert.match(scam, /i\.split === 'dev'/); assert.doesNotMatch(scam.replace(/\/\/.*$/gm, ''), /split === 'held'/);
 });
+
+test('usage metrics: real errors exclude replies Maya cancelled on purpose; the cancelled share and the request size are reported', () => {
+  const u = [{ purpose: 'live-reply', model: 'm', calls: 100, failed: 30, failedBy: { aborted: 28, 'http-5xx': 2 }, tokensIn: 350000, tokensOut: 20000 }, { purpose: 'scam-text', model: 'm', calls: 100, failed: 1, failedBy: { timeout: 1 }, tokensIn: 70000, tokensOut: 60000 }];
+  assert.deepEqual(R.usageMetrics(u), { realFailureRate: (3) / 200, liveCancelledShare: 0.28, liveTokensInPerCall: 3500 });
+  assert.deepEqual(R.usageMetrics([]), { realFailureRate: null, liveCancelledShare: null, liveTokensInPerCall: null });
+  assert.deepEqual(R.usageMetrics([{ purpose: 'scam-text', model: 'm', calls: 5, failed: 0, tokensIn: 1, tokensOut: 1 }]), { realFailureRate: 0, liveCancelledShare: null, liveTokensInPerCall: null });
+});

@@ -47,6 +47,14 @@ function mergeUsage(tables) {
   return [...by.values()].map((s) => ({ purpose: s.purpose, model: s.model, calls: s.calls, failed: s.failed, failedBy: s.failedBy, avgMs: s.msN ? Math.round(s.msSum / s.msN) : null, tokensIn: s.tokensIn, tokensOut: s.tokensOut, audioMs: s.audioMs })).sort((a, b) => a.purpose.localeCompare(b.purpose));
 }
 
+// Numbers about the Meta calls themselves, from the merged usage table: real errors (not counting replies Maya cancelled on purpose), how many live
+// replies were cancelled and rewritten, and how big a live reply request is.
+function usageMetrics(usage) {
+  const calls = usage.reduce((a, u) => a + u.calls, 0), failed = usage.reduce((a, u) => a + u.failed, 0), cancelled = usage.reduce((a, u) => a + ((u.failedBy || {}).aborted || 0), 0);
+  const live = usage.find((u) => u.purpose === 'live-reply');
+  return { realFailureRate: calls ? (failed - cancelled) / calls : null, liveCancelledShare: live && live.calls ? ((live.failedBy || {}).aborted || 0) / live.calls : null, liveTokensInPerCall: live && live.calls ? Math.round(live.tokensIn / live.calls) : null };
+}
+
 // The reasoning-setting comparison, from the scam suite's metrics: one row per setting.
 function reasoningRows(m) {
   const out = [];
@@ -101,12 +109,12 @@ async function main() {
   const failedSuites = results.filter((r) => r.error);
   for (const r of failedSuites) console.error(`ERROR: ${r.error}`);
   const ok = results.filter((r) => !r.error);
-  const metrics = score.flatten(Object.fromEntries(ok.map((r) => [r.suite, r.metrics])));
+  const usage = mergeUsage(ok.map((r) => r.usage));
+  const metrics = score.flatten({ ...Object.fromEntries(ok.map((r) => [r.suite, r.metrics])), meta: usageMetrics(usage) });
   const checks = score.runChecks(metrics, rules.CHECKS);
   let baseline = null;
   try { baseline = JSON.parse(fs.readFileSync(BASELINE, 'utf8')).metrics; } catch { /* none yet */ }
   const cmp = a.compare && baseline ? score.compare(metrics, baseline, rules.RULES) : [];
-  const usage = mergeUsage(ok.map((r) => r.usage));
   const scamM = (ok.find((r) => r.suite === 'scam') || {}).metrics;
   console.log(tables({ metrics, checks, cmp, usage, reasoning: reasoningRows(scamM) }));
   fs.mkdirSync(path.dirname(a.out), { recursive: true });
@@ -117,5 +125,5 @@ async function main() {
   process.exit(bad ? 1 : 0);
 }
 
-module.exports = { parseArgs, parseChild, mergeUsage, reasoningRows, tables, SUITES };
+module.exports = { usageMetrics, parseArgs, parseChild, mergeUsage, reasoningRows, tables, SUITES };
 if (require.main === module) main().catch((e) => { console.error(e.message); process.exit(1); });

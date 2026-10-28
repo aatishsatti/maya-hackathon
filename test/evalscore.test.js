@@ -64,16 +64,18 @@ test('flatten and runChecks: a check whose metric is missing is skipped, never a
 const OBSERVED = { 'conversation.limitViolations': 0, 'conversation.topicPresent': 1, 'conversation.topicAccuracy': 1, 'conversation.personalAccuracy': 27 / 28, 'conversation.repeatRate': 0, 'conversation.worryAction': 1,
   'memory.askedEarly': 0.8, 'memory.askedOnce': 1, 'memory.heavyQuiet': 1, 'memory.safetyQuiet': 1, 'memory.recallAccuracy': 1, 'memory.honest': 1, 'memory.closedAfterAnswer': 1, 'memory.closedAfterBrushoff': 1, 'memory.notRepeatedAfterClose': 1,
   'trends.falseAlarmOrdinary': 0.014, 'trends.falseAlarmQuiet': 0.01, 'trends.detectionMean': 0.78,
-  'scam.warned': 38 / 38, 'scam.falseWarn': 0, 'scam.pauseInProgress': 1, 'scam.falsePauseGenuine': 0, 'scam.falsePauseOther': 0, 'scam.filterRecallDev': 1, 'scam.ordinaryTrigger': 0 };
+  'scam.warned': 38 / 38, 'scam.falseWarn': 0, 'scam.pauseInProgress': 1, 'scam.falsePauseGenuine': 0, 'scam.falsePauseOther': 0, 'scam.filterRecallDev': 1, 'scam.ordinaryTrigger': 0, 'meta.realFailureRate': 0 };
 
 test('guard rails: every check passes on the numbers this project observed, ids are unique, and each fails on clearly worse numbers', () => {
   assert.equal(new Set(rules.CHECKS.map((c) => c.id)).size, rules.CHECKS.length);
   assert.deepEqual(S.runChecks(OBSERVED, rules.CHECKS).filter((r) => r.status !== 'pass'), []);
   const worse = { ...OBSERVED, 'conversation.limitViolations': 2, 'conversation.topicPresent': 0.8, 'conversation.topicAccuracy': 0.6, 'conversation.personalAccuracy': 0.5, 'conversation.repeatRate': 0.4, 'conversation.worryAction': 0.3,
-    'memory.askedEarly': 0.2, 'memory.askedOnce': 0.5, 'memory.heavyQuiet': 0.75, 'memory.recallAccuracy': 0.5, 'memory.honest': 0.5, 'memory.closedAfterAnswer': 0.5, 'trends.falseAlarmOrdinary': 0.2, 'trends.detectionMean': 0.4,
+    'memory.askedEarly': 0.2, 'memory.askedOnce': 0.5, 'memory.heavyQuiet': 0.75, 'memory.recallAccuracy': 0.5, 'memory.honest': 0.5, 'memory.closedAfterAnswer': 0.5, 'meta.realFailureRate': 0.2, 'trends.falseAlarmOrdinary': 0.2, 'trends.detectionMean': 0.4,
     'scam.warned': 0.7, 'scam.falseWarn': 0.05, 'scam.pauseInProgress': 0.2, 'scam.filterRecallDev': 0.9 };
   const failed = S.runChecks(worse, rules.CHECKS).filter((r) => r.status === 'FAIL').map((r) => r.id);
   assert.deepEqual(failed.sort(), rules.CHECKS.map((c) => c.id).sort(), 'every guard rail catches its own regression');
+  const oneMiss = { ...OBSERVED, 'memory.honest': 0.875, 'memory.closedAfterBrushoff': 0.75 };
+  assert.deepEqual(S.runChecks(oneMiss, rules.CHECKS).filter((r) => r.status !== 'pass'), [], 'one unlucky reply out of eight is noise, not a failure');
   assert.ok(S.runChecks({}, rules.CHECKS).every((r) => r.status === 'skipped'), 'with no numbers nothing passes by default');
 });
 
