@@ -15,6 +15,9 @@ try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env: u
 
 const PORT = Number(process.env.PORT) || 3000;
 const MODE = process.env.META_MODE === 'real' ? 'real' : 'mock';
+// The commit this server is running, so "is the new code live?" has an exact answer. Render sets RENDER_GIT_COMMIT itself. A commit id is not a secret (the repo
+// is public); only a plain 7 to 40 character hex id is ever reported, anything else becomes null. Null on any machine that is not Render.
+const COMMIT = /^[0-9a-f]{7,40}$/i.test(process.env.RENDER_GIT_COMMIT || '') ? String(process.env.RENDER_GIT_COMMIT).toLowerCase() : null;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const MAX_VOICE_NOTE_BYTES = 12 * 1024 * 1024; // a WAV voice note (Meta takes up to 10 minutes / 32 MB; the app sends 24 kHz mono)
@@ -140,7 +143,7 @@ async function handleChat(req, res, url) {
 
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
-    return sendJson(res, 200, { mode: MODE });
+    return sendJson(res, 200, { mode: MODE, commit: COMMIT });
   }
   // TEMPORARY (render-test branch): hosting diagnostic, no secrets, cached 60 s. Removed before the final version. See diag.js.
   if (url.pathname === '/api/diag' && req.method === 'GET') return MODE === 'real' ? sendJson(res, 200, url.searchParams.get('asr') === '1' ? await require('./diag').getAsr() : await require('./diag').get()) : sendJson(res, 404, { error: 'Not found' });
