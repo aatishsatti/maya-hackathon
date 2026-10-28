@@ -929,6 +929,7 @@ class Call {
     const p = beat.plan({ count: this.beatCount, topic: low('topic'), emotion: d.emotion, intent: low('intent'), concern: low('concern'), pain: /^(1|yes|true)$/.test(low('pain')), personal: /^(1|yes|true)$/.test(low('personal')), special });
     const lim = beat.limits(p.type);
     d.beat = p.type; d.beatN = p.n;
+    d.tagPain = /^(1|yes|true)$/.test(low('pain')); d.tagConcern = low('concern');   // for the daily count only (trends.js)
     if (lim.noQuestion) d.noQuestion = true;
     if (lim.maxSentences < d.maxSentences) d.maxSentences = lim.maxSentences;
   }
@@ -1597,7 +1598,8 @@ class Call {
       if (/\b(your name|what should i call you|what to call you|call you\?|who am i (talking|speaking) (to|with))\b/i.test(all)) this.askedName = true;
       for (const n of this.names.values()) if (new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(all)) this.lastNameUse = this.replyCount;
       this.replyCount += 1;
-      if (delivery && delivery.beatN != null) this.beatCount = delivery.beatN;   // committed only once the reply is really spoken (a rewrite recomputes from the same count)
+      if (delivery && delivery.beatN != null) this.beatCount = delivery.beatN;
+      care.trendTurn(this.profile.id, delivery);   // counts only: the feeling, its strength, pain, concern; never the words   // committed only once the reply is really spoken (a rewrite recomputes from the same count)
       this.lastReplyAsked = isQuestion(all);
       this.lastExclaimed = /!/.test(all);
       if (this.safety) care.addLine(this.profile.id, 'safety', all);

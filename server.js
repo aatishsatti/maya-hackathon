@@ -85,6 +85,7 @@ async function handleCare(req, res, url) {
   if (req.method === 'GET' && a === 'events') return openStream(req, res, (r) => care.attachFamily(r));
   if (!/^[a-f0-9]{8}$/.test(a || '') || !care.get(a)) return sendJson(res, 404, { error: 'Not found' });
   if (req.method === 'GET' && !b) return sendJson(res, 200, care.view(a));
+  if (req.method === 'GET' && b === 'trend' && !c) return sendJson(res, 200, care.trendView(a));   // family page only: plain facts built from daily numbers, see trends.js
   if (req.method === 'GET' && b === 'events') {
     const tz = url.searchParams.get('tz');
     return openStream(req, res, (r) => care.attachSenior(a, r, /^[\w/+\-]{1,60}$/.test(tz || '') ? tz : null));

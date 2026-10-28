@@ -221,6 +221,7 @@ class ChatSession {
     for (const n of this.names.values()) if (new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(all)) this.lastNameUse = this.replyCount;
     this.replyCount += 1;
     if (delivery && delivery.beatN != null) this.beatCount = delivery.beatN;
+    care.trendTurn(this.profile.id, delivery);   // counts only (see call.js)
     this.lastReplyAsked = isQuestion(all);
     this.lastExclaimed = /!/.test(all);
     if (this.safety) care.addLine(this.profile.id, 'safety', all);

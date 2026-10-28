@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const memory = require('./memory');
+const trends = require('./trends');
 
 const DIR = process.env.MAYA_CARE_DIR || path.join(__dirname, 'data', 'care'); // env override is for tests
 fs.mkdirSync(DIR, { recursive: true });
@@ -49,7 +50,7 @@ const MODES = {
 const cache = new Map();
 const file = (id) => path.join(DIR, `${id}.json`);
 const uid = () => crypto.randomBytes(4).toString('hex');
-const blank = (id) => ({ id, mode: 'standard', callCount: 0, tz: null, lastActivity: { maya: null, app: null, whatsapp: null }, reminders: [], flags: [], notifications: [], lines: {}, safetyHistory: [], scams: [] });
+const blank = (id) => ({ id, mode: 'standard', callCount: 0, tz: null, lastActivity: { maya: null, app: null, whatsapp: null }, reminders: [], flags: [], notifications: [], lines: {}, safetyHistory: [], scams: [], days: [], trend: null });   // days: 30 days of daily NUMBERS (trends.js), trend: the last judgement
 const dirty = new Set();
 let flushTimer = null;
 
@@ -73,6 +74,8 @@ function get(id) {
   try { s = JSON.parse(fs.readFileSync(file(id), 'utf8')); } catch { /* new */ }
   s = Object.assign(blank(id), s || {});
   s.lastActivity = Object.assign({ maya: null, app: null, whatsapp: null }, s.lastActivity);
+  if (!Array.isArray(s.days)) s.days = [];           // an older care file has no daily numbers yet
+  if (!s.trend || typeof s.trend !== 'object') s.trend = null;
   if (!MODES[s.mode]) s.mode = 'standard';
   cache.set(id, s);
   return s;
@@ -151,6 +154,46 @@ function lastSeen(p) {
   return { at, source };
 }
 
+// ---- Wellbeing trends: daily NUMBERS only (trends.js). No words, no topics, no transcripts: counts per local day, kept 30 days. ----
+// Local date and minutes after midnight for a moment, in the person's own time zone when known.
+function localParts(ts, tz) {
+  const at = new Date(ts);
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: 'numeric', hourCycle: 'h23', ...(tz ? { timeZone: tz } : {}) }).formatToParts(at);
+    const get = (t) => Number((parts.find((x) => x.type === t) || { value: 0 }).value);
+    return { date: at.toLocaleDateString('en-CA', tz ? { timeZone: tz } : undefined), min: get('hour') * 60 + get('minute') };
+  } catch { return { date: at.toLocaleDateString('en-CA'), min: at.getHours() * 60 + at.getMinutes() }; }
+}
+// One event into that day's record: {kind:'call'} | {kind:'turn', emotion, intensity, pain, concern} | {kind:'reminder', acked} | {kind:'callback'}.
+function trendEvent(id, ev, now = Date.now()) {
+  const p = get(id);
+  if (!p) return false;
+  const { date, min } = localParts(now, p.tz);
+  const rec = p.days.find((d) => d.date === date) || trends.blank(date);
+  const next = trends.addEvent(rec, { ...ev, atMin: min });
+  p.days = trends.prune([...p.days.filter((d) => d.date !== date), next], date).sort((a, b) => a.date.localeCompare(b.date));   // older than 30 days expires here
+  save(id);
+  return true;
+}
+// The person's turn just answered: only the private read of it (feeling, strength, pain, concern) is counted, never the words.
+const trendTurn = (id, d) => (d ? trendEvent(id, { kind: 'turn', emotion: d.emotion, intensity: d.intensity, pain: d.tagPain === true, concern: d.tagConcern }) : false);
+// For the family page. Judged once per local day, on COMPLETED days only (a half-finished day would look like a quiet one), and
+// remembered so the no-flapping rule can see yesterday's judgement. Returns plain facts: a status, since when, and lines built from numbers.
+function trendView(id, now = Date.now()) {
+  const p = get(id);
+  if (!p) return null;
+  const { date } = localParts(now, p.tz);
+  const end = trends.addDays(date, -1);
+  if (!p.trend || p.trend.evaluatedOn !== date) {
+    p.days = trends.prune(p.days, date);
+    const result = trends.evaluate(p.days.filter((d) => d.date <= end), end, p.trend && p.trend.result);
+    p.trend = { evaluatedOn: date, result };
+    save(id);
+  }
+  const r = p.trend.result;
+  return { status: r.status, since: r.since, learning: r.status === 'learning', daysSoFar: r.span, daysNeeded: trends.MIN_SPAN, lines: trends.describe(r), evaluatedOn: date };
+}
+
 function callStarted(id, call, tz) {
   const p = get(id);
   if (!p) return;
@@ -159,6 +202,7 @@ function callStarted(id, call, tz) {
   if (tz) p.tz = tz;
   for (const h of p.safetyHistory || []) h.callsSince += 1;
   touch(id, 'maya');
+  trendEvent(id, { kind: 'call' });
   const o = activeByProfile.get(id);
   if (o && o.state !== 'answered') { if (o.safety) { const f = safetyFlag(p); if (f) f.callbackState = 'answered'; } closeOutreach(o, 'answered'); } // they called Maya themselves: stop ringing
   save(id);
@@ -292,6 +336,7 @@ function startOutreach(id, { kind, reminderId = null, talked = false, delayMs = 
   o.notif = makeNotif(p, { to: 'senior', kind, text: kind === 'reminder' ? 'Maya is calling with a reminder from your family.' : 'Maya is calling to check on you.', ref: o.id, incident: safety && safetyFlag(p) ? safetyFlag(p).id : null });
   outreaches.set(o.id, o);
   activeByProfile.set(id, o);
+  if (kind === 'callback') trendEvent(id, { kind: 'callback' });   // a call-back was needed (Maya hung up after silence)
   if (safety) { const f = safetyFlag(p); if (f) Object.assign(f, { callbackState: 'pending', callbackAttempts: 0, callbackOf: cfg.maxAttempts, callbackReached: false }); }
   o.timer = setTimeout(() => ring(o), delayMs != null ? delayMs : kind === 'callback' ? cfg.callbackDelayMs : 0);
   return o;
@@ -710,6 +755,8 @@ function finishOccurrence(p, rid, state) {
   const act = r.active || { dueAt: r.dueAt, attempts: 0 };
   r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0 };
   r.active = null;
+  if (state === 'done') trendEvent(p.id, { kind: 'reminder', acked: true });                          // answered
+  else if (state === 'no_reply' || state === 'unanswered') trendEvent(p.id, { kind: 'reminder', acked: false });   // missed (a decline is a choice, not counted)
   save(p.id);
 }
 function advanceDue(r, now) {
@@ -856,6 +903,7 @@ function overview() { return memory.listProfiles().map((x) => { const v = view(x
 
 module.exports = {
   cfg, MODES, get, remove, start, stop, tick,
+  trendEvent, trendTurn, trendView, localParts,
   touch, lastSeen, callStarted, callEnded, callCount, liveCalls, liveChats, pushSenior, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
   recentLines, isRepeatLine, addLine,
   attachSenior, attachFamily, pushFamily, appOpen,

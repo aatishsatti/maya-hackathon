@@ -815,3 +815,112 @@ test('S1 safety words: every way of saying they do not want to live or be here a
     c.careNotes(t); assert.equal(active(id).length, 1, `${t}: one safety ticket`); assert.equal(c.safety, true, t);
   }
 });
+
+// ---------------------------------------------------------------- wellbeing trends: the daily numbers log, its hooks and the family API (stubbed)
+const T = require('../trends');
+const todayOf = (id) => care.localParts(Date.now(), care.get(id).tz).date;
+const dayOf = (id, date) => care.get(id).days.find((d) => d.date === (date || todayOf(id)));
+
+test('TR1 trendEvent: counts accumulate in one record per local day, in the person\'s own time zone', stubbed, () => {
+  const now = Date.UTC(2026, 9, 28, 22, 30);                       // 22:30 UTC
+  const nz = newSenior(); care.get(nz).tz = 'Pacific/Auckland';     // 11:30 the next morning there
+  care.trendEvent(nz, { kind: 'turn', emotion: 'lonely', intensity: 3 }, now); care.trendEvent(nz, { kind: 'turn', emotion: 'happy', intensity: 2 }, now + 60000);
+  assert.deepEqual(care.get(nz).days.map((d) => [d.date, d.turns, d.heavy, d.firstMin]), [['2026-10-29', 2, 1, 690]], 'two turns the same local day: one record');
+  care.trendEvent(nz, { kind: 'turn', emotion: 'sad', intensity: 2 }, now + 86400000);
+  assert.deepEqual(care.get(nz).days.map((d) => [d.date, d.turns]), [['2026-10-29', 2], ['2026-10-30', 1]], 'the next local day: a second record, in order');
+  const la = newSenior(); care.get(la).tz = 'America/Los_Angeles';   // 15:30 the day before
+  care.trendEvent(la, { kind: 'turn', emotion: 'sad', intensity: 2 }, now);
+  assert.deepEqual(care.get(la).days.map((d) => [d.date, d.firstMin]), [['2026-10-28', 930]], 'the same moment is a different local day and time elsewhere');
+  assert.equal(care.trendEvent('deadbeef', { kind: 'call' }), false, 'an unknown profile is ignored');
+});
+
+test('TR2 daily numbers expire after 30 days, on every write', stubbed, () => {
+  const id = newSenior(); const p = care.get(id); const today = todayOf(id);
+  p.days = [40, 31, 30, 29, 5].map((k) => ({ ...T.blank(T.addDays(today, -k)), turns: 9 }));
+  care.trendEvent(id, { kind: 'call' });
+  assert.deepEqual(p.days.map((d) => d.date), [T.addDays(today, -29), T.addDays(today, -5), today]);
+});
+
+test('TR3 hooks: a call, a call-back, an answered reminder and a missed one are each counted once; a declined reminder is not', stubbed, async () => {
+  const id = newSenior(); fast();
+  const c = startCall(id); assert.equal(dayOf(id).calls, 1, 'call started');
+  c.ws = fakeWs; care.callEnded(id, c, 'quiet');
+  care.silenceHangup(id, { talked: false }); assert.equal(dayOf(id).callbacks, 1, 'a call-back was needed');
+  await settle(id);
+  for (const [fn, state] of [['reminderAck', 'done'], ['reminderNoAck', 'no_reply']]) {
+    const r = care.addReminder(id, { task: 'drink water', dueAt: Date.now() + 3600000, repeat: 'none' });
+    care.findReminder(id, r.id).active = { dueAt: Date.now(), attempts: 1, notifId: 'none', state: 'ringing' };
+    assert.equal(care[fn](id, r.id), true, state);
+  }
+  assert.deepEqual([dayOf(id).remindersDue, dayOf(id).remindersMissed], [2, 1]);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'care.js'), 'utf8');
+  assert.match(src, /state === 'done'\) trendEvent[^\n]*acked: true/); assert.match(src, /state === 'no_reply' \|\| state === 'unanswered'\) trendEvent[^\n]*acked: false/);
+  assert.doesNotMatch(src, /'declined'\)[^\n]*trendEvent/, 'a decline is a choice, not a miss');
+  slow();
+});
+
+test('TR4 the end of each normal reply counts the private read of the turn (feeling, strength, pain, concern); a greeting counts nothing', stubbed, async () => {
+  const id = newSenior(); const c = mkCall(id);
+  await beatSay(c, 'emotion=lonely intensity=3 intent=share pain=1 concern=unsure topic=new', 'That sounds like a quiet evening.', 1);
+  await beatSay(c, 'emotion=happy intensity=2 intent=chat pain=0 concern=none topic=new', 'Roses need sun.', 2);
+  const d = dayOf(id); assert.deepEqual({ turns: d.turns, heavy: d.heavy, pain: d.pain, concerns: d.concerns, max: d.maxIntensity }, { turns: 2, heavy: 1, pain: 1, concerns: 1, max: 3 });
+  c.gen = 3; c.abort = new AbortController();
+  await c.speakReply(fixedBeat('[[feel: emotion=sad intensity=4 intent=chat]] Hello there, glad you are here.'), null, 3, { greeting: true, record: false });
+  assert.equal(dayOf(id).turns, 2, 'a greeting is not something the person said');
+});
+
+test('TR5 only numbers are kept: no word they said or Maya said can be found in the daily log or the judgement', stubbed, async () => {
+  const id = newSenior(); const c = mkCall(id);
+  c.history.push({ role: 'user', content: 'Mike: my xylophone is out of tune' });
+  await beatSay(c, 'emotion=sad intensity=3 intent=share personal=1 topic=new', 'That xylophone must be a joy to play.', 1);
+  care.trendView(id);
+  const kept = JSON.stringify({ days: care.get(id).days, trend: care.get(id).trend });
+  assert.doesNotMatch(kept, /xylophone|tune|joy|play/i);
+  for (const dd of care.get(id).days) for (const [k, v] of Object.entries(dd)) assert.ok(k === 'date' ? /^\d{4}-\d{2}-\d{2}$/.test(v) : (v === null || typeof v === 'number'), `${k} is a number`);
+});
+
+function seedLife(id, { decline = false } = {}) {
+  const p = care.get(id); const today = todayOf(id);
+  p.days = Array.from({ length: 29 }, (_, i) => {                    // yesterday back 29 days; today left empty
+    const k = 29 - i, low = decline && k <= 8;
+    return { ...T.blank(T.addDays(today, -k)), calls: 2, turns: low ? 4 : 12 + (i * 7) % 5, heavy: low ? 3 : (i % 3 === 0 ? 2 : 1), pain: decline && k <= 8 ? 2 : (i % 11 === 0 ? 1 : 0), remindersDue: 2, remindersMissed: i % 13 === 0 ? 1 : 0, callbacks: decline && k <= 8 ? 2 : 0, firstMin: 520 + (i * 17) % 50 };
+  });
+  p.trend = null;
+}
+
+test('TR6 trendView: learning at first, then plain facts; judged once per day on completed days only; remembers yesterday for the no-flapping rule', stubbed, () => {
+  const id = newSenior(); const p = care.get(id);
+  p.days = [T.blank(T.addDays(todayOf(id), -3)), T.blank(T.addDays(todayOf(id), -2))]; p.trend = null;
+  let v = care.trendView(id); assert.deepEqual([v.status, v.learning, v.lines.length, v.daysNeeded], ['learning', true, 0, T.MIN_SPAN]);
+  seedLife(id); v = care.trendView(id); assert.ok(['ok'].includes(v.status), v.status); assert.deepEqual(v.lines, []);
+  seedLife(id, { decline: true }); v = care.trendView(id);
+  assert.equal(v.status, 'notable'); assert.ok(v.lines.length >= 3 && v.lines.every((l) => /\(shifted on \d of the last 8 days\)\.$/.test(l)));
+  assert.equal(v.evaluatedOn, todayOf(id)); assert.ok(v.since);
+  const cached = care.get(id).trend; care.trendView(id); assert.equal(care.get(id).trend, cached, 'judged once per local day');
+  // today is unfinished: even an absurd today does not change the judgement
+  care.get(id).days.push({ ...T.blank(todayOf(id)), turns: 0, pain: 9 }); care.get(id).trend = null;
+  const again = care.trendView(id); assert.equal(again.status, 'notable'); assert.equal(again.since, T.addDays(todayOf(id), -1), 'a fresh judgement is dated to the last completed day');
+  // tomorrow: the earlier judgement is the "yesterday" the keep-raised rule needs
+  const tomorrow = Date.now() + 86400000; const prevResult = care.get(id).trend.result;
+  assert.equal(care.trendView(id, tomorrow).evaluatedOn, T.addDays(todayOf(id), 1)); assert.ok(care.get(id).trend.result !== prevResult);
+  assert.equal(care.trendView('deadbeef'), null);
+});
+
+test('TR7 trends are for the family page only: not in the family view, not in any senior-facing file, one GET route behind the same-origin check', stubbed, () => {
+  const id = newSenior(); seedLife(id, { decline: true });
+  const view = care.view(id); assert.ok(!('days' in view) && !('trend' in view), 'the existing view is unchanged');
+  const root = path.join(__dirname, '..');
+  for (const f of ['public/app.js', 'public/inbox.js', 'public/profiles.js', 'public/chat-client.js', 'public/chat-ui.js', 'public/orb.js']) assert.doesNotMatch(fs.readFileSync(path.join(root, f), 'utf8'), /trend|\/trend\b/i, `${f} never reads trends`);
+  const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+  const care_ = server.slice(server.indexOf('async function handleCare'), server.indexOf('async function handleChat'));
+  assert.ok(care_.indexOf('sameOrigin(req)') < care_.indexOf("b === 'trend'"), 'checked after the same-origin test');
+  assert.match(care_, /req\.method === 'GET' && b === 'trend' && !c\) return sendJson\(res, 200, care\.trendView\(a\)\)/);
+  assert.doesNotMatch(care_.slice(care_.indexOf("b === 'trend'") - 80, care_.indexOf("b === 'trend'") + 160).replace(/GET[^\n]*trend[^\n]*/, ''), /POST|DELETE/);
+});
+
+test('TR8 Maya never mentions trends to the senior: nothing in her notes, prompts or tag mentions them', stubbed, () => {
+  const root = path.join(__dirname, '..');
+  for (const f of ['brain.js', 'docs/maya-prompt.md']) assert.doesNotMatch(fs.readFileSync(path.join(root, f), 'utf8'), /\btrends?\b|wellbeing|quieter than usual|shifted on|usual is about/i, f);
+  const c = mkCall(newSenior()); seedLife(c.profile.id, { decline: true });
+  assert.doesNotMatch(c.roster(c.replyNote()), /\btrends?\b|wellbeing|quieter than usual|shifted on|usual is about/i);
+});
