@@ -1,11 +1,12 @@
 {
- "about": "Maya scam-shield test set. Every example was written by the Maya team for this test; none comes from a real person or a real message. Phone numbers are fictional (555-01xx). label: scam | normal. channel: text = a message as it arrives; spoken = the person telling Maya, in their own words, what happened. hard: a scam with no scary words, or a genuine message that looks urgent. now: a scam in progress (the person is about to pay or act). legitpay: a genuine payment in progress. split: dev (used to build and tune) | held (kept for the final, untouched number).",
+ "about": "Maya scam-shield test set. Every example was written by the Maya team for this test; none comes from a real person or a real message. Phone numbers are fictional (555-01xx). tranche: 1 = the first, classic set; 2 = the harder set (subtle scams with no scary words, genuine messages that look urgent), written blind before any detector output was seen. label: scam | normal. channel: text = a message as it arrives; spoken = the person telling Maya, in their own words, what happened. hard: a scam with no scary words, or a genuine message that looks urgent. now: a scam in progress (the person is about to pay or act). legitpay: a genuine payment in progress. split: dev (used to build and tune) | held (kept for the final, untouched number).",
  "items": [
   {
    "label": "scam",
    "category": "bank",
    "channel": "text",
    "text": "URGENT: Your account has been temporarily locked due to suspicious activity. Verify your details within 24 hours at secure-bank-verify.example or your account will be closed.",
+   "tranche": 1,
    "split": "dev",
    "id": "S001"
   },
@@ -14,6 +15,7 @@
    "category": "bank",
    "channel": "text",
    "text": "Hi, this is the fraud team at your bank. We have blocked a payment of $1,840. To cancel it please reply with the 6-digit code we just sent you.",
+   "tranche": 1,
    "split": "held",
    "id": "S002"
   },
@@ -23,6 +25,7 @@
    "channel": "text",
    "text": "Dear customer, we are updating our security system. Please confirm your online banking login so we can keep your account running smoothly. Thank you for banking with us.",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "S003"
   },
@@ -31,6 +34,7 @@
    "category": "bank",
    "channel": "spoken",
    "text": "A lady rang me saying she was from my bank and that someone had tried to take my money. She wanted me to read out the number that came in a text so she could stop it.",
+   "tranche": 1,
    "split": "held",
    "id": "S004"
   },
@@ -39,6 +43,7 @@
    "category": "bank",
    "channel": "spoken",
    "text": "Someone phoned saying my card had been cloned. He told me to move my savings into a safe account he would give me and not to tell the bank staff because one of them is in on it.",
+   "tranche": 1,
    "split": "dev",
    "id": "S005"
   },
@@ -47,6 +52,7 @@
    "category": "government",
    "channel": "text",
    "text": "FINAL NOTICE: You owe $2,300 in unpaid taxes. A warrant will be issued for your arrest unless you pay today with gift cards. Call 555-0143 immediately.",
+   "tranche": 1,
    "split": "held",
    "id": "S006"
   },
@@ -55,6 +61,7 @@
    "category": "government",
    "channel": "text",
    "text": "Your government benefit payment is on hold. Confirm your national insurance number and bank details here to release it: gov-benefit-claims.example",
+   "tranche": 1,
    "split": "dev",
    "id": "S007"
   },
@@ -64,6 +71,7 @@
    "channel": "text",
    "text": "Our records show you overpaid last year and are due a refund of $412. Please submit your bank details through the link to receive it.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "S008"
   },
@@ -72,6 +80,7 @@
    "category": "government",
    "channel": "spoken",
    "text": "A man phoned from the tax office and said I would be arrested this afternoon if I did not pay. He wanted me to pay by buying vouchers.",
+   "tranche": 1,
    "split": "dev",
    "id": "S009"
   },
@@ -80,6 +89,7 @@
    "category": "government",
    "channel": "spoken",
    "text": "I got a call saying my pension was being stopped because of a mistake in my records and that I had to give my bank number to fix it.",
+   "tranche": 1,
    "split": "held",
    "id": "S010"
   },
@@ -88,6 +98,7 @@
    "category": "prize",
    "channel": "text",
    "text": "Congratulations! You have been selected to receive a $5,000 shopping reward. To claim, pay the $49 delivery fee at the link below within 12 hours.",
+   "tranche": 1,
    "split": "dev",
    "id": "S011"
   },
@@ -96,6 +107,7 @@
    "category": "prize",
    "channel": "text",
    "text": "You have won the national lottery draw! Contact our claims agent with a copy of your passport and a processing fee of $200 to release your winnings.",
+   "tranche": 1,
    "split": "held",
    "id": "S012"
   },
@@ -105,6 +117,7 @@
    "channel": "text",
    "text": "Thank you for taking our short survey. As a loyal customer you can claim a free kitchen set; just enter your card number to cover shipping of $2.99.",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "S013"
   },
@@ -113,6 +126,7 @@
    "category": "prize",
    "channel": "spoken",
    "text": "I had a message that said I had won a holiday abroad but I have to send them two hundred pounds first for the taxes.",
+   "tranche": 1,
    "split": "held",
    "id": "S014"
   },
@@ -121,6 +135,7 @@
    "category": "prize",
    "channel": "spoken",
    "text": "A woman phoned to say I won a car in a competition I do not remember entering. She wants my bank details to deliver the prize.",
+   "tranche": 1,
    "split": "dev",
    "id": "S015"
   },
@@ -129,6 +144,7 @@
    "category": "grandchild",
    "channel": "text",
    "text": "Grandma it is me, I lost my phone and I am in trouble. I had an accident and need $900 for the lawyer. Please do not tell mom and dad. Send it by gift card.",
+   "tranche": 1,
    "split": "held",
    "id": "S016"
   },
@@ -137,6 +153,7 @@
    "category": "grandchild",
    "channel": "text",
    "text": "Hi Grandpa this is my new number. I am stuck abroad and my wallet was stolen. Can you wire money today? I will explain later, please keep it between us.",
+   "tranche": 1,
    "split": "dev",
    "id": "S017"
   },
@@ -146,6 +163,7 @@
    "channel": "text",
    "text": "Hey nan, new number, my old phone broke. Are you free? I need a favour, something a bit embarrassing. Can you buy some gift cards for me, I will pay you back at the weekend.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "S018"
   },
@@ -154,6 +172,7 @@
    "category": "grandchild",
    "channel": "spoken",
    "text": "A young man rang crying and said Gran it is me, he had been in a car accident and needed bail money and said not to tell my son.",
+   "tranche": 1,
    "split": "dev",
    "id": "S019"
   },
@@ -162,6 +181,7 @@
    "category": "grandchild",
    "channel": "spoken",
    "text": "My grandson texted from a new number asking me to buy some vouchers and send him the codes because he is locked out of his account.",
+   "tranche": 1,
    "split": "held",
    "id": "S020"
   },
@@ -170,6 +190,7 @@
    "category": "techsupport",
    "channel": "text",
    "text": "WARNING: Your computer has been infected with 5 viruses! Call Microsoft Support at 555-0177 immediately to prevent data loss. Do not shut down your computer.",
+   "tranche": 1,
    "split": "dev",
    "id": "S021"
   },
@@ -178,6 +199,7 @@
    "category": "techsupport",
    "channel": "text",
    "text": "Your Windows license has expired. Call our certified technician now; remote access is required to restore your files.",
+   "tranche": 1,
    "split": "held",
    "id": "S022"
   },
@@ -187,6 +209,7 @@
    "channel": "text",
    "text": "Hello, this is a courtesy call from your internet provider. We noticed slow speeds on your line. If you open the app we send, our engineer can fix it for you for free in a few minutes.",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "S023"
   },
@@ -195,6 +218,7 @@
    "category": "techsupport",
    "channel": "spoken",
    "text": "A pop-up came up on my computer with a loud noise saying I had a virus and to ring a number. The man told me to install a program so he could see my screen.",
+   "tranche": 1,
    "split": "held",
    "id": "S024"
   },
@@ -203,6 +227,7 @@
    "category": "techsupport",
    "channel": "spoken",
    "text": "A man called from my internet company and asked me to let him control my computer so he could give me a refund, and then he said he had put in too much and I had to send the extra back.",
+   "tranche": 1,
    "split": "dev",
    "id": "S025"
   },
@@ -211,6 +236,7 @@
    "category": "parcel",
    "channel": "text",
    "text": "Your parcel could not be delivered due to an unpaid customs fee of $3.45. Pay now at post-delivery-fee.example to reschedule or it will be returned.",
+   "tranche": 1,
    "split": "held",
    "id": "S026"
   },
@@ -219,6 +245,7 @@
    "category": "parcel",
    "channel": "text",
    "text": "Delivery attempt failed. Confirm your address and pay a small redelivery charge via the link to receive your package today.",
+   "tranche": 1,
    "split": "dev",
    "id": "S027"
   },
@@ -228,6 +255,7 @@
    "channel": "text",
    "text": "Hi, we have a package for you but nobody was home. Please reply with your full name and card details to arrange re-delivery on Thursday.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "S028"
   },
@@ -236,6 +264,7 @@
    "category": "parcel",
    "channel": "spoken",
    "text": "I got a text about a parcel that I needed to pay a few pounds for to get it delivered, but I have not ordered anything.",
+   "tranche": 1,
    "split": "dev",
    "id": "S029"
   },
@@ -244,6 +273,7 @@
    "category": "parcel",
    "channel": "spoken",
    "text": "There was a card through the door and then a text saying pay the customs on my parcel online with my card.",
+   "tranche": 1,
    "split": "held",
    "id": "S030"
   },
@@ -252,6 +282,7 @@
    "category": "utility",
    "channel": "text",
    "text": "Your electricity will be disconnected today at 5pm due to an overdue balance of $286. Pay immediately by bank transfer to avoid disconnection. Call 555-0190.",
+   "tranche": 1,
    "split": "dev",
    "id": "S031"
   },
@@ -260,6 +291,7 @@
    "category": "utility",
    "channel": "text",
    "text": "FINAL WARNING: your gas account is in arrears. A technician will cut your supply within 2 hours unless you pay using a prepaid card.",
+   "tranche": 1,
    "split": "held",
    "id": "S032"
   },
@@ -269,6 +301,7 @@
    "channel": "text",
    "text": "We have been trying to reach you about your energy account. A smart meter upgrade is due and you may be eligible for a credit. Please confirm your account number and date of birth.",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "S033"
   },
@@ -277,6 +310,7 @@
    "category": "utility",
    "channel": "spoken",
    "text": "A man phoned saying he is from the electric company and that they would turn off my power in an hour unless I paid straight away over the phone with my card.",
+   "tranche": 1,
    "split": "held",
    "id": "S034"
   },
@@ -285,6 +319,7 @@
    "category": "utility",
    "channel": "spoken",
    "text": "Somebody knocked and said he was from the water company and needed to check my pipes, and then he said I owed a bill and wanted it in cash.",
+   "tranche": 1,
    "split": "dev",
    "id": "S035"
   },
@@ -293,6 +328,7 @@
    "category": "insurance",
    "channel": "text",
    "text": "Your Medicare card is expiring. To receive your new card, reply with your Medicare number and bank details. Failure to respond may suspend your benefits.",
+   "tranche": 1,
    "split": "held",
    "id": "S036"
   },
@@ -301,6 +337,7 @@
    "category": "insurance",
    "channel": "text",
    "text": "Final reminder: your car insurance policy was cancelled. Renew today for $99 by sending payment details to this number or you risk a fine.",
+   "tranche": 1,
    "split": "dev",
    "id": "S037"
   },
@@ -310,6 +347,7 @@
    "channel": "text",
    "text": "You are eligible for a free medical alert device and a back brace covered by your plan. Confirm your insurance number and we will ship them at no cost.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "S038"
   },
@@ -318,6 +356,7 @@
    "category": "insurance",
    "channel": "spoken",
    "text": "A woman rang about a new Medicare card and asked for my number and date of birth so she could send it.",
+   "tranche": 1,
    "split": "dev",
    "id": "S039"
   },
@@ -326,6 +365,7 @@
    "category": "insurance",
    "channel": "spoken",
    "text": "Someone phoned to say I am owed a refund on my insurance and they needed my account number to put it in.",
+   "tranche": 1,
    "split": "held",
    "id": "S040"
   },
@@ -334,6 +374,7 @@
    "category": "romance_invest",
    "channel": "text",
    "text": "My dear, I am an engineer working on an oil rig overseas. I have fallen in love with you. I need $1,500 to complete my contract and fly home to meet you. Please help me.",
+   "tranche": 1,
    "split": "dev",
    "id": "S041"
   },
@@ -342,6 +383,7 @@
    "category": "romance_invest",
    "channel": "text",
    "text": "Exclusive: our crypto trading platform guarantees 30% monthly returns. Deposit $1,000 today; limited spots; no risk.",
+   "tranche": 1,
    "split": "held",
    "id": "S042"
   },
@@ -351,6 +393,7 @@
    "channel": "text",
    "text": "I know we only met online three weeks ago but I trust you. A friend there is holding a package for me; could you pay the customs fee for me? I will repay you when we meet.",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "S043"
   },
@@ -359,6 +402,7 @@
    "category": "romance_invest",
    "channel": "spoken",
    "text": "A man I have been chatting to online says he is in hospital abroad and needs me to send money to the clinic, and says I must not tell my daughter.",
+   "tranche": 1,
    "split": "held",
    "id": "S044"
   },
@@ -367,6 +411,7 @@
    "category": "romance_invest",
    "channel": "spoken",
    "text": "A friendly man on the phone told me about an investment that cannot lose and says I should move my pension money in this week.",
+   "tranche": 1,
    "split": "dev",
    "id": "S045"
   },
@@ -375,6 +420,7 @@
    "category": "charity",
    "channel": "text",
    "text": "Your donation can save a child today! Please donate $100 via gift card to our emergency fund; reply with the card code.",
+   "tranche": 1,
    "split": "held",
    "id": "S046"
   },
@@ -383,6 +429,7 @@
    "category": "charity",
    "channel": "text",
    "text": "Thank you for supporting disaster relief. Your contribution of $500 is overdue, please confirm payment details to avoid legal action.",
+   "tranche": 1,
    "split": "dev",
    "id": "S047"
   },
@@ -392,6 +439,7 @@
    "channel": "text",
    "text": "We are collecting for the local children's hospital and the number of donors is limited this month. Would you give your card details now so you can give today?",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "S048"
   },
@@ -400,6 +448,7 @@
    "category": "charity",
    "channel": "spoken",
    "text": "A man phoned asking for money for a children's charity and would not take no, he said if I did not give my card number now the children would suffer.",
+   "tranche": 1,
    "split": "dev",
    "id": "S049"
   },
@@ -408,6 +457,7 @@
    "category": "charity",
    "channel": "spoken",
    "text": "A lady called about a veterans fund and wanted a gift card code over the phone.",
+   "tranche": 1,
    "split": "held",
    "id": "S050"
   },
@@ -417,6 +467,7 @@
    "channel": "spoken",
    "text": "A man on the phone told me my grandson is in jail and I need to buy gift cards for bail. I am on my way to the shop right now to get them.",
    "now": true,
+   "tranche": 1,
    "split": "dev",
    "id": "S051"
   },
@@ -426,6 +477,7 @@
    "channel": "spoken",
    "text": "The lady from the bank said to transfer all my savings to the safe account. I have the details here and I am about to do it on the computer.",
    "now": true,
+   "tranche": 1,
    "split": "held",
    "id": "S052"
   },
@@ -435,6 +487,7 @@
    "channel": "spoken",
    "text": "He is still on the phone and he is asking me to read out the code that just came in a text. I have got it in front of me now.",
    "now": true,
+   "tranche": 1,
    "split": "dev",
    "id": "S053"
   },
@@ -444,6 +497,7 @@
    "channel": "spoken",
    "text": "The taxman says I must pay today or be arrested, so I am going to the post office to send the money by courier.",
    "now": true,
+   "tranche": 1,
    "split": "held",
    "id": "S054"
   },
@@ -453,6 +507,7 @@
    "channel": "spoken",
    "text": "They told me to install the program so they can fix my computer. I have just downloaded it and he wants me to click run.",
    "now": true,
+   "tranche": 1,
    "split": "dev",
    "id": "S055"
   },
@@ -462,6 +517,7 @@
    "channel": "spoken",
    "text": "My online friend needs the money for the hospital. I am about to send the two thousand through the money transfer place.",
    "now": true,
+   "tranche": 1,
    "split": "held",
    "id": "S056"
   },
@@ -470,6 +526,7 @@
    "category": "bill",
    "channel": "text",
    "text": "Your electricity statement for September is ready. Amount due $84.20 by October 25. View it any time in your online account or by calling the number on your bill.",
+   "tranche": 1,
    "split": "held",
    "id": "N057"
   },
@@ -478,6 +535,7 @@
    "category": "bill",
    "channel": "text",
    "text": "Reminder: your mobile bill of $39.00 will be taken by direct debit on 3 November. No action needed.",
+   "tranche": 1,
    "split": "dev",
    "id": "N058"
   },
@@ -487,6 +545,7 @@
    "channel": "text",
    "text": "Your gas account is overdue by $64.30. Please pay by October 31 to avoid a late fee. You can pay by card on our website or by phone.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "N059"
   },
@@ -495,6 +554,7 @@
    "category": "bill",
    "channel": "spoken",
    "text": "I got my phone bill this morning and it is a bit higher than normal, I think because of the calls to my sister.",
+   "tranche": 1,
    "split": "dev",
    "id": "N060"
   },
@@ -503,6 +563,7 @@
    "category": "bill",
    "channel": "spoken",
    "text": "The water company sent a letter saying the meter will be read next week and someone will call round with an ID badge.",
+   "tranche": 1,
    "split": "held",
    "id": "N061"
   },
@@ -511,6 +572,7 @@
    "category": "appointment",
    "channel": "text",
    "text": "Reminder: you have an appointment with Dr. Patel on Tuesday at 10:30am. Reply C to confirm or call the clinic to reschedule.",
+   "tranche": 1,
    "split": "dev",
    "id": "N062"
   },
@@ -519,6 +581,7 @@
    "category": "appointment",
    "channel": "text",
    "text": "Your dental check-up is tomorrow at 2pm. Please arrive 10 minutes early. Reply YES to confirm.",
+   "tranche": 1,
    "split": "held",
    "id": "N063"
   },
@@ -528,6 +591,7 @@
    "channel": "text",
    "text": "URGENT: We have not heard from you. Please confirm your hospital appointment today or it will be given to another patient. Reply YES.",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "N064"
   },
@@ -537,6 +601,7 @@
    "channel": "spoken",
    "text": "The hospital phoned to move my eye appointment to Friday, and they asked me to confirm my date of birth, which seemed normal.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "N065"
   },
@@ -545,6 +610,7 @@
    "category": "appointment",
    "channel": "spoken",
    "text": "My doctor's surgery sent a text about the flu jab, I can book it online or by ringing the desk.",
+   "tranche": 1,
    "split": "dev",
    "id": "N066"
   },
@@ -553,6 +619,7 @@
    "category": "pharmacy",
    "channel": "text",
    "text": "Your prescription is ready for collection at the pharmacy. Please bring photo ID. Open until 6pm.",
+   "tranche": 1,
    "split": "held",
    "id": "N067"
   },
@@ -561,6 +628,7 @@
    "category": "pharmacy",
    "channel": "text",
    "text": "Your repeat prescription will be ready on Thursday. Reply STOP to opt out of reminders.",
+   "tranche": 1,
    "split": "dev",
    "id": "N068"
   },
@@ -570,6 +638,7 @@
    "channel": "text",
    "text": "Your medication order has shipped. Track it with your order number. We will never ask for your card number or PIN by text.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "N069"
   },
@@ -578,6 +647,7 @@
    "category": "pharmacy",
    "channel": "spoken",
    "text": "The chemist rang to say my tablets are in, I can pick them up any time before six.",
+   "tranche": 1,
    "split": "dev",
    "id": "N070"
   },
@@ -586,6 +656,7 @@
    "category": "pharmacy",
    "channel": "spoken",
    "text": "The pharmacy told me the doctor changed my dose and gave me a new leaflet.",
+   "tranche": 1,
    "split": "held",
    "id": "N071"
   },
@@ -594,6 +665,7 @@
    "category": "family",
    "channel": "text",
    "text": "Hi Nana! Are you free on Sunday? We will come over for lunch around 12. Love you x",
+   "tranche": 1,
    "split": "dev",
    "id": "N072"
   },
@@ -602,6 +674,7 @@
    "category": "family",
    "channel": "text",
    "text": "Dad, just landed safely. Will call you tonight when I am at the hotel.",
+   "tranche": 1,
    "split": "held",
    "id": "N073"
   },
@@ -611,6 +684,7 @@
    "channel": "text",
    "text": "It is me, my number changed because I dropped my phone in the lake. Save this one instead. Call me tonight, I will tell you all about the trip!",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "N074"
   },
@@ -619,6 +693,7 @@
    "category": "family",
    "channel": "spoken",
    "text": "My granddaughter rang from university, she passed her exam and wants to visit at the weekend.",
+   "tranche": 1,
    "split": "held",
    "id": "N075"
   },
@@ -627,6 +702,7 @@
    "category": "family",
    "channel": "spoken",
    "text": "My son texted to say he will be late and to start dinner without him.",
+   "tranche": 1,
    "split": "dev",
    "id": "N076"
   },
@@ -635,6 +711,7 @@
    "category": "bank_genuine",
    "channel": "text",
    "text": "Card ending 4821: a payment of $25.40 at Green Grocers was made on 24 Oct. If you do not recognise it, call the number on the back of your card. We will never ask for your PIN or password.",
+   "tranche": 1,
    "split": "held",
    "id": "N077"
   },
@@ -643,6 +720,7 @@
    "category": "bank_genuine",
    "channel": "text",
    "text": "Your monthly statement is now available in online banking. Log in as usual from our app.",
+   "tranche": 1,
    "split": "dev",
    "id": "N078"
   },
@@ -652,6 +730,7 @@
    "channel": "text",
    "text": "Security alert: a new device signed in to your account. If this was you, no action is needed. If not, please call the number on the back of your card. Never share a one-time code with anyone, including us.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "N079"
   },
@@ -660,6 +739,7 @@
    "category": "bank_genuine",
    "channel": "spoken",
    "text": "My bank sent a letter about changes to their opening hours and the branch is moving across the road.",
+   "tranche": 1,
    "split": "dev",
    "id": "N080"
   },
@@ -669,6 +749,7 @@
    "channel": "spoken",
    "text": "The bank rang to tell me a payment was flagged and asked me to hang up and call back on the number on my card, which I did and it was a genuine check.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "N081"
   },
@@ -677,6 +758,7 @@
    "category": "delivery_genuine",
    "channel": "text",
    "text": "Your order 48213 has been dispatched and will arrive Thursday between 9am and 1pm. Track it in the app.",
+   "tranche": 1,
    "split": "dev",
    "id": "N082"
   },
@@ -685,6 +767,7 @@
    "category": "delivery_genuine",
    "channel": "text",
    "text": "Your parcel was delivered to your front porch at 2:14pm.",
+   "tranche": 1,
    "split": "held",
    "id": "N083"
   },
@@ -694,6 +777,7 @@
    "channel": "text",
    "text": "We missed you. Your parcel is at the local collection point; bring photo ID and the card we left. No payment is needed.",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "N084"
   },
@@ -702,6 +786,7 @@
    "category": "delivery_genuine",
    "channel": "spoken",
    "text": "The postman left a card saying he will try again tomorrow and that I can pick it up from the sorting office if I miss him.",
+   "tranche": 1,
    "split": "held",
    "id": "N085"
   },
@@ -710,6 +795,7 @@
    "category": "delivery_genuine",
    "channel": "spoken",
    "text": "The delivery man rang the bell with the grocery order I made on Monday and checked my name.",
+   "tranche": 1,
    "split": "dev",
    "id": "N086"
   },
@@ -718,6 +804,7 @@
    "category": "newsletter",
    "channel": "text",
    "text": "This week at the garden centre: 20% off all bulbs and a free talk on autumn pruning on Saturday. See you there!",
+   "tranche": 1,
    "split": "held",
    "id": "N087"
   },
@@ -726,6 +813,7 @@
    "category": "newsletter",
    "channel": "text",
    "text": "Your library books are due back on 3 November. You can renew them online or in person.",
+   "tranche": 1,
    "split": "dev",
    "id": "N088"
   },
@@ -735,6 +823,7 @@
    "channel": "text",
    "text": "Hurry, last chance! Our autumn sale ends tonight, save up to 50% on coats and boots. Shop now online or in store.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "N089"
   },
@@ -743,6 +832,7 @@
    "category": "newsletter",
    "channel": "spoken",
    "text": "A flyer came through the door for the new bakery with a voucher for a free coffee.",
+   "tranche": 1,
    "split": "dev",
    "id": "N090"
   },
@@ -751,6 +841,7 @@
    "category": "newsletter",
    "channel": "spoken",
    "text": "I got an email from the knitting club about the next meeting and a raffle.",
+   "tranche": 1,
    "split": "held",
    "id": "N091"
   },
@@ -759,6 +850,7 @@
    "category": "government_genuine",
    "channel": "text",
    "text": "Your council tax bill for the new year is enclosed. You can pay by direct debit, online, or at the post office. Contact the council if you need help.",
+   "tranche": 1,
    "split": "dev",
    "id": "N092"
   },
@@ -767,6 +859,7 @@
    "category": "government_genuine",
    "channel": "text",
    "text": "Your State Pension forecast is ready to view when you log in to your government account.",
+   "tranche": 1,
    "split": "held",
    "id": "N093"
   },
@@ -776,6 +869,7 @@
    "channel": "text",
    "text": "Reminder: your vehicle registration expires on 30 November. Renew on the official government website using the reference letter we posted to you.",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "N094"
   },
@@ -784,6 +878,7 @@
    "category": "government_genuine",
    "channel": "spoken",
    "text": "The council sent a letter that the bins will be collected on a different day over Christmas.",
+   "tranche": 1,
    "split": "held",
    "id": "N095"
   },
@@ -792,6 +887,7 @@
    "category": "government_genuine",
    "channel": "spoken",
    "text": "I had a letter from the pension service saying my payment day is changing, no action needed.",
+   "tranche": 1,
    "split": "dev",
    "id": "N096"
   },
@@ -800,6 +896,7 @@
    "category": "friends",
    "channel": "text",
    "text": "Are you coming to bridge on Thursday? Margaret says she is bringing the lemon cake.",
+   "tranche": 1,
    "split": "held",
    "id": "N097"
   },
@@ -808,6 +905,7 @@
    "category": "friends",
    "channel": "text",
    "text": "Thanks for the lovely tea yesterday, the scones were perfect!",
+   "tranche": 1,
    "split": "dev",
    "id": "N098"
   },
@@ -817,6 +915,7 @@
    "channel": "text",
    "text": "Hi it is Jean from church. We are collecting for the roof fund and I will drop the envelope by on Sunday if you would like to give something. No pressure at all.",
    "hard": true,
+   "tranche": 1,
    "split": "held",
    "id": "N099"
   },
@@ -825,6 +924,7 @@
    "category": "friends",
    "channel": "spoken",
    "text": "My neighbour popped by to ask if I wanted to join the walking group on Wednesday.",
+   "tranche": 1,
    "split": "dev",
    "id": "N100"
   },
@@ -833,6 +933,7 @@
    "category": "friends",
    "channel": "spoken",
    "text": "My friend Alan rang to say his hip operation went well.",
+   "tranche": 1,
    "split": "held",
    "id": "N101"
   },
@@ -841,6 +942,7 @@
    "category": "subscriptions",
    "channel": "text",
    "text": "Thank you for your $20 donation to the local animal shelter. A receipt is attached for your records.",
+   "tranche": 1,
    "split": "dev",
    "id": "N102"
   },
@@ -849,6 +951,7 @@
    "category": "subscriptions",
    "channel": "text",
    "text": "Your magazine subscription renews on 15 December at $34. Manage or cancel any time in your account.",
+   "tranche": 1,
    "split": "held",
    "id": "N103"
   },
@@ -858,6 +961,7 @@
    "channel": "text",
    "text": "Your annual donation reminder: you have supported us each year since 2019. If you would like to give again, you can do so on our website or by post. Thank you!",
    "hard": true,
+   "tranche": 1,
    "split": "dev",
    "id": "N104"
   },
@@ -866,6 +970,7 @@
    "category": "subscriptions",
    "channel": "spoken",
    "text": "The animal shelter rang to thank me for last year's donation and asked if I would like their newsletter.",
+   "tranche": 1,
    "split": "held",
    "id": "N105"
   },
@@ -874,6 +979,7 @@
    "category": "subscriptions",
    "channel": "spoken",
    "text": "I got a letter from the magazine saying the price is going up a little next year.",
+   "tranche": 1,
    "split": "dev",
    "id": "N106"
   },
@@ -883,6 +989,7 @@
    "channel": "spoken",
    "text": "I am just popping to the post office to pay my electricity bill, the one that came in the post.",
    "legitpay": true,
+   "tranche": 1,
    "split": "held",
    "id": "N107"
   },
@@ -892,6 +999,7 @@
    "channel": "spoken",
    "text": "I am about to pay my council tax online through the council website, I typed the address in myself.",
    "legitpay": true,
+   "tranche": 1,
    "split": "dev",
    "id": "N108"
   },
@@ -901,6 +1009,7 @@
    "channel": "spoken",
    "text": "I am going to the shop now to buy a gift card for my granddaughter's birthday, she asked me for one.",
    "legitpay": true,
+   "tranche": 1,
    "split": "held",
    "id": "N109"
   },
@@ -910,6 +1019,7 @@
    "channel": "spoken",
    "text": "I am sending my son some money for his rent. He asked me on the phone and I rang him back on his usual number.",
    "legitpay": true,
+   "tranche": 1,
    "split": "dev",
    "id": "N110"
   },
@@ -919,6 +1029,7 @@
    "channel": "spoken",
    "text": "I am at the pharmacy paying for my prescription with my card.",
    "legitpay": true,
+   "tranche": 1,
    "split": "held",
    "id": "N111"
   },
@@ -928,8 +1039,409 @@
    "channel": "spoken",
    "text": "I am about to transfer the deposit for the holiday cottage. I booked it with the travel agent I have used for years.",
    "legitpay": true,
+   "tranche": 1,
    "split": "dev",
    "id": "N112"
+  },
+  {
+   "label": "scam",
+   "category": "subtle_bank",
+   "channel": "text",
+   "text": "Hello, thanks for being a valued customer. We have a new savings rate for you. To move your current balance and get the better rate, please verify your online banking by replying with the code we have just texted.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S113"
+  },
+  {
+   "label": "scam",
+   "category": "invoice_fraud",
+   "channel": "text",
+   "text": "Hi, please find attached the invoice for the boiler service last month. Our bank details have changed, so kindly send the payment of $320 to the new account below.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S114"
+  },
+  {
+   "label": "scam",
+   "category": "solicitor_fraud",
+   "channel": "text",
+   "text": "Dear Mrs Brown, your solicitor's office here. The house sale completes Friday. For security please transfer the funds to our client account, details attached. Please contact us only on this number as our main line is down.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S115"
+  },
+  {
+   "label": "scam",
+   "category": "refund_callback",
+   "channel": "text",
+   "text": "Your antivirus subscription renewed for $349 today. If you did not authorise this, call 555-0162 to arrange a refund.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S116"
+  },
+  {
+   "label": "scam",
+   "category": "fake_job",
+   "channel": "text",
+   "text": "We saw your profile and have a part-time job: process payments for our clients from home, $200 per day. We will send you a cheque to cover equipment; deposit it and forward the balance to our supplier.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S117"
+  },
+  {
+   "label": "scam",
+   "category": "friend_in_need",
+   "channel": "text",
+   "text": "Hi, it is Paul from the golf club. I am in a bit of a bind, my card got declined at the airport. Could you send $300 by transfer, I will refund you as soon as I am back Thursday? My phone is nearly dead so text only please.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S118"
+  },
+  {
+   "label": "scam",
+   "category": "rebate",
+   "channel": "text",
+   "text": "You are owed a $146 energy rebate under the new government scheme. Check your eligibility and claim in two minutes at energy-rebate-claim.example. No documents needed except your card for identity.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S119"
+  },
+  {
+   "label": "scam",
+   "category": "court_notice",
+   "channel": "text",
+   "text": "Re: jury service. Our records show you did not attend. To avoid a fine please confirm your details at the court portal link. Reference JS-4471.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S120"
+  },
+  {
+   "label": "scam",
+   "category": "bank_security_test",
+   "channel": "spoken",
+   "text": "A very polite young man from my bank's security department said the account was fine but they were testing a new system and he needed me to confirm my card number and the three digits on the back for the test.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S121"
+  },
+  {
+   "label": "scam",
+   "category": "council_rebate",
+   "channel": "spoken",
+   "text": "A woman from the council phoned to say I am entitled to a rebate and could she just confirm my bank account so they can pay it in. She was very nice.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S122"
+  },
+  {
+   "label": "scam",
+   "category": "doorstep",
+   "channel": "spoken",
+   "text": "A man at the door said he was doing roof repairs for the neighbour and noticed some loose tiles on mine. He offered to do it today cheaply for cash and asked for half up front.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S123"
+  },
+  {
+   "label": "scam",
+   "category": "health_check",
+   "channel": "spoken",
+   "text": "I got a lovely call from a lady who said I had been chosen for a free health check at home, she only needed my Medicare details and bank account to book it.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S124"
+  },
+  {
+   "label": "scam",
+   "category": "dating",
+   "channel": "spoken",
+   "text": "A man I met on a dating site two months ago wants to meet me but says his bank account is frozen while he is abroad and asked if I could cover his flight ticket. He is very sweet.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S125"
+  },
+  {
+   "label": "scam",
+   "category": "investment_app",
+   "channel": "spoken",
+   "text": "My neighbour's son recommended an app where you can double your savings in a month. He showed me his account on his phone and it did look like he had made a lot. I have been asked to put in five thousand to start.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S126"
+  },
+  {
+   "label": "scam",
+   "category": "storage_popup",
+   "channel": "spoken",
+   "text": "A message on my tablet said my photos would be deleted unless I paid for extra storage, and it gave a number to ring to sort it out.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S127"
+  },
+  {
+   "label": "scam",
+   "category": "charity_police",
+   "channel": "spoken",
+   "text": "A woman phoned from the police benevolent fund. She was ever so polite and said they just need a small donation, could I read out my card number there and then.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S128"
+  },
+  {
+   "label": "scam",
+   "category": "in_progress",
+   "channel": "spoken",
+   "text": "He said to stay on the line and not hang up while I go to the bank to take out the cash. I am walking there now with him still on the phone.",
+   "now": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S129"
+  },
+  {
+   "label": "scam",
+   "category": "in_progress",
+   "channel": "spoken",
+   "text": "The man on the phone is helping me with my computer and he has asked me to type in the address he gave me. It is some kind of support page and I am just about to press enter.",
+   "now": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S130"
+  },
+  {
+   "label": "scam",
+   "category": "in_progress",
+   "channel": "spoken",
+   "text": "She told me the prize needs a fee of two hundred and I am at the cash machine now to get it out, I am putting the card in.",
+   "now": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "S131"
+  },
+  {
+   "label": "scam",
+   "category": "in_progress",
+   "channel": "spoken",
+   "text": "He asked for the numbers off the gift cards. I have scratched them off and I have got them in my hand, I am about to read them to him.",
+   "now": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "S132"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_fraud_alert",
+   "channel": "text",
+   "text": "FRAUD ALERT: We have blocked a card payment of $640 made in another city. If this was not you, reply NO or call the number on the back of your card. If it was you, reply YES. We will never ask for your PIN, password or any code.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N133"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_inspection",
+   "channel": "text",
+   "text": "Final reminder: your car inspection expires on Friday. Book your test online or call your garage. A fine may apply if you drive after it expires.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N134"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_disconnect",
+   "channel": "text",
+   "text": "Your broadband will be disconnected on 5 November unless the overdue balance of $52.10 is paid. Pay in your online account, by phone using the number on your bill, or at any post office.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N135"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_declined",
+   "channel": "text",
+   "text": "Your pharmacy order cannot be sent because your card was declined. Please update your payment method in your account, or call us during opening hours.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N136"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_flu",
+   "channel": "text",
+   "text": "You are due your annual flu vaccination. Book online or call your surgery before 30 November. This message is free and we will never ask for payment.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N137"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_jury",
+   "channel": "text",
+   "text": "Jury service reminder: you are summoned to attend on 12 November. If you cannot attend you must contact the court office in writing before that date. Details are in the letter we posted to you.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N138"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_renewal",
+   "channel": "text",
+   "text": "Your home insurance renews on 1 December at $412. If you wish to change or cancel, contact us before 24 November. No action is needed to continue your cover.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N139"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_tax",
+   "channel": "text",
+   "text": "Your tax return is due on 31 January and penalties apply if it is late. Please use the official government website. We never send links by text.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N140"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_meter",
+   "channel": "text",
+   "text": "We will visit on Tuesday between 8 and 12 to replace your smart meter. Please be home. Our staff carry ID and you can check by calling the number on your bill. No payment is taken at the door.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N141"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_code",
+   "channel": "text",
+   "text": "Your verification code is 482913. It expires in 10 minutes. Do not share this code with anyone.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N142"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_code",
+   "channel": "spoken",
+   "text": "I just got a text with a code from the bank because I was logging in to my online banking myself, and it says not to share it with anyone.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N143"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_dentist",
+   "channel": "spoken",
+   "text": "The dentist's receptionist rang and said that if I do not confirm my appointment today they will have to give it away, and I did book it last week.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N144"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_secret",
+   "channel": "spoken",
+   "text": "My grandson phoned from his own number, he told me he failed his driving test and he is embarrassed and wants me not to tell his dad, he just wanted a chat.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N145"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_family_money",
+   "channel": "spoken",
+   "text": "My daughter texted from her usual number asking me to put some money into her account for the deposit on her flat. I rang her straight away and she confirmed it.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N146"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_solicitor",
+   "channel": "spoken",
+   "text": "The solicitor wrote to say the sale of mama's flat completes on Friday and I need to sign the form at their office. They gave the office address and I know the firm from before.",
+   "hard": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N147"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_final_notice",
+   "channel": "spoken",
+   "text": "The electricity company sent a final reminder in the post with a red stamp saying I owe forty pounds, and it matches the bill I have in my drawer.",
+   "hard": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N148"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_payment",
+   "channel": "spoken",
+   "text": "I am at the bank counter now paying in a cheque from my sister, the teller is helping me.",
+   "legitpay": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N149"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_payment",
+   "channel": "spoken",
+   "text": "I am about to pay the plumber who fixed my tap this morning. He gave me an invoice and I know him from the village.",
+   "legitpay": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N150"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_payment",
+   "channel": "spoken",
+   "text": "I am on the council website that I typed in myself and I am about to pay for my parking permit with my card.",
+   "legitpay": true,
+   "tranche": 2,
+   "split": "dev",
+   "id": "N151"
+  },
+  {
+   "label": "normal",
+   "category": "genuine_payment",
+   "channel": "spoken",
+   "text": "I am buying vouchers at the supermarket as a Christmas gift for my nephew, he asked for them last week.",
+   "legitpay": true,
+   "tranche": 2,
+   "split": "held",
+   "id": "N152"
   }
  ]
 }

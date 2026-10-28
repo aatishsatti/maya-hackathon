@@ -9,31 +9,43 @@ const SET = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'scam-testset.jso
 const items = SET.items;
 const by = (f) => items.filter(f);
 
-test('set: 56 scams and 56 normal items, every field present, ids unique, texts unique', () => {
-  assert.equal(items.length, 112); assert.equal(by((i) => i.label === 'scam').length, 56); assert.equal(by((i) => i.label === 'normal').length, 56);
-  assert.equal(new Set(items.map((i) => i.id)).size, 112); assert.equal(new Set(items.map((i) => i.text.toLowerCase())).size, 112);
+test('set: 152 items in two tranches (76 scams, 76 normal), every field present, ids unique, texts unique', () => {
+  assert.equal(items.length, 152); assert.equal(by((i) => i.label === 'scam').length, 76); assert.equal(by((i) => i.label === 'normal').length, 76);
+  assert.equal(by((i) => i.tranche === 1).length, 112); assert.equal(by((i) => i.tranche === 2).length, 40);
+  assert.equal(new Set(items.map((i) => i.id)).size, 152); assert.equal(new Set(items.map((i) => i.text.toLowerCase())).size, 152);
   for (const i of items) {
-    assert.ok(['scam', 'normal'].includes(i.label) && ['text', 'spoken'].includes(i.channel) && ['dev', 'held'].includes(i.split), i.id);
+    assert.ok(['scam', 'normal'].includes(i.label) && ['text', 'spoken'].includes(i.channel) && ['dev', 'held'].includes(i.split) && [1, 2].includes(i.tranche), i.id);
     assert.ok(i.category && i.text.length >= 25 && i.text.length <= 400, i.id);
     assert.ok(i.id.startsWith(i.label === 'scam' ? 'S' : 'N'), `${i.id} id matches label`);
   }
 });
 
-test('split: dev and held-out are the same size and both cover every kind of scam and every kind of normal message', () => {
-  for (const label of ['scam', 'normal']) for (const split of ['dev', 'held']) assert.equal(by((i) => i.label === label && i.split === split).length, 28, `${label} ${split}`);
+test('split: dev and held-out are the same size overall and inside each tranche, and the first tranche covers every kind in both halves', () => {
+  for (const label of ['scam', 'normal']) for (const split of ['dev', 'held']) {
+    assert.equal(by((i) => i.label === label && i.split === split).length, 38, `${label} ${split}`);
+    assert.equal(by((i) => i.label === label && i.split === split && i.tranche === 1).length, 28, `${label} ${split} tranche 1`);
+    assert.equal(by((i) => i.label === label && i.split === split && i.tranche === 2).length, 10, `${label} ${split} tranche 2`);
+  }
   for (const label of ['scam', 'normal']) {
-    const kinds = [...new Set(by((i) => i.label === label).map((i) => i.category))];
+    const kinds = [...new Set(by((i) => i.label === label && i.tranche === 1).map((i) => i.category))];
     assert.ok(kinds.length >= 10, `${label}: ${kinds.length} kinds`);
     for (const k of kinds) for (const split of ['dev', 'held']) assert.ok(by((i) => i.label === label && i.category === k && i.split === split).length >= 2, `${label}/${k} appears in ${split}`);
   }
 });
 
+test('tranche 2 is the harder set: every item is a hard case, both channels, with scams and genuine payments in progress', () => {
+  const t2 = by((i) => i.tranche === 2);
+  assert.ok(t2.every((i) => i.hard || i.now || i.legitpay), 'each is a hard case, a scam in progress or a genuine payment in progress');
+  assert.equal(t2.filter((i) => i.hard && i.label === 'scam').length, 16); assert.equal(t2.filter((i) => i.hard && i.label === 'normal').length, 16);
+  for (const label of ['scam', 'normal']) for (const ch of ['text', 'spoken']) assert.ok(t2.filter((i) => i.label === label && i.channel === ch).length >= 8, `${label}/${ch}`);
+});
+
 test('mix: both channels, hard cases, scams in progress and genuine payments in progress are all there', () => {
-  for (const label of ['scam', 'normal']) for (const ch of ['text', 'spoken']) assert.ok(by((i) => i.label === label && i.channel === ch).length >= 26, `${label}/${ch}`);
-  assert.ok(by((i) => i.hard && i.label === 'scam').length >= 10 && by((i) => i.hard && i.label === 'normal').length >= 10, 'hard cases on both sides');
+  for (const label of ['scam', 'normal']) for (const ch of ['text', 'spoken']) assert.ok(by((i) => i.label === label && i.channel === ch).length >= 34, `${label}/${ch}`);
+  assert.ok(by((i) => i.hard && i.label === 'scam').length >= 26 && by((i) => i.hard && i.label === 'normal').length >= 26, 'hard cases on both sides');
   const now = by((i) => i.now), legit = by((i) => i.legitpay);
-  assert.equal(now.length, 6); assert.ok(now.every((i) => i.label === 'scam' && i.channel === 'spoken'));
-  assert.equal(legit.length, 6); assert.ok(legit.every((i) => i.label === 'normal' && i.channel === 'spoken'));
+  assert.equal(now.length, 10); assert.ok(now.every((i) => i.label === 'scam' && i.channel === 'spoken'));
+  assert.equal(legit.length, 10); assert.ok(legit.every((i) => i.label === 'normal' && i.channel === 'spoken'));
   assert.ok(now.some((i) => i.split === 'dev') && now.some((i) => i.split === 'held') && legit.some((i) => i.split === 'dev') && legit.some((i) => i.split === 'held'));
 });
 

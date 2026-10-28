@@ -1,8 +1,8 @@
 # Maya scam-shield test set
 
-Maya scam-shield test set. Every example was written by the Maya team for this test; none comes from a real person or a real message. Phone numbers are fictional (555-01xx). label: scam | normal. channel: text = a message as it arrives; spoken = the person telling Maya, in their own words, what happened. hard: a scam with no scary words, or a genuine message that looks urgent. now: a scam in progress (the person is about to pay or act). legitpay: a genuine payment in progress. split: dev (used to build and tune) | held (kept for the final, untouched number).
+Maya scam-shield test set. Every example was written by the Maya team for this test; none comes from a real person or a real message. Phone numbers are fictional (555-01xx). tranche: 1 = the first, classic set; 2 = the harder set (subtle scams with no scary words, genuine messages that look urgent), written blind before any detector output was seen. label: scam | normal. channel: text = a message as it arrives; spoken = the person telling Maya, in their own words, what happened. hard: a scam with no scary words, or a genuine message that looks urgent. now: a scam in progress (the person is about to pay or act). legitpay: a genuine payment in progress. split: dev (used to build and tune) | held (kept for the final, untouched number).
 
-112 items: 56 scams, 56 normal. Dev = used to build and tune. Held-out = never used for tuning; reported once at the end.
+152 items in two tranches: 76 scams, 76 normal. Dev = used to build and tune. Held-out = never used for tuning; reported once at the end.
 
 ## SCAM
 
@@ -64,6 +64,26 @@ Maya scam-shield test set. Every example was written by the Maya team for this t
 | S054 | held | in_progress | spoken | now | The taxman says I must pay today or be arrested, so I am going to the post office to send the money by courier. |
 | S055 | dev | in_progress | spoken | now | They told me to install the program so they can fix my computer. I have just downloaded it and he wants me to click run. |
 | S056 | held | in_progress | spoken | now | My online friend needs the money for the hospital. I am about to send the two thousand through the money transfer place. |
+| S113 | dev | subtle_bank | text | hard | Hello, thanks for being a valued customer. We have a new savings rate for you. To move your current balance and get the better rate, please verify your online banking by replying with the code we have just texted. |
+| S114 | held | invoice_fraud | text | hard | Hi, please find attached the invoice for the boiler service last month. Our bank details have changed, so kindly send the payment of $320 to the new account below. |
+| S115 | dev | solicitor_fraud | text | hard | Dear Mrs Brown, your solicitor's office here. The house sale completes Friday. For security please transfer the funds to our client account, details attached. Please contact us only on this number as our main line is down. |
+| S116 | held | refund_callback | text | hard | Your antivirus subscription renewed for $349 today. If you did not authorise this, call 555-0162 to arrange a refund. |
+| S117 | dev | fake_job | text | hard | We saw your profile and have a part-time job: process payments for our clients from home, $200 per day. We will send you a cheque to cover equipment; deposit it and forward the balance to our supplier. |
+| S118 | held | friend_in_need | text | hard | Hi, it is Paul from the golf club. I am in a bit of a bind, my card got declined at the airport. Could you send $300 by transfer, I will refund you as soon as I am back Thursday? My phone is nearly dead so text only please. |
+| S119 | dev | rebate | text | hard | You are owed a $146 energy rebate under the new government scheme. Check your eligibility and claim in two minutes at energy-rebate-claim.example. No documents needed except your card for identity. |
+| S120 | held | court_notice | text | hard | Re: jury service. Our records show you did not attend. To avoid a fine please confirm your details at the court portal link. Reference JS-4471. |
+| S121 | dev | bank_security_test | spoken | hard | A very polite young man from my bank's security department said the account was fine but they were testing a new system and he needed me to confirm my card number and the three digits on the back for the test. |
+| S122 | held | council_rebate | spoken | hard | A woman from the council phoned to say I am entitled to a rebate and could she just confirm my bank account so they can pay it in. She was very nice. |
+| S123 | dev | doorstep | spoken | hard | A man at the door said he was doing roof repairs for the neighbour and noticed some loose tiles on mine. He offered to do it today cheaply for cash and asked for half up front. |
+| S124 | held | health_check | spoken | hard | I got a lovely call from a lady who said I had been chosen for a free health check at home, she only needed my Medicare details and bank account to book it. |
+| S125 | dev | dating | spoken | hard | A man I met on a dating site two months ago wants to meet me but says his bank account is frozen while he is abroad and asked if I could cover his flight ticket. He is very sweet. |
+| S126 | held | investment_app | spoken | hard | My neighbour's son recommended an app where you can double your savings in a month. He showed me his account on his phone and it did look like he had made a lot. I have been asked to put in five thousand to start. |
+| S127 | dev | storage_popup | spoken | hard | A message on my tablet said my photos would be deleted unless I paid for extra storage, and it gave a number to ring to sort it out. |
+| S128 | held | charity_police | spoken | hard | A woman phoned from the police benevolent fund. She was ever so polite and said they just need a small donation, could I read out my card number there and then. |
+| S129 | dev | in_progress | spoken | now | He said to stay on the line and not hang up while I go to the bank to take out the cash. I am walking there now with him still on the phone. |
+| S130 | held | in_progress | spoken | now | The man on the phone is helping me with my computer and he has asked me to type in the address he gave me. It is some kind of support page and I am just about to press enter. |
+| S131 | dev | in_progress | spoken | now | She told me the prize needs a fee of two hundred and I am at the cash machine now to get it out, I am putting the card in. |
+| S132 | held | in_progress | spoken | now | He asked for the numbers off the gift cards. I have scratched them off and I have got them in my hand, I am about to read them to him. |
 
 ## NORMAL
 
@@ -125,3 +145,23 @@ Maya scam-shield test set. Every example was written by the Maya team for this t
 | N110 | dev | genuine_payment | spoken | legitpay | I am sending my son some money for his rent. He asked me on the phone and I rang him back on his usual number. |
 | N111 | held | genuine_payment | spoken | legitpay | I am at the pharmacy paying for my prescription with my card. |
 | N112 | dev | genuine_payment | spoken | legitpay | I am about to transfer the deposit for the holiday cottage. I booked it with the travel agent I have used for years. |
+| N133 | dev | genuine_fraud_alert | text | hard | FRAUD ALERT: We have blocked a card payment of $640 made in another city. If this was not you, reply NO or call the number on the back of your card. If it was you, reply YES. We will never ask for your PIN, password or any code. |
+| N134 | held | genuine_inspection | text | hard | Final reminder: your car inspection expires on Friday. Book your test online or call your garage. A fine may apply if you drive after it expires. |
+| N135 | dev | genuine_disconnect | text | hard | Your broadband will be disconnected on 5 November unless the overdue balance of $52.10 is paid. Pay in your online account, by phone using the number on your bill, or at any post office. |
+| N136 | held | genuine_declined | text | hard | Your pharmacy order cannot be sent because your card was declined. Please update your payment method in your account, or call us during opening hours. |
+| N137 | dev | genuine_flu | text | hard | You are due your annual flu vaccination. Book online or call your surgery before 30 November. This message is free and we will never ask for payment. |
+| N138 | held | genuine_jury | text | hard | Jury service reminder: you are summoned to attend on 12 November. If you cannot attend you must contact the court office in writing before that date. Details are in the letter we posted to you. |
+| N139 | dev | genuine_renewal | text | hard | Your home insurance renews on 1 December at $412. If you wish to change or cancel, contact us before 24 November. No action is needed to continue your cover. |
+| N140 | held | genuine_tax | text | hard | Your tax return is due on 31 January and penalties apply if it is late. Please use the official government website. We never send links by text. |
+| N141 | dev | genuine_meter | text | hard | We will visit on Tuesday between 8 and 12 to replace your smart meter. Please be home. Our staff carry ID and you can check by calling the number on your bill. No payment is taken at the door. |
+| N142 | held | genuine_code | text | hard | Your verification code is 482913. It expires in 10 minutes. Do not share this code with anyone. |
+| N143 | dev | genuine_code | spoken | hard | I just got a text with a code from the bank because I was logging in to my online banking myself, and it says not to share it with anyone. |
+| N144 | held | genuine_dentist | spoken | hard | The dentist's receptionist rang and said that if I do not confirm my appointment today they will have to give it away, and I did book it last week. |
+| N145 | dev | genuine_secret | spoken | hard | My grandson phoned from his own number, he told me he failed his driving test and he is embarrassed and wants me not to tell his dad, he just wanted a chat. |
+| N146 | held | genuine_family_money | spoken | hard | My daughter texted from her usual number asking me to put some money into her account for the deposit on her flat. I rang her straight away and she confirmed it. |
+| N147 | dev | genuine_solicitor | spoken | hard | The solicitor wrote to say the sale of mama's flat completes on Friday and I need to sign the form at their office. They gave the office address and I know the firm from before. |
+| N148 | held | genuine_final_notice | spoken | hard | The electricity company sent a final reminder in the post with a red stamp saying I owe forty pounds, and it matches the bill I have in my drawer. |
+| N149 | dev | genuine_payment | spoken | legitpay | I am at the bank counter now paying in a cheque from my sister, the teller is helping me. |
+| N150 | held | genuine_payment | spoken | legitpay | I am about to pay the plumber who fixed my tap this morning. He gave me an invoice and I know him from the village. |
+| N151 | dev | genuine_payment | spoken | legitpay | I am on the council website that I typed in myself and I am about to pay for my parking permit with my card. |
+| N152 | held | genuine_payment | spoken | legitpay | I am buying vouchers at the supermarket as a Christmas gift for my nephew, he asked for them last week. |
