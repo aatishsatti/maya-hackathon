@@ -92,14 +92,16 @@ function termsFound(heard, terms) {
 }
 
 // ---------------------------------------------------------------- comparing with a baseline
-// rules: { 'suite.metric': { dir:'higher'|'lower', tol:number } }: worse than the baseline by more than tol is a regression. null on either side = not comparable.
-function compare(metrics, baseline, rules) {
+// rules: { 'suite.metric': { dir:'higher'|'lower', tol:number } }: worse than the baseline by more than tol is a regression. spread (optional): how far the
+// baseline runs differed from each other per metric; the tolerance is never smaller than 1.5 times that. null on either side = not comparable.
+function compare(metrics, baseline, rules, spread = null) {
   const rows = [];
   for (const [key, rule] of Object.entries(rules)) {
     const now = metrics[key], was = baseline ? baseline[key] : undefined;
     if (now === undefined || now === null || was === undefined || was === null) { rows.push({ key, now: now ?? null, was: was ?? null, status: 'n/a' }); continue; }
+    const tol = Math.max(rule.tol, 1.5 * ((spread && spread[key]) || 0));   // never tighter than the noise actually seen between baseline runs
     const worse = rule.dir === 'higher' ? was - now : now - was;
-    rows.push({ key, now, was, delta: now - was, status: worse > rule.tol ? 'REGRESSED' : worse < -rule.tol ? 'improved' : 'same' });
+    rows.push({ key, now, was, delta: now - was, tol, status: worse > tol ? 'REGRESSED' : worse < -tol ? 'improved' : 'same' });
   }
   return rows;
 }

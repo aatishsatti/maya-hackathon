@@ -54,6 +54,15 @@ test('compare: worse than the baseline by more than the tolerance is REGRESSED; 
   assert.deepEqual(S.compare({ 'a.up': 1 }, null, r).map((x) => x.status), ['n/a', 'n/a', 'n/a'], 'no baseline: nothing to compare, never a pass or a fail');
 });
 
+test('compare: the tolerance is never tighter than 1.5 times the spread seen between the baseline runs (noise is not a regression)', () => {
+  const rules = { 'a.up': { dir: 'higher', tol: 0.05 } };
+  const noisy = S.compare({ 'a.up': 0.6 }, { 'a.up': 0.8 }, rules, { 'a.up': 0.2 })[0];
+  assert.ok(Math.abs(noisy.tol - 0.3) < 1e-9, 'tolerance = 1.5 x spread'); assert.equal(noisy.status, 'same', 'a drop of 0.2 is inside 1.5 x the 0.2 spread');
+  assert.equal(S.compare({ 'a.up': 0.45 }, { 'a.up': 0.8 }, rules, { 'a.up': 0.2 })[0].status, 'REGRESSED', 'a drop of 0.35 is beyond it');
+  assert.equal(S.compare({ 'a.up': 0.7 }, { 'a.up': 0.8 }, rules, { 'a.up': 0 })[0].status, 'REGRESSED', 'no spread: the rule tolerance alone');
+  assert.equal(S.compare({ 'a.up': 0.7 }, { 'a.up': 0.8 }, rules)[0].status, 'REGRESSED', 'spread is optional');
+});
+
 test('flatten and runChecks: a check whose metric is missing is skipped, never a pass', () => {
   assert.deepEqual(S.flatten({ s: { a: 1, b: null, c: 'text', d: { x: 1 } }, t: { a: 2 } }), { 's.a': 1, 's.b': null, 't.a': 2 });
   const res = S.runChecks({ 'x.ok': 1, 'x.bad': 0 }, [{ id: '1', text: 't', test: (m) => m['x.ok'] === 1 }, { id: '2', text: 't', test: (m) => m['x.bad'] === 1 }, { id: '3', text: 't', test: (m) => (m['x.none'] === undefined ? null : true) }, { id: '4', text: 't', test: () => { throw new Error('x'); } }]);
@@ -74,7 +83,7 @@ test('guard rails: every check passes on the numbers this project observed, ids 
     'scam.warned': 0.7, 'scam.falseWarn': 0.05, 'scam.pauseInProgress': 0.2, 'scam.filterRecallDev': 0.9 };
   const failed = S.runChecks(worse, rules.CHECKS).filter((r) => r.status === 'FAIL').map((r) => r.id);
   assert.deepEqual(failed.sort(), rules.CHECKS.map((c) => c.id).sort(), 'every guard rail catches its own regression');
-  const oneMiss = { ...OBSERVED, 'memory.honest': 0.875, 'memory.closedAfterBrushoff': 0.75 };
+  const oneMiss = { ...OBSERVED, 'memory.honest': 0.875, 'memory.closedAfterBrushoff': 0.5, 'memory.askedEarly': 0.5, 'scam.pauseInProgress': 0.7 };
   assert.deepEqual(S.runChecks(oneMiss, rules.CHECKS).filter((r) => r.status !== 'pass'), [], 'one unlucky reply out of eight is noise, not a failure');
   assert.ok(S.runChecks({}, rules.CHECKS).every((r) => r.status === 'skipped'), 'with no numbers nothing passes by default');
   const noneAsked = S.runChecks({ ...OBSERVED, 'memory.closedAfterAnswer': null, 'memory.closedAfterBrushoff': null, 'memory.notRepeatedAfterClose': null }, rules.CHECKS).find((r) => r.id === 'mem.closing');

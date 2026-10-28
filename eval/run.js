@@ -112,14 +112,14 @@ async function main() {
   const usage = mergeUsage(ok.map((r) => r.usage));
   const metrics = score.flatten({ ...Object.fromEntries(ok.map((r) => [r.suite, r.metrics])), meta: usageMetrics(usage) });
   const checks = score.runChecks(metrics, rules.CHECKS);
-  let baseline = null;
-  try { baseline = JSON.parse(fs.readFileSync(BASELINE, 'utf8')).metrics; } catch { /* none yet */ }
-  const cmp = a.compare && baseline ? score.compare(metrics, baseline, rules.RULES) : [];
+  let baseline = null, spread = null;
+  try { const b = JSON.parse(fs.readFileSync(BASELINE, 'utf8')); baseline = b.metrics; spread = b.spread || null; } catch { /* none yet */ }
+  const cmp = a.compare && baseline ? score.compare(metrics, baseline, rules.RULES, spread) : [];
   const scamM = (ok.find((r) => r.suite === 'scam') || {}).metrics;
   console.log(tables({ metrics, checks, cmp, usage, reasoning: reasoningRows(scamM) }));
   fs.mkdirSync(path.dirname(a.out), { recursive: true });
   fs.writeFileSync(a.out, JSON.stringify({ when: new Date().toISOString(), runs: a.runs, seconds: Math.round((Date.now() - t0) / 1000), metrics, checks, compare: cmp, usage, suites: ok }, null, 1));
-  if (a.updateBaseline) { fs.mkdirSync(path.dirname(BASELINE), { recursive: true }); fs.writeFileSync(BASELINE, JSON.stringify({ about: 'Provisional baseline of the Maya evaluation (rates 0..1). Written by `node eval/run.js --update-baseline`.', when: new Date().toISOString(), runs: a.runs, metrics }, null, 1)); console.log(`baseline written: ${path.relative(ROOT, BASELINE)}`); }
+  if (a.updateBaseline) { fs.mkdirSync(path.dirname(BASELINE), { recursive: true }); fs.writeFileSync(BASELINE, JSON.stringify({ about: 'Single-run baseline of the Maya evaluation (rates 0..1), written by `node eval/run.js --update-baseline`. Prefer `node eval/baseline.js <several runs> --write`, which also records the run-to-run spread.', when: new Date().toISOString(), runs: a.runs, metrics, spread: {} }, null, 1)); console.log(`baseline written: ${path.relative(ROOT, BASELINE)}`); }
   console.log(`\nresults: ${path.relative(ROOT, a.out)} (${Math.round((Date.now() - t0) / 1000)} s)`);
   const bad = checks.some((c) => c.status === 'FAIL') || cmp.some((r) => r.status === 'REGRESSED') || failedSuites.length > 0;
   process.exit(bad ? 1 : 0);

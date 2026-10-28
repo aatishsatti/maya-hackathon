@@ -49,8 +49,9 @@ test('conversation suite: real Call path, tags captured, every metric present an
 
 test('memory suite: every scenario runs through the real memory and care code and reports its rates', async () => {
   const r = await require('../eval/suites/memory').run({ runs: 1, limit: 1 });
-  for (const k of ['askedEarly', 'askedOnce', 'heavyQuiet', 'safetyQuiet', 'askedFirstInNextCall', 'recallAccuracy', 'honest', 'closedAfterAnswer', 'closedAfterBrushoff', 'notRepeatedAfterClose']) assert.ok(k in r.metrics, k);
-  assert.ok(numeric(r.metrics)); assert.equal(r.metrics.heavyQuiet, 1); assert.equal(r.metrics.safetyQuiet, 1, 'the safety words really did raise the safety path');
+  for (const k of ['askedEarly', 'askedOnce', 'heavyQuiet', 'safetyQuiet', 'heavyMention', 'safetyMention', 'askedFirstInNextCall', 'recallAccuracy', 'honest', 'closedAfterAnswer', 'closedAfterBrushoff', 'notRepeatedAfterClose']) assert.ok(k in r.metrics, k);
+  assert.ok(numeric(r.metrics)); assert.equal(r.metrics.heavyQuiet, 1, 'the code never offered a follow-up in a heavy moment'); assert.equal(r.metrics.safetyQuiet, 1, 'the safety words really did raise the safety path, and nothing was offered');
+  assert.equal(r.metrics.heavyMention, 0); assert.ok(r.details.B.every((b) => typeof b.said === 'string' && b.said.length > 0) && r.details.SA.every((b) => b.said), 'the replies are kept so any mention can be read');
   assert.equal(r.metrics.askedEarly, 0, 'the stand-in never mentions the follow-up, so nothing is counted as asked'); assert.equal(r.metrics.recallAccuracy, 0);
   assert.equal(r.metrics.askedFirstInNextCall, 0); assert.equal(r.metrics.closedAfterAnswer, null, 'no scenario where she asked: nothing to judge, so no number (never a made-up pass)'); assert.equal(r.metrics.closedAfterBrushoff, null);
 });
