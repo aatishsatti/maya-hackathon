@@ -726,3 +726,12 @@ test('B4 notes to Spark: beat principles only, tied to the count, nothing to cop
   for (const t of [B.note(1), B.note(2)]) assert.doesNotMatch(t, /"[^"]+"/, 'no quoted example line');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'brain.js'), 'utf8'), /topic=T/, 'Spark is asked for the topic field in her private tag');
 });
+
+test('B6 the master prompt states the final conversation rules as principles only: no quoted example line, within the lean limit', stubbed, () => {
+  const md = fs.readFileSync(path.join(__dirname, '..', 'docs', 'maya-prompt.md'), 'utf8');
+  const start = md.indexOf('## How a conversation moves'); assert.ok(start > 0, 'section exists');
+  const section = md.slice(start, md.indexOf('## When someone is in danger'));
+  for (const must of [/never the same kind in two replies running or twice in five/, /Second: tie in a specific detail/, /Third: close gently/, /no question/, /share a memory of, or news about, a person/, /Never announce that you are thinking/, /you choose every word/]) assert.match(section, must);
+  assert.doesNotMatch(section, /["“”]/, 'no quoted sentence for her to copy');
+  assert.ok(md.length < 7500, `lean: ${md.length} chars`);
+});
