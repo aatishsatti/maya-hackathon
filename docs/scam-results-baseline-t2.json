@@ -1,0 +1,485 @@
+{
+ "about": "Baseline on the harder tranche 2 (40 items): the ORIGINAL five-signal scam prompt (scam.ASK, unchanged) read on the text of each example, real Meta Spark, text only, run once on 2026-10-28.",
+ "results": [
+  {
+   "id": "S113",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S114",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S115",
+   "level": "warn",
+   "count": 5,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": true,
+    "payment": true
+   }
+  },
+  {
+   "id": "S116",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S117",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S118",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S119",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S120",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S121",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S122",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S123",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S124",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S125",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S126",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S127",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S128",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S129",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": false,
+    "secrecy": true,
+    "payment": true
+   }
+  },
+  {
+   "id": "S130",
+   "level": "caution",
+   "count": 1,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "S131",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S132",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "N133",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N134",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N135",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N136",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N137",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N138",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N139",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N140",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N141",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N142",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N143",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N144",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N145",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N146",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N147",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N148",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N149",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N150",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N151",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N152",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  }
+ ]
+}

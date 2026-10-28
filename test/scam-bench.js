@@ -1,7 +1,7 @@
 // Scam-shield bench (NOT part of `node --test`; the pure statistics are tested in test/scambench.test.js).
 // Runs a detector over docs/scam-testset.json with REAL Meta Spark (text only: no voice, no ElevenLabs) and reports hit / false-alarm rates
 // with 95% confidence intervals. Usage:
-//   node test/scam-bench.js run <results.json> [dev|held|all]     run the detector (needs META_API_KEY in .env)
+//   node test/scam-bench.js run <results.json> [dev|held|t1|t2|all]     run the detector (needs META_API_KEY in .env)
 //   node test/scam-bench.js report <results.json>                 print the rates; held-out items are only ever shown as totals
 const fs = require('node:fs');
 const path = require('node:path');
@@ -30,7 +30,7 @@ function summarise(items, byId, filter = () => true) {
 }
 
 async function runWith(detect, outFile, which = 'all') {
-  const items = SET().filter((i) => which === 'all' || i.split === which);
+  const items = SET().filter((i) => which === 'all' || i.split === which || (which === 't1' && i.tranche === 1) || (which === 't2' && i.tranche === 2));
   const out = []; let next = 0;
   await Promise.all(Array.from({ length: 4 }, async () => { for (;;) { const i = next++; if (i >= items.length) return; const r = await detect(items[i]); out[i] = { id: items[i].id, ...r }; } }));
   fs.writeFileSync(outFile, JSON.stringify(out, null, 1));
@@ -74,5 +74,5 @@ if (require.main === module) {
     try { process.loadEnvFile(path.join(ROOT, '.env')); } catch { /* no .env */ }
     runWith(baselineDetect, file, which || 'all').then((o) => console.log('done', o.length, 'items,', o.filter((x) => x.error).length, 'errors'));
   } else if (cmd === 'report') report(file);
-  else console.log('usage: node test/scam-bench.js run <results.json> [dev|held|all] | report <results.json>');
+  else console.log('usage: node test/scam-bench.js run <results.json> [dev|held|t1|t2|all] | report <results.json>');
 }
