@@ -802,3 +802,16 @@ test('F5 greetings, call-backs and silence lines have no focus: the full memory,
   assert.match(c.roster(''), /likes ginger tea/); assert.doesNotMatch(c.roster(''), /Open follow-up/); assert.equal(ASKED(id), 0);
   const { ChatSession } = require('../chat'); assert.equal(typeof ChatSession.prototype.setFocus, 'function', 'text chat shares the same rule');
 });
+
+test('S1 safety words: every way of saying they do not want to live or be here alerts, in one place; fear of dying and ordinary refusals still do not', stubbed, () => {
+  const { selfHarmText } = require('../emotion');
+  const yes = ['I do not want to live anymore', "I don't want to live", 'I dont want to live', 'I don\u2019t want to be here', 'I no longer want to be here', 'I do not want to be alive', 'I do not want to be here any more', 'I just do not want to wake up', 'I wish I wasn\'t here', 'I wish I was not alive', 'I do not wish to live', 'I not want to exist', 'I want to die', 'I might kill myself'];
+  const no = ["I'm afraid of dying", 'I think I will die soon', "I'm tired of being old", 'I do not want to go out today', 'I do not want any soup', 'I want to live in the countryside', 'I wish I was there', 'I do not want to wake the neighbours', 'I want to be alive for my granddaughter\'s wedding', 'I wish I were younger'];
+  for (const t of yes) assert.equal(selfHarmText(t), true, t);
+  for (const t of no) assert.equal(selfHarmText(t), false, t);
+  // and the whole path: the words really raise the one safety alert
+  for (const t of ['I do not want to live anymore', 'I no longer want to be here']) {
+    const id = newSenior(); const fam = family(); const c = startCall(id);
+    c.careNotes(t); assert.equal(active(id).length, 1, `${t}: one safety ticket`); assert.equal(c.safety, true, t);
+  }
+});
