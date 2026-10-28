@@ -1,5 +1,7 @@
 # Scam shield: final held-out results (both settings)
 
+> **STALE as of 2026-10-29 (commit after 93740be):** the cheap word filter in front of the live check was widened (scam.js: an outside party asking for something to be handed over or done, and doing it as they speak). Every number below was measured with the OLD filter (36 of 38 held-out scams reached a check; the pipeline rows below are behind that filter). The two scams it missed (S010, S130) are now regression cases, not fresh evidence. One held-out re-run after code freeze will replace these pipeline numbers; until then do not quote them as current.
+
 **Change, stated openly:** On 2026-10-28 the live setting of the scam check on typed and spoken talk was changed from reasoning "low" to "minimal". The decision was made on the DEV half only (76 items, 4 runs per setting: both settings warned 99-100% of scams with 0% false warnings and paused 95% of scams in progress; "minimal" was about 1.7 to 2 times faster and used 57% fewer output tokens). The held-out half was then run once more for the new setting. Both held-out results are shown below; neither was hidden or used for tuning.
 
 Meta Spark, text only, each run once on the held-out half of docs/scam-testset.json (never used for tuning). Intervals are 95% Wilson intervals; with this few items they are wide.

@@ -1563,6 +1563,7 @@ class Call {
     this.playUntil = leadIn ? leadIn.endsAt : 0;   // a lead-in line may still be playing
     const jobs = [];
     const said = [];
+    const allJobs = [];   // every piece handed to the voice, in order, with whether any of its audio was really sent
     let started = false;
     let sentAny = false;
     let producerDone = false;
@@ -1613,8 +1614,8 @@ class Call {
           const why = this.repeatsOpening(text) ? 'repeat' : this.beatBlocks(text, delivery) ? 'beat' : null;
           if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
         } // nothing spoken yet: write it again
-        const job = { chunks: [], done: false, err: null, tone: Boolean(kind), kind };
-        jobs.push(job);
+        const job = { chunks: [], done: false, err: null, tone: Boolean(kind), kind, text, sent: Boolean(this.noVoice && !this.fakeAudio) };   // sent: some of this piece's audio went to the browser (a no-voice test call has no audio, so its words count as sent)
+        jobs.push(job); allJobs.push(job);
         if (!tEnqueue) { tEnqueue = Date.now(); if (timing) timing.firstPieceMs = tEnqueue - tStart; } // Spark started -> the first sentence is handed to the voice
         if (kind === 'excited') excited = true;
         pieces += 1;
@@ -1646,9 +1647,11 @@ class Call {
       } catch (e) { producerErr = e; } finally { producerDone = true; if (timing && timing.sparkDoneMs === undefined) timing.sparkDoneMs = Date.now() - tStart; }
     })();
 
-    const keep = () => { if (record && said.length) { this.history.push({ role: 'assistant', content: said.join(' ') }); memory.appendTurn(this.profile.id, this.callId, { who: 'Maya', text: said.join(' ') }); this.mirror('maya', said.join(' ')); } };
+    // Interrupted: only the pieces whose audio was really sent count as said. Pieces still queued when she was cut off were generated, not heard,
+    // and must not enter her history, her memory of the call or the written thread as if she had said them.
+    const keep = (interrupted = false) => { const text = (interrupted ? allJobs.filter((j) => j.sent).map((j) => j.text) : said).join(' '); if (record && text) { this.history.push({ role: 'assistant', content: text }); memory.appendTurn(this.profile.id, this.callId, { who: 'Maya', text }); this.mirror('maya', text); } };
     for (;;) {
-      if (myGen !== this.gen || this.closed) { keep(); return; } // interrupted
+      if (myGen !== this.gen || this.closed) { keep(true); return; } // interrupted
       const head = jobs[0];
       if (!head) { if (producerDone) break; await sleep(4); continue; }
       // Piece joins: drop each piece's leading silence, hold back its tail until we know where it ends,
@@ -1673,7 +1676,7 @@ class Call {
             if (timing.decidedAt) { timing.replyReadyMs = now - timing.decidedAt; if (timing.guess !== 'prethink') this.readyEma = Math.round(0.6 * this.readyEma + 0.4 * timing.replyReadyMs); }   // learn how long her real reply takes on this line
             if (leadIn) timing.leadGapMs = now - leadIn.endsAt;   // below 0: her reply was already queued behind the lead-in (no gap); above 0: silence before it
           }
-          sentAny = true;
+          sentAny = true; head.sent = true;
           this.lastSaidAt = Date.now();
           this.playUntil = Math.max(this.playUntil, this.lastSaidAt) + out.length / 48;
           this.ws.send(out);
@@ -1698,7 +1701,7 @@ class Call {
       await sleep(4);
     }
     await producer;
-    if (myGen !== this.gen || this.closed) { keep(); return; }
+    if (myGen !== this.gen || this.closed) { keep(true); return; }
     if (splitter.halted && repeated) {
       // The reply opened like a recent one (or said who she is again) before a word was spoken: ask for it again, once.
       this.abort.abort();
