@@ -9,6 +9,7 @@ const { requireRealEnv } = require('./brain');
 const memory = require('./memory');
 const care = require('./care');
 const chat = require('./chat');
+const origin = require('./origin');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env: use defaults */ }
 
@@ -65,7 +66,7 @@ function readBody(req, limit) {
 
 // ---- Care (Feature 3): senior presence stream, call-back / reminder rings, family dashboard data ----
 // Same-origin only for anything that changes state or opens a stream (no cross-site page may drive these).
-const sameOrigin = (req) => !req.headers.origin || req.headers.origin === `http://${req.headers.host}`;
+const sameOrigin = (req) => origin.sameOrigin(req.headers); // this host over http (local) or https (hosted), nothing else: see origin.js
 function openStream(req, res, attach) {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
   res.write(': open\n\n');
@@ -207,7 +208,7 @@ care.start(); // reminder scheduler (also runs in mock mode; rings need the page
 server.on('upgrade', (req, socket) => {
   const url = new URL(req.url, 'http://localhost');
   // Same-origin only, so other web pages cannot open a call on this machine.
-  const okOrigin = req.headers.origin === `http://${req.headers.host}`;
+  const okOrigin = origin.wsOriginOk(req.headers);
   if (MODE !== 'real' || url.pathname !== '/ws' || !okOrigin) { socket.destroy(); return; }
   const ws = accept(req, socket);
   if (ws) new Call(ws, process.env.META_API_KEY);

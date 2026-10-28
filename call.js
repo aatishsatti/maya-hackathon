@@ -1152,6 +1152,16 @@ class Call {
     this.userTurns += 1;
     const notes = [];
     if (selfHarmText(heard)) this.enterSafety();
+    // Scam shield: Maya asked whether to let their family know about a message that looked like a scam (scam.js, care.js). Their answer
+    // decides it: yes -> an alert (the kind of scam only), no -> a dashboard Flag only and she never asks again. A safety or health
+    // matter comes first: the question is dropped. Works the same in a call and in the chat (the pending question lives in care.js).
+    let scamHandled = false;
+    if (care.scamPending(id)) {
+      if (this.safety || this.health) care.scamClear(id);
+      else if (CONCERN_NO.test(heard)) { care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; notes.push('FACT: they said no to letting their family know about the message they showed you. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.'); }
+      else if (CONCERN_YES.test(heard) || FAMILY_ASK.test(heard)) { care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; notes.push('FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). Confirm that in one short sentence in fresh words, saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.'); }
+      else { care.scamUnclear(id); notes.push('FACT: you asked whether they would like their family to know about the message and they have not answered that yet. Answer what they just said; do not push, and do not ask the same question again word for word.'); }
+    }
     if (this.health) notes.push(this.healthNote());
     if (this.safety) notes.push(this.safetyNote());
     else if (this.pendingConcern && !this.health) {
@@ -1159,7 +1169,7 @@ class Call {
       if (CONCERN_NO.test(heard)) { this.pendingConcern = null; notes.push('FACT: they said it is fine or normal. No alert was made and none will be. Take them at their word, carry on warmly, and do not ask about it again.'); }
       else if (CONCERN_YES.test(heard) || FAMILY_ASK.test(heard)) { this.pendingConcern = null; this.familyAsked = true; care.concernAlert(id); notes.push('FACT: they said yes, so the app has now sent their family an alert (topic only) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.'); }
       else { this.pendingConcern.left -= 1; if (this.pendingConcern.left <= 0) this.pendingConcern = null; notes.push('FACT: you asked whether to let their family know and they have not answered that yet. Respond to what they said; if it is still unclear, you may ask once more, gently. Do not alert on a guess.'); }
-    } else if (FAMILY_ASK.test(heard) && !this.familyAsked) {
+    } else if (FAMILY_ASK.test(heard) && !this.familyAsked && !scamHandled) {
       this.familyAsked = true;
       care.familyAsk(id);
       notes.push('FACT: they asked you to let their family know, and the app has sent their family a gentle note (not an alert) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.');

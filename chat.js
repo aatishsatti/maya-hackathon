@@ -35,6 +35,7 @@ const MEDIA_FILE = /^[a-f0-9]{16}\.(wav|jpg|png|gif|webp)$/;
 const deps = {
   transcribe: (wav) => require('./transcribe').transcribeWav(process.env.META_API_KEY, wav),
   describe: (buf, mime) => require('./brain').describeImage(buf, mime),
+  scam: (buf, mime) => (process.env.META_API_KEY ? require('./scam').assess(buf, mime) : null), // Spark vision: is this a scam? (null = no key, no check)
   speak: (text, previous) => new Promise((resolve, reject) => { // one ElevenLabs piece -> Buffer of PCM16 24 kHz
     const parts = [];
     require('./brain').streamSpeech(text, new AbortController().signal, (c) => parts.push(c), previous).then(() => resolve(Buffer.concat(parts)), reject);
@@ -132,11 +133,11 @@ class ChatSession {
   }
 
   // heard = the person's own words (what the care rules read); message = what the brain is shown (a photo adds its description).
-  turn({ heard, message = heard, how = 'text' }) {
-    return this.serial(() => this.runTurn(heard, message, how));
+  turn({ heard, message = heard, how = 'text', note = '', scam = null }) {
+    return this.serial(() => this.runTurn(heard, message, how, note, scam));
   }
 
-  async runTurn(heard, message, how) {
+  async runTurn(heard, message, how, note = '', scam = null) {
     await this.start();
     clearTimeout(this.idleTimer);
     const id = this.profile.id;
@@ -147,13 +148,14 @@ class ChatSession {
     this.history = this.history.slice(-MAX_HISTORY);
     memory.appendTurn(id, this.callId, { label: 'A', text: message, userSaid: true });
     const channelNote = `CHANNEL: this is a written chat message in their app, not a call. ${how === 'voice' ? 'They sent you a voice note and the words above are what they said in it; you will answer by voice note, so write the way you would speak.' : how === 'image' ? 'They sent you a photo; the bracketed words describe it. Answer what matters to them, never claim to see more than the description says.' : 'They cannot hear you; write plainly, warm and short as in a call.'}`;
+    this.scamReply = scam;   // 'warn' | 'caution' | null: the shape of THIS reply (see reply())
     try {
-      const said = await this.reply(`${this.replyNote()} ${channelNote} ${extra}`.trim());
+      const said = await this.reply(`${this.replyNote()} ${channelNote} ${extra} ${note}`.trim());
       return said;
     } catch (e) {
       if (this.history.length && this.history[this.history.length - 1].role === 'user') this.history.pop(); // a failed turn cannot poison the next one
       throw e instanceof ChatError ? e : new ChatError(e.message);
-    } finally { this.armIdle(); }
+    } finally { this.scamReply = null; this.armIdle(); }
   }
 
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.
@@ -179,7 +181,10 @@ class ChatSession {
         if (raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
         d.noQuestion = this.lastReplyAsked && concern !== 'unsure';
         if (concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
-        else if (concern === 'unsure' && !this.health && !this.safety) this.pendingConcern = { left: 2 };
+        else if (concern === 'unsure' && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
+        // A scam reading is a few short sentences, not the usual two: what it says, "this looks like a scam, please don't pay", and (for a
+        // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
+        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = this.scamReply !== 'warn'; d.maxSentences = Math.max(d.maxSentences, this.scamReply === 'warn' ? 4 : 3); }
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear' };
         return d;
@@ -299,19 +304,43 @@ async function sendVoiceNote(profileId, wav, tz) {
   }
 }
 
+// What Maya is told about a photo that looks like a scam. Two or more signals warn; one is caution; none says nothing at all.
+function scamNote(scam) {
+  if (!scam || scam.level === 'none') return '';
+  const signs = require('./scam').said(scam.signals).join('; ');
+  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words: first say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then say clearly that this looks like a scam and ask them please not to pay, send money, share codes or details, or reply. Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.) Use the exact words "this looks like a scam" and "please don't pay". Say "looks like", never that it is certain. No diagnosis, no legal advice, no guarantee, no phone numbers to call, no names or blame. Keep it short, warm and plain.`;
+  return `SCAM CHECK (a fact from the app, not from them): what they showed you has one warning sign (${signs}). Say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. No phone numbers, no names or blame. Keep it short, warm and plain.`;
+}
+
 async function sendImage(profileId, buf, caption, tz) {
   const mime = imageMime(buf);
   if (!mime) throw new ChatError('That file is not a photo Maya can read (JPEG, PNG, GIF or WebP).', 415);
   const s = session(profileId, tz);
   care.touch(profileId, 'app');
-  let seen;
-  try { seen = await deps.describe(buf, mime); } catch (e) { throw new ChatError(e.message); }
+  let seen, scam = null;
+  try {
+    // Two Spark vision calls side by side: what the photo shows, and whether it is a scam (scam.js). A failed scam check never blocks
+    // the photo and never invents a verdict: the photo is then answered as any other photo.
+    const check = Promise.resolve().then(() => deps.scam(buf, mime)).catch((e) => { console.error('scam check failed:', e.message); return null; });
+    [seen, scam] = await Promise.all([deps.describe(buf, mime), check]);
+  } catch (e) { throw new ChatError(e.message); }
   const said = String(caption || '').trim().slice(0, 1000);
   const mine = saveMedia(profileId, IMAGE_TYPES[mime], buf);
   const you = s.push({ role: 'senior', kind: 'image', text: said, mediaUrl: mediaUrl(profileId, mine) });
   const message = `[They sent a photo. The photo shows: ${seen}]${said ? ` ${said}` : ''}`;
-  const r = await s.turn({ heard: said, message, how: 'image' });
-  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })] };
+  const note = scamNote(scam);
+  const r = await s.turn({ heard: said, message, how: 'image', note, scam: scam && scam.level !== 'none' ? scam.level : null });
+  // Her one question is out: from now on the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
+  if (scam && scam.level === 'warn') care.scamAsk(profileId, scam.type);
+  const level = scam ? scam.level : 'none';
+  // A warning is read aloud (a voice note) unless a call is live: then it is written, so two Mayas never talk at once.
+  if (level !== 'none' && !callLive(profileId)) {
+    try {
+      const name = saveMedia(profileId, 'wav', await voiceFor(r.pieces));
+      return { messages: [you, s.push({ role: 'maya', kind: 'voice', text: r.text, mediaUrl: mediaUrl(profileId, name) })], scam: level };
+    } catch (e) { return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text, voiceError: `Maya's voice failed: ${e.message}` })], scam: level, voice: 'failed' }; }
+  }
+  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], scam: level };
 }
 
 // A deleted profile takes its chat, photos and voice notes with it.

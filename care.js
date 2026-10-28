@@ -49,7 +49,7 @@ const MODES = {
 const cache = new Map();
 const file = (id) => path.join(DIR, `${id}.json`);
 const uid = () => crypto.randomBytes(4).toString('hex');
-const blank = (id) => ({ id, mode: 'standard', callCount: 0, tz: null, lastActivity: { maya: null, app: null, whatsapp: null }, reminders: [], flags: [], notifications: [], lines: {}, safetyHistory: [] });
+const blank = (id) => ({ id, mode: 'standard', callCount: 0, tz: null, lastActivity: { maya: null, app: null, whatsapp: null }, reminders: [], flags: [], notifications: [], lines: {}, safetyHistory: [], scams: [] });
 const dirty = new Set();
 let flushTimer = null;
 
@@ -232,6 +232,7 @@ function markNotif(id, nid, status) {
   advance(p, n, status);
   if (status === 'seen' && n.to === 'family') {
     for (const f of p.flags) if (f.safety && f.status === 'active' && f.notifId === n.id) resolveSafety(p, f, 'family');
+    for (const sc of p.scams || []) if (sc.status === 'active' && sc.notifId === n.id) { sc.status = 'resolved'; sc.resolvedAt = Date.now(); sc.resolvedBy = 'family'; } // a scam warning clears when the family sees it, like any alert
   }
   pushFamily('refresh', { id });
   return true;
@@ -489,6 +490,80 @@ function concernAlert(id) {
   return true;
 }
 
+// ---------------------------------------------------------------- scam shield (scam.js judges the message; this keeps the tickets)
+// A scam ticket is its own small list (p.scams), NOT a flag: a scam is not an emergency and not a "couldn't reach" case, so it never
+// rings the senior back, never feeds the silence rules, and is never closed by the senior talking ("back and okay"). It reuses the same
+// notification, Seen and expiry machinery: an alert goes to the family (topic only: the KIND of scam, never the letter text, a transcript
+// or the photo); "Seen" closes it; unseen it closes after the light 2 days (cfg.expireLightMs: not an emergency, and a stale warning is
+// worth little). If the person says no, only a dashboard Flag is kept: no notification, no push, and Maya never asks again.
+const SCAM_ASK_MS = 20 * MIN;
+const SCAM_KEEP = 30;
+function scamAsk(id, type) {
+  const p = get(id);
+  if (!p) return null;
+  p.pendingScam = { type, left: 2, at: Date.now() }; save(id);
+  return p.pendingScam;
+}
+function scamPending(id) {
+  const p = get(id);
+  if (!p || !p.pendingScam) return null;
+  if (Date.now() - p.pendingScam.at > SCAM_ASK_MS) { p.pendingScam = null; save(id); return null; }
+  return p.pendingScam;
+}
+function scamClear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam = null; save(id); } }
+// An answer that is neither yes nor no: she may lean in once more, then it is dropped (no nagging).
+function scamUnclear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam.left -= 1; if (p.pendingScam.left <= 0) p.pendingScam = null; save(id); } }
+function scamTicket(p, type, level) {
+  const now = Date.now();
+  const sc = { id: uid(), level, type, createdAt: now, status: 'active', notified: 'none', notifId: null, resolvedAt: null };
+  p.scams.unshift(sc); p.scams.length = Math.min(p.scams.length, SCAM_KEEP);
+  return sc;
+}
+function scamAlert(id, type) {
+  const p = get(id);
+  if (!p) return { isNew: false };
+  let sc = p.scams.find((x) => x.status === 'active' && x.level === 'alert');
+  if (sc) { sc.repeats = (sc.repeats || 0) + 1; save(id); return { isNew: false, ticket: sc }; } // same incident: no second alert
+  sc = p.scams.find((x) => x.status === 'active' && x.level === 'flag') || scamTicket(p, type, 'flag'); // they said no, then changed their mind: the flag becomes the alert
+  sc.level = 'alert'; sc.type = type; sc.notified = 'alert';
+  const name = nameOf(id);
+  const text = `${name} showed Maya a message that looks like a possible ${type}. Maya told ${name} not to pay or share any details, and ${name} asked Maya to let you know. Please check in with ${name}.`;
+  const n = makeNotif(p, { to: 'family', kind: 'alert', text, ref: sc.id, incident: sc.id });
+  sc.notifId = n.id;
+  if (pushFamily('notify', { id, notifId: n.id, kind: 'alert', text })) advance(p, n, 'delivered');
+  console.log('care scam alert', JSON.stringify({ profile: id, type }));
+  save(id); pushFamily('refresh', { id });
+  return { isNew: true, ticket: sc };
+}
+function scamFlag(id, type) {
+  const p = get(id);
+  if (!p) return { isNew: false };
+  const sc = p.scams.find((x) => x.status === 'active');
+  if (sc) return { isNew: false, ticket: sc };
+  const t = scamTicket(p, type, 'flag');
+  console.log('care scam flag', JSON.stringify({ profile: id, type }));
+  save(id); // dashboard only: no notification and no push
+  return { isNew: true, ticket: t };
+}
+// The person answered Maya's one question: yes -> alert, no -> flag only. The pending question is always cleared.
+function scamAnswer(id, yes) {
+  const pend = scamPending(id);
+  if (!pend) return null;
+  scamClear(id);
+  return yes ? scamAlert(id, pend.type) : scamFlag(id, pend.type);
+}
+function closeScamUnseen(p, sc, now = Date.now()) {
+  sc.status = 'expired'; sc.expiredAt = now; sc.resolvedBy = null;
+  sc.expiredDays = Math.max(1, Math.round((now - sc.createdAt) / (24 * 60 * MIN * SCALE)));
+  if (sc.notified === 'alert') {
+    const text = `The scam warning about ${nameOf(p.id)} from ${fmtTime(sc.createdAt, p.tz)} was never marked seen. It has closed after ${sc.expiredDays} ${sc.expiredDays === 1 ? 'day' : 'days'}, closed unseen. Maya could not confirm anything came of it.`;
+    const n = makeNotif(p, { to: 'family', kind: 'expired', text, ref: sc.id, incident: sc.id });
+    if (pushFamily('notify', { id: p.id, notifId: n.id, kind: 'expired', text })) advance(p, n, 'delivered');
+  }
+  console.log('care expired', JSON.stringify({ profile: p.id, scam: true, days: sc.expiredDays }));
+  save(p.id); pushFamily('refresh', { id: p.id });
+}
+
 // WhatsApp status of a family alert (Feature 6 will report real receipts through here; until then it is a mock entry point).
 // Delivered alone is NOT Seen (read receipts can be switched off). Read, or any reply from the family ("ok", "I'll call"), is.
 function whatsappStatus(id, nid, status) {
@@ -688,6 +763,7 @@ let ticker = null;
 function tick(now = Date.now()) {
   for (const p of cache.values()) {
     for (const f of p.flags) if (f.status === 'active' && now - f.createdAt >= (f.safety ? cfg.expireCriticalMs : cfg.expireLightMs)) closeUnseen(p, f, now);
+    for (const sc of p.scams || []) if (sc.status === 'active' && now - sc.createdAt >= cfg.expireLightMs) closeScamUnseen(p, sc, now); // scam: not an emergency, so the 2-day (light) rule
     for (const r of p.reminders) {
       if (r.dueAt == null || r.dueAt > now || r.active) continue;
       if (now - r.dueAt > cfg.reminderLateMs) {
@@ -745,6 +821,18 @@ function timeline(p, f) {
   return steps.sort((x, y) => x.at - y.at || RANK[x.kind] - RANK[y.kind] || seq.get(x) - seq.get(y));
 }
 
+// A scam card's steps, oldest first: what was shown to the family and what they did with it. No letter text, no photo, ever.
+function scamTimeline(p, sc) {
+  const steps = [];
+  if (sc.level === 'flag' || !sc.notifId) steps.push({ at: sc.createdAt, kind: 'flag', label: 'Kept on this page only (they chose not to alert you)' });
+  for (const n of p.notifications.filter((x) => x.incident === sc.id).reverse()) {
+    if (n.kind === 'alert') steps.push({ at: n.times.sent, kind: 'alert', label: 'Alert sent to you' });
+  }
+  if (sc.status === 'expired') steps.push({ at: sc.expiredAt, kind: 'expired', label: `Closed unseen after ${sc.expiredDays} ${sc.expiredDays === 1 ? 'day' : 'days'}` });
+  else if (sc.status === 'resolved' && sc.resolvedAt) steps.push({ at: sc.resolvedAt, kind: 'seen', label: 'You saw this' });
+  return steps.sort((a, b) => a.at - b.at);
+}
+
 function view(id) {
   const p = get(id);
   if (!p) return null;
@@ -755,15 +843,16 @@ function view(id) {
     last: r.last && { ...r.last, label: OCC_LABEL[r.last.state] } });
   return {
     id, name: nameOf(id), mode: p.mode, modes: MODES, appOpen: appOpen(id), inCall: liveCalls.has(id),
-    lastActivity: p.lastActivity, lastSeen: seen, lastCallAt: p.lastActivity.maya,
+    lastActivity: p.lastActivity, lastSeen: seen, lastCallAt: p.lastActivity.maya, callCount: p.callCount || 0,
     activeOutreach: activeByProfile.has(id) ? { kind: activeByProfile.get(id).kind, attempts: activeByProfile.get(id).attempts, of: cfg.maxAttempts, state: activeByProfile.get(id).state } : null,
     flags: p.flags.filter((f) => f.level === 'flag').map(fl),
     alerts: p.flags.filter((f) => f.level === 'alert').map(fl),
+    scams: (p.scams || []).map((sc) => ({ ...sc, name: nameOf(id), timeline: scamTimeline(p, sc) })),
     reminders: p.reminders.map(rem),
     notifications: p.notifications.filter((n) => !n.incident).slice(0, 30).map((n) => ({ id: n.id, to: n.to, kind: n.kind, text: n.text, channel: n.channel, status: n.status, label: statusLabel(n), times: n.times })),
   };
 }
-function overview() { return memory.listProfiles().map((x) => { const v = view(x.id); return { id: x.id, name: x.name, mode: v.mode, flags: v.flags.filter((f) => f.status === 'active').length, alerts: v.alerts.filter((f) => f.status === 'active').length }; }); }
+function overview() { return memory.listProfiles().map((x) => { const v = view(x.id); return { id: x.id, name: x.name, mode: v.mode, flags: v.flags.filter((f) => f.status === 'active').length + v.scams.filter((x) => x.status === 'active' && x.level === 'flag').length, alerts: v.alerts.filter((f) => f.status === 'active').length + v.scams.filter((x) => x.status === 'active' && x.level === 'alert').length }; }); }
 
 module.exports = {
   cfg, MODES, get, remove, start, stop, tick,
@@ -771,7 +860,7 @@ module.exports = {
   recentLines, isRepeatLine, addLine,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
   addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

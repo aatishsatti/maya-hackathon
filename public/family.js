@@ -89,6 +89,28 @@
     if (!resolved && f.notifId) c.append(closeBtn(f, 'Close'));
     return c;
   }
+  // Scam shield card (care.js p.scams). Topic only: the KIND of scam, never the letter's words, a transcript or the photo.
+  function scamCard(sc, name) {
+    const kind = sc.type || 'scam';
+    if (sc.status === 'expired') {
+      const c = el('div', 'card closed');
+      c.append(cardHead('pill-closed', 'Closed unseen', `Scam warning about ${name}`, sc.createdAt));
+      c.append(el('div', 'closed-line', 'Closed unseen'));
+      c.append(el('div', 'meta', `Nobody marked this seen in ${sc.expiredDays} ${sc.expiredDays === 1 ? 'day' : 'days'}.`));
+      return c;
+    }
+    const resolved = sc.status === 'resolved';
+    const isAlert = sc.level === 'alert';
+    const c = el('div', `card ${resolved ? 'resolved' : isAlert ? 'alert' : 'flag'}`);
+    c.append(cardHead(resolved ? 'pill-ok' : isAlert ? 'pill-alert' : 'pill-flag', resolved ? 'Seen' : isAlert ? 'Scam alert' : 'Flag', `${name} showed Maya a message that looks like a possible ${kind}`, sc.createdAt));
+    if (resolved) c.append(el('div', 'status', `A family member has seen this (${t(sc.resolvedAt)}).`));
+    else if (isAlert) c.append(el('div', 'status', `Maya told ${name} not to pay or share any details, and ${name} asked her to let you know. Please check in with ${name}.`));
+    else c.append(el('div', 'status', `Maya told ${name} it looked like a scam. ${name} chose not to alert you, so this stays on this page only.`));
+    c.append(chips([isAlert ? 'Notification sent' : 'Dashboard only', 'Topic only: no letter text, no photo']));
+    const tl = timelineEl(sc); if (tl) c.append(tl);
+    if (!resolved && isAlert && sc.notifId) c.append(closeBtn(sc, "I've seen this", 'primary'));
+    return c;
+  }
   function list(node, items, empty) { node.replaceChildren(...(items.length ? items : [el('div', 'empty', empty)])); }
 
   // Reminder state -> short pill. Done and Missed are the two the family cares about; the full sentence stays below it.
@@ -98,7 +120,7 @@
 
   function render(v) {
     $('body').hidden = false;
-    $('presence').textContent = v.inCall ? 'On a call with Maya now' : v.appOpen ? 'App is open' : 'App is not open (Maya cannot ring)';
+    $('presence').textContent = `${v.inCall ? 'On a call with Maya now' : v.appOpen ? 'App is open' : 'App is not open (Maya cannot ring)'} · Last seen ${t(v.lastSeen && v.lastSeen.at)} · ${v.callCount || 0} ${v.callCount === 1 ? 'call' : 'calls'}`;
     $('modeNow').textContent = v.modes[v.mode].label;
     $('modes').replaceChildren(...Object.entries(v.modes).map(([k, m]) => {
       const l = el('label', `mode${k === v.mode ? ' on' : ''}`);
@@ -109,8 +131,9 @@
       return l;
     }));
     const act = (a) => a.filter((f) => f.status === 'active'), done = (a) => a.filter((f) => f.status === 'resolved' || f.status === 'expired').slice(0, 5);
-    list($('alerts'), [...act(v.alerts), ...done(v.alerts)].map((f) => flagCard(f, v.name)), 'No alerts.');
-    list($('flags'), [...act(v.flags), ...done(v.flags)].map((f) => flagCard(f, v.name)), 'No flags.');
+    const sc = v.scams || [], scAlerts = sc.filter((x) => x.level === 'alert' || x.status === 'expired' && x.notified === 'alert'), scFlags = sc.filter((x) => !scAlerts.includes(x));
+    list($('alerts'), [...act(scAlerts).map((x) => scamCard(x, v.name)), ...act(v.alerts).map((f) => flagCard(f, v.name)), ...done(scAlerts).map((x) => scamCard(x, v.name)), ...done(v.alerts).map((f) => flagCard(f, v.name))], 'No alerts.');
+    list($('flags'), [...act(scFlags).map((x) => scamCard(x, v.name)), ...act(v.flags).map((f) => flagCard(f, v.name)), ...done(scFlags).map((x) => scamCard(x, v.name)), ...done(v.flags).map((f) => flagCard(f, v.name))], 'No flags.');
     const rem = v.reminders.map((r) => {
       const c = el('div', 'item');
       const cur = r.active || r.last;

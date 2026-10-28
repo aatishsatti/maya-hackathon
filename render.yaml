@@ -1,0 +1,24 @@
+# Render Blueprint: Maya on the FREE plan only. No secret is in this file: the three keys are asked for in the Render dashboard
+# (sync: false) and live only in Render's server environment, never in the browser or in git.
+# plan MUST stay "free": if it is left out, Render defaults a new web service to a paid instance.
+services:
+  - type: web
+    name: maya
+    runtime: node
+    plan: free
+    branch: render-test
+    autoDeploy: false
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/config
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: META_MODE
+        value: real
+      - key: META_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false

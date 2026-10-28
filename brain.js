@@ -221,4 +221,4 @@ async function describeImage(buf, mime, signal) {
   return text.trim();
 }
 
-module.exports = { requireRealEnv, sparkStream, sparkComplete, streamSpeech, describeImage, stats };
+module.exports = { requireRealEnv, sparkStream, sparkComplete, streamSpeech, describeImage, stats, META_URL, liveModel };
