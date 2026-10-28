@@ -13,6 +13,7 @@ const { startReply, fixedReply, ChunkSplitter, stripTags, isQuestion } = require
 const { mapEmotionToDelivery, selfHarmText, INTENTS } = require('./emotion');
 const lead = require('./lead');
 const moves = require('./moves');
+const beat = require('./beat');
 const memory = require('./memory');
 const care = require('./care');
 
@@ -308,6 +309,7 @@ class Call {
     this.greeted = false;        // a call is greeted once, at its start, never again
     this.replyCount = 0;         // normal replies so far
     this.lastReplyAsked = false; // her last reply ended in a question
+    this.beatCount = 0;          // replies she has given on the current light-chat subject (see beat.js); committed after each spoken reply
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
     this.pendingConcern = null;  // she was unsure and asked; waiting for the answer
@@ -883,6 +885,8 @@ class Call {
     const openings = this.recentOpenings();
     if (this.identitySaid) bits.push('You have already said who you are in this call; do not say your name or what you are again, in any words.');
     bits.push('Never use a stock comfort phrase or a stock way of introducing yourself, whether it reassures them that you are with them or says who you are; a friend makes up new words each time.');
+    const beatNote = beat.note(this.beatCount);
+    if (beatNote) bits.push(beatNote);
     const kinds = moves.blockedKinds(this.recentReplies());
     if (kinds.length) bits.push(`In your last two replies you were already ${kinds.join(', and ')}. Do not do that again in this reply, in any words.`);
     bits.push('Answer the specific thing they just said and carry the talk forward by one small step. Do not lean on a general polite acknowledgement in place of a real response, and do not reuse any run of words from your last three replies.');
@@ -899,6 +903,21 @@ class Call {
   // Her last three spoken replies in this call (the call's own history; nothing extra is stored).
   recentReplies() {
     return this.history.filter((m) => m.role === 'assistant').map((m) => String(m.content)).slice(-3);
+  }
+
+  // Decides this reply's beat from Spark's tag (topic) and the care state, then enforces its limits on the delivery (see beat.js).
+  applyBeat(d, raw, special) {
+    const low = (k) => String((raw && raw[k]) || '').toLowerCase();
+    const p = beat.plan({ count: this.beatCount, topic: low('topic'), emotion: d.emotion, intent: low('intent'), concern: low('concern'), pain: /^(1|yes|true)$/.test(low('pain')), special });
+    const lim = beat.limits(p.type);
+    d.beat = p.type; d.beatN = p.n;
+    if (lim.noQuestion) d.noQuestion = true;
+    if (lim.maxSentences < d.maxSentences) d.maxSentences = lim.maxSentences;
+  }
+
+  // On a connect or close beat the reply may not open with a question: it is written again once, like a repeated opening.
+  beatBlocks(piece, d) {
+    return Boolean(d && (d.beat === 'connect' || d.beat === 'close') && isQuestion(piece));
   }
 
   // True when a reply that starts with this piece repeats a recent opening, a stock phrase already used, or the identity line.
@@ -1396,6 +1415,7 @@ class Call {
     let delivery = null;
     let feel = null;
     let repeated = null;
+    let retryWhy = 'repeat';
     const splitter = new ChunkSplitter({
       stripInterjection: (record && this.openedWithInterjection) || Boolean(leadIn),
       stripGreeting,
@@ -1418,12 +1438,16 @@ class Call {
         d.noQuestion = !greeting && this.lastReplyAsked && concern !== 'unsure'; // asking because she genuinely does not know is the one exception
         if (!greeting && concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
         else if (!greeting && concern === 'unsure' && !this.health && !this.safety) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
+        if (!greeting) this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern));
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear', whisperPieces: d.whisperPieces };
         return d;
       },
       onPiece: (text, kind, next) => {
-        if (record && !jobs.length && !this.repeatRetried && !this.safety && this.repeatsOpening(text)) { repeated = text; splitter.halted = true; return; } // nothing spoken yet: write it again
+        if (record && !jobs.length && !this.repeatRetried && !this.safety) {
+          const why = this.repeatsOpening(text) ? 'repeat' : this.beatBlocks(text, delivery) ? 'beat' : null;
+          if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
+        } // nothing spoken yet: write it again
         const job = { chunks: [], done: false, err: null, tone: Boolean(kind), kind };
         jobs.push(job);
         if (!tEnqueue) { tEnqueue = Date.now(); if (timing) timing.firstPieceMs = tEnqueue - tStart; } // Spark started -> the first sentence is handed to the voice
@@ -1517,7 +1541,9 @@ class Call {
       const gen2 = ++this.gen;
       this.abort = new AbortController();
       this.responding = true;
-      const again = `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`;
+      const again = retryWhy === 'beat'
+        ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.`
+        : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`;
       const rs2 = startReply(this.history, this.roster(`${this.replyNote()} ${again}`), this.abort.signal);
       const r = await this.speakReply(rs2, timing, gen2, { record: true, stripGreeting: true, holdBack });
       this.repeatRetried = false;
@@ -1552,6 +1578,7 @@ class Call {
       if (/\b(your name|what should i call you|what to call you|call you\?|who am i (talking|speaking) (to|with))\b/i.test(all)) this.askedName = true;
       for (const n of this.names.values()) if (new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(all)) this.lastNameUse = this.replyCount;
       this.replyCount += 1;
+      if (delivery && delivery.beatN != null) this.beatCount = delivery.beatN;   // committed only once the reply is really spoken (a rewrite recomputes from the same count)
       this.lastReplyAsked = isQuestion(all);
       this.lastExclaimed = /!/.test(all);
       if (this.safety) care.addLine(this.profile.id, 'safety', all);

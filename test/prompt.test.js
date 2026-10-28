@@ -667,3 +667,51 @@ test('R2 the mid-call seen line names only the senior and never leaves it to oth
 });
 
 test.after(() => { calls.forEach((c) => c.end()); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });
+
+// ---------------------------------------------------------------- conversation beats (stubbed). The sentences below exist only in this test file.
+const { fixedReply: fixedBeat } = require('../reply');
+const beatSay = async (c, tag, text, g) => { c.gen = g; c.abort = new AbortController(); await c.speakReply(fixedBeat(`[[feel: ${tag}]] ${text}`), null, g, { record: true }); return c.history[c.history.length - 1].content; };
+
+test('B1 beats: acknowledge may ask, connect may not, close is one short statement and the next new subject starts again', stubbed, async () => {
+  const c = mkCall(newSenior());
+  let said = await beatSay(c, 'emotion=neutral intensity=1 intent=share topic=new', 'Tea is a good habit. Which kind do you like?', 1);
+  assert.match(said, /\?/, 'beat 1 may carry a small question'); assert.equal(c.beatCount, 1);
+  said = await beatSay(c, 'emotion=neutral intensity=1 intent=share topic=same', 'A warm cup by the window sounds peaceful. Does it whistle? And is it strong?', 2);
+  assert.doesNotMatch(said, /\?/, 'beat 2 asks nothing'); assert.ok((said.match(/[.!?]/g) || []).length <= 2); assert.equal(c.beatCount, 2);
+  said = await beatSay(c, 'emotion=neutral intensity=1 intent=share topic=same', 'A quiet cup is a fine way to spend a morning. Enjoy it. Take your time.', 3);
+  assert.doesNotMatch(said, /\?/); assert.equal((said.match(/[.!?]/g) || []).length, 1, 'the close is one short line'); assert.equal(c.beatCount, 3);
+  said = await beatSay(c, 'emotion=anxious intensity=3 intent=share concern=none pain=0 topic=new', 'That is a real worry. What frightens you most about it?', 4);
+  assert.match(said, /\?/, 'a new, heavier subject is not limited by the old topic'); assert.equal(c.beatCount, 0, 'a heavy moment resets the count');
+});
+
+test('B2 beats never limit a heavy moment, a question from the person, or a turn without a topic tag', stubbed, async () => {
+  const c = mkCall(newSenior()); c.beatCount = 2;
+  let said = await beatSay(c, 'emotion=lonely intensity=3 intent=share topic=same', 'I am glad you told me. The evenings must feel long. What do you miss most?', 1);
+  assert.match(said, /\?/, 'a lonely person is never closed off'); assert.equal(c.beatCount, 0);
+  c.beatCount = 2; c.lastReplyAsked = false;   // (the older rule: no question straight after one is not what this test is about)
+  said = await beatSay(c, 'emotion=neutral intensity=1 intent=ask topic=same', 'The kettle clicks off by itself. Do you want help with it?', 2);
+  assert.match(said, /\?/, 'answering them is not limited'); assert.equal(c.beatCount, 2, 'an answer on the same subject does not add a beat');
+  c.beatCount = 2; c.lastReplyAsked = false;
+  said = await beatSay(c, 'emotion=neutral intensity=1 intent=share', 'Roses are lovely. Did you plant some?', 3);
+  assert.match(said, /\?/, 'no topic tag counts as a new subject: more talk, never a cut-off'); assert.equal(c.beatCount, 1);
+});
+
+test('B3 a connect or close reply that opens with a question is written again once, with a principle and no sentence to copy', stubbed, async () => {
+  const c = mkCall(newSenior()); c.beatCount = 1;
+  sparkQueue.length = 0; sparkSeen.length = 0; sparkQueue.push('[[feel: emotion=neutral intensity=1 intent=share topic=same]] Roses need a lot of sun.');
+  const said = await beatSay(c, 'emotion=neutral intensity=1 intent=share topic=same', 'Did you plant roses? They are lovely.', 1);
+  assert.equal(said, 'Roses need a lot of sun.', 'the second draft is spoken');
+  const rewrite = sparkSeen.find((r) => /must not ask a question/.test(r));
+  assert.ok(rewrite, 'Spark was asked once to write it again as a statement');
+  assert.equal(sparkSeen.filter((r) => /must not ask a question/.test(r)).length, 1, 'only one rewrite'); assert.equal(c.beatCount, 2);
+});
+
+test('B4 notes to Spark: beat principles only, tied to the count, nothing to copy', stubbed, () => {
+  const c = mkCall(newSenior());
+  assert.doesNotMatch(c.replyNote(), /already (answered once|given two replies)/);
+  c.beatCount = 1; assert.match(c.replyNote(), /already answered once on this subject/); assert.match(c.replyNote(), /no question/);
+  c.beatCount = 2; assert.match(c.replyNote(), /already given two replies on this subject/); assert.match(c.replyNote(), /do not stretch it/);
+  const B = require('../beat');
+  for (const t of [B.note(1), B.note(2)]) assert.doesNotMatch(t, /"[^"]+"/, 'no quoted example line');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'brain.js'), 'utf8'), /topic=T/, 'Spark is asked for the topic field in her private tag');
+});

@@ -89,7 +89,7 @@ class ChatSession {
     this.started = false;
     this.closed = false;
     // The same per-conversation state call.js keeps, with the same meaning.
-    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.lastReplyAsked = false; this.askHistory = [];
+    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.lastReplyAsked = false; this.askHistory = [];
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
@@ -163,7 +163,7 @@ class ChatSession {
     const signal = AbortSignal.timeout(REPLY_TIMEOUT_MS);
     const rs = startReply(this.history, this.roster(note), signal);
     const pieces = [];
-    let delivery = null, feel = null, repeated = null;
+    let delivery = null, feel = null, repeated = null, retryWhy = 'repeat';
     const splitter = new ChunkSplitter({
       stripInterjection: this.openedWithInterjection,
       stripGreeting: true,
@@ -185,12 +185,16 @@ class ChatSession {
         // A scam reading is a few short sentences, not the usual two: what it says, "this looks like a scam, please don't pay", and (for a
         // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
         if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = this.scamReply !== 'warn'; d.maxSentences = Math.max(d.maxSentences, this.scamReply === 'warn' ? 4 : 3); }
+        this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern || this.scamReply));
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear' };
         return d;
       },
       onPiece: (text, kind) => {
-        if (!pieces.length && !again && !this.safety && this.repeatsOpening(text)) { repeated = text; splitter.halted = true; return; } // nothing shown yet: write it again
+        if (!pieces.length && !again && !this.safety) {
+          const why = this.repeatsOpening(text) ? 'repeat' : this.beatBlocks(text, delivery) ? 'beat' : null;
+          if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
+        } // nothing shown yet: write it again
         pieces.push({ text, kind });
       },
     });
@@ -200,7 +204,7 @@ class ChatSession {
     } catch (e) {
       if (!(e && e.empty && !pieces.length)) throw new ChatError(`Maya could not answer: ${e.message}`);
     }
-    if (splitter.halted && repeated) return this.reply(`${note} Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`, { again: true });
+    if (splitter.halted && repeated) return this.reply(`${note} ${retryWhy === 'beat' ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.` : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`}`, { again: true });
     if (splitter.halted && !safetyRetry) { // Spark read the person as in crisis before saying anything: Tier A, then the reply is written again with the safety note
       this.enterSafety();
       return this.reply(`${this.replyNote()} ${this.safetyNote()}`, { safetyRetry: true });
@@ -215,6 +219,7 @@ class ChatSession {
     this.openedWithInterjection = /^(oh|well|ah|hmm|um)\b/i.test(pieces[0].text);
     for (const n of this.names.values()) if (new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(all)) this.lastNameUse = this.replyCount;
     this.replyCount += 1;
+    if (delivery && delivery.beatN != null) this.beatCount = delivery.beatN;
     this.lastReplyAsked = isQuestion(all);
     this.lastExclaimed = /!/.test(all);
     if (this.safety) care.addLine(this.profile.id, 'safety', all);
@@ -240,7 +245,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'repeatsOpening', 'recordName', 'who', 'dynamicLine']) {
+for (const m of ['careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'recordName', 'who', 'dynamicLine']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 
