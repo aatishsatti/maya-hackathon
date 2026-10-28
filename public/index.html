@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
   <title>Maya</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -25,23 +25,86 @@
     </form>
     <p id="pickError" class="error" role="alert" hidden></p>
   </main>
-  <main id="callScreen" class="call" hidden>
-    <h1>Maya</h1>
-    <div id="orb" class="orb" data-state="idle" role="img" aria-label="Maya is not on a call">
-      <span class="layer l1"></span>
-      <span class="layer l2"></span>
-      <span class="layer l3"></span>
-    </div>
-    <p id="status" class="status" aria-live="polite">Press the button to talk with Maya.</p>
-    <p id="caption" class="caption" aria-live="polite"></p>
-    <p id="error" class="error" role="alert" hidden></p>
-    <button id="callBtn" class="call-btn" type="button">Call Maya</button>
-    <p id="modeNote" class="mode-note" hidden></p>
-    <button id="switchBtn" class="link-btn" type="button"></button>
+  <main id="callScreen" class="call screen" hidden>
+    <header class="top">
+      <h1>Maya</h1>
+      <div class="top-links">
+        <button id="capBtnTop" class="cap-top" type="button" aria-label="Show words during calls" aria-pressed="false" title="Show words during calls">Aa</button>
+        <button id="switchBtn" class="link-btn" type="button"></button>
+        <a class="link-btn" href="/family.html">Family</a>
+      </div>
+    </header>
+
+    <!-- The call: one big orb (full), or a small orb with Mute and Cut Call (minimized / muted). Shown only on a call. -->
+    <section id="stage" class="stage" aria-label="Call with Maya">
+      <div id="orb" class="orb" data-state="idle" role="img" aria-label="Maya is not on a call">
+      </div>
+      <p id="status" class="status" aria-live="polite">Press the button to talk with Maya.</p>
+      <p id="mutedTag" class="muted-tag" hidden>Muted. Maya cannot hear you.</p>
+      <p id="caption" class="caption" aria-live="polite"></p>
+      <p id="fullHint" class="full-hint">Tap anywhere to see the chat and the call buttons.</p>
+      <div id="callControls" class="call-controls" role="group" aria-label="Call controls">
+        <button id="muteBtn" class="strip-btn mute" type="button" aria-label="Mute" title="Mute">
+          <svg class="i-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V22h2v-3.08A7 7 0 0 0 19 12h-2Z"/></svg>
+          <svg class="i-mic-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V22h2v-3.08A7 7 0 0 0 19 12h-2Z"/><path class="slash" d="M4 4 20 20"/></svg>
+        </button>
+        <button id="expandBtn" class="strip-btn expand" type="button" aria-label="Show the big orb" title="Show the big orb">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+        </button>
+        <button id="cutBtn" class="strip-btn cut" type="button" aria-label="Cut call" title="Cut call">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9c-2.6 0-5 .6-7.3 1.8a1.6 1.6 0 0 0-.8 1.9l.6 1.8c.2.7 1 1.1 1.7.9l2.4-.8c.5-.2.8-.6.8-1.1v-1.2a9 9 0 0 1 5.2 0v1.2c0 .5.3.9.8 1.1l2.4.8c.7.2 1.5-.2 1.7-.9l.6-1.8a1.6 1.6 0 0 0-.8-1.9C17 9.6 14.600 9 12 9Z"/></svg>
+        </button>
+        <button id="capBtn" class="strip-btn cap" type="button" aria-label="Show words" aria-pressed="false" title="Show words">Aa</button>
+      </div>
+    </section>
+
+    <!-- The chat: a thread, then what the person can do. Hidden while the call is full screen. -->
+    <section id="chat" class="chat" aria-label="Chat with Maya">
+      <div id="thread" class="thread" role="log" aria-live="polite" aria-relevant="additions"></div>
+      <!-- Photo preview: nothing is sent until Send is tapped; Cancel throws it away. -->
+      <div id="photoPreview" class="photo-preview" hidden>
+        <div class="preview-img"><img id="previewImg" alt="The photo you picked"></div>
+        <p class="preview-ask">Send this photo to Maya?</p>
+        <div class="preview-row">
+          <button id="previewCancel" class="ctl-btn" type="button">Cancel</button>
+          <button id="previewSend" class="ctl-btn send" type="button">Send</button>
+        </div>
+      </div>
+      <p id="busy" class="busy" aria-live="polite" hidden></p>
+      <p id="error" class="error" role="alert" hidden></p>
+      <p id="modeNote" class="mode-note" hidden></p>
+      <div id="recBar" class="rec-bar" hidden>
+        <span id="recTime" class="rec-time">Recording 0:00</span>
+        <span class="rec-help">Tap Stop to send it to Maya.</span>
+        <button id="recCancel" class="link-btn" type="button">Cancel</button>
+      </div>
+      <p id="voiceRule" class="voice-rule" hidden>During the call, Maya answers in writing.</p>
+      <form id="composer" class="composer" autocomplete="off">
+        <div class="type-row">
+          <textarea id="msgIn" rows="1" maxlength="2000" placeholder="Type to Maya" aria-label="Message to Maya" enterkeyhint="send"></textarea>
+          <button id="sendBtn" class="send-btn" type="submit">Send</button>
+        </div>
+        <div class="action-row">
+          <button id="recBtn" class="act-btn" type="button" aria-label="Record a voice note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V22h2v-3.08A7 7 0 0 0 19 12h-2Z"/></svg>
+            <span id="recLabel">Voice</span>
+          </button>
+          <button id="photoBtn" class="act-btn" type="button" aria-label="Send a photo">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 7.2 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.2L15 4H9Zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"/></svg>
+            <span>Photo</span>
+          </button>
+          <button id="callBtn" class="call-btn" type="button">Call Maya</button>
+        </div>
+        <input id="photoIn" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden>
+      </form>
+    </section>
   </main>
   <div id="inbox" class="inbox" aria-live="polite"></div>
   <script src="profiles.js"></script>
   <script src="app.js"></script>
+  <script src="chat-client.js"></script>
   <script src="inbox.js"></script>
+  <script src="orb.js"></script>
+  <script src="chat-ui.js"></script>
 </body>
 </html>

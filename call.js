@@ -11,6 +11,7 @@ const { openTranscribe, Resampler } = require('./transcribe');
 const { streamSpeech, sparkStream } = require('./brain');
 const { startReply, fixedReply, ChunkSplitter, stripTags, isQuestion } = require('./reply');
 const { mapEmotionToDelivery, selfHarmText, INTENTS } = require('./emotion');
+const lead = require('./lead');
 const memory = require('./memory');
 const care = require('./care');
 
@@ -24,7 +25,7 @@ const HOLD_TRAILING_MS = 1500;  // trails off ("and", "my", ...) or is a fragmen
 // partial transcript ends like a sentence and holds still, Spark starts on it speculatively.
 // The reply is only spoken after Meta confirms the turn ended with the same words and labels.
 // Any change in words or labels throws the guess away.
-const SPEC_QUIET_MS = 350;
+const SPEC_QUIET_MS = 250;
 // Meta sometimes leaves a short turn ("Okay.") open through silence. With no endpointing settings
 // to change, a turn whose words have stopped changing is completed here from its last partial.
 const STALE_SENTENCE_MS = 2500;  // partial ends like a sentence
@@ -188,6 +189,38 @@ const RECALL_ASK = /\b(tell me|stor(y|ies)|what (was|happened|did|is|were)|then 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
 
+// ---- Lead-in clips: Maya's own voice saying one short line, rendered once and kept (see lead.js). Real mode only; never faked. ----
+const leadClips = new Map();      // text -> { text, pcm } (PCM16 24 kHz, trimmed like any other piece)
+let leadLoad = null;
+async function renderLead(text) {
+  const parts = [];
+  await streamSpeech(text, new AbortController().signal, (c) => parts.push(c));
+  let buf = Buffer.concat(parts);
+  buf = buf.subarray(Math.max(0, firstLoud(buf) - PAD_LEAD_BYTES));
+  buf = buf.subarray(0, Math.min(buf.length, lastLoud(buf) + PAD_TAIL_BYTES));
+  if (buf.length < 120 * 48) throw new Error('lead clip came back empty');
+  return { text, pcm: fadeOut(fadeIn(buf), 'other') };
+}
+// Renders any missing clips, one at a time (so a greeting is never queued behind them). A failure just leaves that clip out.
+function warmLeads() {
+  if (leadLoad) return leadLoad;
+  leadLoad = (async () => {
+    for (const t of lead.ALL) {
+      if (leadClips.has(t)) continue;
+      try { leadClips.set(t, await renderLead(t)); } catch (e) { console.error('lead clip not ready:', t, '-', e.message); }
+    }
+  })().finally(() => { leadLoad = null; });
+  return leadLoad;
+}
+
+// Keep-warm: idle sockets to ElevenLabs close after about 4 s, and every turn is further apart than that, so each voice request paid a
+// new TLS handshake (measured: first audio byte about 380 ms cold, about 210 ms warm). While a call is live, one tiny GET on the same
+// origin every 2.5 s keeps the socket open. It sends no text, uses no voice credits, and does not touch the voice model or its tags.
+const WARM_URL = 'https://api.elevenlabs.io/v1/models';
+const WARM_EVERY_MS = 2500;
+const TURN_DEBUG = Boolean(process.env.MAYA_TURN_DEBUG);
+const dbg = (...a) => { if (TURN_DEBUG) console.log('turn', ...a); };
+
 class Call {
   constructor(ws, apiKey) {
     this.ws = ws;
@@ -219,6 +252,7 @@ class Call {
     this.hasMic = false;
     this.duckTimer = null;
     this.endTimer = setInterval(() => this.endpointTick(), 100);
+    this.warmTimer = null;       // keep-warm pings to the voice service while the call is live
     this.sayingText = '';        // what Maya has said so far in the current reply
     this.lastSaidAt = 0;
     this.bargeSince = 0;
@@ -252,6 +286,10 @@ class Call {
     this.lastNameUse = -10;      // reply number that last used the person's name
     this.willAskName = Math.random() < 0.6; // decided per call, so asking is neither fixed nor every call
     this.spec = null;            // speculative Spark reply { key, promise, abort }
+    this.pre = null;             // pre-call guesses for the first turn: Map class -> { rs, abort }
+    this.recentLeads = [];       // the last lead-in lines used
+    this.lastLeadAtMs = 0;       // when a lead-in last played (never two within a few seconds)
+    this.readyEma = 2500;        // running estimate of ms from the end-of-turn decision to her first real word of reply (sets how long a lead-in may be)
     this.specTimer = null;
     this.responding = false;
     this.gen = 0;
@@ -283,8 +321,10 @@ class Call {
     clearTimeout(this.staleTimer);
     clearTimeout(this.duckTimer);
     clearInterval(this.endTimer);
+    clearInterval(this.warmTimer);
     this.cancelSilence();
     this.dropSpec();
+    this.dropPre();
     if (this.abort) this.abort.abort();
     if (this.meta) this.meta.close();
   }
@@ -304,6 +344,11 @@ class Call {
       let peak = 0;
       for (let i = 0; i < f32.length; i += 8) { const a = Math.abs(f32[i]); if (a > peak) peak = a; }
       const now = Date.now();
+      if (TURN_DEBUG) { if (this.lastFrameAt && now - this.lastFrameAt > 300) dbg('MIC FRAMES STALLED for', now - this.lastFrameAt, 'ms (frames arrive every ~50-100 ms)'); this.lastFrameAt = now; }
+      if (TURN_DEBUG) { // while a turn is open: how long did the mic deliver (near-)digital silence, though frames kept coming?
+        if (peak < 0.0005) { if (!this.silentSince) this.silentSince = now; }
+        else { if (this.silentSince && now - this.silentSince > 300 && this.curTurn) dbg('MIC DELIVERED SILENCE mid-turn for', now - this.silentSince, 'ms while the turn was open; partial so far', JSON.stringify(this.curTurn.partial)); this.silentSince = 0; }
+      }
       if (peak >= BARGE_MIN_PEAK) this.lastLoudAt = now;
       this.hasMic = true;
       if (peak > Math.max(0.02, this.noiseFloor * 3)) this.lastVoiceAt = now;          // clearly above the room
@@ -344,7 +389,7 @@ class Call {
     {
       this.resampler = new Resampler(rate);
       this.meta = openTranscribe(this.apiKey, {
-        onReady: () => { this.send({ type: 'ready' }); this.greet(Number(m.localHour)); },
+        onReady: () => { this.send({ type: 'ready' }); this.startWarm(); this.greet(Number(m.localHour)); },
         onEvent: (ev) => this.onMeta(ev),
         onClose: (code, reason) => {
           if (this.closed) return;
@@ -365,6 +410,11 @@ class Call {
       }
     } else if (m.type === 'bargein') {
       this.interrupt();
+    } else if (m.type === 'mute') {
+      // The person muted their mic (call stays live, Maya hears silence). Silence timers pause so she does not
+      // check in, reconfirm or hang up on someone who chose to be muted; unmuting starts the wait afresh.
+      this.muted = m.on === true;
+      if (this.muted) this.cancelSilence(); else if (!this.responding && this.greeted) this.armSilence();
     }
   }
 
@@ -422,6 +472,7 @@ class Call {
   }
 
   onMeta(ev) {
+    if (TURN_DEBUG && ev.type !== 'transcript' && ev.type !== 'audioProgress') dbg(ev.type, JSON.stringify({ id: ev.turnId, syn: ev.synthetic, txt: ev.transcript, forced: this.forcedOpen && this.forcedOpen.base, pending: this.pending.length }));
     switch (ev.type) {
       case 'speechStart': {
         clearTimeout(this.holdTimer);
@@ -488,11 +539,13 @@ class Call {
         if (t.base && said.startsWith(t.base)) said = said.slice(t.base.length).trim();
         t.text = this.collapseRepeat(said);
         t.completedAt = Date.now();
+        dbg('turn text', JSON.stringify(t.text), 'from final', JSON.stringify(ev.transcript), 'base', JSON.stringify(t.base), 'partial', JSON.stringify(t.partial));
         const key = this.textKey([t]);
         const last = this.pending[this.pending.length - 1];
         const dup = key && ((last && this.textKey([last]) === key)
           || (this.lastAnswered && this.lastAnswered.key === key && t.completedAt - this.lastAnswered.at < DUPLICATE_WINDOW_MS));
         if (!t.text || dup || !realTokens(t.text).length || this.isEcho(t.text)) {
+          dbg('DROPPED turn text', JSON.stringify(t.text), 'dup', Boolean(dup), 'echo', this.isEcho(t.text), 'base', JSON.stringify(t.base), 'said', JSON.stringify(ev.transcript));
           if (this.pending.length) { clearTimeout(this.holdTimer); this.holdTimer = setTimeout(() => this.respond(0), HOLD_TRAILING_MS); } // keep the wait going
           else if (!this.isSpeaking()) this.send({ type: 'idle' });
           if (!this.pending.length) this.armSilence(); // that was not a usable answer: keep counting the quiet
@@ -557,6 +610,62 @@ class Call {
     return turns.map((t) => t.text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()).join(' ');
   }
 
+  startWarm() {
+    if (this.warmTimer || !process.env.ELEVENLABS_API_KEY) return;
+    const ping = () => fetch(WARM_URL, { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY }, signal: AbortSignal.timeout(3000) }).then((r) => r.arrayBuffer()).catch(() => { /* a missed ping only means one cold connection */ });
+    ping();
+    this.warmTimer = setInterval(ping, WARM_EVERY_MS);
+  }
+
+  dropPre() {
+    if (this.pre) { for (const g of this.pre.values()) g.abort.abort(); this.pre = null; }
+  }
+
+  // Before the person has said a word, Spark writes the reply to the one routine thing a greeting most often gets back
+  // ("I'm fine, thank you" / "Hello Maya"), from the same roster (memory, reminders, notes) as any reply. It is spoken ONLY if the
+  // first words really heard match that class exactly (lead.prethinkClass); otherwise it is dropped unheard.
+  startPrethink() {
+    if (this.pre || this.outreach || this.ticketInCall || this.hadActiveFlag || this.safety || this.health) return;
+    this.pre = new Map();
+    for (const [k, c] of Object.entries(lead.PRETHINK)) {
+      const abort = new AbortController();
+      const msgs = [...this.history, { role: 'user', content: `${this.who('A')}: ${c.sample}` }];
+      this.pre.set(k, { rs: startReply(msgs, this.roster(this.replyNote()), abort.signal), abort, sample: c.sample });
+    }
+  }
+
+  // A short true acknowledgement to say the instant the person has finished, while Spark writes the real reply. Null = say nothing extra.
+  pickLead(turns, extra, spec, holdBack) {
+    const why = (r) => { if (process.env.MAYA_LEAD_DEBUG) console.log('lead skipped:', r); return null; };
+    if (!leadClips.size) return why('no clips');
+    if (extra) return why('care note');
+    if (this.safety || this.health || this.pendingConcern) return why('safety/health/concern');
+    const heard = turns.map((t) => t.text).join(' ');
+    if (!lead.isRoutine(heard)) return why(`not routine: ${JSON.stringify(heard)}`);
+    if (spec && spec.rs.text.length) return why('reply already on its way');
+    if (Date.now() - this.lastLeadAtMs < 6000) return why('a lead-in just played');   // e.g. a turn split in two: one lead-in is enough
+    // The longest line that still ends before her reply is expected (the first 300 ms is held back by the browser), so the silence
+    // before the reply is as short as possible and the reply is never held back behind the lead-in.
+    const hold = holdBack ? HOLD_BACK_MS : 0;
+    const fit = { budgetMs: this.readyEma + 150 - hold, durOf: (l) => (leadClips.has(l) ? leadClips.get(l).pcm.length / 48 : NaN) };
+    const text = lead.chooseLead(heard, this.recentLeads, Math.random, fit);
+    return (text && leadClips.get(text)) || why('no clip for ' + text);
+  }
+
+  // Sends the clip now. The first Spark piece follows with { cont: true }, so the browser keeps this line playing and carries on.
+  playLead(clip, holdBack, timing) {
+    const now = Date.now();
+    this.send({ type: 'speak', text: clip.text, lead: true, hold: holdBack ? HOLD_BACK_MS : 0 });
+    this.ws.send(clip.pcm);
+    this.lastSaidAt = now;
+    this.recentLeads = [...this.recentLeads, clip.text].slice(-2);
+    this.lastLeadAtMs = now;
+    const endsAt = now + clip.pcm.length / 48 + (holdBack ? HOLD_BACK_MS : 0);
+    this.playUntil = endsAt;
+    if (timing) { timing.lead = clip.text; timing.leadFirstSoundMs = now - timing.decidedAt; }
+    return { text: clip.text, endsAt };
+  }
+
   dropSpec() {
     clearTimeout(this.specTimer);
     if (this.spec) { for (const s of this.spec.byLabel.values()) s.abort.abort(); this.spec = null; }
@@ -570,6 +679,7 @@ class Call {
     const key = this.textKey([{ text: t.partial }]);
     if (this.spec && this.spec.textKey !== key) this.dropSpec();
     if (this.spec || !looksComplete(t.partial)) return;
+    if (!lead.isRoutine(t.partial)) return; // routine talk only: pain, health, worry, safety and the like are never guessed at
     this.specTimer = setTimeout(() => {
       if (this.closed || this.spec) return;
       const next = 'ABCDEFGH'.split('').find((l) => !this.seen.has(l));
@@ -619,6 +729,7 @@ class Call {
     const guess = this.lastLabel || (this.seen.size ? [...this.seen][0] : 'A');
     if (!t.spans.length) { t.spans = [{ label: guess, end: t.partial.length }]; this.seen.add(guess); }
     this.forcedOpen = { id: id[0], base: (t.base ? `${t.base} ${t.partial}` : t.partial).trim() };
+    dbg('OWN END-OF-TURN fired on partial', JSON.stringify(t.partial), 'quietFor', Date.now() - this.lastVoiceAt, 'ms, words steady for', Date.now() - this.lastPartialChangeAt, 'ms');
     this.send({ type: 'speechEnd' });
     this.onMeta({ type: 'speechComplete', turnId: id[0], transcript: t.partial, synthetic: true });
   }
@@ -749,7 +860,7 @@ class Call {
 
   armSilence() {
     this.cancelSilence();
-    if (this.closed || this.suddenReported) return;
+    if (this.closed || this.suddenReported || this.muted) return;
     const stage = this.silenceStage;
     const wait = Math.max(0, this.playUntil - Date.now()) + this.silenceWait(stage);
     const abort = new AbortController();
@@ -877,6 +988,7 @@ class Call {
     care.addLine(this.profile.id, rem ? 'reminder' : 'greeting', line.said);
     this.history.push({ role: 'assistant', content: line.said });
     if (this.outreach && this.outreach.kind === 'reminder') { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
+    if (!rem) this.startPrethink();   // Spark thinks about the likeliest routine answer while the greeting is spoken
     await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem ? 1 : 2, bright: !rem && this.greetingPlain === true });
   }
 
@@ -980,9 +1092,17 @@ class Call {
     const turns = this.pending;
     this.pending = [];
     if (!turns.length || this.closed) return;
+    dbg('RESPOND to', JSON.stringify(turns.map((t) => t.text)));
     const extra = this.careNotes(turns.map((t) => t.text).join(' '));
-    let spec = null;
-    if (!extra && this.spec && this.spec.textKey === this.textKey(turns)) {
+    // The pre-call guess comes first: it is already written, so it beats a guess that only started on the partial words.
+    // Only the very first turn, one voice (A), and only if the words match its class exactly.
+    let pre = null;
+    if (!extra && this.pre && this.userTurns === 1 && turns.every((t) => this.attribute(t).every((p) => p.label === 'A'))) {
+      const cls = lead.prethinkClass(turns.map((t) => t.text).join(' '));
+      if (cls && this.pre.has(cls)) { pre = this.pre.get(cls); this.pre.delete(cls); }
+    }
+    let spec = pre ? { rs: pre.rs, abort: pre.abort } : null;
+    if (!pre && !extra && this.spec && this.spec.textKey === this.textKey(turns)) {
       const labels = new Set(turns.flatMap((t) => this.attribute(t).map((p) => p.label)));
       const [only] = labels;
       if (labels.size === 1 && this.spec.byLabel.has(only)) {
@@ -990,6 +1110,7 @@ class Call {
         this.spec.byLabel.delete(only);
       }
     }
+    this.dropPre();  // every other pre-call guess is dropped unheard
     this.dropSpec(); // aborts every other guess
     this.history.push({ role: 'user', content: this.userMessage(turns) });
     this.history = this.history.slice(-MAX_HISTORY);
@@ -999,7 +1120,9 @@ class Call {
       holdMs,
       metaEndpointMs: t0.endedAt ? t0.completedAt - t0.endedAt : null, // speechEnd -> speechComplete
       endedAt: t0.endedAt || t0.completedAt,
-      guess: spec ? 'hit' : 'miss',
+      decidedAt: Date.now(),
+      guess: pre ? 'prethink' : spec ? 'hit' : 'miss',
+      ...((pre || spec) ? { heard: turns.map((t) => t.text).join(' '), predicted: pre ? pre.sample : turns.map((t) => t.text).join(' ') } : {}),
     };
 
     if (this.abort) this.abort.abort(); // never two replies at once
@@ -1008,14 +1131,18 @@ class Call {
     this.abort = new AbortController();
     this.responding = true;
     this.send({ type: 'thinking' });
+    const holdBack = turns.some((t) => t.synthetic);
+    const clip = this.pickLead(turns, extra, spec, holdBack);
+    const leadSent = clip ? this.playLead(clip, holdBack, timing) : null;
+    const leadNote = clip ? ` You have just said "${clip.text}" aloud as your very first words, so begin your reply directly with what you want to say: no second acknowledgement, no "I see" or "Mm-hm", and never repeat or echo those words.` : '';
     let rs;
     if (spec) {
       this.abort.signal.addEventListener('abort', () => spec.abort.abort(), { once: true });
       rs = spec.rs;
     } else {
-      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}`.trim()), this.abort.signal);
+      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote}`.trim()), this.abort.signal);
     }
-    await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack: turns.some((t) => t.synthetic) });
+    await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent });
   }
 
   // Care effects of the words just heard, and notes for the reply that must be true: a flag resolving (so Maya warmly asks
@@ -1057,7 +1184,9 @@ class Call {
       notes.push('They acknowledged the reminder you just gave. Reply very briefly and warmly. Do not repeat the reminder and do not add any advice about it.');
     }
     const tm = parseTimer(heard);
-    if (tm) {
+    if (tm && this.noTimers) {
+      notes.push('They asked for a timer. In this written chat you cannot set one; say kindly that you can only remind them during a voice call, and that their family can set reminders. Promise nothing else.');
+    } else if (tm) {
       if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS) {
         this.setTimerFromWords({ seconds: tm.seconds, task: tm.task });
         notes.push(`They asked you to remind them in ${tm.seconds < 90 ? `${tm.seconds} seconds` : `${Math.round(tm.seconds / 60)} minutes`}${tm.task ? ` about "${tm.task}"` : ''}. A timer is set for it right now. Confirm in one short sentence that you will remind them then. Promise nothing else.`);
@@ -1074,7 +1203,7 @@ class Call {
     this.ticketInCall = true;
     this.escalations += 1;
     this.prevDelivery = null;
-    const r = care.selfHarmAlert(this.profile.id);
+    const r = care.selfHarmAlert(this.profile.id, { channel: this.channel });
     if (r.isNew) this.safetyFresh = true;
     console.log('safety', JSON.stringify({ count: this.escalations, newAlert: r.isNew })); // no words logged
   }
@@ -1092,7 +1221,7 @@ class Call {
   // An emergency judged from context (Spark tagged concern=urgent). The app alerts the family now; Spark is told as a fact.
   enterHealth() {
     this.health = true; this.ticketInCall = true; this.pendingConcern = null;
-    const r = care.healthAlert(this.profile.id);
+    const r = care.healthAlert(this.profile.id, { channel: this.channel });
     this.healthFresh = r.isNew;
     console.log('health', JSON.stringify({ newAlert: r.isNew })); // no words logged
   }
@@ -1127,10 +1256,10 @@ class Call {
   // Streams Spark's text into the voice sentence by sentence. Each sentence is sent to the voice
   // as soon as it is complete (requests run side by side, audio goes out in order), so speech
   // starts while Spark is still writing. Plain text, with an excited opening phrase for happy news.
-  async speakReply(rs, timing, myGen, { record = false, greeting = false, hangup = false, stripGreeting = false, holdBack = false, maxSentences = 1, bright = false } = {}) {
+  async speakReply(rs, timing, myGen, { record = false, greeting = false, hangup = false, stripGreeting = false, holdBack = false, maxSentences = 1, bright = false, lead: leadIn = null } = {}) {
     const signal = this.abort.signal;
     this.sayingText = '';
-    this.playUntil = 0;
+    this.playUntil = leadIn ? leadIn.endsAt : 0;   // a lead-in line may still be playing
     const jobs = [];
     const said = [];
     let started = false;
@@ -1146,8 +1275,9 @@ class Call {
     let feel = null;
     let repeated = null;
     const splitter = new ChunkSplitter({
-      stripInterjection: record && this.openedWithInterjection,
+      stripInterjection: (record && this.openedWithInterjection) || Boolean(leadIn),
       stripGreeting,
+      stripLead: Boolean(leadIn),
       onName: (l, n) => this.recordName(l, n),
       onFeel: (raw) => {
         // Spark's read goes through the deterministic map; nothing else from it is used.
@@ -1174,7 +1304,7 @@ class Call {
         if (record && !jobs.length && !this.repeatRetried && !this.safety && this.repeatsOpening(text)) { repeated = text; splitter.halted = true; return; } // nothing spoken yet: write it again
         const job = { chunks: [], done: false, err: null, tone: Boolean(kind), kind };
         jobs.push(job);
-        if (!tEnqueue) tEnqueue = Date.now();
+        if (!tEnqueue) { tEnqueue = Date.now(); if (timing) timing.firstPieceMs = tEnqueue - tStart; } // Spark started -> the first sentence is handed to the voice
         if (kind === 'excited') excited = true;
         pieces += 1;
         // [excited] is an ElevenLabs v4 audio tag (docs); it covers only its own short opening piece.
@@ -1183,12 +1313,12 @@ class Call {
         const tone = TONES[kind];
         const tagged = tone ? `${tone[0]} ${spoken}` : spoken;
         const gain = tone ? tone[1] : 1;
-        streamSpeech(tagged, signal, (c) => job.chunks.push(gain === 1 ? c : scale(c, gain)), said.length ? said.join(' ').slice(-300) : undefined, next || undefined)
+        streamSpeech(tagged, signal, (c) => { if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = Date.now() - tEnqueue; job.chunks.push(gain === 1 ? c : scale(c, gain)); }, said.length ? said.join(' ').slice(-300) : undefined, next || undefined)
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });
         said.push(text);
         this.sayingText = said.join(' ');
         const shown = said.join(' ').replace(/\s+([,.;:!?])/g, '$1');
-        if (!started) { started = true; this.send({ type: 'speak', text: shown, hold: holdBack ? HOLD_BACK_MS : 0 }); }
+        if (!started) { started = true; this.send({ type: 'speak', text: shown, hold: leadIn ? 0 : holdBack ? HOLD_BACK_MS : 0, ...(leadIn ? { cont: true } : {}) }); }
         else this.send({ type: 'caption', text: shown });
       },
     });
@@ -1200,7 +1330,7 @@ class Call {
           if (splitter.halted) break;
         }
         splitter.end();
-      } catch (e) { producerErr = e; } finally { producerDone = true; }
+      } catch (e) { producerErr = e; } finally { producerDone = true; if (timing && timing.sparkDoneMs === undefined) timing.sparkDoneMs = Date.now() - tStart; }
     })();
 
     const keep = () => { if (record && said.length) { this.history.push({ role: 'assistant', content: said.join(' ') }); memory.appendTurn(this.profile.id, this.callId, { who: 'Maya', text: said.join(' ') }); } };
@@ -1227,6 +1357,8 @@ class Call {
             const now = Date.now();
             timing.ttsFirstMs = now - tEnqueue;
             timing.speechEndToFirstAudioMs = now - timing.endedAt;
+            if (timing.decidedAt) { timing.replyReadyMs = now - timing.decidedAt; if (timing.guess !== 'prethink') this.readyEma = Math.round(0.6 * this.readyEma + 0.4 * timing.replyReadyMs); }   // learn how long her real reply takes on this line
+            if (leadIn) timing.leadGapMs = now - leadIn.endsAt;   // below 0: her reply was already queued behind the lead-in (no gap); above 0: silence before it
           }
           sentAny = true;
           this.lastSaidAt = Date.now();
@@ -1323,4 +1455,4 @@ class Call {
   }
 }
 
-module.exports = { Call, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { Call, warmLeads, leadClips, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

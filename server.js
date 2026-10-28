@@ -8,6 +8,7 @@ const { Call } = require('./call');
 const { requireRealEnv } = require('./brain');
 const memory = require('./memory');
 const care = require('./care');
+const chat = require('./chat');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env: use defaults */ }
 
@@ -15,6 +16,8 @@ const PORT = Number(process.env.PORT) || 3000;
 const MODE = process.env.META_MODE === 'real' ? 'real' : 'mock';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
+const MAX_VOICE_NOTE_BYTES = 12 * 1024 * 1024; // a WAV voice note (Meta takes up to 10 minutes / 32 MB; the app sends 24 kHz mono)
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -101,6 +104,38 @@ async function handleCare(req, res, url) {
   return sendJson(res, 404, { error: 'Not found' });
 }
 
+// Written chat (chat.js): text, voice notes, photos. Same Maya, memory and safety rules as a call; needs the real Meta keys.
+async function handleChat(req, res, url) {
+  if (!sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
+  const parts = url.pathname.split('/').filter(Boolean).slice(2); // after /api/chat
+  const [pid, what, file] = parts;
+  if (!/^[a-f0-9]{8}$/.test(pid || '')) return sendJson(res, 404, { error: 'Not found' });
+  if (req.method === 'GET' && what === 'media' && file) {
+    const m = chat.readMedia(pid, file);
+    if (!m) return sendJson(res, 404, { error: 'Not found' });
+    res.writeHead(200, { 'Content-Type': m.type, 'Cache-Control': 'private, no-store' });
+    return res.end(m.data);
+  }
+  if (MODE !== 'real') return sendJson(res, 503, { error: 'Chat needs real mode: it uses the Meta brain and ElevenLabs voice, and mock mode never invents a reply.' });
+  const tzParam = url.searchParams.get('tz');
+  const tz = /^[\w/+\-]{1,60}$/.test(tzParam || '') ? tzParam : null;
+  try {
+    if (req.method === 'GET' && !what) return sendJson(res, 200, { messages: chat.thread(pid), callLive: chat.callLive(pid) });
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    if (what === 'message') {
+      const body = await readJson(req, 8192);
+      if (!body) return sendJson(res, 400, { error: 'Bad request' });
+      return sendJson(res, 200, await chat.sendText(pid, body.text, tz));
+    }
+    if (what === 'voicenote') return sendJson(res, 200, await chat.sendVoiceNote(pid, await readBody(req, MAX_VOICE_NOTE_BYTES), tz));
+    if (what === 'image') return sendJson(res, 200, await chat.sendImage(pid, await readBody(req, MAX_IMAGE_BYTES), url.searchParams.get('caption'), tz));
+  } catch (e) {
+    if (!e.status) console.error('chat error:', e.message); // message only, never the person's words
+    return sendJson(res, e.status || 500, { error: e.message });
+  }
+  return sendJson(res, 404, { error: 'Not found' });
+}
+
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { mode: MODE });
@@ -114,8 +149,9 @@ async function handleApi(req, res, url) {
     catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
   }
   const del = /^\/api\/profiles\/([a-f0-9]{8})$/.exec(url.pathname);
-  if (del && req.method === 'DELETE') { care.remove(del[1]); return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); }
+  if (del && req.method === 'DELETE') { care.remove(del[1]); chat.forget(del[1]); return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); }
   if (url.pathname.startsWith('/api/care')) return handleCare(req, res, url);
+  if (url.pathname.startsWith('/api/chat/')) return handleChat(req, res, url);
   // Real mode runs over the /ws call socket; these HTTP endpoints are mock only.
   if (MODE === 'real') return sendJson(res, 404, { error: 'Not found' });
   if (url.pathname === '/api/greet' && req.method === 'POST') {
@@ -165,6 +201,7 @@ const server = http.createServer((req, res) => {
 if (MODE === 'real') {
   try { requireRealEnv(); } catch (e) { console.error(e.message); process.exit(1); }
   memory.recoverAll(); // file any words a crash left in a pending file
+  require('./call').warmLeads(); // render the short lead-in lines in Maya's voice once (a failed one is simply left out)
 }
 care.start(); // reminder scheduler (also runs in mock mode; rings need the page open)
 server.on('upgrade', (req, socket) => {

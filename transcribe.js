@@ -106,4 +106,27 @@ function openTranscribe(apiKey, { onReady, onEvent, onClose, languageBias = DEFA
   };
 }
 
-module.exports = { openTranscribe, Resampler };
+// Voice notes: one recorded WAV, one HTTP request (no socket).
+// Docs: https://dev.meta.ai/docs/api-reference/voice/transcribe
+//   POST https://api.meta.ai/v1/asr/transcribe, Authorization: Bearer <key>, multipart/form-data with two parts:
+//   `request` (JSON, Content-Type application/json): { model: "muse-voice-transcribe-1.0", audioEncoding: "WAV", mode: "PUSH_TO_TALK" }
+//   and `audio` (audio/wav, up to 10 minutes, body at most 32 MB). Errors: 400 unsupported audio or over 10 min, 413 too big,
+//   429 limit reached, 500 failed. The docs do not show the JSON reply fields; checked live on this account: 200 with
+//   { sessionId, transcript, audioDurationMs, turns }. The words are in `transcript` ("" when nothing was said).
+const FILE_URL = 'https://api.meta.ai/v1/asr/transcribe';
+async function transcribeWav(apiKey, wav, signal) {
+  const fd = new FormData();
+  fd.append('request', new Blob([JSON.stringify({ model: MODEL, audioEncoding: 'WAV', mode: 'PUSH_TO_TALK' })], { type: 'application/json' }), 'request.json');
+  fd.append('audio', new Blob([wav], { type: 'audio/wav' }), 'note.wav');
+  const r = await fetch(FILE_URL, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: fd, signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(60000)]) });
+  if (!r.ok) {
+    let detail = '';
+    try { detail = (await r.text()).slice(0, 300); } catch { /* ignore */ }
+    throw new Error(`Meta Transcribe failed (HTTP ${r.status}) ${detail}`.trim());
+  }
+  const d = await r.json();
+  if (typeof d.transcript !== 'string') throw new Error('Meta Transcribe returned no transcript field');
+  return d.transcript.trim();
+}
+
+module.exports = { openTranscribe, Resampler, transcribeWav };

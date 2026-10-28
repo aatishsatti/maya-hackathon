@@ -2,6 +2,7 @@
 // -> the voice, so the first sentence is spoken while Spark is still writing the rest.
 const { sparkStream } = require('./brain');
 const { parseFeel } = require('./emotion');
+const { withoutLead } = require('./lead');
 
 // Spark text arrives in pieces. A ReplyStream keeps everything received so far, so a reply
 // started early (a guess) can be picked up later: new readers get the past text, then the live rest.
@@ -54,7 +55,7 @@ function plain(text) {
 
 class ChunkSplitter {
   // onFeel(rawFeelObjectOrNull) must return the mapped delivery; onPiece(text, kind) gets speech (kind: 'excited' or null).
-  constructor({ onName, onFeel, onPiece, stripInterjection = false, stripGreeting = false }) {
+  constructor({ onName, onFeel, onPiece, stripInterjection = false, stripGreeting = false, stripLead = false }) {
     this.buf = '';
     this.headDone = false;
     this.delivery = null;
@@ -69,6 +70,7 @@ class ChunkSplitter {
     this.onName = onName;
     this.onFeel = onFeel;
     this.onPiece = onPiece;
+    this.stripLead = stripLead;                 // a short acknowledgement was just spoken: a reply may not open with it again
     this.stripGreeting = stripGreeting;         // the call is already under way: a reply may not open with a greeting
     this.stripInterjection = stripInterjection; // the previous reply opened with an interjection: this one may not
   }
@@ -139,6 +141,7 @@ class ChunkSplitter {
     // Whispers are off. If Spark writes [[whisper: words]] anyway, the words are spoken normally.
     let said = raw.replace(/\[\[whisper:\s*([^\]]*)\]\]/gi, '$1');
     if (this.pieceCount === 0 && this.stripGreeting) said = withoutGreeting(said);
+    if (this.pieceCount === 0 && this.stripLead) said = withoutLead(said);
     if (this.pieceCount === 0) said = openingInterjection(said, this.stripInterjection);
     let tone = null;
     said = said.replace(TONE_MARK, (_, k) => { tone = tone || k.toLowerCase(); return ' '; });

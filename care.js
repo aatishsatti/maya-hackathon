@@ -131,6 +131,7 @@ function addLine(id, pool, text, now = Date.now()) {
 
 // ---------------------------------------------------------------- activity / calls
 const liveCalls = new Map(); // profileId -> Call (so a due reminder can be spoken in the live call)
+const liveChats = new Map(); // profileId -> text chat session (chat.js), so the family's Seen reaches a senior who is chatting, not calling
 
 // source: 'maya' | 'app' | 'whatsapp'. App pings are ignored while a Maya call is live (the click that started it
 // must not make a silent senior look "busy elsewhere").
@@ -249,6 +250,7 @@ function resolveSafety(p, f, by) {
   // A live call learns it at once (call.js tells the person in fresh words).
   const live = liveCalls.get(p.id);
   if (live && live.onTicketClosed) live.onTicketClosed(by);
+  else { const chat = liveChats.get(p.id); if (chat && chat.onTicketClosed) chat.onTicketClosed(by); }
 }
 
 // An unseen ticket does not stay open for ever. After cfg.expireCriticalMs (safety / medical) or cfg.expireLightMs (Flag / gentle
@@ -438,7 +440,7 @@ function suddenSilence(id, { worry = true } = {}) {
 // Clear intent to hurt themselves (Tier A, decided in call.js). Safety overrides everything: any mode, any hour, even
 // recent activity. Topic-only: no words, no audio, no diagnosis, no location, no emergency number. Maya never calls
 // emergency services; the family decides. Stays active until the family sees it (not cleared by the senior talking).
-function selfHarmAlert(id, { kind = 'self_harm' } = {}) {
+function selfHarmAlert(id, { kind = 'self_harm', channel = 'call' } = {}) {
   const p = get(id);
   if (!p) return { isNew: false };
   let f = p.flags.find((x) => x.status === 'active' && x.safety);
@@ -448,9 +450,10 @@ function selfHarmAlert(id, { kind = 'self_harm' } = {}) {
   p.flags.unshift(f);
   p.flags.length = Math.min(p.flags.length, 50);
   const name = nameOf(id);
+  const stay = channel === 'chat' ? 'Maya is staying in the chat with them' : 'Maya is staying on the call with them';
   const text = kind === 'health'
-    ? `Urgent: something ${name} described worried Maya about their wellbeing. Maya is staying on the call with them. Please contact ${name} now.`
-    : `Urgent: something ${name} said worried Maya about their safety. Maya is staying on the call with them. Please contact ${name} now.`;
+    ? `Urgent: something ${name} described worried Maya about their wellbeing. ${stay}. Please contact ${name} now.`
+    : `Urgent: something ${name} said worried Maya about their safety. ${stay}. Please contact ${name} now.`;
   const n = makeNotif(p, { to: 'family', kind: 'alert', text, ref: f.id, incident: f.id });
   f.notifId = n.id;
   if (pushFamily('notify', { id, notifId: n.id, kind: 'alert', text })) advance(p, n, 'delivered');
@@ -460,7 +463,7 @@ function selfHarmAlert(id, { kind = 'self_harm' } = {}) {
 }
 // An emergency Maya judged from context (fall with injury, chest pain...): the same persistent ticket as a safety concern (rings
 // again whenever a call ends, closes on Seen / WhatsApp Read or Reply), topic-only, no diagnosis.
-const healthAlert = (id) => selfHarmAlert(id, { kind: 'health' });
+const healthAlert = (id, opts = {}) => selfHarmAlert(id, { ...opts, kind: 'health' });
 
 // Plain ask ("tell my family I'd like to hear from them"): a gentle, honest note. Not an alert, not an emergency.
 function familyAsk(id) {
@@ -764,7 +767,7 @@ function overview() { return memory.listProfiles().map((x) => { const v = view(x
 
 module.exports = {
   cfg, MODES, get, remove, start, stop, tick,
-  touch, lastSeen, callStarted, callEnded, callCount, liveCalls, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
+  touch, lastSeen, callStarted, callEnded, callCount, liveCalls, liveChats, pushSenior, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
   recentLines, isRepeatLine, addLine,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,

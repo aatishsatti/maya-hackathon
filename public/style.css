@@ -1,148 +1,355 @@
+/* Senior app. One centred column, one big button. Pure white and neutral grey; the terracotta Call button and the orb glow are the only warm colours. */
 :root {
-  --ink: #1f2933;
-  --soft: #52606d;
-  --btn: #2f6f4f;
-  --btn-end: #b3392f;
+  --bg: #ffffff;
+  --ink: #1a1a1a;
+  --soft: #666666;
+  --line: #e5e5e5;
+  --btn: #bf5530;       /* call: warm terracotta */
+  --btn-ink: #fff;
+  --end: #9c2f27;       /* end call and errors: brick */
+  --focus: #1a1a1a;
 }
 
 * { box-sizing: border-box; }
 
-html, body { margin: 0; background: #fff; color: var(--ink); }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
 
 body {
   font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1.4;
+  -webkit-text-size-adjust: 100%;
 }
 
+[hidden] { display: none !important; }
+
+/* The column: about 500px wide, full height. */
 .call {
   width: 100%;
   max-width: 500px;
   min-height: 100vh;
+  min-height: 100dvh;
   margin: 0 auto;
-  padding: 32px 24px;
+  padding: 24px 24px 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
 }
 
-h1 { margin: 0 0 24px; font-size: 34px; font-weight: 600; }
+/* Call screen never scrolls as a page: the stage gives way, the button stays where the thumb is. */
+.call.screen { height: 100vh; height: var(--app-h, 100dvh); overflow: hidden; padding: 12px 16px 0; align-items: stretch; text-align: left; }
 
-/* Orb: all motion lives inside the circle. No glow, no rings, nothing outside the edge. */
+h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.04em; }
+.top { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 6px; min-height: 40px; }
+.top-links { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.top-links .link-btn { font-size: 15px; padding: 8px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62vw; }
+
+.stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: none;              /* only on a call: see body[data-call-layout] below */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------------------------------------------------
+   Orb. Drawn on a canvas by orb.js (frosted dome, warm glow moving inside, nothing outside it). The shape is fixed: the canvas
+   is exactly this box, so there is no room for the dome to stretch, and it never does.
+   --------------------------------------------------------------------------------------------------------- */
 .orb {
+  --size: clamp(150px, min(64vw, 34dvh), 250px);
   position: relative;
-  width: 240px;
-  height: 240px;
-  border-radius: 50%;
-  overflow: hidden;
-  clip-path: circle(50%);
-  background: #f3e3cf;
+  width: var(--size);
+  height: var(--size);
   flex: none;
-  transition: background-color 0.8s ease;
+  will-change: transform;
 }
+.orb canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: block; }
+body[data-call-layout='big'] .orb { touch-action: none; cursor: grab; -webkit-user-select: none; user-select: none; }
 
-.orb .layer {
-  position: absolute;
-  width: 130%;
-  height: 130%;
-  border-radius: 50%;
-  filter: blur(22px);
-  opacity: 0.85;
-  transition: background-color 0.8s ease;
+.status { flex: none; margin: 22px 0 6px; font-size: 24px; font-weight: 600; min-height: 1.4em; }
+.caption {
+  margin: 0;
+  max-width: 100%;
+  color: var(--soft);
+  font-size: 19px;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 7.5em;     /* long replies scroll inside the caption, they never push the button */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-.orb .l1 { background: #e9a46a; top: -25%; left: -30%; animation: drift1 14s ease-in-out infinite alternate; }
-.orb .l2 { background: #d9777f; top: 5%;   left: 15%;  animation: drift2 17s ease-in-out infinite alternate; }
-.orb .l3 { background: #f6d28b; top: 20%;  left: -20%; animation: drift3 11s ease-in-out infinite alternate; }
-
-@keyframes drift1 { to { transform: translate(30%, 22%) scale(0.9); } }
-@keyframes drift2 { to { transform: translate(-28%, -18%) scale(1.1); } }
-@keyframes drift3 { to { transform: translate(24%, -26%) scale(0.85); } }
-@keyframes breathe { 50% { transform: scale(1.18); } }
-
-/* Idle: very slow, calm. */
-.orb[data-state='idle'] .layer { animation-duration: 28s, 28s, 28s; opacity: 0.6; }
-
-/* Listening: cool, attentive colours. */
-.orb[data-state='listening'] { background: #dbe9ee; }
-.orb[data-state='listening'] .l1 { background: #7fb7c9; }
-.orb[data-state='listening'] .l2 { background: #9ec9a8; }
-.orb[data-state='listening'] .l3 { background: #e4eec5; }
-
-/* Thinking: slower, muted lavender. */
-.orb[data-state='thinking'] { background: #e6e0ee; }
-.orb[data-state='thinking'] .l1 { background: #a99bc9; animation-duration: 22s; }
-.orb[data-state='thinking'] .l2 { background: #c9a0b8; animation-duration: 26s; }
-.orb[data-state='thinking'] .l3 { background: #d8d3ec; animation-duration: 18s; }
-
-/* Speaking: warm colours, inner layers breathe faster. Still inside the circle. */
-.orb[data-state='speaking'] .l1 { animation: drift1 6s ease-in-out infinite alternate, breathe 3.2s ease-in-out infinite; }
-.orb[data-state='speaking'] .l2 { animation: drift2 7s ease-in-out infinite alternate, breathe 4s ease-in-out infinite; }
-.orb[data-state='speaking'] .l3 { animation: drift3 5s ease-in-out infinite alternate, breathe 2.6s ease-in-out infinite; }
-
-.status { margin: 28px 0 8px; font-size: 26px; font-weight: 600; min-height: 1.4em; }
-.caption { margin: 0; color: var(--soft); min-height: 3em; }
 
 .error {
   margin: 12px 0 0;
+  max-width: 100%;
   padding: 12px 16px;
-  border: 2px solid var(--btn-end);
-  border-radius: 12px;
-  color: var(--btn-end);
+  border: 1.5px solid var(--end);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--end);
+  font-size: 17px;
   font-weight: 600;
+  max-height: 9em;
+  overflow-y: auto;
 }
 
 .call-btn {
-  margin-top: auto;
-  width: 100%;
-  min-height: 84px;
-  padding: 20px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 64px;
+  padding: 10px 14px;
   border: 0;
-  border-radius: 20px;
+  border-radius: 18px;
   background: var(--btn);
-  color: #fff;
+  color: var(--btn-ink);
   font: inherit;
-  font-size: 30px;
+  font-size: 26px;
   font-weight: 700;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.2s ease;
 }
-.call-btn:focus-visible { outline: 4px solid #1f2933; outline-offset: 3px; }
-.call-btn[data-live='true'] { background: var(--btn-end); }
+.call-btn:hover { background: #ac4a28; }
+.call-btn:focus-visible { outline: 4px solid var(--focus); outline-offset: 3px; }
 .call-btn:disabled { opacity: 0.6; cursor: default; }
 
-.mode-note { margin: 16px 0 0; font-size: 16px; color: var(--soft); }
+.mode-note { margin: 6px 0 0; font-size: 14px; color: var(--soft); text-align: center; }
 
-@media (prefers-reduced-motion: reduce) {
-  .orb .layer { animation: none !important; }
+.link-btn {
+  font: inherit;
+  font-size: 15px;
+  background: none;
+  border: none;
+  padding: 8px 4px;
+  color: var(--soft);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.link-btn:hover { color: var(--ink); }
+.link-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+
+/* ---------------------------------------------------------------------------------------------------------
+   Screens. body[data-call-layout] comes from the call state (app.js):
+     none  no call: the chat fills the screen, the Call button is pinned at the bottom
+     big   call, full: only the big orb, centred (no chat)
+     small call, minimized or muted: small orb, Mute + Cut Call, the chat below it
+   --------------------------------------------------------------------------------------------------------- */
+.chat { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; width: 100%; }
+body[data-call-layout='big'] .chat { display: none; }
+body[data-call-layout='big'] .stage, body[data-call-layout='small'] .stage { display: flex; }
+body[data-call-layout='big'] .top-links { visibility: hidden; }
+body[data-call-layout='small'] .top-links { display: none; }
+
+body[data-call-layout='big'] .stage { flex: 1 1 auto; cursor: pointer; }
+body[data-call-layout='big'] .orb { --size: clamp(190px, min(70vw, 42dvh), 340px); }
+/* Minimized: the call is a small floating widget (orb + Mute / Expand / Cut / Aa as one piece). It is out of the page flow, so the chat
+   fills the screen; orb.js places it (bottom-right above the composer by default) and lets a finger drag it anywhere on screen. */
+body[data-call-layout='small'] .stage {
+  position: fixed; left: 0; top: 0; z-index: 5; width: max-content; max-width: calc(100vw - 16px); flex: none; padding: 8px; gap: 6px;
+  background: #fff; border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  transform: translate(var(--wx, 0px), var(--wy, 0px)); touch-action: none; -webkit-user-select: none; user-select: none; cursor: grab;
+  animation: widget-in 0.35s ease-out both;
+}
+body[data-call-layout='small'] .stage.dragging { cursor: grabbing; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2); }
+@keyframes widget-in { from { opacity: 0; } }
+body[data-call-layout='small'] .orb { --size: 56px; cursor: pointer; }
+body[data-call-layout='small'] .status { margin: 2px 0 0; font-size: 12px; font-weight: 600; min-height: 0; max-width: 150px; text-align: center; line-height: 1.25; }
+body[data-call-layout='small'] .caption, body[data-call-layout='small'] .full-hint { display: none; }
+.orb[data-muted='true'] { filter: grayscale(0.9); opacity: 0.55; }
+.muted-tag { margin: 6px 0 0; font-size: 18px; font-weight: 700; color: var(--end); }
+.full-hint { margin: 18px 0 0; font-size: 16px; color: var(--soft); }
+/* No words on a call by default: just the orb. The words stay in the page for screen readers (visually hidden, not removed).
+   The Aa button (per person, remembered) puts status and captions back under the orb. */
+body:not([data-captions='on']) .status, body:not([data-captions='on']) .caption, body:not([data-captions='on']) .muted-tag, body:not([data-captions='on']) .full-hint {
+  position: absolute; width: 1px; height: 1px; min-height: 0; max-height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+body[data-call-layout='small'] .muted-tag { font-size: 12px; margin-top: 0; max-width: 150px; text-align: center; }
+
+.call-controls { display: none; width: 100%; gap: 14px; margin-top: 10px; justify-content: center; align-items: center; }
+body[data-call-layout='small'] .call-controls { display: flex; width: auto; gap: 6px; margin-top: 0; }
+/* Small round icon buttons, like a chat app's call bar: quiet, not toy-coloured. */
+.strip-btn {
+  flex: none; width: 44px; height: 44px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+  border: 1.5px solid var(--line); background: #fff; color: var(--ink); font: inherit; font-size: 15px; font-weight: 600; letter-spacing: -0.02em;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, opacity 0.25s ease;
+}
+.strip-btn svg { width: 22px; height: 22px; fill: currentColor; }
+.strip-btn:hover { background: #f2f2f2; }
+.strip-btn:focus-visible, .cap-top:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.strip-btn .i-mic-off { display: none; }
+.strip-btn .slash { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.strip-btn.mute[aria-pressed='true'] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.strip-btn.mute[aria-pressed='true'] .i-mic { display: none; }
+.strip-btn.mute[aria-pressed='true'] .i-mic-off { display: block; }
+.strip-btn.cut { background: var(--end); border-color: var(--end); color: #fff; }
+.strip-btn.cut:hover { background: #862820; }
+.strip-btn.cut svg { transform: rotate(0deg); }
+.strip-btn.cap[aria-pressed='true'], .cap-top[aria-pressed='true'] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.cap-top { flex: none; width: 34px; height: 34px; padding: 0; border-radius: 50%; border: 1.5px solid var(--line); background: #fff; color: var(--soft); font: inherit; font-size: 13px; font-weight: 600; letter-spacing: -0.02em; cursor: pointer; }
+body[data-call-layout='big'] .cap-top { visibility: hidden; }
+.ctl-btn {
+  flex: 1 1 0; min-width: 0; min-height: 60px; padding: 8px 12px; border-radius: 16px; font: inherit; font-size: 24px; font-weight: 700;
+  cursor: pointer; border: 2px solid var(--ink); background: #fff; color: var(--ink); -webkit-tap-highlight-color: transparent;
+}
+.ctl-btn:focus-visible { outline: 4px solid var(--focus); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { body[data-call-layout='small'] .stage { animation: none; } }
+body[data-call-layout='small'] .strip-btn { width: 32px; height: 32px; font-size: 12px; }
+body[data-call-layout='small'] .strip-btn svg { width: 17px; height: 17px; }
+body[data-call-layout='small'] #callBtn { display: none; }
+
+/* The thread: Maya on the left, the person on the right, big readable text. */
+.thread {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 0 10px;
+  display: flex; flex-direction: column; gap: 12px; scroll-behavior: auto;
+}
+.msg { display: flex; flex-direction: column; max-width: 86%; }
+.msg.maya { align-self: flex-start; align-items: flex-start; }
+.msg.senior { align-self: flex-end; align-items: flex-end; }
+.who { font-size: 14px; color: var(--soft); margin: 0 6px 2px; }
+.bubble { padding: 12px 16px; border-radius: 20px; font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; white-space: pre-wrap; text-align: left; }
+.msg.maya .bubble { background: #fff; border: 1.5px solid var(--line); border-bottom-left-radius: 6px; }
+.msg.senior .bubble { background: #f2f2f2; border-bottom-right-radius: 6px; }
+.msg.pending .bubble { opacity: 0.6; }
+.msg .time { font-size: 13px; color: var(--soft); margin: 2px 6px 0; }
+.msg .vtext { margin: 4px 6px 0; font-size: 17px; color: var(--soft); text-align: left; overflow-wrap: anywhere; }
+.msg .voice-fail { margin: 4px 6px 0; font-size: 16px; font-weight: 600; color: var(--end); }
+.bubble.voice { display: flex; align-items: center; gap: 12px; min-width: min(260px, 70vw); white-space: normal; }
+.play { flex: none; width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--btn); color: #fff; cursor: pointer; display: grid; place-items: center; }
+.play svg { width: 26px; height: 26px; fill: currentColor; }
+.play:disabled { background: #d9d9d9; cursor: default; }
+.play:focus-visible { outline: 4px solid var(--focus); outline-offset: 3px; }
+.vmeta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.vbar { height: 8px; border-radius: 4px; background: rgba(26, 26, 26, 0.14); overflow: hidden; }
+.vbar i { display: block; height: 100%; width: 0; background: var(--btn); }
+.vdur { font-size: 15px; color: var(--soft); }
+.bubble.photo { padding: 6px; background: #f2f2f2; }
+.bubble.photo img { display: block; max-width: 100%; width: 260px; max-height: 320px; object-fit: cover; border-radius: 14px; }
+.msg .caption-line { margin: 4px 6px 0; font-size: 20px; text-align: left; overflow-wrap: anywhere; }
+.empty { margin: auto; padding: 16px; text-align: center; color: var(--soft); font-size: 20px; }
+.notice { align-self: center; max-width: 94%; padding: 12px 16px; border: 1.5px solid var(--end); border-radius: 14px; background: #fff; color: var(--end); font-size: 18px; font-weight: 600; text-align: left; overflow-wrap: anywhere; }
+.busy { margin: 0; padding: 4px 8px; font-size: 18px; color: var(--soft); text-align: center; }
+.chat .error { margin: 6px 0; }
+
+/* Photo preview: replaces the thread and the composer until Send or Cancel. */
+.photo-preview { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 6px 0 max(12px, env(safe-area-inset-bottom)); }
+.chat[data-preview='true'] .thread, .chat[data-preview='true'] .composer, .chat[data-preview='true'] .voice-rule, .chat[data-preview='true'] .rec-bar, .chat[data-preview='true'] .busy { display: none; }
+.preview-img { flex: 1 1 auto; min-height: 0; display: grid; place-items: center; border-radius: 18px; background: #f2f2f2; overflow: hidden; }
+.preview-img img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.preview-ask { flex: none; margin: 0; text-align: center; font-size: 22px; font-weight: 600; }
+.preview-row { flex: none; display: flex; gap: 12px; }
+.preview-row .ctl-btn { min-height: 64px; }
+.ctl-btn.send { background: var(--btn); border-color: var(--btn); color: #fff; }
+
+/* Recording bar and the call rule. */
+.rec-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; padding: 8px 12px; margin: 4px 0; border-radius: 14px; background: #fdecea; color: var(--end); font-size: 17px; }
+.rec-time { font-weight: 700; }
+.rec-help { flex: 1 1 140px; }
+.voice-rule { margin: 4px 0; font-size: 15px; color: var(--soft); text-align: center; }
+
+/* The composer is pinned at the bottom: text row, then Voice / Photo / Call. */
+.composer { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 8px 0 max(12px, env(safe-area-inset-bottom)); background: var(--bg); border-top: 1.5px solid var(--line); }
+.type-row { display: flex; gap: 10px; align-items: flex-end; }
+.type-row textarea {
+  flex: 1 1 auto; min-width: 0; font: inherit; font-size: 20px; line-height: 1.3; padding: 12px 14px; min-height: 56px; max-height: 8.5em; resize: none;
+  border: 1.5px solid var(--line); border-radius: 16px; background: #fff; color: var(--ink);
+}
+.type-row textarea:focus { outline: 3px solid var(--focus); outline-offset: 1px; }
+.send-btn { flex: none; min-height: 56px; padding: 0 20px; border: 0; border-radius: 16px; background: var(--ink); color: #fff; font: inherit; font-size: 20px; font-weight: 700; cursor: pointer; }
+.send-btn:disabled, .act-btn:disabled { opacity: 0.5; cursor: default; }
+.send-btn:focus-visible, .act-btn:focus-visible { outline: 4px solid var(--focus); outline-offset: 3px; }
+.action-row { display: flex; gap: 10px; align-items: stretch; }
+.act-btn {
+  flex: none; width: 76px; min-height: 64px; padding: 6px 4px; border: 1.5px solid var(--line); border-radius: 18px; background: #fff; color: var(--ink);
+  font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+}
+.act-btn svg { flex: none; width: 26px; height: 26px; fill: currentColor; }
+.act-btn[data-on='true'] { background: var(--end); border-color: var(--end); color: #fff; }
+
+/* Short screens (small phones, landscape): smaller orb and tighter text so the caption scrolls inside its own box. */
+@media (max-height: 680px) {
+  .status { margin-top: 12px; font-size: 20px; }
+  .caption { font-size: 17px; max-height: 4.6em; }
+  .call-btn { min-height: 58px; font-size: 24px; }
+  .act-btn { min-height: 58px; }
+  body[data-call-layout='small'] .orb { --size: 48px; }
+  body[data-call-layout='small'] .strip-btn { width: 30px; height: 30px; }
+  .ctl-btn { min-height: 54px; font-size: 22px; }
+}
+/* Very short screens (an open phone keyboard, landscape): everything stays reachable. The call becomes one row (small orb,
+   Mute, Cut Call), the header and extra text go, and the thread keeps whatever room is left and scrolls. */
+@media (max-height: 480px) {
+  .call.screen { padding-top: 6px; }
+  .top { min-height: 32px; padding-bottom: 2px; }
+  .voice-rule, .busy { font-size: 14px; padding: 2px 8px; }
+  .type-row textarea { min-height: 48px; padding: 8px 12px; }
+  .send-btn { min-height: 48px; }
+  .composer { gap: 6px; padding-top: 6px; }
+  .act-btn { min-height: 52px; flex-direction: row; gap: 6px; width: auto; padding: 4px 10px; }
+  .act-btn svg { width: 22px; height: 22px; }
+  .call-btn { min-height: 52px; font-size: 22px; }
+  .rec-help { display: none; }
+  .preview-ask { font-size: 18px; }
+  .preview-row .ctl-btn { min-height: 52px; font-size: 20px; }
+  body[data-call-layout='big'] .orb { --size: clamp(96px, 46dvh, 340px); }
+  body[data-call-layout='big'] .status { margin-top: 8px; font-size: 18px; }
+  body[data-call-layout='big'] .caption { max-height: 2.6em; font-size: 15px; }
+  body[data-call-layout='big'] .full-hint { margin-top: 6px; font-size: 14px; }
+  body[data-call-layout='small'] .top { display: none; }
+  body[data-call-layout='small'] .muted-tag { display: none; }
+}
+@media (max-height: 340px) {
+  .top { display: none; }
+  .msg .time, .who { display: none; }
+  .bubble { font-size: 19px; padding: 8px 12px; }
+}
+@media (max-width: 380px) {
+  .bubble { font-size: 21px; }
+  .act-btn { width: 66px; }
+  .call-btn { font-size: 22px; }
+  .send-btn { padding: 0 14px; }
 }
 
-/* Profile picker (family setup). The call screen itself stays one big button. */
-.picker .pick-title { margin: 0 0 16px; }
+
+/* Profile picker (family setup). Its own page scroll; the call screen stays one big button. */
+.picker { padding-bottom: 32px; }
+.picker h1 { font-size: 30px; margin-bottom: 20px; letter-spacing: 0; }
+.picker .pick-title { margin: 0 0 16px; color: var(--soft); }
 .profile-list { display: flex; flex-direction: column; gap: 12px; width: 100%; }
-.pick-btn { font: inherit; font-size: 24px; padding: 16px; border-radius: 14px; border: 2px solid var(--btn); background: #fff; color: var(--ink); cursor: pointer; }
-.pick-btn:hover, .pick-btn:focus-visible { background: #eaf4ee; }
-.link-btn { font: inherit; font-size: 18px; background: none; border: none; color: var(--soft); text-decoration: underline; cursor: pointer; margin-top: 16px; }
-.add-form { display: flex; flex-direction: column; gap: 14px; width: 100%; text-align: left; margin-top: 16px; }
-.add-form input[type=text] { font: inherit; width: 100%; padding: 10px; border: 2px solid var(--soft); border-radius: 10px; }
-.add-form fieldset { border: 2px solid #d5dbe0; border-radius: 10px; }
-.add-form legend { font-size: 16px; color: var(--soft); }
-.add-form fieldset label { display: block; padding: 4px 0; }
-
-/* display:flex on .call would otherwise beat the hidden attribute and stack the screens. */
-[hidden] { display: none !important; }
 .profile-row { display: flex; gap: 8px; align-items: stretch; }
-.profile-row .pick-btn { flex: 1; }
-.del-btn { font: inherit; font-size: 16px; padding: 0 12px; border-radius: 14px; border: 2px solid #d5dbe0; background: #fff; color: var(--btn-end); cursor: pointer; }
+.profile-row .pick-btn { flex: 1; min-width: 0; }
+.pick-btn {
+  font: inherit; font-size: 24px; font-weight: 600; padding: 16px; min-height: 64px;
+  border-radius: 18px; border: 1.5px solid var(--line); background: #fff; color: var(--ink); cursor: pointer;
+}
+.pick-btn:hover, .pick-btn:focus-visible { border-color: var(--btn); background: #f2f2f2; }
+.pick-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.del-btn {
+  font: inherit; font-size: 15px; padding: 0 14px; border-radius: 18px; border: 1.5px solid var(--line);
+  background: #fff; color: var(--end); cursor: pointer;
+}
+.add-form { display: flex; flex-direction: column; gap: 14px; width: 100%; text-align: left; margin-top: 16px; }
+.add-form input[type=text] { font: inherit; width: 100%; padding: 12px; border: 1.5px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); }
+.add-form input[type=text]:focus { outline: 3px solid var(--focus); outline-offset: 1px; }
+.add-form fieldset { border: 1.5px solid var(--line); border-radius: 12px; }
+.add-form legend { font-size: 15px; color: var(--soft); }
+.add-form fieldset label { display: block; padding: 6px 0; }
+.add-form .pick-btn { background: var(--btn); border-color: var(--btn); color: #fff; }
+.add-form .pick-btn:disabled { opacity: 0.6; }
 
-/* Incoming ring / family message cards (inbox.js). Gentle, large, one clear button each. */
-.inbox { position: fixed; left: 0; right: 0; top: 0; z-index: 10; display: flex; flex-direction: column; gap: 10px; align-items: center; padding: 12px; pointer-events: none; }
-.inbox-card { pointer-events: auto; width: 100%; max-width: 480px; background: #fff; border: 3px solid var(--btn); border-radius: 18px; padding: 16px 18px; box-shadow: 0 6px 24px rgba(31, 41, 51, 0.18); text-align: center; animation: inbox-in 0.4s ease-out; }
-.inbox-card p { margin: 0 0 12px; font-size: 24px; font-weight: 600; }
+/* Incoming ring / family message cards (inbox.js). Fixed at the top so they never sit on the call button. */
+.inbox { position: fixed; left: 0; right: 0; top: 0; z-index: 10; display: flex; flex-direction: column; gap: 10px; align-items: center; padding: max(12px, env(safe-area-inset-top)) 12px 12px; pointer-events: none; }
+.inbox-card { pointer-events: auto; width: 100%; max-width: 476px; background: #fff; border: 1.5px solid var(--line); border-radius: 22px; padding: 18px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14); text-align: center; animation: inbox-in 0.4s ease-out; max-height: calc(100dvh - 24px); overflow-y: auto; }
+.inbox-card p { margin: 0 0 14px; font-size: 22px; font-weight: 600; }
 .inbox-row { display: flex; gap: 12px; }
-.inbox-btn { flex: 1; font: inherit; font-size: 24px; font-weight: 700; min-height: 64px; border-radius: 14px; border: 2px solid var(--soft); background: #fff; color: var(--ink); cursor: pointer; }
+.inbox-btn { flex: 1; font: inherit; font-size: 22px; font-weight: 700; min-height: 64px; border-radius: 16px; border: 1.5px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
 .inbox-btn.accept { background: var(--btn); border-color: var(--btn); color: #fff; }
-.inbox-btn:focus-visible { outline: 4px solid #1f2933; outline-offset: 2px; }
+.inbox-btn:focus-visible { outline: 4px solid var(--focus); outline-offset: 2px; }
+.inbox-hint { display: block; margin: -6px 0 10px; font-size: 15px; color: var(--soft); }
 @keyframes inbox-in { from { opacity: 0; transform: translateY(-12px); } }
 @media (prefers-reduced-motion: reduce) { .inbox-card { animation: none; } }
-
-.inbox-hint { display: block; margin: -6px 0 10px; font-size: 16px; color: var(--soft); }

@@ -6,8 +6,92 @@
 // Known limits: the first ~100 ms of an utterance is not recorded (recorder starts
 // after the gate opens). Playback in mock mode uses the browser's own speech voice
 // as a placeholder; it is replaced when real audio output is built.
+// Pure helpers, kept outside the page code so tests can load them in Node (module.exports at the bottom).
+//
+// Orb levels. Live loudness (mic RMS or Maya's playback RMS, 0..1) becomes 0..1 here, is smoothed, and then drives the orb
+// (orb.js) INSIDE the dome only: how big and high the inner glow sits (level, raise) and how fast it moves (rate). No outer
+// glow, no rings outside. When nothing is heard the orb breathes slowly on its own.
+const MayaOrbLevels = {
+  FLOOR_DB: -50,           // at or below this the level is 0
+  CEIL_DB: -10,            // at or above this the level is 1
+  ATTACK_MS: 80,           // rises quickly with the voice
+  RELEASE_MS: 350,         // falls slowly
+  MAX_RAISE: 14,           // percentage points the water can rise
+  MAX_RATE: 3.5,           // swell speed multiplier at full level
+  BREATH_MS: 6000,         // one slow breath when silent
+  BREATH_RAISE: 2.5,
+  BREATH_RATE: 0.7,
+  normalize(rms) {
+    if (!(rms > 0)) return 0;
+    const db = 20 * Math.log10(rms);
+    return Math.min(1, Math.max(0, (db - this.FLOOR_DB) / (this.CEIL_DB - this.FLOOR_DB)));
+  },
+  smooth(prev, target, dtMs) {
+    const tau = target > prev ? this.ATTACK_MS : this.RELEASE_MS;
+    return prev + (target - prev) * (1 - Math.exp(-Math.max(0, dtMs) / tau));
+  },
+  // Mock mode only: the browser's own speech voice has no audio node, so there is no real playback level to read. While Maya
+  // speaks the orb pulses slowly instead (it rises when she starts, settles when she stops). Real mode never uses this.
+  MOCK_PULSE_MS: 1800,
+  mockPulse(tMs) { return 0.3 + 0.25 * (0.5 - 0.5 * Math.cos((2 * Math.PI * tMs) / this.MOCK_PULSE_MS)); },
+  // The level the orb should follow right now. Real playback and mic levels are always real readings; the synthetic pulse
+  // exists only for mock mode, and real mode without a reading (for example the fallback browser voice) stays at 0.
+  target({ src, mode, hasAnalyser, playRms, micRms, tMs }) {
+    if (src === 'mic') return this.normalize(micRms);
+    if (src !== 'playback') return 0;
+    if (hasAnalyser) return this.normalize(playRms);
+    return mode === 'mock' ? this.mockPulse(tMs) : 0;
+  },
+  // Which level the orb follows: Maya's playback while she speaks, the person's mic while they talk, none otherwise.
+  source({ state, hearing, muted }) {
+    if (state === 'speaking') return 'playback';
+    if (state === 'listening' && hearing && !muted) return 'mic';
+    return 'none';
+  },
+  // Smoothed level + time -> what to draw. Silence (level ~0) gives the slow breathing, speech overrides it.
+  frame(level, tMs) {
+    const breath = 0.5 - 0.5 * Math.cos((2 * Math.PI * tMs) / this.BREATH_MS); // 0..1..0
+    const l = Math.min(1, Math.max(0, level));
+    return {
+      raise: Math.max(this.BREATH_RAISE * breath, l * this.MAX_RAISE),
+      rate: (this.BREATH_RATE + 0.2 * breath) + l * (this.MAX_RATE - (this.BREATH_RATE + 0.2 * breath)),
+    };
+  },
+};
+
+// Call view states. The call is either not live (ended) or live with a view and a mute flag:
+//   full       chat hidden, big orb only
+//   minimized  small orb, chat visible, call live
+//   muted      call live, Maya cannot hear; the orb is marked muted (small, or big if the person expanded it)
+//   ended      chat full, Call button back
+// Muting never un-mutes by itself: minimizing or expanding a muted call keeps it muted. While live, typed chat gets a text
+// reply only and a voice note's reply is text too (one Maya voice at a time); the chat is one thread before, during and after.
+class MayaCallState {
+  constructor(onChange) { this.live = false; this.view = 'full'; this.muted = false; this.onChange = onChange || (() => {}); }
+  get state() { return !this.live ? 'ended' : this.muted ? 'muted' : this.view; }
+  get orb() { return !this.live ? 'none' : this.view === 'full' ? 'big' : 'small'; }
+  get chatVisible() { return !this.live || this.view === 'minimized'; }
+  get micOpen() { return this.live && !this.muted; }
+  get callButton() { return !this.live; }
+  get typedReply() { return this.live ? 'text-only' : 'text'; }
+  get voiceNoteReply() { return this.live ? 'text-only' : 'voice'; }
+  set(live, view, muted) {
+    const before = `${this.state}/${this.view}`;
+    this.live = live; this.view = view; this.muted = muted;
+    if (`${this.state}/${this.view}` !== before) this.onChange(this);
+  }
+  start() { this.set(true, 'full', false); }
+  end() { this.set(false, 'full', false); }
+  minimize() { if (this.live) this.set(true, 'minimized', this.muted); }
+  expand() { if (this.live) this.set(true, 'full', this.muted); }
+  mute() { if (this.live) this.set(true, this.view, true); }
+  unmute() { if (this.live) this.set(true, this.view, false); }
+}
+if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallState };
+
 (() => {
   'use strict';
+  if (typeof document === 'undefined') return; // loaded by a test, not a page
 
   const SILENCE_MS = 1400;       // seniors pause; wait before ending an utterance
   const MAX_UTTERANCE_MS = 30000;
@@ -40,6 +124,49 @@
   let call = null;   // active call, or null
   let mode = 'mock'; // from /api/config
   let gen = 0;       // bumped on every start/end; stale async work checks it
+
+  // Call view state (full / minimized / muted / ended). Wired to the real call here; the screens that show it come later:
+  // body[data-call-view] and orb[data-muted] are the hooks. Muting turns the mic track off (Maya hears silence) and tells
+  // the server so its silence timers do not hang up a call the person chose to mute.
+  const callState = new MayaCallState((cs) => {
+    document.body.dataset.callView = cs.state;   // ended | full | minimized | muted
+    document.body.dataset.callLayout = cs.orb;   // none | big | small (what the screen shows)
+    orb.dataset.muted = String(cs.muted);
+    window.dispatchEvent(new Event('maya-callstate'));
+    const c = call;
+    if (!c) return;
+    c.stream.getAudioTracks().forEach((t) => { t.enabled = cs.micOpen; });
+    if (c.ws && c.ws.readyState === WebSocket.OPEN && c.sentMute !== cs.muted) { c.ws.send(JSON.stringify({ type: 'mute', on: cs.muted })); c.sentMute = cs.muted; } // only when the mute flag really changed
+  });
+  document.body.dataset.callView = callState.state;
+  document.body.dataset.callLayout = callState.orb;
+
+  // ---- Orb levels: live loudness moves the water inside the circle (see MayaOrbLevels above) ----
+  const reduceMotion = Boolean(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  let orbLevel = 0;
+  let orbLast = 0;
+  function rmsOf(analyser, buf) {
+    if (!analyser) return 0;
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    return Math.sqrt(sum / buf.length);
+  }
+  function orbTick(ts) {
+    requestAnimationFrame(orbTick);
+    const dt = orbLast ? ts - orbLast : 16;
+    orbLast = ts;
+    const c = call;
+    let target = 0;
+    if (c) {
+      const src = MayaOrbLevels.source({ state: orb.dataset.state, hearing: statusEl.textContent === STATUS.hearing, muted: callState.muted });
+      target = MayaOrbLevels.target({ src, mode, hasAnalyser: Boolean(c.playAnalyser), playRms: src === 'playback' ? rmsOf(c.playAnalyser, c.playBuf) : 0, micRms: src === 'mic' ? rmsOf(c.analyser, c.buf) : 0, tMs: ts });
+    }
+    orbLevel = MayaOrbLevels.smooth(orbLevel, target, dt);
+    const f = MayaOrbLevels.frame(orbLevel, ts);
+    if (window.mayaOrb) window.mayaOrb.draw(ts, orbLevel, f); // orb.js paints the dome from the live level, speed and raise
+  }
+  if (!reduceMotion) requestAnimationFrame(orbTick);
 
   function setState(state, statusKey) {
     orb.dataset.state = state;
@@ -186,6 +313,32 @@
     c.onsetTicks = 0;
     setState('thinking');
     if (u.recorder.state !== 'inactive') u.recorder.stop();
+  }
+
+  // Mock mode only (real mode streams to the server and never starts a recorder): the recorder stopped, so send what was said
+  // to the mock server and play the mock reply. Restored as it was before Feature 1 removed it while startUtterance still calls it.
+  async function onUtteranceStopped(u, myGen) {
+    if (u.discard || myGen !== gen || !call) return;
+    const blob = new Blob(u.chunks, { type: u.recorder.mimeType || 'audio/webm' });
+    if (blob.size < MIN_BLOB_BYTES) { setState('listening'); return; }
+    const c = call;
+    c.turn += 1;
+    const ac = new AbortController();
+    c.fetchAbort = ac;
+    try {
+      const data = await api(`/api/turn`, {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type },
+        body: blob,
+        signal: ac.signal,
+      });
+      if (myGen !== gen) return;
+      c.fetchAbort = null;
+      speak(data, myGen);
+    } catch (e) {
+      if (e.name === 'AbortError' || myGen !== gen) return;
+      endCall(`Something went wrong: ${e.message}`);
+    }
   }
 
   function tick() {
@@ -342,13 +495,20 @@
     switch (ev.type) {
       case 'ready': c.ready = true; chime(c); break; // an instant soft cue while the greeting is being written; it says nothing and claims nothing
       case 'speak':
-        stopPlayback(); c.voiceDone = false;
-        c.ducked = false; clearTimeout(c.duckFailsafe); setMaster(c, 1, 0.01);
-        c.gate = ev.hold ? { holdMs: ev.hold, open: false, paused: false, held: [], timer: null } : null;
+        // cont: the reply's first words, arriving behind a lead-in line that is still playing: do not cut that line off.
+        if (!ev.cont) {
+          stopPlayback(); c.voiceDone = false;
+          c.ducked = false; clearTimeout(c.duckFailsafe); setMaster(c, 1, 0.01);
+          c.gate = ev.hold ? { holdMs: ev.hold, open: false, paused: false, held: [], timer: null } : null;
+        }
+        // lead: a short acknowledgement while Maya is still writing the real reply. The orb stays in its thinking colours.
+        c.leadActive = Boolean(ev.lead);
+        if (ev.lead) { setState('thinking'); break; }
         setState('speaking'); captionEl.textContent = `Maya: ${ev.text}`; break;
       case 'unduck': unduck(c); break;
       case 'caption': if (orb.dataset.state === 'speaking') captionEl.textContent = `Maya: ${ev.text}`; break;
       case 'audioEnd':
+        c.leadActive = false;
         c.voiceDone = true; finishIfDone(c);
         if (ev.timing) console.log('latency', ev.timing);
         break;
@@ -362,6 +522,7 @@
       case 'thinking': setState('thinking'); break;
       case 'idle': if (orb.dataset.state !== 'speaking') setState('listening'); break;
       case 'stopped':
+        c.leadActive = false;
         console.log('stopped', Date.now());
         stopPlayback(); c.voiceDone = false;
         c.ducked = false; clearTimeout(c.duckFailsafe); setMaster(c, 1, 0.01);
@@ -389,6 +550,10 @@
     c.ws = ws;
     c.master = c.ctx.createGain(); // Maya's voice goes through this so her volume can dip instantly
     c.master.connect(c.ctx.destination);
+    c.playAnalyser = c.ctx.createAnalyser(); // reads Maya's playback loudness for the orb; its output goes nowhere
+    c.playAnalyser.fftSize = 1024;
+    c.playBuf = new Float32Array(c.playAnalyser.fftSize);
+    c.master.connect(c.playAnalyser);
     const tap = new AudioWorkletNode(c.ctx, 'mic-tap');
     c.tap = tap;
     const mute = c.ctx.createGain(); // worklet must be connected to run; silent so the mic is never played back
@@ -397,10 +562,11 @@
     tap.connect(mute).connect(c.ctx.destination);
     tap.port.onmessage = (e) => { if (c.ready && ws.readyState === WebSocket.OPEN) ws.send(e.data.buffer); };
     ws.onopen = () => ws.send(JSON.stringify({ type: 'start', sampleRate: c.ctx.sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId }));
+      if (callState.muted) { ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; } // muted while the line was still connecting
     ws.onmessage = (m) => {
       if (myGen !== gen) return;
       if (typeof m.data === 'string') { try { onServerEvent(c, JSON.parse(m.data)); } catch { /* ignore */ } return; }
-      if (orb.dataset.state === 'speaking') feedChunk(c, new Uint8Array(m.data));
+      if (orb.dataset.state === 'speaking' || c.leadActive) feedChunk(c, new Uint8Array(m.data)); // a lead-in line plays while the orb is still in its thinking colours
     };
     ws.onclose = () => { if (myGen === gen) endCall('The connection to Maya ended. Please call again.'); };
     ws.onerror = () => {};
@@ -414,6 +580,7 @@
     const myGen = ++gen;
     showError('');
     captionEl.textContent = '';
+    callState.start();
     setLive(true);
     setState('idle', 'starting');
 
@@ -442,7 +609,7 @@
       buf: new Float32Array(analyser.fftSize),
       utterance: null, fetchAbort: null, timer: null,
       onsetTicks: 0, lastVoice: 0, turn: 0, ws: null, tap: null, ready: false,
-      reason: opts.reason, outreachId: opts.outreachId,
+      reason: opts.reason, outreachId: opts.outreachId, sentMute: false,
     };
     stream.getAudioTracks().forEach((t) => {
       t.onended = () => { if (myGen === gen) endCall('The microphone stopped working. The call has ended.'); };
@@ -483,6 +650,7 @@
       c.ctx.close().catch(() => {});
     }
     stopSpeaking();
+    callState.end();
     setLive(false);
     setState('idle');
     callBtn.disabled = false;
@@ -498,6 +666,7 @@
   window.mayaEndCall = () => endCall();
   window.mayaStartCall = (opts) => { if (!call) startCall(opts); };
   window.mayaInCall = () => Boolean(call);
+  window.mayaCallState = callState; // minimize() / expand() / mute() / unmute(); read .state, .chatVisible, .orb, .typedReply, .voiceNoteReply
 
   api('/api/config').then((cfg) => {
     mode = cfg.mode;

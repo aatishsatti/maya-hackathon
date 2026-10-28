@@ -129,6 +129,8 @@
       ], 'incoming');
       startRing(`o${d.outreachId}`);
     });
+    // Maya's own unprompted chat message (the family's Seen, said in her words) goes to the chat thread (chat-ui.js).
+    es.addEventListener('chat', (e) => { try { window.dispatchEvent(new CustomEvent('maya-chat-message', { detail: JSON.parse(e.data).message })); } catch { /* ignore a bad event */ } });
     es.addEventListener('incomingEnd', (e) => drop(`o${JSON.parse(e.data).outreachId}`));
     es.addEventListener('notice', (e) => {
       const d = JSON.parse(e.data);

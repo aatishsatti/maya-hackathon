@@ -196,4 +196,29 @@ async function sparkComplete(instructions, userText, signal) {
   return text;
 }
 
-module.exports = { requireRealEnv, sparkStream, sparkComplete, streamSpeech, stats };
+// Vision: Meta Chat Completions with an image (https://dev.meta.ai/docs/image-understanding), same endpoint and model
+// as the brain. A user message whose content is a list: { type:'text', text } and { type:'image_url', image_url:{ url } };
+// url is a public URL or a data URL "data:image/jpeg;base64,...". Types image/jpeg, png, gif, webp (and x-icon); up to
+// 50 MB inline; images only in user messages; a corrupt image is HTTP 400. Checked live on this account with a
+// blue/yellow PNG: HTTP 200, correct colours. Returns a plain description for the brain; never a reply to the person.
+const VISION_ASK = 'Describe what is plainly visible in this photo in two or three short, factual sentences, for a friend who cannot see it. Read any clearly visible text. Do not name or guess who a person is, and do not guess feelings, illness, injury causes or anything you cannot see. If it is unclear or you cannot tell, say so.';
+async function describeImage(buf, mime, signal) {
+  const r = await fetch(META_URL, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${process.env.META_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: liveModel(),
+      messages: [{ role: 'user', content: [{ type: 'text', text: VISION_ASK }, { type: 'image_url', image_url: { url: `data:${mime};base64,${buf.toString('base64')}` } }] }],
+      reasoning_effort: 'minimal',
+      max_completion_tokens: 2000,
+    }),
+    signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(60000)]),
+  });
+  if (!r.ok) throw await upstreamError('Meta vision', r);
+  const d = await r.json();
+  const text = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+  if (typeof text !== 'string' || !text.trim()) throw new Error('Meta vision returned no description');
+  return text.trim();
+}
+
+module.exports = { requireRealEnv, sparkStream, sparkComplete, streamSpeech, describeImage, stats };
