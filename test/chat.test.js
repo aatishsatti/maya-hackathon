@@ -104,6 +104,31 @@ test('text: Spark reads crisis before saying anything -> safety path, reply writ
   assert.ok(!/placeholder/.test(r.messages[1].text));
 });
 
+test('text: a no with family named stays a no (negation), is kept for the whole chat, and a later urgent read still alerts', async () => {
+  const id = newSenior(); const sentCount = () => care.get(id).notifications.filter((x) => x.to === 'family').length;
+  reset(PAIN2); await chat.sendText(id, 'my knee is hurting again', null);
+  reset(PAIN1); await chat.sendText(id, 'No, please do not tell my family', null);
+  assert.equal(sentCount(), 0, '"please do not tell my family" is not a yes');
+  reset(PAIN2); await chat.sendText(id, 'the knee hurts again', null);
+  assert.match(asked[0].roster, /told you no to letting their family know/);
+  reset(PAIN1); await chat.sendText(id, 'I said do not alert my family', null);
+  assert.equal(sentCount(), 0);
+  reset(FALL); await chat.sendText(id, 'I fell and cannot get up', null);
+  assert.equal(activeSafety(id).length, 1, 'urgent still alerts');
+  const id2 = newSenior();
+  reset(PLAIN); await chat.sendText(id2, 'I told you specifically do not tell my son', null);
+  assert.equal(care.get(id2).notifications.filter((x) => x.to === 'family').length, 0, 'a refusal with no question open sends nothing');
+});
+
+test('text: what they said earlier in the chat is in her notes for a "do you remember" ask, and only then', async () => {
+  const id = newSenior();
+  reset(PLAIN); await chat.sendText(id, 'my grandson Toby called today', null);
+  for (let k = 0; k < 8; k++) { reset(PLAIN); await chat.sendText(id, `just having tea number ${k}`, null); }
+  assert.doesNotMatch(asked[0].roster, /Toby/);
+  reset(PLAIN); await chat.sendText(id, 'you remember his name?', null);
+  assert.match(asked[0].roster, /WHAT THEY TOLD YOU EARLIER IN THIS CONVERSATION/); assert.match(asked[0].roster, /grandson Toby/);
+});
+
 test('text: plain pain follows the ladder: first no alert, repeat asks, yes alerts; severe asks at once; fall alerts', async () => {
   const id = newSenior();
   const flagsBefore = () => care.get(id).flags.length + alertsFor(id).length;

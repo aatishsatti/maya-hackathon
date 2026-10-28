@@ -94,6 +94,7 @@ class ChatSession {
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
+    this.familyDeclined = false; this.said = [];   // as in call.js: a no to telling family lasts the whole chat; what they said, for recall asks
     this.prevDelivery = null; this.askWhat = false;
     this.reminderFacts = null; this.reminderPending = null; this.awaitAck = null; this.nameChance = 0;
   }
@@ -147,6 +148,7 @@ class ChatSession {
     const extra = this.careNotes(heard);
     this.history.push({ role: 'user', content: `${this.who('A')}: ${message}` });
     this.history = this.history.slice(-MAX_HISTORY);
+    this.said = [...this.said, `${this.who('A')}: ${message}`].slice(-60);
     memory.appendTurn(id, this.callId, { label: 'A', text: message, userSaid: true });
     const channelNote = `CHANNEL: this is a written chat message in their app, not a call. ${how === 'voice' ? 'They sent you a voice note and the words above are what they said in it; you will answer by voice note, so write the way you would speak.' : how === 'image' ? 'They sent you a photo; the bracketed words describe it. Answer what matters to them, never claim to see more than the description says.' : 'They cannot hear you; write plainly, warm and short as in a call.'}`;
     this.setFocus(heard, `${extra} ${note}`.trim());
@@ -182,8 +184,9 @@ class ChatSession {
         const concern = String((raw && raw.concern) || '').toLowerCase();
         if (raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
         d.noQuestion = this.lastReplyAsked && concern !== 'unsure';
+        if (concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // already said no to telling family: no second ask
         if (concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
-        else if (concern === 'unsure' && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
+        else if (concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
         // A scam reading is a few short sentences, not the usual two: what it says, that it looks like a scam and what not to do yet (in her own words), and (for a
         // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
         if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }

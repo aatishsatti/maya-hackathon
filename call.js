@@ -109,6 +109,18 @@ const isFamilyMessage = (task) => MESSAGE_CUES.test(String(task || ''));
 const CONCERN_NO = /\b(no|nope|nah|don'?t|do not|no need|not needed|not necessary|leave it|i'?m fine|i am fine|it'?s fine|it is fine|it'?s nothing|it is nothing|nothing serious|just normal|it'?s normal)\b/i;
 const CONCERN_YES = /\b(yes|yeah|yep|yup|please|go ahead|do that|tell them|let them know|call them|i think you should|maybe you should|that would be good)\b/i;
 const FAMILY_ASK = /\b(tell|let|call|alert|notify|contact|message|text|ring|inform)\b[^.?!]{0,30}\b(my |the )?(family|daughter|son|kids|children|wife|husband|sister|brother|grandson|granddaughter)\b/i;
+// A "yes" or a family request only counts when its own clause is not negated: "please do not tell my family" is a no, not a yes.
+// Clauses are split at , . ? ! ; and a clause with any negation word never counts as an affirmative.
+const NEGATION = /\b(do not|don'?t|dont|not|never|won'?t|wont|no|nope|nah|without|rather not)\b/i;
+function affirmed(re, text) {
+  return String(text || '').replace(/[\u2018\u2019]/g, "'").split(/[,.?!;]/).some((c) => re.test(c) && !NEGATION.test(c));
+}
+// They named their family in a clause that refuses it ("do not tell my son"): a no, whether or not a question was open.
+const refusedFamily = (text) => String(text || '').replace(/[\u2018\u2019]/g, "'").split(/[,.?!;]/).some((c) => FAMILY_ASK.test(c) && NEGATION.test(c));
+// Asks that need what they said earlier in THIS call (the filed memory only exists after the call ends).
+const CALL_RECALL = /\b(remember|remembered|told you|i told|already (told|said|mentioned)|forgot|forget|his name|her name|their name|what (was|is) (his|her|their)|what about my|what did i (say|tell)|do you know (him|her|them|my))\b/i;
+const MAX_SAID = 60;        // lines of this call kept for those asks
+const MAX_SAID_CHARS = 5000; // and the most that is handed to Spark
 // Barge-in: only real speech may stop Maya. A system ding, a click or Maya's own voice coming back
 // through the mic must not. All of these must hold: (1) Transcribe produced actual words, not sound
 // words like "ding"; (2) at least two real words (or one clear stop word like "stop"); (3) they
@@ -192,6 +204,16 @@ const RECALL_ASK = /\b(tell me|stor(y|ies)|what (was|happened|did|is|were)|then 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Scam shield for what the person SAYS on a call (scam.js). Replaceable in tests; looked up when called. null = no key, no check.
 const SCAM_AWAIT_MS_DEFAULT = 2500; // the longest an awaited check ("happening right now") may hold her answer; after that she answers without it
+// What the person has said so far in THIS call, handed to Spark only when the words just heard ask about something told earlier
+// (remember / told you / his name / a story or recall ask). Facts only, the person's own words; the saved notes stay trimmed otherwise.
+// A chat session borrows roster() without a call-local list: it passes nothing and adds nothing.
+function callWords(said, heard) {
+  const ask = String(heard || '');
+  if (!said || !said.length || !(CALL_RECALL.test(ask) || STORY_ASK.test(ask) || RECALL_ASK.test(ask))) return '';
+  let out = '', used = 0;
+  for (let k = said.length - 1; k >= 0 && used < MAX_SAID_CHARS; k--) { out = `${said[k]}\n${out}`; used += said[k].length + 1; }
+  return ` WHAT THEY TOLD YOU EARLIER IN THIS CONVERSATION (their own words, oldest first, today; it is not in your saved notes yet, so it counts as something you know; a name, relationship or story that appears here is known, do not say you cannot remember it):\n${out.trim()}\n`;
+}
 const callDeps = { awaitMs: SCAM_AWAIT_MS_DEFAULT, scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null) };
 const SCAM_LATER_FRESH_MS = 30000; // a verdict that arrives after her answer shapes the NEXT answer only if that comes within this long
 const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
@@ -323,6 +345,8 @@ class Call {
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
     this.pendingConcern = null;  // she was unsure and asked; waiting for the answer
+    this.familyDeclined = false; // they said no to letting their family know, earlier in this call: kept for the whole call, not one turn
+    this.said = [];              // what the person said in this call, in order (not yet in the filed memory); only shown to Spark for asks that need it
     this.ticketInCall = false;   // a safety ticket was open at the start of this call or opened in it
     this.askedName = false;
     this.lastNameUse = -10;      // reply number that last used the person's name
@@ -741,7 +765,7 @@ class Call {
     for (const [k, c] of Object.entries(lead.PRETHINK)) {
       const abort = new AbortController();
       const msgs = [...this.history, { role: 'user', content: `${this.who('A')}: ${c.sample}` }];
-      this.pre.set(k, { rs: startReply(msgs, this.roster(this.replyNote()), abort.signal), abort, sample: c.sample });
+      this.pre.set(k, { rs: startReply(msgs, this.roster(this.replyNote(), c.sample), abort.signal), abort, sample: c.sample });
     }
   }
 
@@ -803,7 +827,7 @@ class Call {
         const turn = { ...t, text: t.partial, spans: [{ label, end: t.partial.length }] };
         const msgs = [...this.history, { role: 'user', content: this.userMessage([turn]) }].slice(-MAX_HISTORY);
         // A failed or dropped guess is silent (ReplyStream keeps the error; nothing reads it).
-        spec.byLabel.set(label, { rs: startReply(msgs, this.roster(this.replyNote()), abort.signal), abort });
+        spec.byLabel.set(label, { rs: startReply(msgs, this.roster(this.replyNote(), t.partial), abort.signal), abort });
       }
       this.spec = spec;
     }, SPEC_QUIET_MS);
@@ -860,10 +884,10 @@ class Call {
 
   who(label) { return label ? (this.names.get(label) || `Speaker ${label}`) : 'Someone'; }
 
-  roster(note = '') {
+  roster(note = '', heard = '') {
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
-    return `${memory.profileNote(this.profile, this.tz, this.focus)} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
+    return `${memory.profileNote(this.profile, this.tz, this.focus)}${callWords(this.said, heard || (this.focus && this.focus.text))} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
   }
 
   // A safety alert from an earlier call is still active (the call-back is a NEW call, so this call has no memory of it).
@@ -1297,6 +1321,7 @@ class Call {
     this.dropSpec(); // aborts every other guess
     this.history.push({ role: 'user', content: this.userMessage(turns) });
     this.history = this.history.slice(-MAX_HISTORY);
+    this.said = [...this.said, ...this.userMessage(turns).split('\n').filter(Boolean)].slice(-MAX_SAID);
     for (const t of turns) for (const pt of this.attribute(t)) memory.appendTurn(this.profile.id, this.callId, { label: pt.label, text: pt.text, userSaid: true });
     const t0 = turns[turns.length - 1];
     const timing = {
@@ -1326,7 +1351,7 @@ class Call {
     } else {
       this.scamReply = scamTurn.scam ? scamTurn.scam.level : null; this.scamAskFor = scamTurn.scam && ['warn', 'pause'].includes(scamTurn.scam.level) ? scamTurn.scam : null;
       this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
-      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim()), this.abort.signal);
+      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
     try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; this.scamReply = null; this.scamAskFor = null; }
   }
@@ -1345,17 +1370,20 @@ class Call {
     if (care.scamPending(id)) {
       if (this.safety || this.health) care.scamClear(id);
       else if (CONCERN_NO.test(heard)) { care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; notes.push('FACT: they said no to letting their family know about the message they showed you. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.'); }
-      else if (CONCERN_YES.test(heard) || FAMILY_ASK.test(heard)) { care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; notes.push('FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). Confirm that in one short sentence in fresh words, saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.'); }
+      else if (affirmed(CONCERN_YES, heard) || affirmed(FAMILY_ASK, heard)) { care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; notes.push('FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). Confirm that in one short sentence in fresh words, saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.'); }
       else { care.scamUnclear(id); notes.push('FACT: you asked whether they would like their family to know about the message and they have not answered that yet. Answer what they just said; do not push, and do not ask the same question again word for word.'); }
     }
     if (this.health) notes.push(this.healthNote());
+    if (this.familyDeclined && !this.health && !this.safety) notes.push('FACT: earlier in this call they told you no to letting their family know. Take them at their word for the rest of the call: do not ask again whether to tell their family, and no alert will be made unless something truly urgent happens. You still listen and care about how they are.');
     if (this.safety) notes.push(this.safetyNote());
     else if (this.pendingConcern && !this.health) {
       // Maya was unsure and asked. Decide from the answer: yes -> alert; no -> nothing; neither -> she may lean in once more.
-      if (CONCERN_NO.test(heard)) { this.pendingConcern = null; notes.push('FACT: they said it is fine or normal. No alert was made and none will be. Take them at their word, carry on warmly, and do not ask about it again.'); }
-      else if (CONCERN_YES.test(heard) || FAMILY_ASK.test(heard)) { this.pendingConcern = null; this.familyAsked = true; care.concernAlert(id); notes.push('FACT: they said yes, so the app has now sent their family an alert (topic only) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.'); }
+      if (CONCERN_NO.test(heard) || refusedFamily(heard)) { this.pendingConcern = null; this.familyDeclined = true; notes.push('FACT: they said it is fine or normal. No alert was made and none will be. Take them at their word, carry on warmly, and do not ask about it again.'); }
+      else if (affirmed(CONCERN_YES, heard) || affirmed(FAMILY_ASK, heard)) { this.pendingConcern = null; this.familyAsked = true; care.concernAlert(id); notes.push('FACT: they said yes, so the app has now sent their family an alert (topic only) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.'); }
       else { this.pendingConcern.left -= 1; if (this.pendingConcern.left <= 0) this.pendingConcern = null; notes.push('FACT: you asked whether to let their family know and they have not answered that yet. Respond to what they said; if it is still unclear, you may ask once more, gently. Do not alert on a guess.'); }
-    } else if (FAMILY_ASK.test(heard) && !this.familyAsked && !scamHandled) {
+    } else if (refusedFamily(heard)) {
+      this.familyDeclined = true;   // a refusal with no question open is still a refusal, kept for the call (nothing is sent)
+    } else if (affirmed(FAMILY_ASK, heard) && !this.familyAsked && !scamHandled) {
       this.familyAsked = true;
       care.familyAsk(id);
       notes.push('FACT: they asked you to let their family know, and the app has sent their family a gentle note (not an alert) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.');
@@ -1419,13 +1447,17 @@ class Call {
     this.health = true; this.ticketInCall = true; this.pendingConcern = null;
     const r = care.healthAlert(this.profile.id, { channel: this.channel });
     this.healthFresh = r.isNew;
-    console.log('health', JSON.stringify({ newAlert: r.isNew })); // no words logged
+    this.healthOverrode = Boolean(this.familyDeclined);
+    // Why the alert happened, for the log: Spark judged this turn urgent (rule 4: fall, injury, chest pain, cannot breathe, needs help), which
+    // is the one case that alerts without asking. If they had said no earlier in the call, that is said here too, never hidden.
+    console.log('health', JSON.stringify({ newAlert: r.isNew, reason: 'concern=urgent', overrodeEarlierNo: this.healthOverrode })); // no words logged
   }
 
   // Facts for every reply once an emergency ticket is open (no scripted line).
   healthNote() {
     const fresh = this.healthFresh; this.healthFresh = false;
-    return fresh ? 'FACT: what they described looks like an emergency, and the app has just alerted their family, once (topic only). You may tell them briefly, in your own words, this one time. Stay calm and with them; no diagnosis, no medical advice, no phone number, you never call anyone yourself.' : 'FACT: their family has already been alerted about this and no second alert is made. Do not announce it again; stay calm and with them, ask only what you truly need to know, no diagnosis, no medical advice, no phone number.';
+    const asked = this.healthOverrode ? ' They had said no to telling their family earlier, so say plainly and kindly that this is different because what they described sounds serious, so you let their family know.' : '';
+    return fresh ? `FACT: what they described looks like an emergency, and the app has just alerted their family, once (topic only). You may tell them briefly, in your own words, this one time.${asked} Stay calm and with them; no diagnosis, no medical advice, no phone number, you never call anyone yourself.` : 'FACT: their family has already been alerted about this and no second alert is made. Do not announce it again; stay calm and with them, ask only what you truly need to know, no diagnosis, no medical advice, no phone number. If they ask whether you told their family, or why, answer truthfully and plainly that you did let them know; never deny it or say you have not told anyone.';
   }
 
   // Notes for every reply once Tier A has begun: principles and FACTS only. The app created the alert (or it already existed);
@@ -1491,8 +1523,9 @@ class Call {
         const concern = String((raw && raw.concern) || '').toLowerCase();
         if (!greeting && raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
         d.noQuestion = !greeting && this.lastReplyAsked && concern !== 'unsure'; // asking because she genuinely does not know is the one exception
+        if (!greeting && concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // they already said no to telling family: no second ask, however often the pain comes back
         if (!greeting && concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
-        else if (!greeting && concern === 'unsure' && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
+        else if (!greeting && concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
         // A scam reading is a few short sentences, not the usual two: what it seems to be, what not to do yet, and (warn / pause) the ONE question about
         // telling their family. Calm and plain: nothing bright, no exclamation. Same shape as the written chat (chat.js).
         if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }
@@ -1666,4 +1699,4 @@ class Call {
   }
 }
 
-module.exports = { callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
