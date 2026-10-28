@@ -318,7 +318,7 @@ test('T4 no question straight after a question; the facts say how often she has 
   assert.doesNotMatch(said, /\?/, `question dropped: ${said}`); assert.match(said, /lovely/);
   assert.equal(c.lastReplyAsked, false);
   c.gen = 2;
-  await c.speakReply(fixedReply('[[feel: emotion=neutral intensity=1 intent=chat]] That sounds wonderful. Did you plant roses?'), null, 2, { record: true });
+  await c.speakReply(fixedReply('[[feel: emotion=neutral intensity=1 intent=chat]] Roses are lovely. Did you plant some?'), null, 2, { record: true });
   assert.match(c.history[c.history.length - 1].content, /\?/, 'a question is allowed again');
   // greeting: two short sentences allowed, the second may ask
   sparkQueue.length = 0; sparkQueue.push('Hi Mike. How has your day been so far? And more.');

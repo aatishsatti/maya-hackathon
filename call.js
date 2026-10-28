@@ -12,6 +12,7 @@ const { streamSpeech, sparkStream } = require('./brain');
 const { startReply, fixedReply, ChunkSplitter, stripTags, isQuestion } = require('./reply');
 const { mapEmotionToDelivery, selfHarmText, INTENTS } = require('./emotion');
 const lead = require('./lead');
+const moves = require('./moves');
 const memory = require('./memory');
 const care = require('./care');
 
@@ -876,7 +877,10 @@ class Call {
     bits.push(this.lastReplyAsked ? `Your last reply asked a question (of your last ${this.askHistory.length} replies, ${this.askHistory.filter(Boolean).length} asked one), so make this reply a statement, a reflection or a warm acknowledgement with no question.` : this.askHistory.filter(Boolean).length >= 2 ? 'You have been asking a lot; do not add a follow-up question unless you truly need the answer.' : 'Do not add a follow-up question by default; a friend listens more than she asks. Ask only when you genuinely need to know.');
     const openings = this.recentOpenings();
     if (this.identitySaid) bits.push('You have already said who you are in this call; do not say your name or what you are again, in any words.');
-    bits.push('Never use a stock comfort or identity phrase (not "I\'m here with you", "I\'m right beside you", "I\'m right here with you", not "I\'m Maya, your companion"); a friend makes up new words each time.');
+    bits.push('Never use a stock comfort phrase or a stock way of introducing yourself, whether it reassures them that you are with them or says who you are; a friend makes up new words each time.');
+    const kinds = moves.blockedKinds(this.recentReplies());
+    if (kinds.length) bits.push(`In your last two replies you were already ${kinds.join(', and ')}. Do not do that again in this reply, in any words.`);
+    bits.push('Answer the specific thing they just said and carry the talk forward by one small step. Do not lean on a general polite acknowledgement in place of a real response, and do not reuse any run of words from your last three replies.');
     return bits.join(' ') + ' ' + (openings.length
       ? `Your last reply openings were: ${openings.map((o) => `"${o}"`).join(', ')}. Open this reply differently, in fresh words chosen from the feeling. Do not begin with any of these word pairs: ${[...new Set(openings.map((o) => o.split(' ').slice(0, 2).join(' ')))].map((p) => `"${p}"`).join(', ')}.`
       : '');
@@ -887,11 +891,17 @@ class Call {
     return this.profile ? care.recentLines(this.profile.id, 'open').slice(-3) : [];
   }
 
+  // Her last three spoken replies in this call (the call's own history; nothing extra is stored).
+  recentReplies() {
+    return this.history.filter((m) => m.role === 'assistant').map((m) => String(m.content)).slice(-3);
+  }
+
   // True when a reply that starts with this piece repeats a recent opening, a stock phrase already used, or the identity line.
   repeatsOpening(piece) {
     const w = openWords(piece);
     const recent = this.recentOpenings();
     if (STOCK_OPENINGS.some((re) => re.test(piece) && (re === IDENTITY_LINE ? this.identitySaid : recent.some((o) => re.test(o))))) return true;
+    if (moves.violations(piece, this.recentReplies()).repeat) return true;   // same kind of acknowledgement within 2 replies, or 4+ words in a row from the last 3
     return recent.some((o) => { const x = openWords(o); const n = Math.min(3, x.length, w.length); return n > 0 && x.slice(0, n).join(' ') === w.slice(0, n).join(' '); });
   }
 

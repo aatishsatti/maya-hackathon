@@ -25,6 +25,19 @@ const FAMILIES = [
   ['let-me-think', /\blet me think\b/],
 ];
 
+// What Spark is told when a family is blocked: the KIND, in plain words that describe a move, never a sentence to say or avoid verbatim.
+const KIND_DESC = {
+  'hear-you': 'telling them you hear or understand them',
+  'sounds-like': 'remarking on how their situation sounds or seems',
+  'sorry': 'saying you are sorry to hear it',
+  'thanks-sharing': 'thanking them for sharing or telling you',
+  'here-for-you': 'reassuring them that you are here with them or that they are not alone',
+  'its-okay': 'telling them it is okay to feel or do something',
+  'understandable': 'calling their reaction understandable or natural',
+  'how-lovely': 'praising what they said as lovely, wonderful or nice',
+  'let-me-think': 'saying you need to think',
+};
+
 const norm = (t) => String(t || '').toLowerCase().replace(/[‘’]/g, "'");
 const words = (t) => norm(t).match(/[\p{L}\p{N}']+/gu) || [];
 
@@ -51,6 +64,11 @@ function blockedFamilies(recent) {
   return [...out];
 }
 
+// The same blocked families as plain-word descriptions (see KIND_DESC), for the note Spark gets. Spark picks every word herself.
+function blockedKinds(recent) {
+  return blockedFamilies(recent).map((id) => KIND_DESC[id]).filter(Boolean);
+}
+
 // What is wrong with a candidate reply, given her recent replies (oldest first). { families:[ids], phrase:bool, repeat:bool }.
 function violations(text, recent) {
   const blocked = new Set(blockedFamilies(recent));
@@ -68,4 +86,4 @@ function repeatRate(replies) {
   return bad / (list.length - 1);
 }
 
-module.exports = { FAMILY_WINDOW, PHRASE_WINDOW, PHRASE_RUN, familiesOf, sharesRun, blockedFamilies, violations, repeatRate };
+module.exports = { FAMILY_WINDOW, PHRASE_WINDOW, PHRASE_RUN, familiesOf, sharesRun, blockedFamilies, blockedKinds, violations, repeatRate };
