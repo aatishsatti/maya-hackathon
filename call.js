@@ -192,6 +192,9 @@ const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
 
 // ---- Lead-in clips: Maya's own voice saying one short line, rendered once and kept (see lead.js). Real mode only; never faked. ----
 const leadClips = new Map();      // text -> { text, pcm } (PCM16 24 kHz, trimmed like any other piece)
+// Conversation brain step 3: lead-in clips are OFF. They are fixed sentences, so every first word Maya speaks is real Spark output instead.
+// MAYA_LEAD_INS=1 switches the old behaviour back on (read at call time). Off means no clip is chosen, played, or even rendered (no ElevenLabs request).
+const leadInsOn = () => process.env.MAYA_LEAD_INS === '1';
 let leadLoad = null;
 async function renderLead(text) {
   const parts = [];
@@ -222,6 +225,7 @@ async function fakeSpeech(text, signal, onChunk, { firstChunkMs = 150, chunkByte
 
 // Renders any missing clips, one at a time (so a greeting is never queued behind them). A failure just leaves that clip out.
 function warmLeads() {
+  if (!leadInsOn()) return Promise.resolve();
   if (leadLoad) return leadLoad;
   leadLoad = (async () => {
     for (const t of lead.ALL) {
@@ -732,6 +736,7 @@ class Call {
   // A short true acknowledgement to say the instant the person has finished, while Spark writes the real reply. Null = say nothing extra.
   pickLead(turns, extra, spec, holdBack) {
     const why = (r) => { if (process.env.MAYA_LEAD_DEBUG) console.log('lead skipped:', r); return null; };
+    if (!leadInsOn()) return why('lead-ins are off');
     if (this.noVoice) return why('no-voice test call');
     if (!leadClips.size) return why('no clips');
     if (extra) return why('care note');

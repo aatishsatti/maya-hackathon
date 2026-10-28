@@ -54,8 +54,20 @@ test('no-voice call: no lead-in clip is ever played, even if clips exist; a norm
   leadClips.set('Mm-hm, I\'m listening.', { text: 'Mm-hm, I\'m listening.', pcm: Buffer.alloc(80000) });
   const heard = [{ text: 'I had toast and tea for breakfast this morning.' }];
   const { c: quiet } = mk(true); assert.equal(quiet.pickLead(heard, '', null, true), null, 'no-voice: nothing');
-  const { c: loud } = mk(false); assert.ok(loud.pickLead(heard, '', null, true), 'a voiced call still gets its lead-in');
+  process.env.MAYA_LEAD_INS = '1';   // lead-ins are off by default (see the next test); this checks the opt-in path still works
+  try { const { c: loud } = mk(false); assert.ok(loud.pickLead(heard, '', null, true), 'a voiced call with lead-ins switched on still gets its lead-in'); }
+  finally { delete process.env.MAYA_LEAD_INS; }
   leadClips.clear();
+});
+
+test('lead-ins are OFF by default: no clip is chosen even when clips exist, and none is rendered (no ElevenLabs request)', async () => {
+  delete process.env.MAYA_LEAD_INS;
+  leadClips.set('Mm-hm, I\'m listening.', { text: 'Mm-hm, I\'m listening.', pcm: Buffer.alloc(80000) });
+  const heard = [{ text: 'I had toast and tea for breakfast this morning.' }];
+  const { c } = mk(false); assert.equal(c.pickLead(heard, '', null, true), null, 'voiced call, routine talk, clip ready: still nothing extra is said');
+  leadClips.clear(); elevenCalls = 0;
+  await require('../call').warmLeads();
+  assert.equal(leadClips.size, 0, 'nothing rendered'); assert.equal(elevenCalls, 0, 'no ElevenLabs request');
 });
 
 test('no-voice call: the switch comes only from the start message, the latency line says so, and the only ElevenLabs call sites are the per-piece voice and the lead-in renderer', () => {
