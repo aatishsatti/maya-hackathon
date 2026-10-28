@@ -141,6 +141,8 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { mode: MODE });
   }
+  // TEMPORARY (render-test branch): hosting diagnostic, no secrets, cached 60 s. Removed before the final version. See diag.js.
+  if (url.pathname === '/api/diag' && req.method === 'GET') return MODE === 'real' ? sendJson(res, 200, await require('./diag').get()) : sendJson(res, 404, { error: 'Not found' });
   // Profiles (family setup). Names and gender only; each profile has its own memory file.
   if (url.pathname === '/api/profiles' && req.method === 'GET') return sendJson(res, 200, { profiles: memory.listProfiles() });
   if (url.pathname === '/api/profiles' && req.method === 'POST') {
