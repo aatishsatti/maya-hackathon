@@ -83,7 +83,8 @@ test('a failed or unreadable filing keeps the words and the threads for the next
 test('the filing instructions describe threads as principles and facts: no quoted example line, no advice, ids kept', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'memory.js'), 'utf8');
   const instr = src.slice(src.indexOf('const EXTRACT_INSTRUCTIONS'), src.indexOf('function parseJson'));
-  for (const must of [/threads = things still open/, /Existing threads carry an id/, /status closed/, /never advise/, /Never make a thread from ordinary chat/]) assert.match(instr, must);
+  for (const must of [/threads = things still open/, /Existing threads carry an id/, /status closed/, /never advise/, /Never make a thread from ordinary chat/, /declines to talk about it, asks to drop it, or clearly brushes it off/, /their wish is respected and it is not raised again/]) assert.match(instr, must);
+  assert.doesNotMatch(instr.slice(instr.indexOf('declines to talk')), /^[^.]*"[^"]+"/, 'the decline rule quotes no example line');
   assert.match(instr, /"threads":\[\{"id"/);
 });
 
@@ -143,4 +144,17 @@ test('markAsked counts an offer and saves it; an unknown thread is ignored', () 
   assert.equal(memory.markAsked(p.id, 'tdue001'), true); assert.equal(memory.load(p.id).memory.threads[0].asked, 1);
   assert.equal(memory.markAsked(p.id, 'nope'), false); assert.equal(memory.markAsked('deadbeef', 'tdue001'), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(process.env.MAYA_DATA_DIR, `${p.id}.json`), 'utf8')).memory.threads[0].asked, 1, 'saved to the file');
+});
+
+test('a declined follow-up is closed by id, keeps its ask count, is never offered again, and never reopens', async () => {
+  const id = fresh();
+  let m = await call(id, ['Priya visits Saturday.'], { ...base, threads: [{ who: 'Priya', text: 'visiting on Saturday', due: '', kind: 'event', status: 'open' }] });
+  const tid = m.threads[0].id;
+  memory.markAsked(id, tid);                                   // it was offered once, and she asked
+  m = await call(id, ['I would rather not talk about that.'], { ...base, threads: [{ id: tid, status: 'closed' }] });   // the filing step judged it a brush-off
+  assert.equal(m.threads[0].status, 'closed'); assert.equal(m.threads[0].asked, 1);
+  const recall = require('../recall');
+  assert.equal(recall.dueThread(m.threads, TODAY, {}), null, 'a closed thread is never due');
+  m = await call(id, ['Priya again.'], { ...base, threads: [{ id: tid, status: 'open', text: 'visiting on Saturday' }] });
+  assert.equal(m.threads[0].status, 'closed', 'and it never reopens');
 });
