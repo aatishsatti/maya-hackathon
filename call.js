@@ -201,6 +201,24 @@ async function renderLead(text) {
   if (buf.length < 120 * 48) throw new Error('lead clip came back empty');
   return { text, pcm: fadeOut(fadeIn(buf), 'other') };
 }
+// TEMPORARY (render-test): a SYNTHETIC voice for a call that starts with { noVoice: true, fakeAudio: true }. It is NOT ElevenLabs and makes no network
+// request: speech-like PCM16 24 kHz is made in memory and handed to the same playback loop in ElevenLabs-like chunks (a first chunk after ~150 ms, then about
+// four times real time), with a little silence before and after like a real TTS piece. It exists to test whether the playback path and the audio going
+// down the call (not the ElevenLabs request) is what upsets a small hosted server. Remove before the final version.
+async function fakeSpeech(text, signal, onChunk, { firstChunkMs = 150, chunkBytes = 4096, everyMs = 20, msPerChar = 65 } = {}) {
+  const speechMs = Math.max(600, String(text).length * msPerChar), leadMs = 120, tailMs = 150;
+  const samples = Math.round(((leadMs + speechMs + tailMs) / 1000) * 24000), buf = Buffer.alloc(samples * 2);
+  let seed = 7919; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+  const from = Math.round((leadMs / 1000) * 24000), to = samples - Math.round((tailMs / 1000) * 24000);
+  for (let i = from; i < to; i++) { const t = i / 24000, env = 0.5 + 0.5 * Math.sin(2 * Math.PI * 4 * t); buf.writeInt16LE(Math.round(rnd() * 2 * 9000 * env * (0.6 + 0.4 * Math.sin(2 * Math.PI * 220 * t))), i * 2); }
+  await sleep(firstChunkMs);
+  for (let off = 0; off < buf.length; off += chunkBytes) {
+    if (signal && signal.aborted) throw signal.reason || new Error('aborted');
+    onChunk(Buffer.from(buf.subarray(off, Math.min(off + chunkBytes, buf.length))));
+    await sleep(everyMs);
+  }
+}
+
 // Renders any missing clips, one at a time (so a greeting is never queued behind them). A failure just leaves that clip out.
 function warmLeads() {
   if (leadLoad) return leadLoad;
@@ -254,6 +272,7 @@ class Call {
     this.endTimer = setInterval(() => this.endpointTick(), 100);
     this.warmTimer = null;       // keep-warm pings to the voice service while the call is live
     this.noVoice = false;        // TEMPORARY test switch: no ElevenLabs request in this call (see the start handler)
+    this.fakeAudio = false;      // TEMPORARY: with noVoice, use fakeSpeech() instead of silence (synthetic audio down the call)
     this.sayingText = '';        // what Maya has said so far in the current reply
     this.lastSaidAt = 0;
     this.bargeSince = 0;
@@ -369,7 +388,8 @@ class Call {
       // TEMPORARY (render-test): a call that makes NO ElevenLabs request at all. The greeting and every reply go out as text events only; the mic path,
       // Meta Transcribe and Spark are the real ones. Used to tell whether a hosting failure is the mic path or the voice. Remove before the final version.
       this.noVoice = m.noVoice === true;
-      if (this.noVoice) console.log('call noVoice: ElevenLabs is skipped for this call');
+      this.fakeAudio = this.noVoice && m.fakeAudio === true;   // only ever together with noVoice
+      if (this.noVoice) console.log(this.fakeAudio ? 'call noVoice+fakeAudio: ElevenLabs is skipped; a synthetic voice is used' : 'call noVoice: ElevenLabs is skipped for this call');
       this.starting = true;
       // Maya rang them and they pressed Accept: the id must match a live ring for THIS profile, else it is an ordinary call.
       if ((m.reason === 'callback' || m.reason === 'reminder') && typeof m.outreachId === 'string') this.outreach = care.claim(this.profile.id, m.outreachId);
@@ -1131,7 +1151,7 @@ class Call {
       metaEndpointMs: t0.endedAt ? t0.completedAt - t0.endedAt : null, // speechEnd -> speechComplete
       endedAt: t0.endedAt || t0.completedAt,
       decidedAt: Date.now(),
-      ...(this.noVoice ? { noVoice: true } : {}),
+      ...(this.noVoice ? { noVoice: true, ...(this.fakeAudio ? { fakeAudio: true } : {}) } : {}),
       guess: pre ? 'prethink' : spec ? 'hit' : 'miss',
       ...((pre || spec) ? { heard: turns.map((t) => t.text).join(' '), predicted: pre ? pre.sample : turns.map((t) => t.text).join(' ') } : {}),
     };
@@ -1334,8 +1354,9 @@ class Call {
         const tone = TONES[kind];
         const tagged = tone ? `${tone[0]} ${spoken}` : spoken;
         const gain = tone ? tone[1] : 1;
-        if (this.noVoice) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no ElevenLabs request
-        else streamSpeech(tagged, signal, (c) => { if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = Date.now() - tEnqueue; job.chunks.push(gain === 1 ? c : scale(c, gain)); }, said.length ? said.join(' ').slice(-300) : undefined, next || undefined)
+        const onVoiceChunk = (c) => { if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = Date.now() - tEnqueue; job.chunks.push(gain === 1 ? c : scale(c, gain)); };
+        if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no ElevenLabs request
+        else (this.noVoice ? fakeSpeech(tagged, signal, onVoiceChunk) : streamSpeech(tagged, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });
         said.push(text);
         this.sayingText = said.join(' ');
@@ -1464,7 +1485,7 @@ class Call {
       this.prevDelivery = delivery;
       console.log('latency', JSON.stringify({ ...timing, endedAt: undefined }));
     }
-    this.send({ type: 'audioEnd', timing: timing ? { ...timing, endedAt: undefined } : null, ...(this.noVoice ? { noVoice: true } : {}) });
+    this.send({ type: 'audioEnd', timing: timing ? { ...timing, endedAt: undefined } : null, ...(this.noVoice ? { noVoice: true, ...(this.fakeAudio ? { fakeAudio: true } : {}) } : {}) });
   }
 
   // Greeting: fixed words, spoken through the same voice path.
@@ -1477,4 +1498,4 @@ class Call {
   }
 }
 
-module.exports = { Call, warmLeads, leadClips, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
