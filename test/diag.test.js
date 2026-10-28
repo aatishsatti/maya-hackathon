@@ -32,6 +32,11 @@ test('diag: shows the settings, key length only, the model list and one test per
   const out = await diag.run(env);
   const all = JSON.stringify(out);
   for (const secret of [KEY, EL, VOICE]) assert.ok(!all.includes(secret), 'a secret leaked into the diagnostic');
+  const fp = require('node:crypto').createHash('sha256').update(KEY).digest('hex').slice(0, 6);
+  assert.equal(out.metaKey.fingerprint, fp); assert.match(out.metaKey.fingerprint, /^[0-9a-f]{6}$/);
+  assert.ok(!KEY.includes(out.metaKey.fingerprint) || fp.length === 6, 'only six hex characters of a hash, never part of the key');
+  assert.equal((await diag.run({ ...env, META_API_KEY: KEY + 'x' })).metaKey.fingerprint === fp, false, 'a different key gives a different fingerprint');
+  assert.equal((await diag.run({ META_MODE: 'real' })).metaKey.fingerprint, null);
   assert.equal(out.metaKey.length, KEY.length); assert.equal(out.metaKey.present, true); assert.equal(out.metaKey.hasWhitespace, false); assert.equal(out.metaKey.onlyKeySafeChars, true);
   assert.equal(out.settings.MAYA_BRAIN_MODEL, 'muse-spark-1.2'); assert.equal(out.settings.modelInUse, 'muse-spark-1.2');
   assert.equal(out.egress.country, 'US'); assert.deepEqual(out.metaModels.ids, ['muse-spark-1.3', 'muse-spark-1.2', 'muse-voice-transcribe-1.0']);

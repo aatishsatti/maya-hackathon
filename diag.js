@@ -28,7 +28,9 @@ async function run(env = process.env) {
       modelInUse: env.MAYA_BRAIN_MODEL || 'muse-spark-1.3',
       PORT: env.PORT || null,
     },
-    metaKey: { present: Boolean(key), length: key.length, hasWhitespace: /\s/.test(key), hasQuotes: /["']/.test(key), onlyKeySafeChars: /^[A-Za-z0-9._\-]+$/.test(key) },
+    // fingerprint: first 6 hex of the key's SHA-256 (24 bits of a 48-character random key: it cannot be used to get the key back). Compare
+    // it with the same number computed on the Mac to see whether Render holds the SAME key.
+    metaKey: { present: Boolean(key), length: key.length, fingerprint: key ? require('node:crypto').createHash('sha256').update(key).digest('hex').slice(0, 6) : null, hasWhitespace: /\s/.test(key), hasQuotes: /["']/.test(key), onlyKeySafeChars: /^[A-Za-z0-9._\-]+$/.test(key) },
     elevenLabs: { keyPresent: Boolean(env.ELEVENLABS_API_KEY), voiceIdPresent: Boolean(env.ELEVENLABS_VOICE_ID) },
     egress: null, metaModels: null, oneTokenTests: [],
   };
