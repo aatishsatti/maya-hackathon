@@ -83,6 +83,11 @@ function upcoming(memory, today) {
   return out.sort((a, b) => Math.abs(a.days) - Math.abs(b.days));
 }
 
+// A deliberately wide net for "this is not a moment for a follow-up": distress, fear, loss, pain, giving up, any contraction of not wanting
+// to live. It only ever BLOCKS a follow-up (never alerts, never decides care), so a false positive costs one missed question and nothing else.
+const HEAVY_TALK = new RegExp(String.raw`\b(die|died|dying|dead|death|suicid\w*|kill\w*|end (it|my life|things)|(do not|don'?t|dont|no longer|not) (want|wish) to (live|be here|go on|wake|carry on|exist)|wish i (was|were) (dead|gone)|no (point|reason|hope)|give up|giving up|hopeless|worthless|burden|can'?t (go on|cope|take|manage|breathe)|cannot (go on|cope|take|manage|breathe)|lonely|alone|sad|scared|afraid|frightened|terrified|worried|worry|anxious|panic\w*|cry|crying|cried|upset|depress\w*|grie\w*|miss(ing)? (him|her|them)|pain\w*|hurt\w*|ache\w*|sore|fell|fall|dizz\w*|faint\w*|chest|bleed\w*|hospital|ambulance|emergency|help me|scam|fraud|money|bank)\b`, 'i');
+const heavyTalk = (text) => HEAVY_TALK.test(String(text || '').replace(/[\u2018\u2019]/g, "'"));
+
 const OPEN_WORRY_DAYS = 10;   // an undated worry or plan is followed up from the next day until this many days after it was told
 const DATED_GRACE_DAYS = 14;  // a dated thread is still worth one gentle ask for this long after its date; later it is just over
 
@@ -159,4 +164,4 @@ function mergeThreads(existing, returned, today, makeId = newId) {
   return kept.filter((t) => open.includes(t) || rest.includes(t));
 }
 
-module.exports = { OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };
+module.exports = { heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };

@@ -747,3 +747,58 @@ test('B7 a practical worry (would anyone know, what if they cannot be reached) i
   assert.match(md.slice(md.indexOf('Fear of dying')), /warm and listen\. No alert, no crisis wording\./, 'general fear is unchanged');
   assert.ok(md.length < 7500, `lean: ${md.length} chars`);
 });
+
+// ---------------------------------------------------------------- memory focus and follow-ups (stubbed)
+const agoDay = (k) => { const d = new Date(`${memory.today()}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - k); return d.toISOString().slice(0, 10); };
+const withThread = (over = {}) => { const id = newSenior(); const p = memory.load(id); p.memory.people = [{ name: 'Priya', relationship: 'granddaughter', birthday: '', stories: [] }]; p.memory.threads = [{ id: 'tdue001', who: 'Priya', text: 'visiting for the weekend', due: agoDay(2), kind: 'event', status: 'open', asked: 0, told: agoDay(6), ...over }]; return id; };
+const ASKED = (id) => memory.load(id).memory.threads[0].asked;
+
+test('F1 a due follow-up is offered once per call: the note carries the fact, the count goes up once, and a second turn offers nothing', stubbed, () => {
+  const id = withThread(); const c = mkCall(id);
+  c.setFocus('I am doing fine today, thank you.');
+  assert.match(c.roster(''), /Open follow-up from an earlier call.*visiting for the weekend.*2 days ago/); assert.equal(ASKED(id), 1); assert.equal(c.followUpOffered, true);
+  c.setFocus('The weather is nice again.');
+  assert.doesNotMatch(c.roster(''), /Open follow-up/, 'never twice in a call'); assert.equal(ASKED(id), 1);
+});
+
+test('F2 never after two offers in total: a new call offers it once more at one earlier offer, then never', stubbed, () => {
+  const id = withThread({ asked: 1 });
+  const a = mkCall(id); a.setFocus('I am doing fine today, thank you.');
+  assert.match(a.roster(''), /Open follow-up/); assert.equal(ASKED(id), 2);
+  const b = mkCall(id); b.setFocus('I am doing fine today, thank you.');
+  assert.doesNotMatch(b.roster(''), /Open follow-up/); assert.equal(ASKED(id), 2);
+  const closed = withThread({ status: 'closed' }); const c = mkCall(closed); c.setFocus('I am doing fine today, thank you.');
+  assert.doesNotMatch(c.roster(''), /Open follow-up/);
+});
+
+test('F3 never in a heavy or careful moment, and the count does not move', stubbed, () => {
+  const talk = 'I am doing fine today, thank you.';
+  const cases = [
+    ['care note this turn', (c) => c.setFocus(talk, 'a reminder note')],
+    ['safety on', (c) => { c.safety = true; c.setFocus(talk); }],
+    ['health on', (c) => { c.health = true; c.setFocus(talk); }],
+    ['a pending worry', (c) => { c.pendingConcern = { left: 1 }; c.setFocus(talk); }],
+    ['her last reply read them as sad', (c) => { c.prevDelivery = { emotion: 'sad', intensity: 3 }; c.setFocus(talk); }],
+    ['her last reply read them as lonely', (c) => { c.prevDelivery = { emotion: 'lonely', intensity: 2 }; c.setFocus(talk); }],
+    ['pain or health words', (c) => c.setFocus('My head hurts a lot today.')],
+    ['self-harm words', (c) => c.setFocus('I do not want to live anymore.')],
+    ['a bare okay (not plain talk)', (c) => c.setFocus('Okay')],
+  ];
+  for (const [name, run] of cases) { const id = withThread(); const c = mkCall(id); run(c); assert.doesNotMatch(c.roster(''), /Open follow-up/, name); assert.equal(ASKED(id), 0, `${name}: not counted`); assert.equal(c.followUpOffered, false, name); }
+});
+
+test('F4 a request for a story or a recalled account keeps the whole memory and offers no follow-up; ordinary talk gets the trimmed note', stubbed, () => {
+  const id = withThread(); const p = memory.load(id); p.memory.preferences = [{ who: p.name, text: 'likes ginger tea', told: agoDay(20) }];
+  const c = mkCall(id); c.setFocus('Tell me about Priya please');
+  assert.match(c.roster(''), /likes ginger tea/); assert.doesNotMatch(c.roster(''), /Open follow-up/); assert.equal(ASKED(id), 0);
+  c.setFocus('The roses are finished I think.');
+  assert.doesNotMatch(c.roster(''), /likes ginger tea/, 'unrelated notes are not shown');
+  assert.match(c.roster(''), /other notes exist but are not shown now/);
+});
+
+test('F5 greetings, call-backs and silence lines have no focus: the full memory, no follow-up, as before', stubbed, () => {
+  const id = withThread(); const p = memory.load(id); p.memory.preferences = [{ who: p.name, text: 'likes ginger tea', told: agoDay(20) }];
+  const c = mkCall(id); assert.equal(c.focus, null);
+  assert.match(c.roster(''), /likes ginger tea/); assert.doesNotMatch(c.roster(''), /Open follow-up/); assert.equal(ASKED(id), 0);
+  const { ChatSession } = require('../chat'); assert.equal(typeof ChatSession.prototype.setFocus, 'function', 'text chat shares the same rule');
+});

@@ -87,9 +87,60 @@ test('the filing instructions describe threads as principles and facts: no quote
   assert.match(instr, /"threads":\[\{"id"/);
 });
 
-test('threads are private: nothing outside the memory file and the filing step reads them yet (no notes to Maya, no family dashboard)', () => {
+test('threads stay private to Maya: no family-facing file reads them (server, care, ws, the family and senior pages); only her own notes do', () => {
   const root = path.join(__dirname, '..');
-  for (const f of ['call.js', 'chat.js', 'server.js', 'care.js', 'ws.js', 'public/family.js', 'public/app.js']) assert.doesNotMatch(fs.readFileSync(path.join(root, f), 'utf8'), /\.threads\b|recall\./, `${f} does not touch threads`);
+  for (const f of ['server.js', 'care.js', 'ws.js', 'public/family.js', 'public/family.html', 'public/inbox.js', 'public/app.js', 'public/profiles.js']) assert.doesNotMatch(fs.readFileSync(path.join(root, f), 'utf8'), /\.threads\b|recall\./, `${f} does not touch threads`);
   const note = memory.profileNote(memory.load(fresh()), null);
-  assert.doesNotMatch(note, /thread|follow-up/i);
+  assert.doesNotMatch(note, /thread|follow-up/i, 'no focus (greeting, call-back, silence line): no follow-up in the note');
+});
+
+// ---------------------------------------------------------------- the per-reply note (Step 3)
+const ago = (k) => { const d = new Date(`${TODAY}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - k); return d.toISOString().slice(0, 10); };
+function seeded(extra = {}) {
+  const id = fresh(); const p = memory.load(id);
+  p.memory.people = [{ name: 'Priya', relationship: 'granddaughter', birthday: '', stories: [{ text: 'plays the violin at school', told: ago(8) }] }, { name: 'Ravi', relationship: 'son', birthday: '', stories: [] }];
+  p.memory.preferences = [{ who: p.name, text: 'likes ginger tea', told: ago(20) }];
+  p.memory.events = [{ who: 'Priya', text: 'visiting for the weekend', date: ago(2), told: ago(6) }];
+  p.memory.current = [{ who: p.name, text: 'knee feels sore on the stairs', told: ago(1) }];
+  p.memory.topics = [{ text: 'old steam trains', told: ago(30) }];
+  Object.assign(p.memory, extra);
+  return p;
+}
+const DUE = () => ({ id: 'tdue001', who: 'Priya', text: 'visiting for the weekend', due: ago(2), kind: 'event', status: 'open', asked: 0, told: ago(6) });
+
+test('focused note: people, dates around now and only the items that relate to what was just said; the rest of the file is not shown', () => {
+  const p = seeded();
+  const note = memory.profileNote(p, null, { text: 'My violin lesson is tonight', full: false, thread: '' });
+  assert.match(note, /People in their life: Priya \(granddaughter\), Ravi \(son\)/);
+  assert.match(note, /plays the violin at school/, 'the related story is shown');
+  assert.doesNotMatch(note, /ginger|steam trains|knee feels sore/, 'unrelated items are left out');
+  assert.match(note, /other notes exist but are not shown now/);
+  assert.match(note, /Dates around now, worked out for you: visiting for the weekend 2 days ago/);
+  assert.doesNotMatch(note, /follow-up/i, 'no thread offered here');
+  assert.match(memory.profileNote(p, null, { text: 'zzz nothing', full: false, thread: '' }), /None of your other notes relate/);
+});
+
+test('a request for an account or a story keeps the whole memory; with no focus the note is the full file as before', () => {
+  const p = seeded();
+  const full = memory.profileNote(p, null, { text: 'tell me about Priya', full: true, thread: '' });
+  assert.match(full, /ginger tea/); assert.match(full, /steam trains/); assert.match(full, /What you remember \(only what they told you; nothing else is known\)/);
+  assert.equal(memory.profileNote(p, null), memory.profileNote(p, null, null));
+  assert.match(memory.profileNote(p, null), /ginger tea/);
+  const empty = fresh(); assert.match(memory.profileNote(memory.load(empty), null, { text: 'hello', full: false, thread: '' }), /no memories of this person yet/);
+});
+
+test('the follow-up is a fact with its date worked out, and the instruction is a principle: ask once, own words, leave it if awkward', () => {
+  const p = seeded();
+  const fact = require('../recall').threadFact(DUE(), TODAY);
+  const note = memory.profileNote(p, null, { text: 'Hello there', full: false, thread: fact });
+  assert.match(note, /Open follow-up from an earlier call \(a fact for you, not words to say\): Priya: visiting for the weekend, was due .* \(2 days ago\); told/);
+  assert.match(note, /ask about it once, simply, in your own words/); assert.match(note, /leave it\./);
+  assert.doesNotMatch(note.slice(note.indexOf('Open follow-up')), /"[^"]+"/, 'no quoted sentence');
+});
+
+test('markAsked counts an offer and saves it; an unknown thread is ignored', () => {
+  const p = seeded({ threads: [DUE()] });
+  assert.equal(memory.markAsked(p.id, 'tdue001'), true); assert.equal(memory.load(p.id).memory.threads[0].asked, 1);
+  assert.equal(memory.markAsked(p.id, 'nope'), false); assert.equal(memory.markAsked('deadbeef', 'tdue001'), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(process.env.MAYA_DATA_DIR, `${p.id}.json`), 'utf8')).memory.threads[0].asked, 1, 'saved to the file');
 });

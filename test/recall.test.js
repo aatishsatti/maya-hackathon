@@ -168,3 +168,8 @@ test('mergeThreads: threads past their window are expired on the way through, an
   assert.equal(capped.length, R.MAX_THREADS); assert.ok(capped.some((t) => t.id === 'topen'), 'the open one survives the cap');
   assert.ok(!capped.some((t) => t.id === 'tc0'), 'the oldest closed ones go first');
 });
+
+test('heavyTalk: a wide net that only blocks a follow-up; every way of saying they do not want to live is caught, ordinary talk is not', () => {
+  for (const t of ['I do not want to live anymore', "I don't want to live", 'I dont want to be here', 'I no longer want to go on', 'I wish I was dead', 'there is no point', 'I give up', 'I feel so alone', 'I am scared', 'My head hurts', 'I fell in the kitchen', 'I got a call about my bank', 'I miss him so much', 'I am worried about it']) assert.equal(R.heavyTalk(t), true, t);
+  for (const t of ['I am doing fine today, thank you.', 'The roses are finished I think.', 'I made some soup.', 'Priya came by on Saturday.', 'The tea is getting cold', '']) assert.equal(R.heavyTalk(t), false, t);
+});

@@ -89,7 +89,7 @@ class ChatSession {
     this.started = false;
     this.closed = false;
     // The same per-conversation state call.js keeps, with the same meaning.
-    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.lastReplyAsked = false; this.askHistory = [];
+    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.lastReplyAsked = false; this.askHistory = [];
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
@@ -148,6 +148,7 @@ class ChatSession {
     this.history = this.history.slice(-MAX_HISTORY);
     memory.appendTurn(id, this.callId, { label: 'A', text: message, userSaid: true });
     const channelNote = `CHANNEL: this is a written chat message in their app, not a call. ${how === 'voice' ? 'They sent you a voice note and the words above are what they said in it; you will answer by voice note, so write the way you would speak.' : how === 'image' ? 'They sent you a photo; the bracketed words describe it. Answer what matters to them, never claim to see more than the description says.' : 'They cannot hear you; write plainly, warm and short as in a call.'}`;
+    this.setFocus(heard, `${extra} ${note}`.trim());
     this.scamReply = scam;   // 'warn' | 'caution' | null: the shape of THIS reply (see reply())
     try {
       const said = await this.reply(`${this.replyNote()} ${channelNote} ${extra} ${note}`.trim());
@@ -155,7 +156,7 @@ class ChatSession {
     } catch (e) {
       if (this.history.length && this.history[this.history.length - 1].role === 'user') this.history.pop(); // a failed turn cannot poison the next one
       throw e instanceof ChatError ? e : new ChatError(e.message);
-    } finally { this.scamReply = null; this.armIdle(); }
+    } finally { this.scamReply = null; this.focus = null; this.armIdle(); }
   }
 
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.
@@ -245,7 +246,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'recordName', 'who', 'dynamicLine']) {
+for (const m of ['careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'recordName', 'who', 'dynamicLine']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 

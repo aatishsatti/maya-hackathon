@@ -14,6 +14,7 @@ const { mapEmotionToDelivery, selfHarmText, INTENTS } = require('./emotion');
 const lead = require('./lead');
 const moves = require('./moves');
 const beat = require('./beat');
+const recall = require('./recall');
 const memory = require('./memory');
 const care = require('./care');
 
@@ -309,6 +310,8 @@ class Call {
     this.greeted = false;        // a call is greeted once, at its start, never again
     this.replyCount = 0;         // normal replies so far
     this.lastReplyAsked = false; // her last reply ended in a question
+    this.focus = null;           // this reply's memory focus (see setFocus); null for greetings, call-backs and silence lines
+    this.followUpOffered = false; // a due follow-up was already offered to Spark in this call
     this.beatCount = 0;          // replies she has given on the current light-chat subject (see beat.js); committed after each spoken reply
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
@@ -853,7 +856,7 @@ class Call {
   roster(note = '') {
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
-    return `${memory.profileNote(this.profile, this.tz)} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
+    return `${memory.profileNote(this.profile, this.tz, this.focus)} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
   }
 
   // A safety alert from an earlier call is still active (the call-back is a NEW call, so this call has no memory of it).
@@ -903,6 +906,21 @@ class Call {
   // Her last five spoken replies in this call (the call's own history; nothing extra is stored). The repeat rules read what they need from the end.
   recentReplies() {
     return this.history.filter((m) => m.role === 'assistant').map((m) => String(m.content)).slice(-5);
+  }
+
+  // Memory focus for ONE normal reply (conversation brain #3): the words just heard pick the few memory items worth showing, and code may
+  // offer Spark at most one due follow-up (recall.js) as a fact with its date already worked out. Never in a heavy or careful moment, never
+  // twice in a call, never after two offers in total. A request for a story or a recalled account keeps the whole memory. Spark phrases it.
+  setFocus(heard, extra = '') {
+    const full = STORY_ASK.test(heard) || RECALL_ASK.test(heard);
+    const heavy = Boolean(extra || this.safety || this.health || this.pendingConcern || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
+    this.focus = { text: String(heard || ''), full, thread: '' };
+    if (full || !this.profile) return;
+    const t = recall.dueThread(this.profile.memory.threads, memory.today(this.tz), { heavy, askedThisCall: this.followUpOffered });
+    if (!t) return;
+    this.followUpOffered = true;
+    memory.markAsked(this.profile.id, t.id);
+    this.focus.thread = recall.threadFact(t, memory.today(this.tz));
   }
 
   // Decides this reply's beat from Spark's tag (topic) and the care state, then enforces its limits on the delivery (see beat.js).
@@ -1271,9 +1289,10 @@ class Call {
       this.abort.signal.addEventListener('abort', () => spec.abort.abort(), { once: true });
       rs = spec.rs;
     } else {
+      this.setFocus(turns.map((t) => t.text).join(' '), extra);
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote}`.trim()), this.abort.signal);
     }
-    await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent });
+    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; }
   }
 
   // Care effects of the words just heard, and notes for the reply that must be true: a flag resolving (so Maya warmly asks

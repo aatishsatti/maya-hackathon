@@ -209,8 +209,36 @@ async function extract(id, said, { heavy = false, tz } = {}) {
   return true;
 }
 
+// The memory text for ONE reply (see recall.js): the people in their life, dates around now already worked out, the few items that relate
+// to what the person just said, and at most one due follow-up. All facts; the rest of the file is not shown, and Spark is told so.
+function focusedMemory(m, focus, tz) {
+  const t = today(tz);
+  const bits = [];
+  if (m.people.length) bits.push(`People in their life: ${m.people.map((x) => `${x.name}${x.relationship ? ` (${x.relationship})` : ''}`).join(', ')}`);
+  const up = recall.upcoming(m, t);
+  if (up.length) bits.push(`Dates around now, worked out for you: ${up.map((u) => `${u.text} ${u.when}`).join('; ')}`);
+  const kind = { person: 'Person', story: 'Told about', event: 'Life event', likes: 'Likes', current: 'Happening around them', topic: 'Recent topic' };
+  const sel = recall.select(m, focus.text, t, { k: 6 }).filter((x) => x.kind !== 'person');
+  bits.push(sel.length
+    ? `Notes that relate to what they just said (only what they told you): ${sel.map((x) => `${kind[x.kind]}${x.told ? `, told ${x.told}` : ''}${x.date ? `, date ${x.date}` : ''}: ${x.who ? `${x.who}: ` : ''}${x.text}`).join(' | ')}`
+    : 'None of your other notes relate to what they just said.');
+  let out = `What you remember, for this reply (only what they told you; other notes exist but are not shown now, so if they ask about something not shown, say honestly that you cannot think of it right now): ${bits.join('. ')}.`;
+  if (focus.thread) out += ` Open follow-up from an earlier call (a fact for you, not words to say): ${focus.thread}. If it fits the moment, ask about it once, simply, in your own words, early in this reply; if what they are saying makes it awkward, leave it.`;
+  return out;
+}
+
+// A follow-up thread was offered to Spark: count it (never more than two offers in total, see recall.dueThread). Returns false if not found.
+function markAsked(id, threadId) {
+  const p = load(id);
+  const t = p && p.memory.threads.find((x) => x.id === threadId);
+  if (!t) return false;
+  t.asked = (t.asked || 0) + 1;
+  save(p);
+  return true;
+}
+
 // Text for Spark's instructions: who this profile is, the date/time now, and only this profile's memory.
-function profileNote(p, tz) {
+function profileNote(p, tz, focus = null) {
   const now = new Date();
   const opt = tz ? { timeZone: tz } : {};
   const when = `${now.toLocaleDateString('en-US', { ...opt, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${now.toLocaleTimeString('en-US', { ...opt, hour: 'numeric', minute: '2-digit' })}`;
@@ -227,8 +255,9 @@ function profileNote(p, tz) {
   m.preferences.forEach((x) => mem.push(`Likes, told ${x.told}: ${who(x)}${x.text}`));
   m.current.forEach((x) => mem.push(`Happening around them, told ${x.told}: ${who(x)}${x.text}`));
   m.topics.slice(-5).forEach((x) => mem.push(`Recent topic, ${x.told}: ${x.text}`));
-  lines.push(mem.length ? `What you remember (only what they told you; nothing else is known): ${mem.join(' | ')}` : 'You have no memories of this person yet.');
+  if (focus && !focus.full && mem.length) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
+  else lines.push(mem.length ? `What you remember (only what they told you; nothing else is known): ${mem.join(' | ')}` : 'You have no memories of this person yet.');
   return lines.join(' ');
 }
 
-module.exports = { listProfiles, createProfile, deleteProfile, load, startCall, appendTurn, noteNames, endCall, flushPending, recoverAll, profileNote, today, GENDERS };
+module.exports = { listProfiles, createProfile, deleteProfile, load, startCall, appendTurn, noteNames, endCall, flushPending, recoverAll, profileNote, markAsked, today, GENDERS };
