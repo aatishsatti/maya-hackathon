@@ -38,6 +38,8 @@ test('diag: shows the settings, key length only, the model list and one test per
   assert.equal((await diag.run({ ...env, META_API_KEY: KEY + 'x' })).metaKey.fingerprint === fp, false, 'a different key gives a different fingerprint');
   assert.equal((await diag.run({ META_MODE: 'real' })).metaKey.fingerprint, null);
   assert.equal(out.metaKey.length, KEY.length); assert.equal(out.metaKey.present, true); assert.equal(out.metaKey.hasWhitespace, false); assert.equal(out.metaKey.onlyKeySafeChars, true);
+  assert.equal(out.settings.commit, null, 'no commit shown when the host does not provide one');
+  assert.equal((await diag.run({ ...env, RENDER_GIT_COMMIT: 'abcdef1234567890' })).settings.commit, 'abcdef1', 'the deployed commit, 7 characters');
   assert.equal(out.settings.MAYA_BRAIN_MODEL, 'muse-spark-1.2'); assert.equal(out.settings.modelInUse, 'muse-spark-1.2');
   assert.equal(out.egress.country, 'US'); assert.deepEqual(out.metaModels.ids, ['muse-spark-1.3', 'muse-spark-1.2', 'muse-voice-transcribe-1.0']);
   const byModel = Object.fromEntries(out.oneTokenTests.map((t) => [t.model, t]));

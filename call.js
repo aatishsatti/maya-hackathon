@@ -253,6 +253,7 @@ class Call {
     this.duckTimer = null;
     this.endTimer = setInterval(() => this.endpointTick(), 100);
     this.warmTimer = null;       // keep-warm pings to the voice service while the call is live
+    this.noVoice = false;        // TEMPORARY test switch: no ElevenLabs request in this call (see the start handler)
     this.sayingText = '';        // what Maya has said so far in the current reply
     this.lastSaidAt = 0;
     this.bargeSince = 0;
@@ -365,6 +366,10 @@ class Call {
       try { new Intl.DateTimeFormat('en-US', { timeZone: m.tz }); this.tz = m.tz; } catch { this.tz = null; }
       const rate = Number(m.sampleRate);
       if (!(rate >= 8000 && rate <= 96000)) return this.fatal('Bad microphone sample rate');
+      // TEMPORARY (render-test): a call that makes NO ElevenLabs request at all. The greeting and every reply go out as text events only; the mic path,
+      // Meta Transcribe and Spark are the real ones. Used to tell whether a hosting failure is the mic path or the voice. Remove before the final version.
+      this.noVoice = m.noVoice === true;
+      if (this.noVoice) console.log('call noVoice: ElevenLabs is skipped for this call');
       this.starting = true;
       // Maya rang them and they pressed Accept: the id must match a live ring for THIS profile, else it is an ordinary call.
       if ((m.reason === 'callback' || m.reason === 'reminder') && typeof m.outreachId === 'string') this.outreach = care.claim(this.profile.id, m.outreachId);
@@ -640,6 +645,7 @@ class Call {
   // A short true acknowledgement to say the instant the person has finished, while Spark writes the real reply. Null = say nothing extra.
   pickLead(turns, extra, spec, holdBack) {
     const why = (r) => { if (process.env.MAYA_LEAD_DEBUG) console.log('lead skipped:', r); return null; };
+    if (this.noVoice) return why('no-voice test call');
     if (!leadClips.size) return why('no clips');
     if (extra) return why('care note');
     if (this.safety || this.health || this.pendingConcern) return why('safety/health/concern');
@@ -993,6 +999,7 @@ class Call {
     if (this.outreach && this.outreach.kind === 'reminder') { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
     if (!rem) this.startPrethink();   // Spark thinks about the likeliest routine answer while the greeting is spoken
     await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem ? 1 : 2, bright: !rem && this.greetingPlain === true });
+    if (!this.noVoice) warmLeads();   // the short lead-in clips are rendered once, after the first voiced greeting (not at server start); a no-voice call never does
   }
 
   // ---- Reminders and timers: information only, as the family (or the person) wrote it ----
@@ -1124,6 +1131,7 @@ class Call {
       metaEndpointMs: t0.endedAt ? t0.completedAt - t0.endedAt : null, // speechEnd -> speechComplete
       endedAt: t0.endedAt || t0.completedAt,
       decidedAt: Date.now(),
+      ...(this.noVoice ? { noVoice: true } : {}),
       guess: pre ? 'prethink' : spec ? 'hit' : 'miss',
       ...((pre || spec) ? { heard: turns.map((t) => t.text).join(' '), predicted: pre ? pre.sample : turns.map((t) => t.text).join(' ') } : {}),
     };
@@ -1326,7 +1334,8 @@ class Call {
         const tone = TONES[kind];
         const tagged = tone ? `${tone[0]} ${spoken}` : spoken;
         const gain = tone ? tone[1] : 1;
-        streamSpeech(tagged, signal, (c) => { if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = Date.now() - tEnqueue; job.chunks.push(gain === 1 ? c : scale(c, gain)); }, said.length ? said.join(' ').slice(-300) : undefined, next || undefined)
+        if (this.noVoice) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no ElevenLabs request
+        else streamSpeech(tagged, signal, (c) => { if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = Date.now() - tEnqueue; job.chunks.push(gain === 1 ? c : scale(c, gain)); }, said.length ? said.join(' ').slice(-300) : undefined, next || undefined)
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });
         said.push(text);
         this.sayingText = said.join(' ');
@@ -1455,7 +1464,7 @@ class Call {
       this.prevDelivery = delivery;
       console.log('latency', JSON.stringify({ ...timing, endedAt: undefined }));
     }
-    this.send({ type: 'audioEnd', timing: timing ? { ...timing, endedAt: undefined } : null });
+    this.send({ type: 'audioEnd', timing: timing ? { ...timing, endedAt: undefined } : null, ...(this.noVoice ? { noVoice: true } : {}) });
   }
 
   // Greeting: fixed words, spoken through the same voice path.

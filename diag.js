@@ -27,6 +27,7 @@ async function run(env = process.env) {
       MAYA_MEMORY_MODEL: env.MAYA_MEMORY_MODEL || null,
       modelInUse: env.MAYA_BRAIN_MODEL || 'muse-spark-1.3',
       PORT: env.PORT || null,
+      commit: (env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,   // which commit Render is running (so a test can refuse to run on old code)
     },
     // fingerprint: first 6 hex of the key's SHA-256 (24 bits of a 48-character random key: it cannot be used to get the key back). Compare
     // it with the same number computed on the Mac to see whether Render holds the SAME key.

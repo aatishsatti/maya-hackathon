@@ -204,7 +204,8 @@ const server = http.createServer((req, res) => {
 if (MODE === 'real') {
   try { requireRealEnv(); } catch (e) { console.error(e.message); process.exit(1); }
   memory.recoverAll(); // file any words a crash left in a pending file
-  require('./call').warmLeads(); // render the short lead-in lines in Maya's voice once (a failed one is simply left out)
+  // The short lead-in clips are no longer rendered at server start (every deploy and every wake would make ElevenLabs requests): call.js renders
+  // them once, after the first voiced call's greeting.
 }
 care.start(); // reminder scheduler (also runs in mock mode; rings need the page open)
 server.on('upgrade', (req, socket) => {
