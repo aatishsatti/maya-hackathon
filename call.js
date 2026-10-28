@@ -611,6 +611,9 @@ class Call {
   }
 
   startWarm() {
+    // OFF by default (new free ElevenLabs account after a termination: keep its traffic minimal). It saved about 150 ms per turn, so it can be
+    // switched back on later with MAYA_KEEPWARM=1. Nothing else about the voice changes.
+    if (process.env.MAYA_KEEPWARM !== '1') return;
     if (this.warmTimer || !process.env.ELEVENLABS_API_KEY) return;
     const ping = () => fetch(WARM_URL, { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY }, signal: AbortSignal.timeout(3000) }).then((r) => r.arrayBuffer()).catch(() => { /* a missed ping only means one cold connection */ });
     ping();
