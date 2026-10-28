@@ -184,7 +184,7 @@ class ChatSession {
         d.noQuestion = this.lastReplyAsked && concern !== 'unsure';
         if (concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
         else if (concern === 'unsure' && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
-        // A scam reading is a few short sentences, not the usual two: what it says, "this looks like a scam, please don't pay", and (for a
+        // A scam reading is a few short sentences, not the usual two: what it says, that it looks like a scam and what not to do yet (in her own words), and (for a
         // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
         if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }
         this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern || this.scamReply));
@@ -337,7 +337,8 @@ const SCAM_FEEL = " In your private [[feel: ...]] tag use concern=none and pain=
 function scamNote(scam) {
   if (!scam || scam.level === 'none') return '';
   const signs = require('./scam').said(scam.signals).join('; ');
-  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words: first say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then say clearly that this looks like a scam and ask them please not to pay, send money, share codes or details, or reply. Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.) Use the exact words "this looks like a scam" and "please don't pay". Say "looks like", never that it is certain. No diagnosis, no legal advice, no guarantee, no phone numbers to call, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
+  // Principles only (like the typed / spoken note in scam.js): Spark finds her own words for the warning; the app dictates no phrase.
+  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words of your own: first say in one or two short sentences what it says, from this reading: ${scam.reading}. Then say that it looks like a scam, never that it is certain, and ask them not to pay, send money, share codes or details, or reply yet. Say the safe way is to check with the real company or bank themselves, through a number or website they already trust; never give a number yourself. Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.) No diagnosis, no legal advice, no guarantee, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
   return `SCAM CHECK (a fact from the app, not from them): what they showed you has one warning sign (${signs}). Say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. No phone numbers, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
 }
 

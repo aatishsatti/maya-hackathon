@@ -46,8 +46,9 @@ test('warn (2+ signals): read aloud as a voice note, ONE question asked, the que
   assert.equal(r.messages[1].kind, 'voice', 'read aloud');
   assert.ok(spoke.length > 0, 'the voice was asked for');
   const roster = lastRoster();
-  assert.match(roster, /SCAM CHECK/); assert.match(roster, /possible prize scam/); assert.match(roster, /ask them please not to pay/); assert.match(roster, /ONE short question/);
-  assert.match(roster, /Say "looks like", never that it is certain\. No diagnosis, no legal advice, no guarantee/);
+  assert.match(roster, /SCAM CHECK/); assert.match(roster, /possible prize scam/); assert.match(roster, /ask them not to pay, send money, share codes or details, or reply yet/); assert.match(roster, /ONE short question/);
+  assert.match(roster, /it looks like a scam, never that it is certain/); assert.match(roster, /never give a number yourself/); assert.match(roster, /No diagnosis, no legal advice, no guarantee/);
+  assert.doesNotMatch(roster, /exact words|Use the words|"this looks like a scam"|please don't pay/i, 'principles only: Spark finds her own words, the app dictates none');
   assert.equal(care.scamPending(id).type, 'prize scam');
   assert.equal(care.view(id).scams.length, 0, 'no ticket until they answer');
   assert.equal(ev.filter((e) => e.ev === 'notify' && e.data.id === id).length, 0, 'nothing to the family');
@@ -183,7 +184,7 @@ test('a scam warning keeps ALL its sentences even when Spark reads the person as
   const text = r.messages[1].text;
   assert.match(text, /looks like a scam, please don't pay/); assert.match(text, /Would you like me to let your family know\?/);
   assert.equal(sentences(text), 4, text);
-  assert.match(lastRoster(), /exact words "this looks like a scam" and "please don't pay"/);
+  assert.doesNotMatch(lastRoster(), /exact words|"this looks like a scam"|please don't pay/i, 'no phrase is dictated: she words the warning herself'); assert.match(lastRoster(), /ask them not to pay, send money, share codes or details, or reply yet/);
   const id2 = senior();
   chat.deps.scam = check('none', 'ordinary letter'); reset(FOUR('anxious'));
   const r2 = await chat.sendImage(id2, PNG, '', null);
