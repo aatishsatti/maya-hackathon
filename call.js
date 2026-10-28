@@ -360,6 +360,8 @@ class Call {
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
     this.pendingConcern = null;  // she was unsure and asked; waiting for the answer
     this.safetyAsked = new Set(); // topics her safety replies have already asked about in this call (see SAFETY_TOPICS)
+    this.safetyFreshShown = false; this.healthFreshShown = false; // the "family is being alerted" fact went to Spark for this reply, not yet spoken
+    this.scamOwed = null;        // the scam verdict this reply carries; still owed if the reply is cut or fails
     this.seenShown = false;      // the family-has-seen fact was handed to Spark for THIS reply (cleared once the reply is spoken)
     this.reminderShown = null;   // id of the next-call reminder handed to Spark for THIS reply (delivered only when the reply is spoken, see commitReminder)
     this.familyDeclined = false; // they said no to letting their family know, earlier in this call: kept for the whole call, not one turn
@@ -984,6 +986,11 @@ class Call {
   // The reply that carried a next-call reminder was spoken to the end (not cut off, not failed): now it counts as delivered, once, and "not
   // done yet" can reopen it. Until then the reminder stays due, so a cut reply never loses it. Chat borrows this too.
   commitReminder() {
+    // Generated is not heard: what must be TOLD to the person (a new family alert, a scam warning) is only counted as told when the reply that
+    // carried it was spoken to the end. A cut or failed reply leaves it owed for the next one.
+    if (this.safetyFreshShown) { this.safetyFresh = false; this.safetyFreshShown = false; }
+    if (this.healthFreshShown) { this.healthFresh = false; this.healthFreshShown = false; }
+    this.scamOwed = null;
     if (this.seenShown && this.profile) { this.seenShown = false; care.clearSeenToTell(this.profile.id); }   // the reply that carried "your family knows" was spoken
     const tid = this.reminderShown; this.reminderShown = null;
     if (!tid || !this.profile) return;
@@ -1289,6 +1296,7 @@ class Call {
     this.responding = true;
     if (reminder) this.reminderReply = { gen: myGen, said: line.said };
     await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, stripGreeting: true });
+    line.spoken = myGen === this.gen && !this.closed;   // false when something cut it off
     return line;
   }
 
@@ -1384,7 +1392,12 @@ class Call {
       this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
-    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; this.reminderShown = null; this.seenShown = false; this.scamReply = null; this.scamAskFor = null; }
+    this.scamOwed = scamTurn && scamTurn.scam && scamTurn.scam.level !== 'none' ? scamTurn.scam : null;
+    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); }
+    finally {
+      this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null;
+      if (this.scamOwed) { this.scamLater = { scam: this.scamOwed, at: Date.now() }; this.scamOwed = null; }   // cut off before it was heard: the next reply carries the warning again
+    }
   }
 
   // Care effects of the words just heard, and notes for the reply that must be true: a flag resolving (so Maya warmly asks
@@ -1484,7 +1497,7 @@ class Call {
     this.ticketTold = true;
     this.ticketInCall = false;
     this.speakWhenFree(async (signal) => { const l = await this.dynamicLine({ pool: 'seen', signal, sentences: 2, what: `FACT: a moment ago their family looked at the worry about them and now knows. You are already mid-conversation: do NOT greet them, do NOT say hello, do NOT introduce yourself or say your name. Tell them so in one or two short, warm, fresh sentences: their family knows, someone will check on them, and you are with them, so they need not worry (${pick(SEEN_ANGLES)}). If you use a name, use ONLY the name in your notes for them, never any other name. Never say "let them sort things out" or leave it to others; never copy a comfort phrase. Never promise an exact time or a call, never name a button, page, app, notification or anything technical, do not ask a question, do not repeat what they said earlier.`
-      }); care.addLine(this.profile.id, 'seen', l.said); care.clearSeenToTell(this.profile.id); return l; }).catch(() => {});
+      }); care.addLine(this.profile.id, 'seen', l.said); return l; }).then((l) => { if (l && l.spoken) care.clearSeenToTell(this.profile.id); }).catch(() => {});   // told only if she got to say it; otherwise the next turn carries it
   }
 
   // An emergency judged from context (Spark tagged concern=urgent). The app alerts the family now; Spark is told as a fact.
@@ -1501,7 +1514,7 @@ class Call {
 
   // Facts for every reply once an emergency ticket is open (no scripted line).
   healthNote() {
-    const fresh = this.healthFresh; this.healthFresh = false;
+    const fresh = this.healthFresh; if (fresh) this.healthFreshShown = true;   // cleared only once a reply that carried it was spoken (commitReminder)
     const asked = this.healthOverrode ? ' They had said no to telling their family earlier, so say plainly and kindly that this is different because what they described sounds serious, so you let their family know.' : '';
     return fresh ? `FACT: what they described looks like an emergency, and the app has just alerted their family, once (topic only). You may tell them briefly, in your own words, this one time.${asked} Stay calm and with them; no diagnosis, no medical advice, no phone number, you never call anyone yourself.` : 'FACT: their family has already been alerted about this and no second alert is made. Do not announce it again; stay calm and with them, ask only what you truly need to know, no diagnosis, no medical advice, no phone number. If they ask whether you told their family, or why, answer truthfully and plainly that you did let them know; never deny it or say you have not told anyone.';
   }
@@ -1510,7 +1523,7 @@ class Call {
   // Spark decides the words and varies them. `fresh` is true only for the first reply after a NEW alert was created.
   safetyNote() {
     const fresh = this.safetyFresh;
-    this.safetyFresh = false;
+    if (fresh) this.safetyFreshShown = true;   // cleared only once a reply that carried it was spoken (commitReminder)
     const recent = care.recentLines(this.profile.id, 'safety').slice(-6);
     const asked = [...this.safetyAsked];
     const progress = `${this.escalations > 1 || asked.length ? 'They have now spoken of ending their life more than once in this call. ' : ''}${asked.length ? `You have ALREADY asked about: ${asked.join('; ')}. Do not ask any of those again, in any words, and do not follow a question with another of the same kind. ` : ''}Each reply must move forward from the last one: respond to what is NEW in what they just said, stay with them, and if your questions are already asked let presence and a small next step (staying on the line, what they might do in the next few minutes) carry the reply instead of another question.`;

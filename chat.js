@@ -94,7 +94,7 @@ class ChatSession {
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
-    this.familyDeclined = false; this.said = []; this.reminderShown = null; this.seenShown = false; this.safetyAsked = new Set();   // as in call.js: a no to telling family lasts the whole chat; what they said, for recall asks
+    this.familyDeclined = false; this.said = []; this.reminderShown = null; this.seenShown = false; this.safetyAsked = new Set(); this.safetyFreshShown = false; this.healthFreshShown = false; this.scamOwed = null;   // as in call.js: a no to telling family lasts the whole chat; what they said, for recall asks
     this.prevDelivery = null; this.askWhat = false;
     this.reminderFacts = null; this.reminderPending = null; this.awaitAck = null; this.nameChance = 0;
   }
@@ -160,7 +160,7 @@ class ChatSession {
     } catch (e) {
       if (this.history.length && this.history[this.history.length - 1].role === 'user') this.history.pop(); // a failed turn cannot poison the next one
       throw e instanceof ChatError ? e : new ChatError(e.message);
-    } finally { this.scamReply = null; this.focus = null; this.reminderShown = null; this.seenShown = false; this.armIdle(); }
+    } finally { this.scamReply = null; this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.armIdle(); }
   }
 
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.

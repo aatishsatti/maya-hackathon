@@ -57,7 +57,7 @@ const ANNOUNCE = /letting (your|their) family know|let (your|their) family know|
 test('P1 Tier A 3x in the same call -> 1 alert, 1 note to family, announced once, later notes say do not announce', stubbed, () => {
   const id = newSenior(); const fam = family();
   const c = startCall(id);
-  const notes = HARM.map((h) => c.careNotes(h));
+  const notes = HARM.map((h) => { const n = c.careNotes(h); c.commitReminder(); return n; });   // each reply is spoken to the end before the next turn
   assert.equal(active(id).length, 1); assert.equal(care.get(id).flags.filter((f) => f.safety).length, 1);
   assert.equal(fam.filter((e) => e.ev === 'notify').length, 1, 'family told once');
   assert.match(notes[0], /the app has just alerted their family, once/);
@@ -422,6 +422,7 @@ test('U2 urgent (clear emergency from context) -> one persistent ticket at once;
   await c.speakReply(fixedReply('[[feel: emotion=anxious intensity=4 intent=share concern=urgent]] I am letting your family know right now and I am staying with you.'), null, 1, { record: true });
   assert.equal(c.health, true); assert.equal(active(id).length, 1); assert.equal(active(id)[0].kind, 'health');
   const n1 = c.careNotes('It really hurts, I cannot get up'); assert.match(n1, /the app has just alerted their family, once/);
+  c.commitReminder();   // that reply was spoken to the end
   assert.match(c.careNotes('Still here'), /has already been alerted about this and no second alert/);
   c.gen = 2; c.history.push({ role: 'user', content: 'y' });
   await c.speakReply(fixedReply('[[feel: emotion=anxious intensity=4 intent=share concern=urgent]] I am right here.'), null, 2, { record: true });

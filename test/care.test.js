@@ -737,6 +737,7 @@ test('A safety: Tier A alerts at once (any mode, quiet hours, recent activity), 
     assert.equal(push.length, 1);
     assert.match(push[0].data.text, /^Urgent: something .* said worried Maya about their safety/);
     assert.doesNotMatch(push[0].data.text, /kill|suicid|die|emergency|911|999|\d{3}|transcript|location/i);
+    c.commitReminder();   // the first reply (which announced the alert) was spoken to the end
     const n2 = c.careNotes(harm[1]);
     assert.match(n2, /already been alerted for this and no second alert is made. Do not announce it again/);
     const n3 = c.careNotes(harm[2]);
