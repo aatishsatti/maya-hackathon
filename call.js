@@ -190,6 +190,10 @@ const STORY_ASK = /\b(stor(y|ies)|tale)\b/i;
 // A bare "do you remember / do you know X?" is a check (short answer), not a recall: it does not match here.
 const RECALL_ASK = /\b(tell me|stor(y|ies)|what (was|happened|did|is|were)|then what)\b/i;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Scam shield for what the person SAYS on a call (scam.js). Replaceable in tests; looked up when called. null = no key, no check.
+const SCAM_AWAIT_MS_DEFAULT = 2500; // the longest an awaited check ("happening right now") may hold her answer; after that she answers without it
+const callDeps = { awaitMs: SCAM_AWAIT_MS_DEFAULT, scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null) };
+const SCAM_LATER_FRESH_MS = 30000; // a verdict that arrives after her answer shapes the NEXT answer only if that comes within this long
 const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
 
 // ---- Lead-in clips: Maya's own voice saying one short line, rendered once and kept (see lead.js). Real mode only; never faked. ----
@@ -310,6 +314,9 @@ class Call {
     this.greeted = false;        // a call is greeted once, at its start, never again
     this.replyCount = 0;         // normal replies so far
     this.lastReplyAsked = false; // her last reply ended in a question
+    this.scamLater = null;       // { scam, at }: a scam verdict that arrived after her answer, used for the next one only
+    this.scamReply = null;       // 'warn' | 'pause' | 'caution' | null: the shape of THIS reply (see onFeel)
+    this.scamAskFor = null;      // the verdict whose one question to the family she is about to ask
     this.focus = null;           // this reply's memory focus (see setFocus); null for greetings, call-backs and silence lines
     this.followUpOffered = false; // a due follow-up was already offered to Spark in this call
     this.beatCount = 0;          // replies she has given on the current light-chat subject (see beat.js); committed after each spoken reply
@@ -908,6 +915,29 @@ class Call {
     return this.history.filter((m) => m.role === 'assistant').map((m) => String(m.content)).slice(-5);
   }
 
+  // Scam shield on a call: what the person just said. Decides in code (the cheap word filter) whether it is worth one Spark check, and whether
+  // that check must be AWAITED (the person is on the way to pay, or the caller is still on the line) or can run beside her answer and shape the
+  // next one. Never while a safety matter is active, never for self-harm words, never while her family question is still open.
+  // Returns { note, level } for THIS reply (empty when nothing applies); a failed or slow check changes nothing and is never replaced by a guess.
+  scamForTurn(heard) {
+    const scam = require('./scam');
+    let now = null;
+    const later = this.scamLater; this.scamLater = null;
+    if (later && Date.now() - later.at <= SCAM_LATER_FRESH_MS) now = later.scam;
+    const out = (v) => ({ note: v ? scam.talkNote(v) : '', scam: v });
+    const id = this.profile && this.profile.id;
+    if (!id || this.safety || this.health || this.pendingConcern || care.hasActiveSafety(id) || care.scamPending(id) || selfHarmText(heard)) return out(now);
+    const plan = scam.checkPlan(heard);
+    if (!plan.check) return out(now);   // ordinary talk: synchronous, nothing awaited, no added delay
+    const p = Promise.resolve().then(() => callDeps.scamText(heard)).catch((e) => { console.error('scam check failed:', e.message); return null; });
+    if (!plan.await) { p.then((v) => { if (v && v.level !== 'none') this.scamLater = { scam: v, at: Date.now() }; }); return out(now); }
+    return Promise.race([p, sleep(callDeps.awaitMs).then(() => 'late')]).then((v) => {
+      if (v === 'late') p.then((late) => { if (late && late.level !== 'none') this.scamLater = { scam: late, at: Date.now() }; });
+      else if (v && v.level !== 'none') now = v;
+      return out(now);
+    });
+  }
+
   // Memory focus for ONE normal reply (conversation brain #3): the words just heard pick the few memory items worth showing, and code may
   // offer Spark at most one due follow-up (recall.js) as a fact with its date already worked out. Never in a heavy or careful moment, never
   // twice in a call, never after two offers in total. A request for a story or a recalled account keeps the whole memory. Spark phrases it.
@@ -1243,6 +1273,9 @@ class Call {
     if (!turns.length || this.closed) return;
     dbg('RESPOND to', JSON.stringify(turns.map((t) => t.text)));
     const extra = this.careNotes(turns.map((t) => t.text).join(' '));
+    let scamTurn = this.scamForTurn(turns.map((t) => t.text).join(' '));
+    if (scamTurn && typeof scamTurn.then === 'function') scamTurn = await scamTurn;   // only the rare "happening right now" turn ever waits
+    if (this.closed) return;
     // The pre-call guess comes first: it is already written, so it beats a guess that only started on the partial words.
     // Only the very first turn, one voice (A), and only if the words match its class exactly.
     let pre = null;
@@ -1259,6 +1292,7 @@ class Call {
         this.spec.byLabel.delete(only);
       }
     }
+    if (scamTurn.scam && spec) { spec.abort.abort(); spec = null; } // a guess written before the verdict cannot carry the scam note: write it again
     this.dropPre();  // every other pre-call guess is dropped unheard
     this.dropSpec(); // aborts every other guess
     this.history.push({ role: 'user', content: this.userMessage(turns) });
@@ -1290,10 +1324,11 @@ class Call {
       this.abort.signal.addEventListener('abort', () => spec.abort.abort(), { once: true });
       rs = spec.rs;
     } else {
-      this.setFocus(turns.map((t) => t.text).join(' '), extra);
-      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote}`.trim()), this.abort.signal);
+      this.scamReply = scamTurn.scam ? scamTurn.scam.level : null; this.scamAskFor = scamTurn.scam && ['warn', 'pause'].includes(scamTurn.scam.level) ? scamTurn.scam : null;
+      this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
+      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim()), this.abort.signal);
     }
-    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; }
+    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; this.scamReply = null; this.scamAskFor = null; }
   }
 
   // Care effects of the words just heard, and notes for the reply that must be true: a flag resolving (so Maya warmly asks
@@ -1457,8 +1492,11 @@ class Call {
         if (!greeting && raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
         d.noQuestion = !greeting && this.lastReplyAsked && concern !== 'unsure'; // asking because she genuinely does not know is the one exception
         if (!greeting && concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
-        else if (!greeting && concern === 'unsure' && !this.health && !this.safety) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
-        if (!greeting) this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern));
+        else if (!greeting && concern === 'unsure' && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
+        // A scam reading is a few short sentences, not the usual two: what it seems to be, what not to do yet, and (warn / pause) the ONE question about
+        // telling their family. Calm and plain: nothing bright, no exclamation. Same shape as the written chat (chat.js).
+        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }
+        if (!greeting) this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern || this.scamReply));
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear', whisperPieces: d.whisperPieces };
         return d;
@@ -1599,6 +1637,7 @@ class Call {
       for (const n of this.names.values()) if (new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(all)) this.lastNameUse = this.replyCount;
       this.replyCount += 1;
       if (delivery && delivery.beatN != null) this.beatCount = delivery.beatN;
+      if (this.scamAskFor) { care.scamAsk(this.profile.id, this.scamAskFor.type, { channel: 'spoken', pause: this.scamAskFor.level === 'pause' }); this.scamAskFor = null; }   // her one question is out: their yes or no settles it (careNotes)
       care.trendTurn(this.profile.id, delivery);   // counts only: the feeling, its strength, pain, concern; never the words   // committed only once the reply is really spoken (a rewrite recomputes from the same count)
       this.lastReplyAsked = isQuestion(all);
       this.lastExclaimed = /!/.test(all);
@@ -1627,4 +1666,4 @@ class Call {
   }
 }
 
-module.exports = { liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
