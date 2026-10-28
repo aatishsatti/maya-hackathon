@@ -233,6 +233,21 @@ test('text: Spark failure is an error, never a faked reply, and does not poison 
   assert.equal(asked[0].history.filter((m) => m.role === 'user').length, 1, 'the failed message is not in the next request');
 });
 
+test('text: a failed chat turn leaves a due next-call reminder undelivered; the next good reply carries it and delivers it once', async () => {
+  const id = newSenior();
+  assert.equal(memory.addReminder(id, 'call my grandson', 'a-call-from-before').status, 'added');
+  const asked1 = () => memory.load(id).memory.threads.find((t) => t.kind === 'reminder').asked;
+  reset(new Error('Meta Spark failed (HTTP 500)'));
+  await assert.rejects(chat.sendText(id, 'hello there my friend', null), /Meta Spark failed/);
+  assert.match(asked[0].roster, /REMINDER THEY ASKED YOU FOR/, 'it was handed to Spark for the failed reply');
+  assert.equal(asked1(), 0, 'a failed reply does not count as delivered');
+  reset(PLAIN); await chat.sendText(id, 'hello again my friend', null);
+  assert.match(asked[0].roster, /REMINDER THEY ASKED YOU FOR/); assert.match(asked[0].roster, /call my grandson/);
+  assert.equal(asked1(), 1, 'the reply that went out delivered it');
+  reset(PLAIN); await chat.sendText(id, 'what a nice afternoon it is', null);
+  assert.doesNotMatch(asked[0].roster, /REMINDER THEY ASKED YOU FOR/, 'not repeated');
+});
+
 // ------------------------------------------------------------------------------------------ 2 voice notes
 
 const wavOf = (ms = 500) => chat.pcmToWav(Buffer.alloc(ms * 48), 24000);
