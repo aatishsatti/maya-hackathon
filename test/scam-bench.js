@@ -80,7 +80,38 @@ function report(file) {
   console.log('DEV normal wrongly flagged:'); for (const i of have.filter((x) => x.split === 'dev' && x.label === 'normal' && byId[x.id].level !== 'none')) console.log(`  ${i.id} [${i.category}/${i.channel}] ${byId[i.id].level}: ${i.text.slice(0, 90)}`);
 }
 
-module.exports = { wilson, fmt, summarise, isWarn, runWith };
+// What the live system does: talk only reaches the Spark check if the cheap word filter lets it through; otherwise there is no verdict at all.
+// byId: the detector's answers. Returns answers as the whole pipeline would give them (filtered-out items become level 'none').
+function throughFilter(items, byId, needsCheck) {
+  const out = {};
+  for (const i of items) out[i.id] = byId[i.id] ? (needsCheck(i.text) ? byId[i.id] : { ...byId[i.id], level: 'none', filtered: true }) : undefined;
+  return out;
+}
+
+// The published page for one result file (the detector alone, then the whole pipeline), listing every miss and false alarm by id.
+function publishMarkdown(items, byId, baselineById, title) {
+  const { needsCheck } = require('../scam');
+  const piped = throughFilter(items, byId, needsCheck);
+  const rows = (map, label) => {
+    const s = summarise(items, map);
+    return `| ${label} | ${fmt(s.warned, s.scams)} | ${fmt(s.cautioned, s.scams)} | ${fmt(s.falseWarned, s.normal)} | ${fmt(s.falseCautioned, s.normal)} |`;
+  };
+  const now = items.filter((i) => i.now), lp = items.filter((i) => i.legitpay);
+  const paused = (map, list) => list.filter((i) => map[i.id] && map[i.id].level === 'pause').length;
+  const other = (f) => items.filter((i) => f(i) && !i.now && !i.legitpay);
+  const L = [`# ${title}`, '', 'Meta Spark, text only, run once on the held-out half of docs/scam-testset.json (never used for tuning). Intervals are 95% Wilson intervals; with this few items they are wide.', '',
+    '| detector | scams warned | scams at least cautioned | normal wrongly warned | normal wrongly cautioned |', '|---|---|---|---|---|'];
+  if (baselineById) L.push(rows(baselineById, 'Original five-signal prompt (baseline)'));
+  L.push(rows(byId, 'New detector alone (six signs, pause level)'), rows(piped, 'New detector behind the cheap word filter (what runs live)'), '');
+  L.push('## The pause moment', '', `- Scams in progress paused: detector alone ${fmt(paused(byId, now), now.length)}; behind the filter ${fmt(paused(piped, now), now.length)}.`,
+    `- Genuine payments in progress wrongly paused: ${fmt(paused(byId, lp), lp.length)}.`, `- Other normal items wrongly paused: ${fmt(paused(byId, other((i) => i.label === 'normal')), other((i) => i.label === 'normal').length)}.`, '');
+  const wrongs = (map, f) => items.filter(f).map((i) => `- ${i.id} [${i.category}/${i.channel}${i.hard ? '/hard' : ''}] ${map[i.id] ? map[i.id].level : 'n/a'}${map[i.id] && map[i.id].filtered ? ' (the word filter did not pass it to Spark)' : ''}: ${i.text}`);
+  L.push('## Every held-out scam that was not warned (behind the filter)', '', ...wrongs(piped, (i) => i.label === 'scam' && !isWarn(piped[i.id])), '');
+  L.push('## Every held-out normal item that was wrongly flagged (warned or cautioned, behind the filter)', '', ...wrongs(piped, (i) => i.label === 'normal' && piped[i.id] && piped[i.id].level !== 'none'), '');
+  return L.join('\n');
+}
+
+module.exports = { wilson, fmt, summarise, isWarn, runWith, throughFilter, publishMarkdown };
 
 if (require.main === module) {
   const [cmd, file, which] = process.argv.slice(2);
@@ -88,5 +119,12 @@ if (require.main === module) {
     try { process.loadEnvFile(path.join(ROOT, '.env')); } catch { /* no .env */ }
     runWith(process.argv[5] === 'talk' ? talkDetect : baselineDetect, file, which || 'all').then((o) => console.log('done', o.length, 'items,', o.filter((x) => x.error).length, 'errors'));
   } else if (cmd === 'report') report(file);
-  else console.log('usage: node test/scam-bench.js run <results.json> [dev|held|t1|t2|all] [baseline|talk] | report <results.json>');
+  else if (cmd === 'publish') {   // node test/scam-bench.js publish <held-results.json> <out.md> [baseline-held.json]
+    const held = SET().filter((i) => i.split === 'held');
+    const by = (f) => Object.fromEntries(JSON.parse(fs.readFileSync(f, 'utf8')).map((r) => [r.id, r]));
+    const base = process.argv[5] ? by(process.argv[5]) : null;
+    fs.writeFileSync(which, publishMarkdown(held, by(file), base, 'Scam shield: final held-out results'));
+    console.log('wrote', which);
+  }
+  else if (cmd !== 'publish') console.log('usage: node test/scam-bench.js run <results.json> [dev|held|t1|t2|all] [baseline|talk] | report <results.json> | publish <held.json> <out.md> [baseline.json]');
 }

@@ -25,3 +25,25 @@ test('the bench never touches ElevenLabs or any voice', () => {
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, 'scam-bench.js'), 'utf8').replace(/\/\/.*$/gm, '');
   assert.doesNotMatch(src, /elevenlabs|streamSpeech|ELEVEN/i);
 });
+
+test('throughFilter: an item the word filter does not pass has no verdict at all; one it passes keeps the detector\'s answer', () => {
+  const items = [{ id: 'a', text: 'passes' }, { id: 'b', text: 'blocked' }];
+  const by = { a: { level: 'warn' }, b: { level: 'pause' } };
+  const out = B.throughFilter(items, by, (t) => t === 'passes');
+  assert.equal(out.a.level, 'warn'); assert.equal(out.b.level, 'none'); assert.equal(out.b.filtered, true); assert.equal(by.b.level, 'pause', 'the input is not changed');
+});
+
+test('publishMarkdown: both views, the pause numbers, and every held-out miss and false alarm listed by id (the held-out half is published once, at the end)', () => {
+  const items = [
+    { id: 'S1', label: 'scam', category: 'bank', channel: 'text', text: 'urgent please send the gift cards and the code now', now: true },
+    { id: 'S2', label: 'scam', category: 'prize', channel: 'text', text: 'a quiet one' },
+    { id: 'N1', label: 'normal', category: 'bill', channel: 'text', text: 'Your bill is due, pay at the bank by Friday.', hard: true },
+    { id: 'N2', label: 'normal', category: 'bill', channel: 'spoken', text: 'I paid the milkman.', legitpay: true },
+  ];
+  const by = { S1: { level: 'pause' }, S2: { level: 'caution' }, N1: { level: 'caution' }, N2: { level: 'none' } };
+  const md = B.publishMarkdown(items, by, { S1: { level: 'warn' }, S2: { level: 'none' }, N1: { level: 'none' }, N2: { level: 'none' } }, 'T');
+  assert.match(md, /^# T/); assert.match(md, /Original five-signal prompt \(baseline\)/); assert.match(md, /behind the cheap word filter/);
+  assert.match(md, /Scams in progress paused: detector alone 1\/1/);
+  assert.match(md, /- S2 \[prize\/text\] (caution|none)/); assert.doesNotMatch(md, /- S1 \[/, 'a warned scam is not listed as a miss');
+  assert.match(md, /- N1 \[bill\/text\/hard\] caution/); assert.doesNotMatch(md, /- N2 \[/);
+});
