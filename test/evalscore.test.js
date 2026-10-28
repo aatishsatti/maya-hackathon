@@ -77,6 +77,8 @@ test('guard rails: every check passes on the numbers this project observed, ids 
   const oneMiss = { ...OBSERVED, 'memory.honest': 0.875, 'memory.closedAfterBrushoff': 0.75 };
   assert.deepEqual(S.runChecks(oneMiss, rules.CHECKS).filter((r) => r.status !== 'pass'), [], 'one unlucky reply out of eight is noise, not a failure');
   assert.ok(S.runChecks({}, rules.CHECKS).every((r) => r.status === 'skipped'), 'with no numbers nothing passes by default');
+  const noneAsked = S.runChecks({ ...OBSERVED, 'memory.closedAfterAnswer': null, 'memory.closedAfterBrushoff': null, 'memory.notRepeatedAfterClose': null }, rules.CHECKS).find((r) => r.id === 'mem.closing');
+  assert.equal(noneAsked.status, 'skipped', 'if she never asked there is nothing to judge: skipped, not passed');
 });
 
 test('rules: every comparison rule names a direction and a positive tolerance', () => {

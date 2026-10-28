@@ -49,14 +49,17 @@ async function run({ runs = 2, limit = null } = {}) {
       await S.memory.endCall(id, c.callId);
       log.push({ callNo, offered: ts.some((x) => x.offered), mentioned: ts.some((x) => score.mentionsFollowUp(x.maya)), status: thread(S, id).status, said: ts.map((x) => x.maya) });
     }
-    return { kind, closedAfterCall1: log[0].status === 'closed', laterQuiet: log.slice(1).every((l) => !l.offered && !l.mentioned), log };
+    return { kind, askedFirst: log[0].mentioned, closedAfterCall1: log[0].status === 'closed', laterQuiet: log.slice(1).every((l) => !l.offered && !l.mentioned), log };
   });
   const rate = (list, f) => score.frac(list.filter(f).length, list.length);
-  const ans = D.filter((d) => d.kind === 'answered'), brs = D.filter((d) => d.kind === 'brushed');
+  // An answer or a brush-off can only be judged when she actually ASKED in the first call (being handed the follow-up is not asking: she may ask about
+  // something else). Scenarios where she did not ask never tested the closing, so they are left out and reported separately (askedFirstInNextCall).
+  const asked = D.filter((d) => d.askedFirst);
+  const ans = asked.filter((d) => d.kind === 'answered'), brs = asked.filter((d) => d.kind === 'brushed');
   const metrics = {
     askedEarly: rate(A, (a) => a.early), askedOnce: rate(A, (a) => a.asked === 1 && a.mentions <= 2), heavyQuiet: rate(B, (b) => b.quiet), safetyQuiet: rate(SA, (b) => b.quiet),
-    recallAccuracy: rate(Cres.filter((x) => x.kind === 'pos'), (x) => x.ok), honest: rate(Cres.filter((x) => x.kind !== 'pos'), (x) => x.ok),
-    closedAfterAnswer: rate(ans, (d) => d.closedAfterCall1), closedAfterBrushoff: rate(brs, (d) => d.closedAfterCall1), notRepeatedAfterClose: rate(D.filter((d) => d.closedAfterCall1), (d) => d.laterQuiet),
+    askedFirstInNextCall: rate(D, (d) => d.askedFirst), recallAccuracy: rate(Cres.filter((x) => x.kind === 'pos'), (x) => x.ok), honest: rate(Cres.filter((x) => x.kind !== 'pos'), (x) => x.ok),
+    closedAfterAnswer: rate(ans, (d) => d.closedAfterCall1), closedAfterBrushoff: rate(brs, (d) => d.closedAfterCall1), notRepeatedAfterClose: rate(asked.filter((d) => d.closedAfterCall1), (d) => d.laterQuiet),
   };
   return { metrics, details: { A, B, SA, Cres, D } };
 }

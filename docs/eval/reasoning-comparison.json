@@ -1,0 +1,24 @@
+{
+ "about": "The dev-half evidence for changing the scam check on typed and spoken talk from reasoning low to minimal: 76 dev items, 4 runs per setting (304 calls each), real Meta Spark, text only, run 2026-10-28. Speed was measured while two suites ran at once, so absolute times are higher than when the check runs alone; the comparison between the settings is the point.",
+ "when": "2026-10-28",
+ "runs": 4,
+ "liveSetting": "minimal",
+ "low": {
+  "warned": 1,
+  "falseWarn": 0,
+  "pauseInProgress": 0.95,
+  "avgMs": 4984,
+  "p90Ms": 7458,
+  "tokensIn": 727,
+  "tokensOut": 851
+ },
+ "minimal": {
+  "warned": 0.993421052631579,
+  "falseWarn": 0,
+  "pauseInProgress": 0.95,
+  "avgMs": 2881,
+  "p90Ms": 4309,
+  "tokensIn": 727,
+  "tokensOut": 367
+ }
+}

@@ -49,9 +49,10 @@ test('conversation suite: real Call path, tags captured, every metric present an
 
 test('memory suite: every scenario runs through the real memory and care code and reports its rates', async () => {
   const r = await require('../eval/suites/memory').run({ runs: 1, limit: 1 });
-  for (const k of ['askedEarly', 'askedOnce', 'heavyQuiet', 'safetyQuiet', 'recallAccuracy', 'honest', 'closedAfterAnswer', 'closedAfterBrushoff', 'notRepeatedAfterClose']) assert.ok(k in r.metrics, k);
+  for (const k of ['askedEarly', 'askedOnce', 'heavyQuiet', 'safetyQuiet', 'askedFirstInNextCall', 'recallAccuracy', 'honest', 'closedAfterAnswer', 'closedAfterBrushoff', 'notRepeatedAfterClose']) assert.ok(k in r.metrics, k);
   assert.ok(numeric(r.metrics)); assert.equal(r.metrics.heavyQuiet, 1); assert.equal(r.metrics.safetyQuiet, 1, 'the safety words really did raise the safety path');
   assert.equal(r.metrics.askedEarly, 0, 'the stand-in never mentions the follow-up, so nothing is counted as asked'); assert.equal(r.metrics.recallAccuracy, 0);
+  assert.equal(r.metrics.askedFirstInNextCall, 0); assert.equal(r.metrics.closedAfterAnswer, null, 'no scenario where she asked: nothing to judge, so no number (never a made-up pass)'); assert.equal(r.metrics.closedAfterBrushoff, null);
 });
 
 test('scam suite: dev half only, both reasoning settings asked for, rates + speed + tokens per setting, and the filter numbers', async () => {
