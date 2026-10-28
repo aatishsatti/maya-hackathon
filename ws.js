@@ -5,15 +5,20 @@ const crypto = require('node:crypto');
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_MESSAGE = 4 * 1024 * 1024;
+// Heartbeat (render-test, hosting): a protocol ping every PING_MS keeps steady traffic on the line, and a socket that has sent us NOTHING
+// (no audio, no pong) for DEAD_MS is destroyed so a dead link is noticed in seconds instead of minutes. Browsers answer pings by themselves.
+const PING_MS = 5000;
+const DEAD_MS = 15000;
 
-function accept(req, socket) {
+function accept(req, socket, { pingMs = PING_MS, deadMs = DEAD_MS } = {}) {
   const key = req.headers['sec-websocket-key'];
   if (!key || String(req.headers.upgrade).toLowerCase() !== 'websocket') { socket.destroy(); return null; }
   const hash = crypto.createHash('sha1').update(key + GUID).digest('base64');
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${hash}\r\n\r\n`);
   socket.setNoDelay(true);
 
-  const ws = { onmessage: null, onclose: null, closed: false };
+  const ws = { onmessage: null, onclose: null, closed: false, cleanClose: false }; // cleanClose: a close frame was exchanged (by either side), so this was not a lost link
+  let lastRx = Date.now();
   let buf = Buffer.alloc(0);
   let frag = null; // { opcode, parts, size }
 
@@ -32,19 +37,28 @@ function accept(req, socket) {
   };
   ws.close = (code = 1000) => {
     if (ws.closed) return;
+    ws.cleanClose = true;
     const p = Buffer.alloc(2); p.writeUInt16BE(code);
     try { socket.write(frame(8, p)); } catch { /* socket gone */ }
     finish();
     socket.end();
   };
+  ws.terminate = () => { socket.destroy(); }; // no close frame: used when a newer connection takes this call over
+  const beat = setInterval(() => {
+    if (ws.closed) return;
+    if (Date.now() - lastRx > deadMs) { socket.destroy(); return; }
+    try { socket.write(frame(9, Buffer.alloc(0))); } catch { /* socket gone: close/error will follow */ }
+  }, pingMs);
+  beat.unref();
   function finish() {
     if (ws.closed) return;
+    clearInterval(beat);
     ws.closed = true;
     if (ws.onclose) ws.onclose();
   }
 
   function onFrame(fin, opcode, payload) {
-    if (opcode === 8) { ws.close(1000); return; }
+    if (opcode === 8) { ws.close(1000); return; } // ws.close marks cleanClose
     if (opcode === 9) { socket.write(frame(10, payload)); return; }
     if (opcode === 10) return;
     if (opcode === 0) {
@@ -61,6 +75,7 @@ function accept(req, socket) {
   }
 
   socket.on('data', (chunk) => {
+    lastRx = Date.now();
     buf = Buffer.concat([buf, chunk]);
     for (;;) {
       if (buf.length < 2) return;

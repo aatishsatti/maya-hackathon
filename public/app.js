@@ -87,7 +87,20 @@ class MayaCallState {
   mute() { if (this.live) this.set(true, this.view, true); }
   unmute() { if (this.live) this.set(true, this.view, false); }
 }
-if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallState };
+// Line recovery (render-test, hosting): what the page does when the call's socket dies without a goodbye. It reconnects within a second or two
+// and sends the call's token so the server hands the same call back. Gives up after WINDOW_MS (the server holds the call for a little longer).
+// Heartbeat: the page pings every PING_MS and expects to hear anything from the server within DEAD_MS, else the line counts as lost.
+const MayaLine = {
+  WINDOW_MS: 18000, RETRY_MS: [300, 1000], PING_MS: 5000, DEAD_MS: 12000, ATTEMPT_MS: 4000,
+  // First loss at lostAt; `attempt` is how many reconnects were tried. -> { retry, delay } or { retry: false }.
+  next({ now, lostAt, attempt, hasToken }) {
+    if (!hasToken || now - lostAt >= this.WINDOW_MS) return { retry: false };
+    return { retry: true, delay: this.RETRY_MS[Math.min(attempt, this.RETRY_MS.length - 1)] };
+  },
+  dead({ now, lastRx }) { return now - lastRx > this.DEAD_MS; },
+};
+
+if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallState, MayaLine };
 
 (() => {
   'use strict';
@@ -111,6 +124,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     hearing: 'I hear you.',
     thinking: 'Maya is thinking.',
     speaking: 'Maya is speaking. You can talk any time to stop her.',
+    reconnecting: 'The line dropped. Reconnecting...',
   };
 
   const $ = (id) => document.getElementById(id);
@@ -493,7 +507,14 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       c.thinkTimer = setTimeout(() => { if (call === c) endCall('Maya did not answer in time. Please call again.'); }, THINK_TIMEOUT_MS);
     }
     switch (ev.type) {
-      case 'ready': c.ready = true; chime(c); break; // an instant soft cue while the greeting is being written; it says nothing and claims nothing
+      case 'ready': c.ready = true; c.token = ev.resume; c.lostAt = 0; chime(c); break;
+      case 'resumed': // the server gave this call back after the line dropped: carry on
+        c.ready = true; c.lostAt = 0; c.attempt = 0; clearTimeout(c.attemptTimer);
+        if (callState.muted && c.ws.readyState === WebSocket.OPEN) { c.ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; }
+        setState(voiceSources.size ? 'speaking' : 'listening');
+        break;
+      case 'resumeFailed': endCall(LINE_LOST_MSG); break;
+      case 'pong': break; // an instant soft cue while the greeting is being written; it says nothing and claims nothing
       case 'speak':
         // cont: the reply's first words, arriving behind a lead-in line that is still playing: do not cut that line off.
         if (!ev.cont) {
@@ -541,13 +562,14 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     }
   }
 
+  const LINE_LOST_MSG = 'The connection to Maya ended. Please call again.';
+
   async function startReal(c, myGen) {
     try { await c.ctx.audioWorklet.addModule('/mic-worklet.js'); }
     catch { endCall('Maya could not start the microphone. Please reload the page and try again.'); return; }
     if (myGen !== gen) return;
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-    ws.binaryType = 'arraybuffer';
-    c.ws = ws;
+    c.attempt = 0; c.lostAt = 0; c.lastRx = Date.now();
+    openSocket(c, myGen, false);
     c.master = c.ctx.createGain(); // Maya's voice goes through this so her volume can dip instantly
     c.master.connect(c.ctx.destination);
     c.playAnalyser = c.ctx.createAnalyser(); // reads Maya's playback loudness for the orb; its output goes nowhere
@@ -560,16 +582,51 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     mute.gain.value = 0;
     c.ctx.createMediaStreamSource(c.stream).connect(tap);
     tap.connect(mute).connect(c.ctx.destination);
-    tap.port.onmessage = (e) => { if (c.ready && ws.readyState === WebSocket.OPEN) ws.send(e.data.buffer); };
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'start', sampleRate: c.ctx.sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId }));
+    tap.port.onmessage = (e) => { if (c.ready && c.ws && c.ws.readyState === WebSocket.OPEN) c.ws.send(e.data.buffer); };
+    c.heartbeat = setInterval(() => {
+      if (myGen !== gen || call !== c) return;
+      if (c.ws && c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify({ type: 'ping' }));
+      if (c.ws && MayaLine.dead({ now: Date.now(), lastRx: c.lastRx })) lineLost(c, c.ws, myGen); // a half-open socket can take minutes to report itself
+    }, MayaLine.PING_MS);
+  }
+
+  // One socket for the call. resume=false: a new call ('start'). resume=true: the same call again, identified by the token the server gave at 'ready'.
+  function openSocket(c, myGen, resume) {
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+    ws.binaryType = 'arraybuffer';
+    c.ws = ws;
+    c.lastRx = Date.now();
+    ws.onopen = () => {
+      if (myGen !== gen || c.ws !== ws) return;
+      if (resume) { ws.send(JSON.stringify({ type: 'resume', token: c.token })); return; }
+      ws.send(JSON.stringify({ type: 'start', sampleRate: c.ctx.sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId }));
       if (callState.muted) { ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; } // muted while the line was still connecting
+    };
     ws.onmessage = (m) => {
-      if (myGen !== gen) return;
+      if (myGen !== gen || c.ws !== ws) return;
+      c.lastRx = Date.now();
       if (typeof m.data === 'string') { try { onServerEvent(c, JSON.parse(m.data)); } catch { /* ignore */ } return; }
       if (orb.dataset.state === 'speaking' || c.leadActive) feedChunk(c, new Uint8Array(m.data)); // a lead-in line plays while the orb is still in its thinking colours
     };
-    ws.onclose = () => { if (myGen === gen) endCall('The connection to Maya ended. Please call again.'); };
+    ws.onclose = () => lineLost(c, ws, myGen);
     ws.onerror = () => {};
+    if (resume) { clearTimeout(c.attemptTimer); c.attemptTimer = setTimeout(() => lineLost(c, ws, myGen), MayaLine.ATTEMPT_MS); } // this try never connected or never got the call back
+  }
+
+  // The socket ended or went silent without the server saying goodbye. Before the call was live, or past the window, the call ends; otherwise reconnect.
+  function lineLost(c, ws, myGen) {
+    if (myGen !== gen || call !== c || c.ws !== ws) return;
+    ws.onclose = null; ws.onmessage = null; ws.onopen = null;
+    try { ws.close(); } catch { /* ignore */ }
+    clearTimeout(c.thinkTimer); clearTimeout(c.attemptTimer);
+    c.ready = false;
+    const now = Date.now();
+    if (!c.lostAt) c.lostAt = now;
+    const step = MayaLine.next({ now, lostAt: c.lostAt, attempt: c.attempt, hasToken: Boolean(c.token) });
+    if (!step.retry) { endCall(LINE_LOST_MSG); return; }
+    c.attempt += 1;
+    setState('thinking', 'reconnecting');
+    c.reconnectTimer = setTimeout(() => { if (myGen === gen && call === c) openSocket(c, myGen, true); }, step.delay);
   }
 
   // ---- Call lifecycle ----
@@ -638,6 +695,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       clearTimeout(c.stuck);
       clearTimeout(c.duckFailsafe);
       clearTimeout(c.thinkTimer);
+      clearInterval(c.heartbeat); clearTimeout(c.reconnectTimer); clearTimeout(c.attemptTimer);
       if (c.fetchAbort) c.fetchAbort.abort();
       if (c.utterance) {
         c.utterance.discard = true;

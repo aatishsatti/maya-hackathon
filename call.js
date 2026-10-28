@@ -239,6 +239,11 @@ const WARM_EVERY_MS = 2500;
 const TURN_DEBUG = Boolean(process.env.MAYA_TURN_DEBUG);
 const dbg = (...a) => { if (TURN_DEBUG) console.log('turn', ...a); };
 
+// Calls that can be picked up again by a new socket (render-test, hosting): token -> Call. The token is secret and goes only to that call's browser.
+const liveCalls = new Map();
+const RESUME_GRACE_MS = 20000;   // how long a call waits for its browser to come back after the line was lost
+const SILENCE_FEED_MS = 100;     // whenever the browser's audio stops arriving, Transcribe is fed 100 ms of silence per 100 ms so it does not drop the session ("Ingress audio slower than real-time")
+
 class Call {
   constructor(ws, apiKey) {
     this.ws = ws;
@@ -314,8 +319,55 @@ class Call {
     this.responding = false;
     this.gen = 0;
     this.closed = false;
+    this.token = require('node:crypto').randomBytes(16).toString('hex');
+    this.detached = false;       // the browser's line was lost; the call is waiting for it to come back (RESUME_GRACE_MS)
+    this.detachTimer = null;
+    this.feedTimer = null;
+    this.lastMicAt = 0;          // when the last mic frame came from the browser
+    this.bind(ws);
+  }
+
+  bind(ws) {
+    this.ws = ws;
     ws.onmessage = (data, isBinary) => this.onBrowser(data, isBinary);
-    ws.onclose = () => this.end();
+    ws.onclose = () => this.onSocketClosed();
+  }
+
+  // The browser socket ended. A close the browser or server chose (close frame) ends the call. A lost line (no close frame) during a live call
+  // does NOT: the call keeps its Transcribe session, memory and state for RESUME_GRACE_MS so the browser can reconnect and carry on.
+  onSocketClosed() {
+    if (this.closed) return;
+    if (!this.meta || !this.meta.ready || this.ws.cleanClose || !liveCalls.has(this.token)) { this.end(); return; }
+    this.detached = true;
+    this.cancelSilence();
+    clearTimeout(this.detachTimer);
+    this.detachTimer = setTimeout(() => this.end(), RESUME_GRACE_MS);
+    console.log('call line lost, waiting up to', RESUME_GRACE_MS / 1000, 's for the browser to come back');
+  }
+
+  // Transcribe wants audio at real-time pace. When the browser's audio stops (line lost, frozen link, stalled mic) this stands in with silence, so the
+  // session survives the gap and the browser can come back to the same call. Real frames always take over again at once.
+  startMicFeed() {
+    this.lastMicAt = Date.now();
+    clearInterval(this.feedTimer);
+    this.feedTimer = setInterval(() => {
+      if (this.closed || !this.meta || Date.now() - this.lastMicAt < 2 * SILENCE_FEED_MS) return;
+      this.meta.sendPcm(Buffer.alloc(SILENCE_FEED_MS * 48)); // 24 kHz s16 = 48 bytes/ms
+    }, SILENCE_FEED_MS);
+  }
+
+  // A new socket carrying this call's token takes the call over (also when the old line is still half-open).
+  attach(ws) {
+    if (this.closed) return false;
+    const old = this.ws;
+    if (old && old !== ws && !old.closed) { old.onclose = null; old.onmessage = null; if (old.terminate) old.terminate(); }
+    clearTimeout(this.detachTimer);
+    this.detached = false;
+    this.bind(ws);
+    this.send({ type: 'resumed' });
+    if (!this.responding && this.greeted && !this.muted) this.armSilence();
+    console.log('call line is back');
+    return true;
   }
 
   send(obj) { this.ws.send(JSON.stringify(obj)); }
@@ -342,6 +394,9 @@ class Call {
     clearTimeout(this.duckTimer);
     clearInterval(this.endTimer);
     clearInterval(this.warmTimer);
+    clearTimeout(this.detachTimer);
+    clearInterval(this.feedTimer);
+    liveCalls.delete(this.token);
     this.cancelSilence();
     this.dropSpec();
     this.dropPre();
@@ -371,6 +426,7 @@ class Call {
       }
       if (peak >= BARGE_MIN_PEAK) this.lastLoudAt = now;
       this.hasMic = true;
+      this.lastMicAt = now;
       if (peak > Math.max(0.02, this.noiseFloor * 3)) this.lastVoiceAt = now;          // clearly above the room
       else this.noiseFloor = this.noiseFloor * 0.98 + peak * 0.02;                      // learn the room
       const pcm = this.resampler.process(f32);
@@ -379,6 +435,16 @@ class Call {
     }
     let m;
     try { m = JSON.parse(data); } catch { return; }
+    if (m.type === 'ping') { this.send({ type: 'pong' }); return; }   // client heartbeat: the answer keeps traffic flowing both ways
+    if (m.type === 'resume' && !this.meta && !this.starting) {       // a new socket for a call whose line was lost: hand the socket over
+      const target = typeof m.token === 'string' ? liveCalls.get(m.token) : null;
+      const ws = this.ws;
+      this.end();                                                    // this placeholder call was never started
+      if (target && target.attach(ws)) return;
+      try { ws.send(JSON.stringify({ type: 'resumeFailed' })); } catch { /* socket gone */ }
+      ws.close(1000);
+      return;
+    }
     if (m.type === 'start' && !this.meta && !this.starting) {
       this.profile = memory.load(m.profileId);
       if (!this.profile) return this.fatal('Please pick a profile first.');
@@ -414,7 +480,7 @@ class Call {
     {
       this.resampler = new Resampler(rate);
       this.meta = openTranscribe(this.apiKey, {
-        onReady: () => { this.send({ type: 'ready' }); this.startWarm(); this.greet(Number(m.localHour)); },
+        onReady: () => { liveCalls.set(this.token, this); this.startMicFeed(); this.send({ type: 'ready', resume: this.token }); this.startWarm(); this.greet(Number(m.localHour)); },
         onEvent: (ev) => this.onMeta(ev),
         onClose: (code, reason) => {
           if (this.closed) return;
@@ -1498,4 +1564,4 @@ class Call {
   }
 }
 
-module.exports = { Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
