@@ -1,0 +1,1349 @@
+{
+ "about": "Baseline: the ORIGINAL five-signal scam prompt (scam.ASK, unchanged from the photo path) read on the text of each example in docs/scam-testset.json, real Meta Spark, text only, run once on 2026-10-28. level: none | caution (1 sign) | warn (2+ signs).",
+ "results": [
+  {
+   "id": "S001",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S002",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S003",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S004",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S005",
+   "level": "warn",
+   "count": 5,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": true,
+    "payment": true
+   }
+  },
+  {
+   "id": "S006",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S007",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S008",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S009",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S010",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S011",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S012",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S013",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S014",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S015",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S016",
+   "level": "warn",
+   "count": 5,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": true,
+    "payment": true
+   }
+  },
+  {
+   "id": "S017",
+   "level": "warn",
+   "count": 5,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": true,
+    "payment": true
+   }
+  },
+  {
+   "id": "S018",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S019",
+   "level": "warn",
+   "count": 5,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": true,
+    "payment": true
+   }
+  },
+  {
+   "id": "S020",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S021",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S022",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S023",
+   "level": "caution",
+   "count": 1,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "S024",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S025",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S026",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S027",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S028",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S029",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S030",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S031",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S032",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S033",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S034",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S035",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S036",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S037",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S038",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S039",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S040",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S041",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S042",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S043",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S044",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": false,
+    "secrecy": true,
+    "payment": true
+   }
+  },
+  {
+   "id": "S045",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S046",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S047",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S048",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S049",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S050",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": false,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S051",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S052",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S053",
+   "level": "warn",
+   "count": 2,
+   "signals": {
+    "urgency": true,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S054",
+   "level": "warn",
+   "count": 4,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "S055",
+   "level": "caution",
+   "count": 1,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "S056",
+   "level": "warn",
+   "count": 3,
+   "signals": {
+    "urgency": true,
+    "money": true,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": true
+   }
+  },
+  {
+   "id": "N057",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N058",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N059",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N060",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N061",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N062",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N063",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N064",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N065",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N066",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N067",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N068",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N069",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N070",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N071",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N072",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N073",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N074",
+   "level": "caution",
+   "count": 1,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": true,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N075",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N076",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N077",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N078",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N079",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N080",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N081",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N082",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N083",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N084",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N085",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N086",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N087",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N088",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N089",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N090",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N091",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N092",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N093",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N094",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N095",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N096",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N097",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N098",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N099",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N100",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N101",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N102",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N103",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N104",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N105",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N106",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N107",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N108",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N109",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N110",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N111",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  },
+  {
+   "id": "N112",
+   "level": "none",
+   "count": 0,
+   "signals": {
+    "urgency": false,
+    "money": false,
+    "impersonation": false,
+    "secrecy": false,
+    "payment": false
+   }
+  }
+ ]
+}
