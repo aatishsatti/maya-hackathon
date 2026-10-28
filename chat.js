@@ -304,12 +304,16 @@ async function sendVoiceNote(profileId, wav, tz) {
   }
 }
 
+// Spark's private feel tag once read a scam letter as "concern=urgent", which the existing health rule treats as a medical emergency: a
+// false safety alert to the family. The note therefore says plainly that this turn is about a message, not about their health.
+const SCAM_FEEL = " In your private [[feel: ...]] tag use concern=none and pain=0 and never emotion=crisis: this is about a message, not about their health or safety, so never mark it urgent or unsure.";
+
 // What Maya is told about a photo that looks like a scam. Two or more signals warn; one is caution; none says nothing at all.
 function scamNote(scam) {
   if (!scam || scam.level === 'none') return '';
   const signs = require('./scam').said(scam.signals).join('; ');
-  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words: first say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then say clearly that this looks like a scam and ask them please not to pay, send money, share codes or details, or reply. Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.) Use the exact words "this looks like a scam" and "please don't pay". Say "looks like", never that it is certain. No diagnosis, no legal advice, no guarantee, no phone numbers to call, no names or blame. Keep it short, warm and plain.`;
-  return `SCAM CHECK (a fact from the app, not from them): what they showed you has one warning sign (${signs}). Say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. No phone numbers, no names or blame. Keep it short, warm and plain.`;
+  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words: first say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then say clearly that this looks like a scam and ask them please not to pay, send money, share codes or details, or reply. Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.) Use the exact words "this looks like a scam" and "please don't pay". Say "looks like", never that it is certain. No diagnosis, no legal advice, no guarantee, no phone numbers to call, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
+  return `SCAM CHECK (a fact from the app, not from them): what they showed you has one warning sign (${signs}). Say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. No phone numbers, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
 }
 
 async function sendImage(profileId, buf, caption, tz) {

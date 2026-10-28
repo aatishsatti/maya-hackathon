@@ -207,3 +207,16 @@ test('the scam question is its own question: a Spark "unsure" read on the photo 
   assert.equal(care.get(id).notifications.filter((x) => x.ref === 'asked').length, 0, 'no "told Maya something is not right" alert');
   assert.ok(!ev.some((e) => e.ev === 'notify' && /something is not right/.test(e.data.text)));
 });
+
+test('a scam note tells Maya the feel tag must say concern=none (a scam letter is not a health emergency), for both warn and caution', async () => {
+  for (const level of ['warn', 'caution']) {
+    const id = senior();
+    chat.deps.scam = check(level, 'prize scam', ...(level === 'warn' ? ['money', 'payment'] : ['urgency'])); reset(PLAIN);
+    await chat.sendImage(id, PNG, '', null);
+    assert.match(lastRoster(), /use concern=none and pain=0 and never emotion=crisis: this is about a message, not about their health or safety/, level);
+  }
+  const id = senior();
+  chat.deps.scam = check('none', 'ordinary letter'); reset(PLAIN);
+  await chat.sendImage(id, PNG, '', null);
+  assert.ok(!/concern=none and pain=0/.test(lastRoster()), 'an ordinary photo gets no extra instruction');
+});
