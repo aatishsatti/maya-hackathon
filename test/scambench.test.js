@@ -46,4 +46,7 @@ test('publishMarkdown: both views, the pause numbers, and every held-out miss an
   assert.match(md, /Scams in progress paused: detector alone 1\/1/);
   assert.match(md, /- S2 \[prize\/text\] (caution|none)/); assert.doesNotMatch(md, /- S1 \[/, 'a warned scam is not listed as a miss');
   assert.match(md, /- N1 \[bill\/text\/hard\] caution/); assert.doesNotMatch(md, /- N2 \[/);
+  const calm = B.publishMarkdown([{ id: 'S9', label: 'scam', category: 'x', channel: 'text', text: 'urgent gift cards and a code, please send now' }], { S9: { level: 'warn' } }, null, 'T2');
+  assert.equal((calm.match(/- None\./g) || []).length, 2, 'an empty list says None, not nothing');
+  assert.match(md, /## Caveats/); assert.match(md, /written by the same team that built the detector/); assert.match(md, /1 scam description in 20 gets no check/); assert.match(md, /frozen before this run/);
 });

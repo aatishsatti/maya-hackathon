@@ -106,8 +106,17 @@ function publishMarkdown(items, byId, baselineById, title) {
   L.push('## The pause moment', '', `- Scams in progress paused: detector alone ${fmt(paused(byId, now), now.length)}; behind the filter ${fmt(paused(piped, now), now.length)}.`,
     `- Genuine payments in progress wrongly paused: ${fmt(paused(byId, lp), lp.length)}.`, `- Other normal items wrongly paused: ${fmt(paused(byId, other((i) => i.label === 'normal')), other((i) => i.label === 'normal').length)}.`, '');
   const wrongs = (map, f) => items.filter(f).map((i) => `- ${i.id} [${i.category}/${i.channel}${i.hard ? '/hard' : ''}] ${map[i.id] ? map[i.id].level : 'n/a'}${map[i.id] && map[i.id].filtered ? ' (the word filter did not pass it to Spark)' : ''}: ${i.text}`);
-  L.push('## Every held-out scam that was not warned (behind the filter)', '', ...wrongs(piped, (i) => i.label === 'scam' && !isWarn(piped[i.id])), '');
-  L.push('## Every held-out normal item that was wrongly flagged (warned or cautioned, behind the filter)', '', ...wrongs(piped, (i) => i.label === 'normal' && piped[i.id] && piped[i.id].level !== 'none'), '');
+  const orNone = (list) => (list.length ? list : ['- None.']);
+  L.push('## Every held-out scam that was not warned (behind the filter)', '', ...orNone(wrongs(piped, (i) => i.label === 'scam' && !isWarn(piped[i.id]))), '');
+  L.push('## Every held-out normal item that was wrongly flagged (warned or cautioned, behind the filter)', '', ...orNone(wrongs(piped, (i) => i.label === 'normal' && piped[i.id] && piped[i.id].level !== 'none')), '');
+  L.push('## Caveats (please read before quoting any number)', '',
+    '- The test set was written by the same team that built the detector, so both halves are ours. Real scams in the wild may be harder, or phrased differently.',
+    '- There are only 38 scams and 38 normal items in this half. "0 wrongly warned" can hide a true rate of up to about 9%. The intervals above are the honest range.',
+    '- The same family of model reads both the examples and the checks, and the same detector run twice can differ by about two items (identical dev runs gave 36 and 38 of 38).',
+    '- Text only. Photos (the vision path) were not measured here.',
+    '- Warn accuracy is not meaningfully different from the original five-signal prompt (overlapping intervals). What the new detector adds is the pause moment, coverage of typed and spoken talk, and the remote-access and identity-details reads.',
+    '- The cheap word filter that guards the live check let through 36 of 38 held-out scams: about 1 scam description in 20 gets no check and no pause moment, although Maya still replies naturally. A looser filter would check more than half of ordinary chat lines, which costs too much, so it was left as is. The two misses are listed above.',
+    '- The held-out half was looked at in totals twice before this run (the original prompt, and the word filter\'s pass rate). Neither led to any change; the detector, the filter and the prompts were frozen before this run.', '');
   return L.join('\n');
 }
 
