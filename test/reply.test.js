@@ -41,3 +41,10 @@ test('P4 a very long sentence with no end is cut at a comma so the voice is not 
   const p = split(long);
   assert.ok(p.length >= 2, JSON.stringify(p)); assert.equal(flat(p).replace(/,/g, ''), long.replace(/,/g, ''));
 });
+
+test('isQuestion: a sentence with no question mark counts as a question only when it is built like one, never an order such as "Do not send it"', () => {
+  const { isQuestion } = require('../reply');
+  for (const t of ['Do you want me to let your family know', 'Does it sound right to you', 'Have you told anyone', 'Has he called back', 'Are you safe right now, is someone near you', 'Would you like a cup of tea?', 'Is it hurting a lot']) assert.equal(isQuestion(t), true, t);
+  for (const t of ['Do not send anything yet.', "Don't pay anything today.", 'Please stop. Do not read out the code.', 'Have a rest and a cup of tea.', 'Have some water.', 'It is safest to check with the real bank yourself.']) assert.equal(isQuestion(t), false, t);
+  assert.equal(isQuestion('Please stop for a moment. Do you want me to tell your family'), true, 'a real question after an order is still found');
+});

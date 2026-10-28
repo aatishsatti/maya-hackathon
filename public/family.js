@@ -102,11 +102,12 @@
     const resolved = sc.status === 'resolved';
     const isAlert = sc.level === 'alert';
     const c = el('div', `card ${resolved ? 'resolved' : isAlert ? 'alert' : 'flag'}`);
-    c.append(cardHead(resolved ? 'pill-ok' : isAlert ? 'pill-alert' : 'pill-flag', resolved ? 'Seen' : isAlert ? 'Scam alert' : 'Flag', `${name} showed Maya a message that looks like a possible ${kind}`, sc.createdAt));
+    const how = sc.channel === 'text' ? 'message' : sc.channel === 'spoken' ? 'call or message' : null;   // photo (or older tickets): the original wording
+    c.append(cardHead(resolved ? 'pill-ok' : isAlert ? 'pill-alert' : 'pill-flag', resolved ? 'Seen' : isAlert ? 'Scam alert' : 'Flag', how ? `${name} told Maya about a ${how} that looks like a possible ${kind}` : `${name} showed Maya a message that looks like a possible ${kind}`, sc.createdAt));
     if (resolved) c.append(el('div', 'status', `A family member has seen this (${t(sc.resolvedAt)}).`));
-    else if (isAlert) c.append(el('div', 'status', `Maya told ${name} not to pay or share any details, and ${name} asked her to let you know. Please check in with ${name}.`));
+    else if (isAlert) c.append(el('div', 'status', sc.pause ? `${name} may have been about to pay or share details, so Maya asked ${name} to stop and check first, and ${name} asked her to let you know. Please check in with ${name}.` : `Maya told ${name} not to pay or share any details, and ${name} asked her to let you know. Please check in with ${name}.`));
     else c.append(el('div', 'status', `Maya told ${name} it looked like a scam. ${name} chose not to alert you, so this stays on this page only.`));
-    c.append(chips([isAlert ? 'Notification sent' : 'Dashboard only', 'Topic only: no letter text, no photo']));
+    c.append(chips([isAlert ? 'Notification sent' : 'Dashboard only', sc.channel === 'text' ? 'Typed message' : sc.channel === 'spoken' ? 'Told Maya' : null, sc.pause ? 'May have been about to pay' : null, 'Topic only: no letter text, no photo']));
     const tl = timelineEl(sc); if (tl) c.append(tl);
     if (!resolved && isAlert && sc.notifId) c.append(closeBtn(sc, "I've seen this", 'primary'));
     return c;

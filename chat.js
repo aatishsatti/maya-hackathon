@@ -17,7 +17,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { startReply } = require('./reply');
 const { ChunkSplitter, isQuestion } = require('./reply');
-const { mapEmotionToDelivery, INTENTS } = require('./emotion');
+const { mapEmotionToDelivery, INTENTS, selfHarmText } = require('./emotion');
 const { Call, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE } = require('./call');
 const memory = require('./memory');
 const care = require('./care');
@@ -36,6 +36,7 @@ const deps = {
   transcribe: (wav) => require('./transcribe').transcribeWav(process.env.META_API_KEY, wav),
   describe: (buf, mime) => require('./brain').describeImage(buf, mime),
   scam: (buf, mime) => (process.env.META_API_KEY ? require('./scam').assess(buf, mime) : null), // Spark vision: is this a scam? (null = no key, no check)
+  scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null), // Spark text: is what they typed or said a scam? (null = no key, no check)
   speak: (text, previous) => new Promise((resolve, reject) => { // one ElevenLabs piece -> Buffer of PCM16 24 kHz
     const parts = [];
     require('./brain').streamSpeech(text, new AbortController().signal, (c) => parts.push(c), previous).then(() => resolve(Buffer.concat(parts)), reject);
@@ -185,7 +186,7 @@ class ChatSession {
         else if (concern === 'unsure' && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
         // A scam reading is a few short sentences, not the usual two: what it says, "this looks like a scam, please don't pay", and (for a
         // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
-        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = this.scamReply !== 'warn'; d.maxSentences = Math.max(d.maxSentences, this.scamReply === 'warn' ? 4 : 3); }
+        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }
         this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern || this.scamReply));
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear' };
@@ -265,14 +266,29 @@ const callLive = (profileId) => care.liveCalls.has(profileId);
 const thread = (profileId) => { session(profileId); return sessions.get(profileId).thread.slice(); };
 
 // ---- the three ways in ----
+// Typed or spoken talk that may be a scam (scam.js): the cheap word filter decides whether it is worth one Spark check; chat is not
+// latency-critical, so the check is simply awaited before Maya answers. A failed check never blocks the reply and never invents a verdict.
+// Safety first: nothing is checked while a safety alert is active or when the words themselves are about self-harm, and a pending
+// "shall I tell your family?" question is answered, not re-asked.
+async function talkCheck(profileId, words) {
+  const scam = require('./scam');
+  if (!scam.needsCheck(words) || care.hasActiveSafety(profileId) || care.scamPending(profileId) || selfHarmText(words)) return null;
+  try { return await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); return null; }
+}
+// After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
+const afterTalkReply = (profileId, scam, channel) => { if (scam && (scam.level === 'warn' || scam.level === 'pause')) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause' }); };
+const talkTurn = (scam) => ({ note: scam ? require('./scam').talkNote(scam) : '', scam: scam && scam.level !== 'none' ? scam.level : null });
+
 async function sendText(profileId, text, tz) {
   const t = String(text || '').trim().slice(0, 2000);
   if (!t) throw new ChatError('Please type a message first.', 400);
   const s = session(profileId, tz);
   care.touch(profileId, 'app');
   const you = s.push({ role: 'senior', kind: 'text', text: t });
-  const r = await s.turn({ heard: t });
-  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })] };
+  const scam = await talkCheck(profileId, t);
+  const r = await s.turn({ heard: t, ...talkTurn(scam) });
+  afterTalkReply(profileId, scam, 'text');
+  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
 }
 
 // Maya's voice for a written reply: each piece with the same delivery tag and gain as a call (call.js TONES), joined as WAV.
@@ -299,7 +315,9 @@ async function sendVoiceNote(profileId, wav, tz) {
   if (!words) throw new ChatError('I could not hear any words in that voice note. Please try recording it again.', 422);
   const mine = saveMedia(profileId, 'wav', wav);
   const you = s.push({ role: 'senior', kind: 'voice', text: words, mediaUrl: mediaUrl(profileId, mine) });
-  const r = await s.turn({ heard: words, how: 'voice' });
+  const scam = await talkCheck(profileId, words);
+  const r = await s.turn({ heard: words, how: 'voice', ...talkTurn(scam) });
+  afterTalkReply(profileId, scam, 'spoken');
   // A live call has the voice: the note's answer is text only, so two Mayas never talk at once.
   if (callLive(profileId)) return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], voice: 'suppressed-call-live' };
   try {

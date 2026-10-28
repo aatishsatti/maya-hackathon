@@ -145,6 +145,21 @@ async function assessText(text, signal) {
 }
 
 const SIGNAL_WORDS = { urgency: 'pressure to act now', money: 'money out of the blue', impersonation: 'someone claiming to be a trusted sender', secrecy: 'a request to keep it secret', payment: 'a request to pay or send details' };
-const said = (signals) => SIGNALS.filter((k) => signals[k]).map((k) => SIGNAL_WORDS[k]);
+const READ_WORDS = { remoteAccess: 'a request to install something, give control of a device, or read out a code', idDetails: 'a request for identity numbers or a date of birth' };
+const said = (signals, reads = null) => [...SIGNALS.filter((k) => signals[k]).map((k) => SIGNAL_WORDS[k]), ...(reads ? ['remoteAccess', 'idDetails'].filter((k) => reads[k]).map((k) => READ_WORDS[k]) : [])];
 
-module.exports = { needsCheck, payNow, checkPlan, READS, ASK_TALK, assessText, SIGNALS, WARN_AT, CAUTION_AT, ASK, parse, levelOf, typeLabel, assess, said };
+// Spark's private feel tag once read a scam letter as "concern=urgent", which the health rule treats as a medical emergency: a false safety alert.
+const FEEL_NOTE = " In your private [[feel: ...]] tag use concern=none and pain=0 and never emotion=crisis: this is about a message or a call, not about their health or safety, so never mark it urgent or unsure.";
+
+// What Maya is told about spoken or typed talk that looks like a scam: FACTS and PRINCIPLES only. Spark phrases every word (nothing here is a sentence to say).
+function talkNote(scam) {
+  if (!scam || scam.level === 'none') return '';
+  const signs = said(scam.signals || {}, scam.reads).join('; ');
+  const lead = 'SCAM CHECK (a fact from the app, not from them)';
+  if (scam.level === 'pause') return `${lead}: what they told you about looks like a possible ${scam.type}, and they may be about to act on it right now (${signs}). Slow down: be steady, calm and brief, with no cheerfulness. First, in your own words, ask them to stop for a moment and not pay, send money, read out a code, give any details, install or click anything yet; if the other person is still on the line, they can simply hang up or say they will call back. Say it looks like a scam, never that it is certain. Say the safe way is to check with the real company or bank themselves, through a number or website they already trust, and never give a number yourself. Then ask ONE short question: would they like you to let their family know now? (This overrides any earlier instruction about not asking a question: ask it.) If they say they will go ahead anyway, say once, gently, why you are worried and that their family can help; do not nag or argue. No diagnosis, no legal advice, no guarantee, no blame.${FEEL_NOTE}`;
+  if (scam.level === 'warn') return `${lead}: what they told you about looks like a possible ${scam.type}, with warning signs (${signs}). In your own words and in plain, calm language: say briefly what it seems to be, from this reading: ${scam.reading}. Say it looks like a scam, never that it is certain. Ask them not to pay, send money, read out codes, give details or click anything until they have checked, and to check with the real company or bank themselves through a number or website they already trust; never give a number yourself. Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.) No diagnosis, no legal advice, no guarantee, no blame. Keep it short, warm and plain.${FEEL_NOTE}`;
+  return `${lead}: what they told you about has one warning sign (${signs}). In your own words, in one or two short sentences, say what to double-check, and gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. No phone numbers, no blame. Keep it short, warm and plain.${FEEL_NOTE}`;
+}
+
+
+module.exports = { talkNote, FEEL_NOTE, needsCheck, payNow, checkPlan, READS, ASK_TALK, assessText, SIGNALS, WARN_AT, CAUTION_AT, ASK, parse, levelOf, typeLabel, assess, said };

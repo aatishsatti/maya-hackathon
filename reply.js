@@ -231,7 +231,8 @@ function stripTags(full) {
 
 // Spark sometimes leaves the "?" off a question ("Are you safe right now, is someone near you"), so a sentence that opens like
 // a question counts as one too.
-const QUESTION_OPEN = /(^|[.!]\s+)(are|is|do|does|did|can|could|would|will|what|how|why|who|where|when|have|has|shall|should|isn't|aren't)\b/i;
+// "Do not send it" and "Have a rest" are orders, not questions: do/don't only count when not negated, have/has only before a subject ("Have you...").
+const QUESTION_OPEN = /(^|[.!]\s+)(are|is|do(?! not\b)(?!n['\u2019]t\b)|does|did|can|could|would|will|what|how|why|who|where|when|(?:have|has)(?=\s+(?:you|i|we|they|he|she|there|it)\b)|shall|should|isn't|aren't)\b/i;
 const isQuestion = (t) => /\?/.test(t) || QUESTION_OPEN.test(String(t).trim());
 
 module.exports = { isQuestion, ReplyStream, startReply, fixedReply, ChunkSplitter, plain, stripTags };

@@ -543,10 +543,18 @@ function concernAlert(id) {
 // worth little). If the person says no, only a dashboard Flag is kept: no notification, no push, and Maya never asks again.
 const SCAM_ASK_MS = 20 * MIN;
 const SCAM_KEEP = 30;
-function scamAsk(id, type) {
+const SCAM_CHANNELS = new Set(['photo', 'text', 'spoken']);
+// The family's sentence about how Maya learned of it: the kind of scam and the channel only, never any words from the message or the call.
+function scamToldLine(sc, name, type) {
+  if (sc.channel === 'text') return `${name} told Maya about a message that looks like a possible ${type}.`;
+  if (sc.channel === 'spoken') return `${name} told Maya about a call or message that looks like a possible ${type}.`;
+  return `${name} showed Maya a message that looks like a possible ${type}.`;
+}
+// opts.channel: how Maya learned of it (photo | text | spoken); opts.pause: they may have been about to pay or act. Both are topic-only facts.
+function scamAsk(id, type, opts = {}) {
   const p = get(id);
   if (!p) return null;
-  p.pendingScam = { type, left: 2, at: Date.now() }; save(id);
+  p.pendingScam = { type, left: 2, at: Date.now(), channel: SCAM_CHANNELS.has(opts.channel) ? opts.channel : 'photo', pause: opts.pause === true }; save(id);
   return p.pendingScam;
 }
 function scamPending(id) {
@@ -558,21 +566,22 @@ function scamPending(id) {
 function scamClear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam = null; save(id); } }
 // An answer that is neither yes nor no: she may lean in once more, then it is dropped (no nagging).
 function scamUnclear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam.left -= 1; if (p.pendingScam.left <= 0) p.pendingScam = null; save(id); } }
-function scamTicket(p, type, level) {
+function scamTicket(p, type, level, how = {}) {
   const now = Date.now();
-  const sc = { id: uid(), level, type, createdAt: now, status: 'active', notified: 'none', notifId: null, resolvedAt: null };
+  const sc = { id: uid(), level, type, createdAt: now, status: 'active', notified: 'none', notifId: null, resolvedAt: null, channel: SCAM_CHANNELS.has(how.channel) ? how.channel : 'photo', pause: how.pause === true };
   p.scams.unshift(sc); p.scams.length = Math.min(p.scams.length, SCAM_KEEP);
   return sc;
 }
-function scamAlert(id, type) {
+function scamAlert(id, type, how = {}) {
   const p = get(id);
   if (!p) return { isNew: false };
   let sc = p.scams.find((x) => x.status === 'active' && x.level === 'alert');
   if (sc) { sc.repeats = (sc.repeats || 0) + 1; save(id); return { isNew: false, ticket: sc }; } // same incident: no second alert
-  sc = p.scams.find((x) => x.status === 'active' && x.level === 'flag') || scamTicket(p, type, 'flag'); // they said no, then changed their mind: the flag becomes the alert
-  sc.level = 'alert'; sc.type = type; sc.notified = 'alert';
+  sc = p.scams.find((x) => x.status === 'active' && x.level === 'flag') || scamTicket(p, type, 'flag', how); // they said no, then changed their mind: the flag becomes the alert
+  sc.level = 'alert'; sc.type = type; sc.notified = 'alert'; if (how.channel) { sc.channel = SCAM_CHANNELS.has(how.channel) ? how.channel : sc.channel; sc.pause = how.pause === true || sc.pause; }
   const name = nameOf(id);
-  const text = `${name} showed Maya a message that looks like a possible ${type}. Maya told ${name} not to pay or share any details, and ${name} asked Maya to let you know. Please check in with ${name}.`;
+  const told = scamToldLine(sc, name, type);
+  const text = `${told} ${sc.pause ? `${name} may have been about to pay or share details, so Maya asked ${name} to stop and check first, and` : `Maya told ${name} not to pay or share any details, and`} ${name} asked Maya to let you know. Please check in with ${name}.`;
   const n = makeNotif(p, { to: 'family', kind: 'alert', text, ref: sc.id, incident: sc.id });
   sc.notifId = n.id;
   if (pushFamily('notify', { id, notifId: n.id, kind: 'alert', text })) advance(p, n, 'delivered');
@@ -580,12 +589,12 @@ function scamAlert(id, type) {
   save(id); pushFamily('refresh', { id });
   return { isNew: true, ticket: sc };
 }
-function scamFlag(id, type) {
+function scamFlag(id, type, how = {}) {
   const p = get(id);
   if (!p) return { isNew: false };
   const sc = p.scams.find((x) => x.status === 'active');
   if (sc) return { isNew: false, ticket: sc };
-  const t = scamTicket(p, type, 'flag');
+  const t = scamTicket(p, type, 'flag', how);
   console.log('care scam flag', JSON.stringify({ profile: id, type }));
   save(id); // dashboard only: no notification and no push
   return { isNew: true, ticket: t };
@@ -595,7 +604,7 @@ function scamAnswer(id, yes) {
   const pend = scamPending(id);
   if (!pend) return null;
   scamClear(id);
-  return yes ? scamAlert(id, pend.type) : scamFlag(id, pend.type);
+  return yes ? scamAlert(id, pend.type, pend) : scamFlag(id, pend.type, pend);
 }
 function closeScamUnseen(p, sc, now = Date.now()) {
   sc.status = 'expired'; sc.expiredAt = now; sc.resolvedBy = null;
