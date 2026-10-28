@@ -7,7 +7,7 @@ const FIXED_MODELS = ['muse-spark-1.3', 'muse-spark-1.2', 'muse-spark-1.1'];
 const CACHE_MS = 60000;
 let cached = null;
 
-const deps = { fetch: (...a) => fetch(...a) };
+const deps = { fetch: (...a) => fetch(...a), WebSocket: (...a) => new WebSocket(...a), sparkStream: (...a) => require('./brain').sparkStream(...a) };
 
 function redact(text, secrets) {
   let t = String(text == null ? '' : text);
@@ -73,4 +73,119 @@ async function get() {
   return value;
 }
 
-module.exports = { run, get, redact, deps };
+
+// ================= ASR streaming diagnostic: GET /api/diag?asr=1 (TEMPORARY, render-test only) =================
+// The server opens a Meta Transcribe session ITSELF (same endpoint and session settings as a call, plus audioProgress so Meta reports how far
+// behind it is) and streams ~12 s of synthetic speech-like audio from memory in real time: no browser, no call, no ElevenLabs. Run twice:
+// idle, and while the server is busy (a real Spark call plus short bursts of synchronous work, like a call's start-up). It reports drops
+// (Meta's close code and message, verbatim), how late each frame was sent, how far behind Meta says it is, the event loop's lag, and the
+// container's own CPU-throttle counters (cgroup cpu.stat), which show directly whether a CPU cap is freezing the process.
+const { monitorEventLoopDelay } = require('node:perf_hooks');
+const fs = require('node:fs');
+const ASR_URL = 'wss://api.meta.ai/v1/asr/realtime';
+const FRAME_MS = 50, FRAME_BYTES = 2400;           // 24 kHz PCM16 mono: 1200 samples = 2400 bytes = 50 ms
+const ASR_CACHE_MS = 300000;
+let cachedAsr = null;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function summarize(arr) {
+  const a = arr.filter((x) => Number.isFinite(x)).sort((x, y) => x - y);
+  if (!a.length) return { n: 0 };
+  const q = (p) => a[Math.min(a.length - 1, Math.floor(p * a.length))];
+  return { n: a.length, p50: Math.round(q(0.5)), p95: Math.round(q(0.95)), max: Math.round(a[a.length - 1]), over100ms: a.filter((x) => x > 100).length, over500ms: a.filter((x) => x > 500).length };
+}
+// cgroup CPU limit and throttling counters (v2 first, then v1). Null where the container does not expose them.
+function parseKv(text) { const o = {}; for (const line of String(text || '').split('\n')) { const m = /^(\w+)\s+(-?\d+)/.exec(line.trim()); if (m) o[m[1]] = Number(m[2]); } return o; }
+function readCgroup(read = (f) => fs.readFileSync(f, 'utf8')) {
+  const out = { version: null, cpuLimit: null, nrPeriods: null, nrThrottled: null, throttledMs: null };
+  try { // cgroup v2
+    const st = parseKv(read('/sys/fs/cgroup/cpu.stat')); const [quota, period] = String(read('/sys/fs/cgroup/cpu.max')).trim().split(/\s+/);
+    out.version = 2; out.cpuLimit = quota === 'max' ? null : +(Number(quota) / Number(period)).toFixed(3);
+    out.nrPeriods = st.nr_periods ?? null; out.nrThrottled = st.nr_throttled ?? null; out.throttledMs = st.throttled_usec != null ? Math.round(st.throttled_usec / 1000) : null;
+    return out;
+  } catch { /* not v2 */ }
+  try { // cgroup v1
+    const st = parseKv(read('/sys/fs/cgroup/cpu/cpu.stat')); const quota = Number(String(read('/sys/fs/cgroup/cpu/cpu.cfs_quota_us')).trim()), period = Number(String(read('/sys/fs/cgroup/cpu/cpu.cfs_period_us')).trim());
+    out.version = 1; out.cpuLimit = quota > 0 ? +(quota / period).toFixed(3) : null;
+    out.nrPeriods = st.nr_periods ?? null; out.nrThrottled = st.nr_throttled ?? null; out.throttledMs = st.throttled_time != null ? Math.round(st.throttled_time / 1e6) : null;
+  } catch { /* no cgroup info */ }
+  return out;
+}
+// Speech-like audio from memory: noise shaped by a ~4 Hz syllable envelope, with pauses, so Meta's detector treats it as talking.
+function synthAudio(ms = 12000) {
+  const n = Math.round(ms / FRAME_MS) * 1200, buf = Buffer.alloc(n * 2); let seed = 12345;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+  for (let i = 0; i < n; i++) {
+    const t = i / 24000, inPhrase = t % 4 >= 1 && t % 4 < 3.5;                         // 1 s quiet, 2.5 s of "speech", 0.5 s quiet
+    const env = inPhrase ? 0.5 + 0.5 * Math.sin(2 * Math.PI * 4 * t) : 0;
+    buf.writeInt16LE(Math.round(rnd() * 2 * 9000 * env * (0.6 + 0.4 * Math.sin(2 * Math.PI * 220 * t))), i * 2);
+  }
+  return buf;
+}
+const diffCg = (a, b) => ({ cpuLimit: b.cpuLimit, throttledPeriods: b.nrThrottled != null && a.nrThrottled != null ? b.nrThrottled - a.nrThrottled : null, ofPeriods: b.nrPeriods != null && a.nrPeriods != null ? b.nrPeriods - a.nrPeriods : null, throttledMs: b.throttledMs != null && a.throttledMs != null ? b.throttledMs - a.throttledMs : null });
+
+async function asrRun(label, { withLoad = false, ms = 12000, env = process.env, readCg = readCgroup } = {}) {
+  const key = env.META_API_KEY || ''; const secrets = [key];
+  const audio = synthAudio(ms), nFrames = Math.floor(audio.length / FRAME_BYTES);
+  const lag = monitorEventLoopDelay({ resolution: 10 }); lag.enable();
+  const cg0 = readCg(), cpu0 = process.cpuUsage(), t0 = Date.now(), at = () => Date.now() - t0;
+  const r = { label, withLoad, audioSentMs: 0, dropped: false, close: null, errors: [], sessionAckMs: null, senderLateMs: null, metaBehindMs: null, spark: null };
+  let ack = false, closed = null; const progress = []; let sentMs = 0;
+  const ws = deps.WebSocket(ASR_URL); ws.binaryType = 'arraybuffer';
+  ws.addEventListener('open', () => ws.send(JSON.stringify({ authorization: { accessToken: `Bearer ${key}` }, audioEncoding: 'PCM_24KHZ', model: 'muse-voice-transcribe-1.0', mode: 'DIARIZATION', partialMode: 'CUMULATIVE', emitAudioProgress: true, languageBias: ['English'] })));
+  ws.addEventListener('message', (m) => {
+    if (typeof m.data !== 'string') return;
+    let e; try { e = JSON.parse(m.data); } catch { return; }
+    if (!e.type && e.sessionId) { ack = true; r.sessionAckMs = at(); return; }
+    if (e.type === 'audioProgress' && Number.isFinite(e.audioProcessedMs)) progress.push(sentMs - e.audioProcessedMs);   // how far behind the audio we have sent Meta says it is
+    if (e.type === 'error') r.errors.push(redact(e.message, secrets));
+  });
+  ws.addEventListener('close', (e) => { if (!closed) closed = { code: e.code, reason: redact(e.reason || '', secrets) }; });   // the FIRST close is the one that matters
+  ws.addEventListener('error', () => {});
+  for (let i = 0; i < 400 && !ack && !closed; i++) await sleep(25);
+  if (!ack) { lag.disable(); return { ...r, dropped: true, error: 'no session ack', close: closed }; }
+  let sparkP = null;
+  if (withLoad) {   // what a call does at the same moment: a real Spark request, and short bursts of synchronous work
+    const s0 = Date.now(); let first = null;
+    sparkP = deps.sparkStream([{ role: 'user', content: 'A: Hello Maya, how are you today?' }], '', AbortSignal.timeout(30000), () => { if (first === null) first = Date.now() - s0; })
+      .then(() => { r.spark = { firstTokenMs: first, totalMs: Date.now() - s0 }; }, (e) => { r.spark = { error: redact(e.message, secrets) }; });
+    for (const when of [1500, 3500, 5500, 7500, 9500]) setTimeout(() => { const end = Date.now() + 150; let x = 0; while (Date.now() < end) x += Math.sqrt(Date.now() % 97); r.burnSink = x > 0; }, when);
+  }
+  const late = []; const streamStart = Date.now();
+  for (let i = 0; i < nFrames; i++) {
+    if (closed) break;
+    const due = streamStart + i * FRAME_MS, wait = due - Date.now(); if (wait > 0) await sleep(wait);
+    late.push(Date.now() - due);
+    try { ws.send(audio.subarray(i * FRAME_BYTES, (i + 1) * FRAME_BYTES)); sentMs += FRAME_MS; } catch { break; }
+  }
+  r.audioSentMs = sentMs;
+  await sleep(1500);   // let the last progress events and any close arrive
+  if (sparkP) await Promise.race([sparkP, sleep(15000)]);
+  try { ws.send(JSON.stringify({ type: 'endStream' })); } catch { /* closed */ } await sleep(300); try { ws.close(1000); } catch { /* closed */ }
+  lag.disable();
+  const cpu1 = process.cpuUsage(cpu0), wall = at();
+  r.close = closed; r.dropped = Boolean(r.errors.length) || Boolean(closed && closed.code !== 1000);
+  r.senderLateMs = summarize(late); r.metaBehindMs = summarize(progress);
+  r.eventLoopDelayMs = { mean: +(lag.mean / 1e6).toFixed(1), p99: +(lag.percentile(99) / 1e6).toFixed(1), max: +(lag.max / 1e6).toFixed(1) };
+  r.cpu = { usedMs: Math.round((cpu1.user + cpu1.system) / 1000), wallMs: wall, percentOfOneCore: +(((cpu1.user + cpu1.system) / 1000 / wall) * 100).toFixed(1) };
+  r.cgroup = diffCg(cg0, readCg());
+  delete r.burnSink;
+  return r;
+}
+
+async function runAsr({ ms = 12000 } = {}) {
+  const cg = readCgroup();
+  const out = { at: new Date().toISOString(), node: process.version, cgroup: cg, note: 'synthetic speech-like audio from memory; no ElevenLabs, no browser, no call', runs: [] };
+  out.runs.push(await asrRun('A  idle server', { withLoad: false, ms }));
+  await sleep(2000);
+  out.runs.push(await asrRun('B  server busy (real Spark call + 5 x 150 ms bursts of synchronous work)', { withLoad: true, ms }));
+  return out;
+}
+async function getAsr(opts) {
+  if (cachedAsr && Date.now() - cachedAsr.at < ASR_CACHE_MS) return { ...cachedAsr.value, cached: true };
+  const value = await runAsr(opts);
+  cachedAsr = { at: Date.now(), value };
+  return value;
+}
+
+module.exports = { run, get, redact, deps, getAsr, runAsr, asrRun, synthAudio, summarize, parseKv, readCgroup, FRAME_BYTES };
