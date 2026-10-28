@@ -740,8 +740,9 @@ test('B7 a practical worry (would anyone know, what if they cannot be reached) i
   const src = fs.readFileSync(path.join(__dirname, '..', 'brain.js'), 'utf8');
   const md = fs.readFileSync(path.join(__dirname, '..', 'docs', 'maya-prompt.md'), 'utf8');
   const worry = src.slice(src.indexOf('Worry about aging or dying'), src.indexOf('Language: answer in the language'));
-  for (const must of [/practical question about being found or helped/, /it tries again, and then lets their family know/, /as far as your facts about their mode say/, /Promise nothing beyond those facts/, /no emergency services, nobody arriving/, /invent nothing/, /gently ask what worries them/, /do not promise to contact anyone yourself/]) assert.match(worry, must);
+  for (const must of [/practical question about being found or helped/, /further attempts, then the family is informed/, /as firmly as the mode in your facts sets/, /in your own words/, /Promise nothing beyond those facts/, /no emergency services, nobody arriving/, /invent nothing/, /gently ask what worries them/, /do not promise to contact anyone yourself/]) assert.match(worry, must);
   assert.doesNotMatch(worry, /"[^"]+"/, 'no quoted sentence for her to copy');
+  assert.doesNotMatch(src + md, /tries again/, 'no ready-made sentence about what the app does: it is given as facts so her wording varies');
   assert.match(md, /practical question about being found or helped, answer it first/);
   assert.match(md.slice(md.indexOf('Fear of dying')), /warm and listen\. No alert, no crisis wording\./, 'general fear is unchanged');
   assert.ok(md.length < 7500, `lean: ${md.length} chars`);
