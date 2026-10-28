@@ -345,6 +345,7 @@ class Call {
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
     this.pendingConcern = null;  // she was unsure and asked; waiting for the answer
+    this.reminderShown = null;   // id of the next-call reminder handed to Spark for THIS reply (delivered only when the reply is spoken, see commitReminder)
     this.familyDeclined = false; // they said no to letting their family know, earlier in this call: kept for the whole call, not one turn
     this.said = [];              // what the person said in this call, in order (not yet in the filed memory); only shown to Spark for asks that need it
     this.ticketInCall = false;   // a safety ticket was open at the start of this call or opened in it
@@ -962,6 +963,15 @@ class Call {
     });
   }
 
+  // The reply that carried a next-call reminder was spoken to the end (not cut off, not failed): now it counts as delivered, once, and "not
+  // done yet" can reopen it. Until then the reminder stays due, so a cut reply never loses it. Chat borrows this too.
+  commitReminder() {
+    const tid = this.reminderShown; this.reminderShown = null;
+    if (!tid || !this.profile) return;
+    memory.deliverReminder(this.profile.id, tid, this.callId);
+    this.followUpOffered = true;
+  }
+
   // Memory focus for ONE normal reply (conversation brain #3): the words just heard pick the few memory items worth showing, and code may
   // offer Spark at most one due follow-up (recall.js) as a fact with its date already worked out. Never in a heavy or careful moment, never
   // twice in a call, never after two offers in total. A request for a story or a recalled account keeps the whole memory. Spark phrases it.
@@ -972,9 +982,8 @@ class Call {
     if (full || !this.profile) return;
     const t = recall.dueThread(this.profile.memory.threads, memory.today(this.tz), { heavy, askedThisCall: this.followUpOffered, callId: this.callId });
     if (!t) return;
-    this.followUpOffered = true;
-    if (t.kind === 'reminder') { memory.deliverReminder(this.profile.id, t.id, this.callId); this.focus.reminder = true; }   // shown once; "not done yet" reopens it
-    else memory.markAsked(this.profile.id, t.id);
+    if (t.kind === 'reminder') { this.reminderShown = t.id; this.focus.reminder = true; }   // marked delivered only once the reply is really spoken (commitReminder); a cut reply leaves it for next time
+    else { this.followUpOffered = true; memory.markAsked(this.profile.id, t.id); }
     this.focus.thread = recall.threadFact(t, memory.today(this.tz));
   }
 
@@ -1354,7 +1363,7 @@ class Call {
       this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
-    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; this.scamReply = null; this.scamAskFor = null; }
+    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); } finally { this.focus = null; this.reminderShown = null; this.scamReply = null; this.scamAskFor = null; }
   }
 
   // Care effects of the words just heard, and notes for the reply that must be true: a flag resolving (so Maya warmly asks
@@ -1670,6 +1679,7 @@ class Call {
       return this.speak(RECOVERY);
     }
     keep();
+    this.commitReminder();
     this.responding = false;
     if (IDENTITY_LINE.test(said.join(' '))) this.identitySaid = true;
     if (record && said.length) {

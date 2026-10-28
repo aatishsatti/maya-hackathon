@@ -16,7 +16,7 @@ require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, e
   requireRealEnv() {}, streamSpeech: async () => {}, sparkComplete: async () => '{}',
   sparkStream: async (history, roster, _s, onDelta) => {
     if (/has been silent for a little while/.test(roster)) { const idle = `${'[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0]]'} Are you still there?`; if (onDelta) onDelta(idle); return idle; }   // the call's own silence check is not one of the replies under test
-    asked.push({ roster }); const item = queue.length > 1 ? queue.shift() : queue[0]; if (onDelta) onDelta(item); return item; },
+    asked.push({ roster }); if (global.__stubDelay) await new Promise((r) => setTimeout(r, global.__stubDelay)); const item = queue.length > 1 ? queue.shift() : queue[0]; if (onDelta) onDelta(item); return item; },
 } };
 const memory = require('../memory');
 const care = require('../care');
@@ -140,6 +140,29 @@ test('dueThread: a reminder comes before dated follow-ups, and never in the call
   const th = [{ id: 'a', who: '', text: 'visit', due: '2026-10-29', kind: 'event', status: 'open', asked: 0, told: '2026-10-20' }, { id: 'b', who: '', text: 'call him', due: '', kind: 'reminder', status: 'open', asked: 0, told: '2026-10-29', fromCall: 'c1' }];
   assert.equal(recall.dueThread(th, '2026-10-29', { callId: 'c2' }).id, 'b'); assert.equal(recall.dueThread(th, '2026-10-29', { callId: 'c1' }).id, 'a');
   assert.match(recall.threadFact(th[1], '2026-10-29'), /^call him; they asked on 2026-10-29/);
+});
+
+test('a reply cut off before it is spoken leaves the reminder due: not marked delivered, offered again next time, then delivered once', async () => {
+  const a = mkCall(); reset(PLAIN2); await say(a.c, ASK); const id = a.c.profile.id;
+  const b = mkCall(id); b.c.pending = [turn('Hello Maya, how are you today?')];
+  global.__stubDelay = 80;
+  const done = b.c.respond(0);
+  await sleep(30); b.c.gen += 1;          // the person talks over her: this reply is dropped before it is spoken
+  await done; global.__stubDelay = 0;
+  assert.match(asked.at(-1).roster, /REMINDER THEY ASKED YOU FOR/, 'it was handed to Spark for that reply');
+  assert.equal(reminders(b.c)[0].asked, 0, 'but not marked delivered');
+  assert.equal(b.c.reminderShown, null);
+  await say(b.c, 'Sorry, as I was saying, how are you?');            // the next reply in the same call carries it again
+  assert.match(lastRoster(), /REMINDER THEY ASKED YOU FOR/); assert.equal(reminders(b.c)[0].asked, 1, 'now spoken: delivered');
+  const c3 = mkCall(id); await say(c3.c, 'Hello again, Maya.'); assert.doesNotMatch(lastRoster(), /REMINDER THEY ASKED YOU FOR/);
+});
+
+test('a cut reply in one call keeps the reminder for the NEXT call too', async () => {
+  const a = mkCall(); reset(PLAIN2); await say(a.c, ASK); const id = a.c.profile.id;
+  const b = mkCall(id); b.c.pending = [turn('Hello Maya, how are you today?')];
+  global.__stubDelay = 80; const done = b.c.respond(0); await sleep(30); b.c.gen += 1; await done; global.__stubDelay = 0;
+  assert.equal(reminders(b.c)[0].asked, 0);
+  const c3 = mkCall(id); await say(c3.c, 'Hello again, Maya.'); assert.match(lastRoster(), /REMINDER THEY ASKED YOU FOR/); assert.equal(reminders(c3.c)[0].asked, 1);
 });
 
 test.after(() => { made.forEach((c) => c.end()); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });
