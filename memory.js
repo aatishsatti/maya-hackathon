@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { sparkComplete } = require('./brain');
+const recall = require('./recall');
 
 const DIR = process.env.MAYA_DATA_DIR || path.join(__dirname, 'data', 'profiles'); // env override is for tests
 const GENDERS = { female: 'she/her', male: 'he/him', 'prefer-not': 'they/them' };
@@ -21,7 +22,7 @@ const writeQueue = new Map(); // id -> promise chain, so two extractions never o
 
 fs.mkdirSync(DIR, { recursive: true });
 
-const emptyMemory = () => ({ people: [], events: [], preferences: [], current: [], topics: [] });
+const emptyMemory = () => ({ people: [], events: [], preferences: [], current: [], topics: [], threads: [] });   // threads: open follow-ups (recall.js); an older file without them loads with none
 const file = (id) => path.join(DIR, `${id}.json`);
 const today = (tz) => new Date().toLocaleDateString('en-CA', tz ? { timeZone: tz } : undefined); // YYYY-MM-DD
 
@@ -37,6 +38,7 @@ function load(id) {
   let p;
   try { p = JSON.parse(fs.readFileSync(file(id), 'utf8')); } catch { return null; }
   p.memory = { ...emptyMemory(), ...(p.memory || {}) };
+  if (!Array.isArray(p.memory.threads)) p.memory.threads = [];
   cache.set(id, p);
   return p;
 }
@@ -71,7 +73,7 @@ function createProfile(name, gender) {
 const clip = (v, n = 300) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, n);
 
 // Keeps only the expected shape from whatever Spark returned.
-function sanitize(m, fallbackDate) {
+function sanitize(m, fallbackDate, existingThreads) {
   const told = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(x && x.told) ? x.told : fallbackDate);
   const arr = (a) => (Array.isArray(a) ? a.slice(0, MAX_ITEMS) : []);
   const out = emptyMemory();
@@ -88,6 +90,7 @@ function sanitize(m, fallbackDate) {
       out[k].push({ who: clip(x.who, 40), text: clip(x.text), ...(k === 'events' ? { date: clip(x.date, 40) } : {}), told: told(x) });
     }
   }
+  out.threads = recall.mergeThreads(existingThreads, m.threads, fallbackDate);   // Spark proposes, code merges (told / asked are never Spark's)
   out.topics = arr(m.topics).map((x) => ({ text: clip(x && x.text, 120), told: told(x) })).filter((x) => x.text).slice(-MAX_TOPICS);
   return out;
 }
@@ -99,8 +102,9 @@ Return ONLY the full updated memory as JSON, no other text, no code fences, with
  "preferences":[{"who":"","text":"","told":"YYYY-MM-DD"}],
  "current":[{"who":"","text":"","told":"YYYY-MM-DD"}],
  "topics":[{"text":"","told":"YYYY-MM-DD"}],
+ "threads":[{"id":"","who":"","text":"","due":"YYYY-MM-DD or empty","kind":"event|worry|plan","status":"open|closed"}],
  "removed":["short phrase of each old fact this call corrected or showed is no longer true, e.g. ice cream"]}
-Columns: people = each named person in their life (relationship, birthday, stories = what they said or did, kept close to the words told, including what that person said to the owner, e.g. said he loves her and wants to come over sometime). A thing someone says to the owner goes in that person's stories, not in events; events = life events (past or coming, with date if told); preferences = likes/dislikes; current = things happening around them right now, as they told it; topics = 1-3 short subject labels for this call (a few words each, never sentences from the call).
+Columns: people = each named person in their life (relationship, birthday, stories = what they said or did, kept close to the words told, including what that person said to the owner, e.g. said he loves her and wants to come over sometime). A thing someone says to the owner goes in that person's stories, not in events; events = life events (past or coming, with date if told); preferences = likes/dislikes; current = things happening around them right now, as they told it; topics = 1-3 short subject labels for this call (a few words each, never sentences from the call); threads = things still open that a caring friend would gently ask about on a later call: a dated event coming up or just past (a visit, an appointment, a trip, a gathering), a worry they raised that was left unresolved, or something they plan to do. Give the absolute due date when the event has one, otherwise leave due empty. One thread per item, short plain text, only what they said. Existing threads carry an id: leave them out unless this call changes them; when this call shows a thread happened or was settled, return it with the same id and status closed. Never make a thread from ordinary chat, feelings, memories of the past, or health beyond the person's own words about an upcoming appointment or an unresolved worry, and never advise.
 Rules:
 - Keep every existing item unless this call corrects or contradicts it. A correction REPLACES the old fact: the old one must not remain anywhere (no "used to"), and that includes topics: delete or reword any topic that names the old fact, and list the old fact in \"removed\" (an empty list if nothing was corrected).
 - Only record what was actually said, as told. Never guess, infer, diagnose, interpret or recommend. Health things are recorded only as the person said them, in their words.
@@ -193,7 +197,7 @@ async function extract(id, said, { heavy = false, tz } = {}) {
   try { raw = await sparkComplete(EXTRACT_INSTRUCTIONS, user); } catch (e) { console.error('Memory update failed:', e.message); return false; }
   let m;
   let removed;
-  try { const j = parseJson(raw); m = sanitize(j, date); removed = (Array.isArray(j.removed) ? j.removed : []).map((x) => clip(x, 60).toLowerCase()).filter((x) => x.length >= 4); }
+  try { const j = parseJson(raw); m = sanitize(j, date, p.memory.threads); removed = (Array.isArray(j.removed) ? j.removed : []).map((x) => clip(x, 60).toLowerCase()).filter((x) => x.length >= 4); }
   catch (e) { console.error('Memory update unreadable:', e.message); return false; }
   // A corrected fact leaves no label behind: topics naming anything Spark says was removed are dropped here too.
   m.topics = m.topics.filter((t) => !removed.some((r) => t.text.toLowerCase().includes(r)));

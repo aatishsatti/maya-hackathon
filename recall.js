@@ -121,4 +121,42 @@ function expire(threads, today) {
   });
 }
 
-module.exports = { OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire };
+const KINDS = new Set(['event', 'worry', 'plan']);
+const MAX_THREADS = 20;     // open ones are always kept; the oldest closed / expired ones go first
+const clip = (v, n) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, n);
+const key = (who, text) => `${words(who).join(' ')}|${words(text).join(' ')}`;
+const newId = () => `t${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
+
+// Applies what the filing step (Spark) returned about threads to the threads already kept. Spark only ever proposes changes:
+// it never sets told or asked (code owns those), a closed thread never reopens, an existing thread Spark leaves out is kept as it was,
+// and a duplicate (same id, or same person and words) is the same thread. A new thread must arrive open. `returned` that is not a
+// list (the key missing or garbage) changes nothing. Pure: the input is not mutated; makeId is injectable for tests.
+function mergeThreads(existing, returned, today, makeId = newId) {
+  const out = (Array.isArray(existing) ? existing : []).filter((t) => t && String(t.text || '').trim()).map((t) => ({ ...t }));
+  if (Array.isArray(returned)) {
+    for (const r of returned) {
+      if (!r || typeof r !== 'object') continue;
+      const text = clip(r.text, 200);
+      const hit = out.find((t) => (r.id && t.id === r.id) || (text && key(t.who, t.text) === key(r.who, text)));
+      const due = ISO.test(String(r.due)) ? String(r.due) : '';
+      const kind = KINDS.has(String(r.kind)) ? String(r.kind) : null;
+      const closing = String(r.status) === 'closed';
+      if (hit) {
+        if (hit.status === 'open') {
+          if (text) hit.text = text;
+          if (due) hit.due = due;
+          if (kind) hit.kind = kind;
+          if (closing) hit.status = 'closed';
+        }
+      } else if (text && !closing) {
+        out.push({ id: makeId(), who: clip(r.who, 40), text, due, kind: kind || (due ? 'event' : 'plan'), status: 'open', asked: 0, told: today });
+      }
+    }
+  }
+  const kept = expire(out, today);
+  const open = kept.filter((t) => t.status === 'open');
+  const rest = kept.filter((t) => t.status !== 'open').slice(-Math.max(0, MAX_THREADS - open.length));
+  return kept.filter((t) => open.includes(t) || rest.includes(t));
+}
+
+module.exports = { OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };

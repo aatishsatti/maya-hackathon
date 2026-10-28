@@ -116,3 +116,55 @@ test('recall.js is pure: no network, no file, no Spark, and no module that has a
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'recall.js'), 'utf8').replace(/\/\/.*$/gm, '');
   assert.ok(!/require\(|fetch\(|process\.env|writeFile|readFile/.test(src));
 });
+
+// ---------------------------------------------------------------- mergeThreads: Spark proposes, code merges
+let seq = 0; const mk = () => `tabc${String(++seq).padStart(3, '0')}`;
+const old = (o = {}) => ({ id: 'told01', who: 'Priya', text: 'visiting for the weekend', due: '2026-10-26', kind: 'event', status: 'open', asked: 1, told: '2026-10-22', ...o });
+
+test('mergeThreads: a new open thread gets an id, today as told, and nothing asked; told and asked are never Spark\'s', () => {
+  const out = R.mergeThreads([], [{ who: 'Mike', text: 'blood test on Tuesday', due: '2026-11-03', kind: 'event', status: 'open', asked: 9, told: '1999-01-01' }], TODAY, mk);
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0], { id: 'tabc001', who: 'Mike', text: 'blood test on Tuesday', due: '2026-11-03', kind: 'event', status: 'open', asked: 0, told: TODAY });
+});
+
+test('mergeThreads: a thread Spark leaves out is kept exactly; a missing or garbage list changes nothing; the input is not mutated', () => {
+  const before = [old()];
+  const snap = JSON.stringify(before);
+  assert.deepEqual(R.mergeThreads(before, [], TODAY, mk), before);
+  for (const bad of [undefined, null, 'x', 7, {}]) assert.deepEqual(R.mergeThreads(before, bad, TODAY, mk), before);
+  R.mergeThreads(before, [{ id: 'told01', status: 'closed' }], TODAY, mk);
+  assert.equal(JSON.stringify(before), snap);
+});
+
+test('mergeThreads: closing by id keeps told and asked; a closed thread never reopens; a new thread cannot arrive already closed', () => {
+  let out = R.mergeThreads([old()], [{ id: 'told01', status: 'closed' }], TODAY, mk);
+  assert.equal(out[0].status, 'closed'); assert.equal(out[0].asked, 1); assert.equal(out[0].told, '2026-10-22'); assert.equal(out[0].text, 'visiting for the weekend');
+  out = R.mergeThreads(out, [{ id: 'told01', status: 'open', text: 'something else', due: '2026-11-30' }], TODAY, mk);
+  assert.equal(out[0].status, 'closed'); assert.equal(out[0].text, 'visiting for the weekend', 'a closed thread is left alone');
+  out = R.mergeThreads([], [{ who: 'Mike', text: 'already over', status: 'closed' }], TODAY, mk);
+  assert.deepEqual(out, [], 'a thread that was never open is not recorded');
+});
+
+test('mergeThreads: the same person and words (even without the id) is the same thread; a changed date updates it', () => {
+  let out = R.mergeThreads([old()], [{ who: 'priya', text: 'Visiting for the weekend!', status: 'open' }], TODAY, mk);
+  assert.equal(out.length, 1, 'no duplicate');
+  out = R.mergeThreads([old()], [{ id: 'told01', due: '2026-10-30' }], TODAY, mk);
+  assert.equal(out[0].due, '2026-10-30'); assert.equal(out[0].asked, 1);
+});
+
+test('mergeThreads: bad fields are normalised, never trusted', () => {
+  const out = R.mergeThreads([], [{ who: 'M'.repeat(90), text: 'x'.repeat(500), due: 'next week', kind: 'secret', status: 'whatever' }, { text: '   ' }, null, 5], TODAY, mk);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].who.length, 40); assert.equal(out[0].text.length, 200);
+  assert.equal(out[0].due, ''); assert.equal(out[0].kind, 'plan', 'undated, unknown kind -> plan'); assert.equal(out[0].status, 'open');
+  assert.equal(R.mergeThreads([], [{ text: 'dinner', due: '2026-11-01', kind: 'nonsense' }], TODAY, mk)[0].kind, 'event', 'dated, unknown kind -> event');
+});
+
+test('mergeThreads: threads past their window are expired on the way through, and the list is capped with open ones kept first', () => {
+  const out = R.mergeThreads([old({ due: '2026-09-01' })], [], TODAY, mk);
+  assert.equal(out[0].status, 'expired');
+  const many = Array.from({ length: 30 }, (_, i) => old({ id: `tc${i}`, text: `closed ${i}`, status: 'closed' }));
+  const capped = R.mergeThreads([...many, old({ id: 'topen', text: 'still open', status: 'open', due: '2026-10-27' })], [], TODAY, mk);
+  assert.equal(capped.length, R.MAX_THREADS); assert.ok(capped.some((t) => t.id === 'topen'), 'the open one survives the cap');
+  assert.ok(!capped.some((t) => t.id === 'tc0'), 'the oldest closed ones go first');
+});
