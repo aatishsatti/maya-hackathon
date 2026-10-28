@@ -104,7 +104,7 @@ Return ONLY the full updated memory as JSON, no other text, no code fences, with
  "topics":[{"text":"","told":"YYYY-MM-DD"}],
  "threads":[{"id":"","who":"","text":"","due":"YYYY-MM-DD or empty","kind":"event|worry|plan","status":"open|closed"}],
  "removed":["short phrase of each old fact this call corrected or showed is no longer true, e.g. ice cream"]}
-Columns: people = each named person in their life (relationship, birthday, stories = what they said or did, kept close to the words told, including what that person said to the owner, e.g. said he loves her and wants to come over sometime). A thing someone says to the owner goes in that person's stories, not in events; events = life events (past or coming, with date if told); preferences = likes/dislikes; current = things happening around them right now, as they told it; topics = 1-3 short subject labels for this call (a few words each, never sentences from the call); threads = things still open that a caring friend would gently ask about on a later call: a dated event coming up or just past (a visit, an appointment, a trip, a gathering), a worry they raised that was left unresolved, or something they plan to do. Give the absolute due date when the event has one, otherwise leave due empty. One thread per item, short plain text, only what they said. Existing threads carry an id: leave them out unless this call changes them; when this call shows a thread happened or was settled, return it with the same id and status closed. Also close it when the person declines to talk about it, asks to drop it, or clearly brushes it off: their wish is respected and it is not raised again. Never make a thread from ordinary chat, feelings, memories of the past, or health beyond the person's own words about an upcoming appointment or an unresolved worry, and never advise.
+Columns: people = each named person in their life (relationship, birthday, stories = what they said or did, kept close to the words told, including what that person said to the owner, e.g. said he loves her and wants to come over sometime). A thing someone says to the owner goes in that person's stories, not in events; events = life events (past or coming, with date if told); preferences = likes/dislikes; current = things happening around them right now, as they told it; topics = 1-3 short subject labels for this call (a few words each, never sentences from the call); threads = things still open that a caring friend would gently ask about on a later call: a dated event coming up or just past (a visit, an appointment, a trip, a gathering), a worry they raised that was left unresolved, or something they plan to do. Give the absolute due date when the event has one, otherwise leave due empty. One thread per item, short plain text, only what they said. Existing threads carry an id; a thread of kind "reminder" is something they asked to be reminded of on a later call and the app keeps it: never create, copy or reword one, and return it (same id, status closed) only if this call shows it was done; for the rest, leave existing threads out unless this call changes them; when this call shows a thread happened or was settled, return it with the same id and status closed. Also close it when the person declines to talk about it, asks to drop it, or clearly brushes it off: their wish is respected and it is not raised again. Never make a thread from ordinary chat, feelings, memories of the past, or health beyond the person's own words about an upcoming appointment or an unresolved worry, and never advise.
 Rules:
 - Keep every existing item unless this call corrects or contradicts it. A correction REPLACES the old fact: the old one must not remain anywhere (no "used to"), and that includes topics: delete or reword any topic that names the old fact, and list the old fact in \"removed\" (an empty list if nothing was corrected).
 - Only record what was actually said, as told. Never guess, infer, diagnose, interpret or recommend. Health things are recorded only as the person said them, in their words.
@@ -223,8 +223,35 @@ function focusedMemory(m, focus, tz) {
     ? `Notes that relate to what they just said (only what they told you): ${sel.map((x) => `${kind[x.kind]}${x.told ? `, told ${x.told}` : ''}${x.date ? `, date ${x.date}` : ''}: ${x.who ? `${x.who}: ` : ''}${x.text}`).join(' | ')}`
     : 'None of your other notes relate to what they just said.');
   let out = `What you remember, for this reply (only what they told you; other notes exist but are not shown now, so if they ask about something not shown, say honestly that you cannot think of it right now): ${bits.join('. ')}.`;
-  if (focus.thread) out += ` Open follow-up from an earlier call (a fact for you, not words to say): ${focus.thread}. If it fits the moment, ask about it once, simply, in your own words, early in this reply; if what they are saying makes it awkward, leave it.`;
+  if (focus.thread && focus.reminder) out += ` REMINDER THEY ASKED YOU FOR (a fact for you, not words to say; they wanted you to remind them on their next call, and this is that call): ${focus.thread}. Remind them of it once, simply, in your own words, task first, early in this reply. Add no advice, no health or dose words and nothing about it that they did not say.`;
+  else if (focus.thread) out += ` Open follow-up from an earlier call (a fact for you, not words to say): ${focus.thread}. If it fits the moment, ask about it once, simply, in your own words, early in this reply; if what they are saying makes it awkward, leave it.`;
   return out;
+}
+
+// Next-call reminders (recall.js): code files one the moment the person asks, shows it once on the next call, and reopens it only when they say it is
+// still to do. Returns { status:'added'|'duplicate'|'full'|'none' }.
+function addReminder(id, task, callId) {
+  const p = load(id);
+  if (!p || !String(task || '').trim()) return { status: 'none' };
+  const r = recall.addReminderTo(p.memory.threads, task, callId, today());
+  if (r.status === 'added') { p.memory.threads.push(r.thread); save(p); }
+  return { status: r.status };
+}
+function deliverReminder(id, threadId, callId) {
+  const p = load(id);
+  const t = p && p.memory.threads.find((x) => x.id === threadId && x.kind === 'reminder');
+  if (!t) return false;
+  t.asked = (t.asked || 0) + 1; t.deliveredCall = callId;
+  save(p);
+  return true;
+}
+// "Not done yet": reminders shown in THIS call come due again on the next call. Returns how many.
+function reopenReminders(id, callId) {
+  const p = load(id);
+  const hit = p ? p.memory.threads.filter((t) => t.kind === 'reminder' && t.status === 'open' && t.deliveredCall === callId && (t.asked || 0) > 0) : [];
+  for (const t of hit) { t.asked = 0; t.fromCall = callId; delete t.deliveredCall; }
+  if (hit.length) save(p);
+  return hit.length;
 }
 
 // A follow-up thread was offered to Spark: count it (never more than two offers in total, see recall.dueThread). Returns false if not found.
@@ -255,9 +282,9 @@ function profileNote(p, tz, focus = null) {
   m.preferences.forEach((x) => mem.push(`Likes, told ${x.told}: ${who(x)}${x.text}`));
   m.current.forEach((x) => mem.push(`Happening around them, told ${x.told}: ${who(x)}${x.text}`));
   m.topics.slice(-5).forEach((x) => mem.push(`Recent topic, ${x.told}: ${x.text}`));
-  if (focus && !focus.full && mem.length) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
+  if (focus && !focus.full && (mem.length || focus.thread)) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
   else lines.push(mem.length ? `What you remember (only what they told you; nothing else is known): ${mem.join(' | ')}` : 'You have no memories of this person yet.');
   return lines.join(' ');
 }
 
-module.exports = { listProfiles, createProfile, deleteProfile, load, startCall, appendTurn, noteNames, endCall, flushPending, recoverAll, profileNote, markAsked, today, GENDERS };
+module.exports = { listProfiles, createProfile, deleteProfile, load, startCall, appendTurn, noteNames, endCall, flushPending, recoverAll, profileNote, markAsked, addReminder, deliverReminder, reopenReminders, today, GENDERS };

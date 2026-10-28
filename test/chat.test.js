@@ -129,6 +129,17 @@ test('text: what they said earlier in the chat is in her notes for a "do you rem
   assert.match(asked[0].roster, /WHAT THEY TOLD YOU EARLIER IN THIS CONVERSATION/); assert.match(asked[0].roster, /grandson Toby/);
 });
 
+test('text: "remind me next time I call that I need to call my grandson" is kept as a next-call reminder, and she is not left to say she cannot', async () => {
+  const id = newSenior();
+  reset(PLAIN); await chat.sendText(id, 'Can you remind me the next time that I call you that I need to call my grandson?', null);
+  const r = memory.load(id).memory.threads.filter((t) => t.kind === 'reminder');
+  assert.equal(r.length, 1); assert.equal(r[0].text, 'I need to call my grandson'); assert.equal(r[0].status, 'open');
+  assert.match(asked[0].roster, /The app keeps it and will bring it to you at the start of their next call/); assert.match(asked[0].roster, /Do not say you cannot do it/);
+  reset(PLAIN); await chat.sendText(id, 'Remind me in 5 minutes to call him', null);
+  assert.match(asked[0].roster, /only remind them during a voice call/, 'a timed ask in chat is still the timer answer');
+  assert.equal(memory.load(id).memory.threads.filter((t) => t.kind === 'reminder').length, 1);
+});
+
 test('text: plain pain follows the ladder: first no alert, repeat asks, yes alerts; severe asks at once; fall alerts', async () => {
   const id = newSenior();
   const flagsBefore = () => care.get(id).flags.length + alertsFor(id).length;

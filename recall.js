@@ -4,7 +4,9 @@
 //
 // Memory shape (see memory.js): { people:[{name,relationship,birthday,stories:[{text,told}]}], events:[{who,text,date,told}],
 // preferences:[{who,text,told}], current:[{who,text,told}], topics:[{text,told}], threads:[Thread] }
-// Thread: { who, text, due:'YYYY-MM-DD'|'', kind:'event'|'worry'|'plan', status:'open'|'closed'|'expired', asked:number, told:'YYYY-MM-DD' }
+// Thread: { who, text, due:'YYYY-MM-DD'|'', kind:'event'|'worry'|'plan'|'reminder', status:'open'|'closed'|'expired', asked:number, told:'YYYY-MM-DD' }
+// A 'reminder' is a next-call note the person asked for ("remind me next time I call to ..."): only CODE creates one (parseNextCallReminder, memory.addReminder),
+// it carries fromCall (the call it was asked in) and, once shown, deliveredCall; Spark may only close it at filing.
 
 const DAY = 86400000;
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -89,15 +91,21 @@ const HEAVY_TALK = new RegExp(String.raw`\b(die|died|dying|dead|death|suicid\w*|
 const heavyTalk = (text) => HEAVY_TALK.test(String(text || '').replace(/[\u2018\u2019]/g, "'"));
 
 const OPEN_WORRY_DAYS = 10;   // an undated worry or plan is followed up from the next day until this many days after it was told
+const REMINDER_DAYS = 30;     // a next-call reminder nobody got to deliver still stands this long
 const DATED_GRACE_DAYS = 14;  // a dated thread is still worth one gentle ask for this long after its date; later it is just over
 
 // Which open thread, if any, should be offered to Spark in this call. At most one.
 // ctx: { heavy: the moment is heavy/careful, askedThisCall: a follow-up was already offered in this call }.
-function dueThread(threads, today, { heavy = false, askedThisCall = false } = {}) {
+function dueThread(threads, today, { heavy = false, askedThisCall = false, callId = '' } = {}) {
   if (heavy || askedThisCall) return null;
   const live = [];
   for (const t of threads || []) {
-    if (!t || t.status !== 'open' || (t.asked || 0) >= 2 || !String(t.text || '').trim()) continue;
+    if (!t || t.status !== 'open' || !String(t.text || '').trim()) continue;
+    if (t.kind === 'reminder') {          // due from the NEXT call (never the call it was asked in), shown once, ahead of every other thread
+      if (!(t.asked || 0) && (!callId || t.fromCall !== callId) && ISO.test(String(t.told)) && daysBetween(t.told, today) <= REMINDER_DAYS) live.push({ t, rank: -1 });
+      continue;
+    }
+    if ((t.asked || 0) >= 2) continue;
     if (ISO.test(String(t.due))) {
       const since = daysBetween(t.due, today);                       // days since the date; negative = not yet
       if (since >= 0 && since <= DATED_GRACE_DAYS) live.push({ t, rank: since });
@@ -112,6 +120,7 @@ function dueThread(threads, today, { heavy = false, askedThisCall = false } = {}
 
 // The fact line handed to Spark for a thread: who, what, told date, and the date worked out in plain words. Never wording for her to say.
 function threadFact(t, today) {
+  if (t.kind === 'reminder') return `${t.text}; they asked on ${t.told || 'an earlier call'} to be reminded of this when they next called`;
   const f = ISO.test(String(t.due)) ? dateFact(t.due, today) : null;
   const when = f ? `, was due ${t.due} (${f.text})` : '';
   return `${t.who ? `${t.who}: ` : ''}${t.text}${when}; told ${t.told || 'earlier'}`;
@@ -121,6 +130,7 @@ function threadFact(t, today) {
 function expire(threads, today) {
   return (threads || []).map((t) => {
     if (!t || t.status !== 'open') return t;
+    if (t.kind === 'reminder') return ISO.test(String(t.told)) && daysBetween(t.told, today) > REMINDER_DAYS ? { ...t, status: 'expired' } : t;
     const over = ISO.test(String(t.due)) ? daysBetween(t.due, today) > DATED_GRACE_DAYS : ISO.test(String(t.told)) && daysBetween(t.told, today) > OPEN_WORRY_DAYS;
     return over ? { ...t, status: 'expired' } : t;
   });
@@ -146,7 +156,9 @@ function mergeThreads(existing, returned, today, makeId = newId) {
       const due = ISO.test(String(r.due)) ? String(r.due) : '';
       const kind = KINDS.has(String(r.kind)) ? String(r.kind) : null;
       const closing = String(r.status) === 'closed';
-      if (hit) {
+      if (hit && hit.kind === 'reminder') {
+        if (hit.status === 'open' && closing) hit.status = 'closed';   // Spark may close one that was done; it never rewrites, reopens or duplicates one
+      } else if (hit) {
         if (hit.status === 'open') {
           if (text) hit.text = text;
           if (due) hit.due = due;
@@ -164,4 +176,27 @@ function mergeThreads(existing, returned, today, makeId = newId) {
   return kept.filter((t) => open.includes(t) || rest.includes(t));
 }
 
-module.exports = { heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };
+// "Remind me the next time I call (you) that I need to call my grandson" / "remind me next time to call X" / "remind me to call X when I call again".
+// Returns the task in the person's own words, or '' when it is not a next-call reminder or has no task. A timed ask ("in 5 minutes") is not one.
+const NEXT_CALL = /\b(?:the )?next (?:time|call)\b(?: that| when)?(?: (?:i|we) (?:call|ring|phone|talk|speak)(?: to)?(?: you)?(?: again| back| next)?)?|\bwhen (?:i|we) (?:call|ring|phone|talk|speak)(?: to)?(?: you)?(?: again| back| next)\b|\bon my next call\b/i;
+function parseNextCallReminder(text) {
+  const sentence = String(text || '').replace(/[‘’]/g, "'").split(/[.?!]/).find((c) => /\bremind me\b/i.test(c) && NEXT_CALL.test(c));
+  if (!sentence || /\b(?:in|after)\s+(?:\d+(?:\.\d+)?|[a-z]+)\s*(?:seconds?|secs?|minutes?|mins?|hours?|hrs?)\b/i.test(sentence)) return '';
+  const rest = sentence.replace(NEXT_CALL, ' ').replace(/^.*?\bremind me\b/i, '').replace(/\s+/g, ' ');
+  const task = rest.replace(/^[\s,]*(?:to|about|that)\b\s*/i, '').replace(/^[\s,]+|[\s,]+$/g, '');
+  return words(task).length >= 1 && task.length >= 3 ? clip(task, 120) : '';
+}
+
+const MAX_OPEN_REMINDERS = 5;
+// Pure: the reminder to add to the threads, or why not. makeId injectable for tests.
+function addReminderTo(threads, task, callId, today, makeId = newId) {
+  const open = (threads || []).filter((t) => t && t.kind === 'reminder' && t.status === 'open');
+  if (open.some((t) => key('', t.text) === key('', task))) return { status: 'duplicate' };
+  if (open.length >= MAX_OPEN_REMINDERS) return { status: 'full' };
+  return { status: 'added', thread: { id: makeId(), who: '', text: clip(task, 120), due: '', kind: 'reminder', status: 'open', asked: 0, told: today, fromCall: callId } };
+}
+
+// They said the thing they asked to be reminded of is not done yet / still to do.
+const STILL_TO_DO = /\b(?:not (?:done|finished)(?: yet)?|haven'?t (?:done|called|managed|got(?:ten)? to)(?: it| that)?(?: yet)?|still (?:need|have|got) to|still to do|didn'?t (?:get|manage) to|not yet|remind me again)\b/i;
+
+module.exports = { parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };

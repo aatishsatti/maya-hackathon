@@ -970,10 +970,11 @@ class Call {
     const heavy = Boolean(extra || this.safety || this.health || this.pendingConcern || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
     this.focus = { text: String(heard || ''), full, thread: '' };
     if (full || !this.profile) return;
-    const t = recall.dueThread(this.profile.memory.threads, memory.today(this.tz), { heavy, askedThisCall: this.followUpOffered });
+    const t = recall.dueThread(this.profile.memory.threads, memory.today(this.tz), { heavy, askedThisCall: this.followUpOffered, callId: this.callId });
     if (!t) return;
     this.followUpOffered = true;
-    memory.markAsked(this.profile.id, t.id);
+    if (t.kind === 'reminder') { memory.deliverReminder(this.profile.id, t.id, this.callId); this.focus.reminder = true; }   // shown once; "not done yet" reopens it
+    else memory.markAsked(this.profile.id, t.id);
     this.focus.thread = recall.threadFact(t, memory.today(this.tz));
   }
 
@@ -1406,6 +1407,16 @@ class Call {
       care.reminderAck(id, this.awaitAck);
       this.awaitAck = null;
       notes.push('They acknowledged the reminder you just gave. Reply very briefly and warmly. Do not repeat the reminder and do not add any advice about it.');
+    }
+    // "Remind me next time I call to ...": not a timer. Code files a next-call reminder now (recall.js, memory.js); Spark is told as a fact. Said again as
+    // "not done yet / still to do" about a reminder shown in THIS call, it comes due again next call.
+    const nextTask = parseTimer(heard) ? '' : recall.parseNextCallReminder(heard);
+    if (nextTask) {
+      const r = memory.addReminder(id, nextTask, this.callId);
+      if (r.status === 'added' || r.status === 'duplicate') notes.push('FACT: they asked you to remind them, the next time they talk with you, of something they told you. The app keeps it and will bring it to you at the start of their next call. In one short sentence, in fresh words, confirm you will remind them then. Do not say you cannot do it, do not set a time, promise nothing else, and add no advice.');
+      else notes.push('FACT: they asked you to remind them next time, but the app is already holding several reminders for them and could not keep another. Say so kindly in one sentence and promise nothing; their family can also set reminders.');
+    } else if (recall.STILL_TO_DO.test(heard) && memory.reopenReminders(id, this.callId)) {
+      notes.push('FACT: they said the thing you just reminded them of is still to do. The app will remind them again the next time they call. Take it kindly in one short sentence, no advice, and do not remind them again in this call.');
     }
     const tm = parseTimer(heard);
     if (tm && this.noTimers) {
