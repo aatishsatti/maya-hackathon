@@ -62,7 +62,7 @@ test('the numbers on the page are the numbers in the data', () => {
   assert.match(html, /<td>100<\/td><td>2\.0 s<\/td><td>3,500 \/ 200<\/td>/, 'live reply: calls, speed, tokens per call'); assert.match(html, /30% cancelled|28 cancelled and rewritten on purpose \(28%\), 2 real errors/);
   assert.match(html, /<td>300 \(half at each setting, for the comparison\)<\/td><td>2\.5 s<\/td><td>727 \/ 372<\/td>/, 'the scam-check row shows the LIVE setting\'s speed and tokens, not a blend of both settings');
   assert.doesNotMatch(html, /<td>2\.8 s<\/td><td>727 \/ 367<\/td><td>measured; speed/, 'never the blended average');
-  assert.match(html, /<td>48<\/td><td>2\.0 s<\/td><td>169 s of audio<\/td>/); assert.match(html, /Word error rate <b>3\.3%<\/b>/); assert.match(html, /<b>99\.2%<\/b> of the key words/); assert.match(html, /<b>100%<\/b> of the words a scam turns on/);
+  assert.match(html, /<td>48<\/td><td>2\.0 s<\/td><td>169 s of audio<\/td>/); assert.match(html, /Word error rate <b>3\.3%<\/b>/); assert.match(html, /<b>99\.2%<\/b> of the key words/); assert.match(html, /<b>100\.0%<\/b> of the words a scam turns on/);
   assert.match(html, /Twenty-four fixed sentences[^.]*48 hearings, 0 failed/); assert.match(html, /<div class="n">78%<\/div>/); assert.match(html, /<div class="n">1\.4%<\/div>/);
   assert.match(html, /<span class="pill FAIL">FAIL<\/span> word error rate at most 8%/, 'a failing rail is shown as FAIL, in words not only colour'); assert.match(html, /<span class="pill skipped">skipped<\/span>/);
 });
@@ -71,7 +71,7 @@ test('the one-page write-up: short, the same facts, the limits, and the numbers 
   const md = P.renderMarkdown(summary());
   assert.ok(md.split('\n').length <= 60, `one page: ${md.split('\n').length} lines`);
   for (const t of ['# Maya: how Meta models are used', 'muse-spark-1.3', 'muse-voice-transcribe-1.0', '**not measured**', '**synthetic clean speech**', 'Photos (Spark vision) are wired and used but **not measured**', 'about 1.7x faster', '57% fewer output tokens', 'ElevenLabs is only the voice']) assert.ok(md.includes(t), t);
-  assert.match(md, /word error rate 3\.3% on synthetic clean speech; 99\.2% of key words, 100% of scam words/); assert.match(md, /`low` warned 3 of 3, `minimal` 2 of 3/);
+  assert.match(md, /word error rate 3\.3% on synthetic clean speech; 99\.2% of key words, 100\.0% of scam words/); assert.match(md, /`low` warned 3 of 3, `minimal` 2 of 3/);
   assert.doesNotMatch(md, /https?:\/\//);
 });
 
@@ -89,4 +89,18 @@ test('the generator touches no network and no app file: it reads committed data 
   assert.doesNotMatch(src, /fetch\(|require\('node:(http|https|net)'\)|child_process|process\.env/);
   const writes = [...src.matchAll(/writeFileSync\(path\.join\(ROOT, '([^']+)'/g)].map((m) => m[1]); assert.deepEqual(writes, ['docs', 'docs', 'docs'], 'three files, all under docs/');
   assert.ok(!fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8').includes('meta-models'), 'no app page links to it');
+});
+
+test('baseline mode: every rate is the baseline average, each rail shows how many runs it passed, and hearing is ONE number, the average of all its runs', () => {
+  const baseline = { when: '2026-10-29', runs: 3, metrics: { ...RESULTS.metrics, 'conversation.repeatRate': 0.01, 'hearing.wer': 0.034, 'hearing.termSurvival': 0.9 },
+    checks: { 'conv.limits': { pass: 3, fail: 0, skipped: 0, text: 'no connect / close reply asks a question' }, 'hear.wer': { pass: 2, fail: 1, skipped: 0, text: 'word error rate at most 6%' }, 'mem.x': { pass: 0, fail: 0, skipped: 3, text: 'never ran' } } };
+  const hearingRuns = [0.025, 0.033, 0.043].map((wer, i) => ({ wer, exact: 0.7, termSurvival: 0.99, scamTermSurvival: 1, avgMs: 2000 + i, hearings: 48 }));
+  const s = P.buildSummary(RESULTS, { items: ITEMS, low: { byId: LOW }, minimal: { byId: MIN } }, REASONING, new Date('2026-10-29T00:00:00Z'), baseline, hearingRuns);
+  assert.equal(s.fullRuns, 3); assert.equal(s.when, '2026-10-29'); assert.equal(s.metrics['conversation.repeatRate'], 0.01);
+  assert.deepEqual(s.checks.map((c) => [c.id, c.status, c.passed, c.of]), [['conv.limits', 'pass', 3, 3], ['hear.wer', 'FAIL', 2, 3], ['mem.x', 'skipped', 0, 3]], 'a rail that failed in any run is shown as FAIL');
+  assert.ok(Math.abs(s.hearing.wer - 0.0337) < 0.0005 && s.hearing.runs === 3 && s.hearing.hearings === 144, 'pooled over the runs, not the baseline value');
+  const html = P.render(s), md = P.renderMarkdown(s);
+  assert.match(html, /the average of 3 full evaluation runs/); assert.match(html, /\(2 of 3 runs\)/); assert.match(html, /Word error rate <b>3\.4%<\/b> \(the average of 3 runs, 144 hearings/);
+  assert.equal((html.match(/Word error rate/g) || []).length, 1, 'one hearing error rate on the page, not two'); assert.equal((md.match(/word error rate/g) || []).length, 1);
+  assert.match(md, /word error rate 3\.4% on synthetic clean speech \(the average of 3 runs\)/);
 });

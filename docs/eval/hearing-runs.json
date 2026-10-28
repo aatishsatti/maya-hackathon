@@ -1,0 +1,85 @@
+{
+ "about": "Every full evaluation run of the (unchanged) hearing test: 24 fixed sentences, each heard through two of four built-in Mac voices (synthetic clean speech), transcribed by Meta Transcribe. Transcribe varies a little from run to run, so the single number published on the page is the average of these runs. Run dates are real; the dates of the earliest runs are 2026-10-28.",
+ "runs": [
+  {
+   "when": "2026-10-28",
+   "source": "Step 3, hearing only",
+   "hearings": 48,
+   "wer": 0.0334,
+   "exact": 0.65,
+   "termSurvival": 0.9917,
+   "scamTermSurvival": 1,
+   "avgMs": 2034
+  },
+  {
+   "when": "2026-10-28",
+   "source": "full run (Step 4)",
+   "hearings": 48,
+   "wer": 0.0249,
+   "exact": 0.725,
+   "termSurvival": 0.9917,
+   "scamTermSurvival": 1,
+   "avgMs": 1998
+  },
+  {
+   "when": "2026-10-28",
+   "source": "full run (earlier baseline 1)",
+   "hearings": 48,
+   "wer": 0.0239,
+   "exact": 0.75,
+   "termSurvival": 0.9833,
+   "scamTermSurvival": 0.9833,
+   "avgMs": 2042
+  },
+  {
+   "when": "2026-10-28",
+   "source": "full run (earlier baseline 2)",
+   "hearings": 48,
+   "wer": 0.0277,
+   "exact": 0.725,
+   "termSurvival": 0.9667,
+   "scamTermSurvival": 0.9833,
+   "avgMs": 1947
+  },
+  {
+   "when": "2026-10-29",
+   "source": "full run (earlier baseline 3)",
+   "hearings": 48,
+   "wer": 0.0296,
+   "exact": 0.7,
+   "termSurvival": 0.9917,
+   "scamTermSurvival": 1,
+   "avgMs": 2047
+  },
+  {
+   "when": "2026-10-29",
+   "source": "full run (final 1)",
+   "hearings": 48,
+   "wer": 0.0278,
+   "exact": 0.7,
+   "termSurvival": 0.9917,
+   "scamTermSurvival": 1,
+   "avgMs": 2145
+  },
+  {
+   "when": "2026-10-29",
+   "source": "full run (final 2)",
+   "hearings": 48,
+   "wer": 0.0427,
+   "exact": 0.625,
+   "termSurvival": 0.975,
+   "scamTermSurvival": 0.9833,
+   "avgMs": 2088
+  },
+  {
+   "when": "2026-10-29",
+   "source": "full run (final 3)",
+   "hearings": 48,
+   "wer": 0.0305,
+   "exact": 0.65,
+   "termSurvival": 0.9917,
+   "scamTermSurvival": 1,
+   "avgMs": 2112
+  }
+ ]
+}

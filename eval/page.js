@@ -9,23 +9,34 @@ const ROOT = path.join(__dirname, '..');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pc = (x) => (x === null || x === undefined ? 'n/a' : `${Math.round(x * 100)}%`);
-const pc1 = (x) => (x === null || x === undefined ? 'n/a' : `${Math.round(x * 1000) / 10}%`);
+const pc1 = (x) => (x === null || x === undefined ? 'n/a' : `${(x * 100).toFixed(1)}%`);   // one decimal, always (3.0%, not 3%)
 const secs = (ms) => (ms === null || ms === undefined ? 'n/a' : `${(ms / 1000).toFixed(1)} s`);
 const num = (x) => (x === null || x === undefined ? 'n/a' : Number(x).toLocaleString('en-US'));
 const frac = (k, n) => `${k} of ${n}`;
 
 // ---- the data the page is built from -------------------------------------------------------------------------------------------------------------
 // results: an eval run (eval-results/latest.json); held: { items, low:{byId}, minimal:{byId} }; reasoning: the dev-half comparison file.
-function buildSummary(results, held, reasoning, now = new Date()) {
+function buildSummary(results, held, reasoning, now = new Date(), baseline = null, hearingRuns = null) {
   const { summarise, throughFilter } = require('../test/scam-bench');
   const { needsCheck } = require('../scam');
   const view = (byId) => { const alone = summarise(held.items, byId), live = summarise(held.items, throughFilter(held.items, byId, needsCheck)); return { alone, live }; };
   const piped = (byId) => throughFilter(held.items, byId, needsCheck);
   const missed = (byId) => held.items.filter((i) => i.label === 'scam' && !['warn', 'pause'].includes((piped(byId)[i.id] || {}).level)).map((i) => ({ id: i.id, kind: i.category, level: (piped(byId)[i.id] || {}).level, filtered: Boolean((piped(byId)[i.id] || {}).filtered) }));
-  const hearing = ((results.suites || []).find((s) => s.suite === 'hearing') || {}).metrics || {};
+  // The numbers are the AVERAGE of the baseline's full runs (one consistent figure each); the table of calls is one representative run.
+  const metrics = baseline ? baseline.metrics : results.metrics;
+  const hearing = baseline ? Object.fromEntries(Object.entries(metrics).filter(([k]) => k.startsWith('hearing.')).map(([k, v]) => [k.slice('hearing.'.length), v]))
+    : ((results.suites || []).find((s) => s.suite === 'hearing') || {}).metrics || {};
+  // Hearing: Transcribe varies from run to run, so ONE number is published: the average over every run of the (unchanged) hearing test.
+  if (hearingRuns && hearingRuns.length) {
+    const avg = (k) => hearingRuns.reduce((a, r) => a + r[k], 0) / hearingRuns.length;
+    Object.assign(hearing, { wer: avg('wer'), exact: avg('exact'), termSurvival: avg('termSurvival'), scamTermSurvival: avg('scamTermSurvival'), avgMs: Math.round(avg('avgMs')), runs: hearingRuns.length, hearings: hearingRuns.reduce((a, r) => a + r.hearings, 0) });
+  }
+  const checks = baseline
+    ? Object.entries(baseline.checks || {}).map(([id, c]) => ({ id, text: c.text, status: c.fail > 0 ? 'FAIL' : c.pass > 0 ? 'pass' : 'skipped', passed: c.pass, of: c.pass + c.fail + c.skipped }))
+    : (results.checks || []).map((c) => ({ id: c.id, text: c.text, status: c.status }));
   return {
-    generated: now.toISOString().slice(0, 10), when: (results.when || '').slice(0, 10), runs: results.runs, seconds: results.seconds,
-    metrics: results.metrics, checks: (results.checks || []).map((c) => ({ id: c.id, text: c.text, status: c.status })), usage: results.usage,
+    generated: now.toISOString().slice(0, 10), when: baseline ? baseline.when : (results.when || '').slice(0, 10), runs: baseline ? 2 : results.runs, fullRuns: baseline ? baseline.runs : 1, seconds: results.seconds,
+    metrics, checks, usage: results.usage,
     hearing, reasoning, held: { low: view(held.low.byId), minimal: view(held.minimal.byId), lowMissed: missed(held.low.byId), minimalMissed: missed(held.minimal.byId) },
   };
 }
@@ -56,7 +67,7 @@ function render(s) {
   const checks = GROUPS.map(([k, label]) => {
     const list = s.checks.filter((c) => c.id.startsWith(`${k}.`));
     if (!list.length) return '';
-    return `<h3>${esc(label)}</h3><ul class="checks">${list.map((c) => `<li><span class="pill ${esc(c.status)}">${esc(c.status)}</span> ${esc(c.text)}</li>`).join('')}</ul>`;
+    return `<h3>${esc(label)}</h3><ul class="checks">${list.map((c) => `<li><span class="pill ${esc(c.status)}">${esc(c.status)}</span> ${esc(c.text)}${c.of ? ` <span class="sub">(${esc(c.passed)} of ${esc(c.of)} runs)</span>` : ''}</li>`).join('')}</ul>`;
   }).join('');
 
   const key = (label, val) => `<div class="stat"><div class="n">${val}</div><div class="l">${esc(label)}</div></div>`;
@@ -98,13 +109,13 @@ table{border-collapse:collapse;width:100%;background:var(--card);border:1px soli
 .note{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--metaLine);border-radius:10px;padding:10px 14px;margin:12px 0}.note.warn{border-left-color:#c2862b}
 </style></head><body><main>
 <h1>Maya: Meta models doing the work</h1>
-<p class="sub">A voice companion for older adults. Maya's ears and brain are Meta models. This page is generated from a real evaluation run on ${esc(s.when)} (${esc(s.runs)} runs per suite, ${esc(s.seconds)} s), text only, with the numbers below taken straight from it. It loads nothing from the internet.</p>
+<p class="sub">A voice companion for older adults. Maya's ears and brain are Meta models. This page is generated from ${s.fullRuns > 1 ? `the average of ${esc(s.fullRuns)} full evaluation runs` : 'a real evaluation run'} (baseline of ${esc(s.when)}; each run repeats every check ${esc(s.runs)} times), text only, with the numbers below taken straight from them. It loads nothing from the internet.</p>
 ${flow}
 <div class="stats">${stats}</div>
 
-<h2>What each Meta model does, with this run's real numbers</h2>
+<h2>What each Meta model does, with real numbers</h2>
 <div class="wrap"><table><tbody>${usageTable}</tbody></table></div>
-<p class="sub">Spark is called through Meta's chat-completions endpoint; Transcribe through Meta's realtime stream (live calls) and its file endpoint (voice notes). ElevenLabs only turns Maya's words into speech; nothing is understood or decided there. No ElevenLabs request is made by the evaluation.</p>
+<p class="sub">The calls, speeds and tokens in this table come from one representative full run; the rates elsewhere are averages over all the baseline runs. Spark is called through Meta's chat-completions endpoint; Transcribe through Meta's realtime stream (live calls) and its file endpoint (voice notes). ElevenLabs only turns Maya's words into speech; nothing is understood or decided there. No ElevenLabs request is made by the evaluation.</p>
 
 <h2>The scam check: the reasoning setting, and what changing it cost</h2>
 <p>The check on typed and spoken talk was changed from reasoning <code>low</code> to <code>minimal</code>. The decision was made on the dev half only: 76 items, ${esc(R.runs)} runs per setting.</p>
@@ -115,7 +126,7 @@ ${row(['<code>low</code> (before)', pc(lo.warned), pc(lo.falseWarn), pc(lo.pause
 <p class="sub">The word filter lets about 1 scam description in 20 through unchecked, so those get no pause moment (Maya still answers naturally). The photo check is unchanged and was not measured.</p>
 
 <h2>Hearing: Meta Transcribe</h2>
-<p>Twenty-four fixed sentences were each spoken by two of four built-in Mac voices (US, UK, Australian, Irish) and transcribed by Meta Transcribe: ${num(H.sentences)} hearings, ${num(H.failed)} failed. Word error rate <b>${pc1(H.wer)}</b>; <b>${pc1(H.termSurvival)}</b> of the key words survived, and <b>${pc1(H.scamTermSurvival)}</b> of the words a scam turns on (gift cards, Medicare number, date of birth, code, arrested, install). Average ${secs(H.avgMs)} per voice note.</p>
+<p>Twenty-four fixed sentences were each spoken by two of four built-in Mac voices (US, UK, Australian, Irish) and transcribed by Meta Transcribe: ${num(H.sentences)} hearings, ${num(H.failed)} failed. Word error rate <b>${pc1(H.wer)}</b>${H.runs ? ` (the average of ${esc(H.runs)} runs, ${num(H.hearings)} hearings, because Transcribe varies a little from run to run)` : ''}; <b>${pc1(H.termSurvival)}</b> of the key words survived, and <b>${pc1(H.scamTermSurvival)}</b> of the words a scam turns on (gift cards, Medicare number, date of birth, code, arrested, install). Average ${secs(H.avgMs)} per voice note.</p>
 <div class="note warn"><b>Limit.</b> This is <b>synthetic clean speech</b> made by the Mac's built-in voice: no real older voices, no accents, no hesitation, no noisy room. It shows the ears work and the key words come through; it does not show real-world accuracy. Most errors are a repeated word ("are finished are finished"), and once the name <i>Maya</i> came back as <i>Ma</i>. The live streamed-call path of the same model was not measured separately.</div>
 
 <h2>Scorecard</h2>
@@ -144,7 +155,7 @@ function renderMarkdown(s) {
   const cancelled = live ? (live.failedBy || {}).aborted || 0 : 0;
   return `# Maya: how Meta models are used
 
-Maya is a voice companion for older adults. Her **ears and brain are Meta models**; ElevenLabs is only the voice. Numbers below come from a real evaluation run on ${s.when} (${s.runs} runs per suite), text only. The same facts, with the flow diagram and scorecard, are on the page \`docs/meta-models.html\`.
+Maya is a voice companion for older adults. Her **ears and brain are Meta models**; ElevenLabs is only the voice. Numbers below are the average of ${s.fullRuns} full evaluation runs (baseline of ${s.when}; each run repeats every check ${s.runs} times), text only. The same facts, with the flow diagram and scorecard, are on the page \`docs/meta-models.html\`.
 
 ## What each model does
 
@@ -162,7 +173,7 @@ Maya is a voice companion for older adults. Her **ears and brain are Meta models
 - **Memory:** a due follow-up asked at the first reply ${pc(m['memory.askedEarly'])}; never asked twice; trimmed memory still answers; nothing invented.
 - **Trends (simulation):** ordinary life wrongly flagged ${pc1(m['trends.falseAlarmOrdinary'])}; slow drifts noticed within two weeks ${pc(m['trends.detectionMean'])} on average.
 - **Scam shield:** dev scams warned ${pc(m['scam.warned'])}, no normal item warned. Held-out: ${frac(miH.alone.warned, miH.alone.scams)} scams warned by the detector, ${frac(miH.live.warned, miH.live.scams)} behind the live word filter, ${frac(miH.alone.falseWarned, miH.alone.normal)} normal items wrongly warned.
-- **Hearing:** word error rate ${pc1(H.wer)} on synthetic clean speech; ${pc1(H.termSurvival)} of key words, ${pc1(H.scamTermSurvival)} of scam words survived.
+- **Hearing:** word error rate ${pc1(H.wer)} on synthetic clean speech${H.runs ? ` (the average of ${H.runs} runs)` : ''}; ${pc1(H.termSurvival)} of key words, ${pc1(H.scamTermSurvival)} of scam words survived.
 
 ## What changing the scam check's reasoning cost
 
@@ -185,7 +196,9 @@ function main() {
   const set = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'scam-testset.json'), 'utf8')).items.filter((i) => i.split === 'held');
   const by = (f) => ({ byId: Object.fromEntries(JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', f), 'utf8')).map((r) => [r.id, r])) });
   let reasoning = null; try { reasoning = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'eval', 'reasoning-comparison.json'), 'utf8')); } catch { /* none */ }
-  const summary = buildSummary(results, { items: set, low: by('scam-results-final-held.json'), minimal: by('scam-results-final-held-minimal.json') }, reasoning);
+  let baseline = null; try { baseline = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'eval', 'baseline.json'), 'utf8')); } catch { /* none yet */ }
+  let hearingRuns = null; try { hearingRuns = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'eval', 'hearing-runs.json'), 'utf8')).runs; } catch { /* none */ }
+  const summary = buildSummary(results, { items: set, low: by('scam-results-final-held.json'), minimal: by('scam-results-final-held-minimal.json') }, reasoning, new Date(), baseline, hearingRuns);
   fs.mkdirSync(path.join(ROOT, 'docs', 'eval'), { recursive: true });
   fs.writeFileSync(path.join(ROOT, 'docs', 'eval', 'summary.json'), JSON.stringify(summary, null, 1) + '\n');
   fs.writeFileSync(path.join(ROOT, 'docs', 'meta-models.html'), render(summary));

@@ -1,24 +1,24 @@
 # Maya: how Meta models are used
 
-Maya is a voice companion for older adults. Her **ears and brain are Meta models**; ElevenLabs is only the voice. Numbers below come from a real evaluation run on 2026-10-28 (2 runs per suite), text only. The same facts, with the flow diagram and scorecard, are on the page `docs/meta-models.html`.
+Maya is a voice companion for older adults. Her **ears and brain are Meta models**; ElevenLabs is only the voice. Numbers below are the average of 3 full evaluation runs (baseline of 2026-10-28; each run repeats every check 2 times), text only. The same facts, with the flow diagram and scorecard, are on the page `docs/meta-models.html`.
 
 ## What each model does
 
 | Meta model | Job | This run |
 |---|---|---|
-| **Spark** `muse-spark-1.3` (brain) | Live reply: what Maya says, plus a private read of the person's feeling, subject and pain | 349 calls, 1.9 s average, 3,545 tokens in per call; 26% cancelled and rewritten on purpose |
-| **Spark** (brain) | Files memory after a call: people, events, open follow-ups (closing them when answered) | 24 calls, 10.2 s average, in the background |
-| **Spark** (brain) | Scam check on typed and spoken talk: six signs plus "happening now" and "about to act", so Maya can pause someone before they pay | 304 calls (half at each reasoning setting, for the comparison); the live setting, minimal: 2.5 s average |
+| **Spark** `muse-spark-1.3` (brain) | Live reply: what Maya says, plus a private read of the person's feeling, subject and pain | 382 calls, 2.0 s average, 3,517 tokens in per call; 26% cancelled and rewritten on purpose |
+| **Spark** (brain) | Files memory after a call: people, events, open follow-ups (closing them when answered) | 24 calls, 9.3 s average, in the background |
+| **Spark** (brain) | Scam check on typed and spoken talk: six signs plus "happening now" and "about to act", so Maya can pause someone before they pay | 304 calls (half at each reasoning setting, for the comparison); the live setting, minimal: 2.3 s average |
 | **Spark vision** | Describes a photo for Maya; checks a photo for a scam | wired and used; **not measured** (the evaluation is text only) |
-| **Transcribe** `muse-voice-transcribe-1.0` (ears) | Hears live calls (streamed) and recorded voice notes | voice notes: 48 hearings, 2.0 s average; live calls: used, not part of the evaluation |
+| **Transcribe** `muse-voice-transcribe-1.0` (ears) | Hears live calls (streamed) and recorded voice notes | voice notes: 48 hearings, 2.1 s average; live calls: used, not part of the evaluation |
 
 ## Results (details on the page)
 
-- **Conversation:** 0% of replies repeat a polite phrase; subject tag right 94%; the "nobody knows" worry answered with what the app does 100%.
-- **Memory:** a due follow-up asked at the first reply 100%; never asked twice; trimmed memory still answers; nothing invented.
-- **Trends (simulation):** ordinary life wrongly flagged 2%; slow drifts noticed within two weeks 78% on average.
-- **Scam shield:** dev scams warned 100%, no normal item warned. Held-out: 37 of 38 scams warned by the detector, 35 of 38 behind the live word filter, 0 of 38 normal items wrongly warned.
-- **Hearing:** word error rate 2.5% on synthetic clean speech; 99.2% of key words, 100% of scam words survived.
+- **Conversation:** 0% of replies repeat a polite phrase; subject tag right 93%; the "nobody knows" worry answered with what the app does 98%.
+- **Memory:** a due follow-up asked at the first reply 92%; never asked twice; trimmed memory still answers; nothing invented.
+- **Trends (simulation):** ordinary life wrongly flagged 2.0%; slow drifts noticed within two weeks 78% on average.
+- **Scam shield:** dev scams warned 99%, no normal item warned. Held-out: 37 of 38 scams warned by the detector, 35 of 38 behind the live word filter, 0 of 38 normal items wrongly warned.
+- **Hearing:** word error rate 3.0% on synthetic clean speech (the average of 8 runs); 98.5% of key words, 99.4% of scam words survived.
 
 ## What changing the scam check's reasoning cost
 
