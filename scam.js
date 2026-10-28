@@ -37,6 +37,31 @@ const ASK_TALK = [
   'An ordinary message (a bill from a known sender with a normal due date, an appointment, a reminder, a note from family or a friend, a genuine bank alert that says never to share a code) has all nine false. A payment the person chose to make themselves, to someone they know, for something they asked for (their own bill, a purchase, a gift, rent they agreed) is not a scam: aboutToAct on its own does not make anything one. Do not guess: if you cannot tell, set the signs to false and say so in "reading".',
 ].join('\n');
 
+// ---- Cheap word filter: which spoken / typed talk is worth one Spark check at all (so ordinary chat costs nothing), and which is happening
+// RIGHT NOW (the person is on the way to pay, or the caller is still on the line), where the check is awaited before Maya answers.
+// Wide on purpose: a miss means a scam is not checked, a false match only costs one check that comes back "nothing". Pure, no network.
+const G = {
+  money: /\b(pay|paid|paying|payment|send|sent|sending|transfer\w*|wire|wired|deposit\w*|fees?|fines?|owe|owed|owing|refund\w*|rebates?|invoices?|cash|cheques?|checks?|gift ?cards?|vouchers?|crypto\w*|bitcoin|invest\w*|loans?|bail|prizes?|lottery|won|winnings?|reward|donat\w+|charity|\$|£|€|dollars?|pounds?|thousand|hundred|savings|money|funds?)\b|[$£€]/i,
+  secrets: /\b(codes?|pin|passwords?|passcodes?|otp|verif\w+|confirm\w*|security|card number|account number|bank details|bank account|sort code|medicare|national insurance|social security|passport|date of birth|birthday|dob|login|log in|log-in|details)\b/i,
+  contact: /\b(rang|ring|phoned|phone|called|calling|calls?|text(ed)?|messages?|e-?mail\w*|letters?|knock\w*|door|pop-?up|web ?site|web ?page|links?|apps?|install\w*|download\w*|remote|screen|computer|laptop|tablet|virus\w*|support|technician|engineer|bank\w*|tax|council|company|insurance|parcel|delivery|customs|courier|police|hospital|energy|gas|electric\w*|water|broadband|internet|provider|pension|benefits?|government|solicitor|landlord|agent)\b/i,
+  pressure: /\b(urgent\w*|immediate\w*|today|within|arrest\w*|warrant|suspend\w*|disconnect\w*|cut off|locked|frozen|final (notice|warning|reminder)|expire\w*|don'?t tell|not to tell|do not tell|between us|secret|stay on the (line|phone)|hang up|safe account|limited|hurry|deadline|legal action)\b/i,
+};
+// Weights, not just groups: a classic tell is enough alone (2); a bait word that ordinary chat almost never uses is enough alone (2); an
+// everyday word group counts 1, and it takes two groups to fire. "fine" on its own never counts (people say "I'm fine" all day).
+const STRONG = /\b(gift ?cards?|vouchers?|bitcoin|crypto\w*|remote access|safe account|one[- ]time|read (it |them |the (code|numbers?) )?out|control (of )?my (computer|phone)|see my screen|install (a |the )?(program|app)|(don'?t|do not|must not|mustn'?t|never|not to|can'?t|cannot) tell|keep it (a )?(secret|between us)|arrest\w*|warrant|western union|wire (the )?money)\b/i;
+const BAIT = /\b(rebates?|refunds?|prizes?|lottery|winnings?|rewards?|cheques?|deposit it|invoices?|bail|loans?|invest\w*|fees?|fines|fined|penalt\w+|overdue|arrears|unpaid|outstanding|eligible|entitled|claim\w*|cash machine|atm|withdraw\w*|take out the cash|disconnected|suspended|locked|frozen|final (notice|warning)|legal action|customs|redelivery|re-delivery|virus\w*|unauthori[sz]ed|fraud team|security department|safe account|courtesy call|free (health check|device|gift|holiday)|selected|chosen)\b/i;
+function needsCheck(text) {
+  const t = String(text || '').replace(/[\u2018\u2019]/g, "'");
+  if (t.trim().length < 12) return false;
+  let score = (STRONG.test(t) ? 2 : 0) + (BAIT.test(t) ? 2 : 0) + Object.values(G).filter((re) => re.test(t)).length;
+  return score >= 2;
+}
+// The person is, or is about to be, in the middle of it: on the way to pay, at the cash machine, the caller still on the line, a code in front of them.
+const NOW = /\b(on my way|(i am|i'm|im) (just )?(going|walking|heading|driving|off) (to|now)|(i am|i'm|im) (just )?about to|about to (pay|send|transfer|give|read|press|click|install|do|type)|(i am|i'm|im) (at|in) the (cash machine|atm|bank|post office|shop|supermarket|queue)|putting (the |my )?card in|(have|got) (it|them|the (code|numbers?)) (in front of me|in my hand|here)|(still|staying) on the (phone|line)|(he|she|they)('s| is|'re| are) (asking|telling) me to|wants me to (click|press|type|read|install|open|go|pay|send)|just (downloaded|installed|clicked)|right now)\b/i;
+const payNow = (text) => NOW.test(String(text || '').replace(/[\u2018\u2019]/g, "'"));
+// What to do with a turn of talk: no check, a check beside the reply, or a check awaited before the reply (the rare "happening right now" turns).
+function checkPlan(text) { const check = needsCheck(text); return { check, await: check && payNow(text) }; }
+
 // The reply is JSON, possibly wrapped in a code fence or a sentence. Returns null if it is not usable.
 function parse(text) {
   const raw = String(text || '');
@@ -122,4 +147,4 @@ async function assessText(text, signal) {
 const SIGNAL_WORDS = { urgency: 'pressure to act now', money: 'money out of the blue', impersonation: 'someone claiming to be a trusted sender', secrecy: 'a request to keep it secret', payment: 'a request to pay or send details' };
 const said = (signals) => SIGNALS.filter((k) => signals[k]).map((k) => SIGNAL_WORDS[k]);
 
-module.exports = { READS, ASK_TALK, assessText, SIGNALS, WARN_AT, CAUTION_AT, ASK, parse, levelOf, typeLabel, assess, said };
+module.exports = { needsCheck, payNow, checkPlan, READS, ASK_TALK, assessText, SIGNALS, WARN_AT, CAUTION_AT, ASK, parse, levelOf, typeLabel, assess, said };
