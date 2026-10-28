@@ -129,12 +129,13 @@ async function assessCore(note, buf, mime, signal) {
 }
 
 // One Spark text call for spoken or typed talk (see ASK_TALK). Throws on a Meta error: the caller decides what a failed check means; nothing is invented.
-async function assessText(text, signal) {
+// opts.reasoning (optional, for measuring only): Spark's reasoning_effort for this one call. The default, 'low', is what runs live.
+async function assessText(text, signal, opts = {}) {
   const brain = require('./brain'), lm = require('./meta').begin('scam-text', brain.liveModel()), note = { usage: null };
-  try { const out = await assessTextCore(note, text, signal); lm.done(true, { usage: note.usage }); return out; }
+  try { const out = await assessTextCore(note, text, signal, opts); lm.done(true, { usage: note.usage }); return out; }
   catch (e) { lm.done(false, { usage: note.usage }); throw e; }
 }
-async function assessTextCore(note, text, signal) {
+async function assessTextCore(note, text, signal, opts) {
   const brain = require('./brain');
   const r = await fetch(brain.META_URL, {
     method: 'POST',
@@ -142,7 +143,7 @@ async function assessTextCore(note, text, signal) {
     body: JSON.stringify({
       model: brain.liveModel(),
       messages: [{ role: 'user', content: `${ASK_TALK}\n\nWHAT THEY RECEIVED OR TOLD YOU:\n${String(text).slice(0, 2000)}` }],
-      reasoning_effort: 'low',
+      reasoning_effort: opts && opts.reasoning ? opts.reasoning : 'low',
       max_completion_tokens: 3000,
     }),
     signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(60000)]),

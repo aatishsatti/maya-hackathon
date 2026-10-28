@@ -4,7 +4,10 @@
   "private": true,
   "description": "Maya, a warm voice companion for seniors.",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "eval": "node eval/run.js",
+    "eval:offline": "node eval/run.js --suites trends"
   },
   "engines": {
     "node": ">=22"

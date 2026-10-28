@@ -1,0 +1,13 @@
+{
+  "about": "Fixed inputs for the conversation suite. Each user line carries a hand label: want = topic 'n' (new subject) / 's' (same subject) / '?' (ambiguous, not scored); wantP = personal '1' (shares something about a person in their life) / '0' / '?'. Written by the Maya team; no real people.",
+  "chats": [
+    [["Good morning Maya", "n", "0"], ["I'm having my morning tea", "n", "0"], ["I like it strong with a little ginger", "s", "0"], ["My sister used to make it the same way", "?", "1"], ["It is very quiet in the house these days", "?", "0"], ["What if something happens to me and nobody knows?", "n", "0"]],
+    [["Hello there", "n", "0"], ["The roses are finished I think", "n", "0"], ["The petals are all over the path", "s", "0"], ["My neighbour brought me some tomatoes", "n", "?"], ["They were very red", "s", "0"], ["I put them in a sandwich", "s", "0"], ["It was a good lunch", "s", "0"], ["I might read a bit now", "n", "0"]],
+    [["Hi Maya", "n", "0"], ["I watched a programme about trains", "n", "0"], ["They were old steam trains", "s", "0"], ["My father worked near the railway once", "?", "1"], ["He liked the whistle", "s", "1"], ["Funny the things you remember", "?", "?"], ["The tea is getting cold", "n", "0"], ["I should make another one", "s", "0"]],
+    [["Good morning Maya", "n", "0"], ["I made some soup today", "n", "0"], ["It was just vegetables and a bit of rice", "s", "0"], ["The kitchen smelled lovely", "s", "0"], ["My grandson called yesterday", "n", "1"], ["He is learning the guitar", "s", "1"], ["We talked about school for a long time", "s", "1"], ["I think I will rest a little now", "n", "0"]]
+  ],
+  "worry": {
+    "line": "What if something happens to me and nobody knows?",
+    "lead": [["Good morning Maya", "Good morning. That's a cozy way to start the day."], ["I'm having my morning tea", "Morning tea sounds perfect right now."], ["I like it strong with a little ginger", "Strong with ginger sounds wonderfully warming."], ["My sister used to make it the same way", "What a sweet little thing to share with her."], ["It is very quiet in the house these days", "Quiet houses can feel a bit heavy sometimes."]]
+  }
+}
