@@ -21,10 +21,10 @@ test('child result: the last EVAL_RESULT line is read; noise before it and broke
 });
 
 test('usage tables from several suites merge by job and model; speed is weighted by calls', () => {
-  const a = [{ purpose: 'live-reply', model: 'm', calls: 2, failed: 0, avgMs: 100, tokensIn: 10, tokensOut: 4, audioMs: 0 }, { purpose: 'scam-text', model: 'm', calls: 1, failed: 1, avgMs: null, tokensIn: 0, tokensOut: 0, audioMs: 0 }];
-  const b = [{ purpose: 'live-reply', model: 'm', calls: 6, failed: 1, avgMs: 200, tokensIn: 60, tokensOut: 24, audioMs: 0 }];
+  const a = [{ purpose: 'live-reply', model: 'm', calls: 2, failed: 0, failedBy: {}, avgMs: 100, tokensIn: 10, tokensOut: 4, audioMs: 0 }, { purpose: 'scam-text', model: 'm', calls: 1, failed: 1, failedBy: { 'http-5xx': 1 }, avgMs: null, tokensIn: 0, tokensOut: 0, audioMs: 0 }];
+  const b = [{ purpose: 'live-reply', model: 'm', calls: 6, failed: 1, failedBy: { aborted: 1 }, avgMs: 200, tokensIn: 60, tokensOut: 24, audioMs: 0 }];
   const m = R.mergeUsage([a, b, undefined]);
-  assert.deepEqual(m.find((x) => x.purpose === 'live-reply'), { purpose: 'live-reply', model: 'm', calls: 8, failed: 1, avgMs: 175, tokensIn: 70, tokensOut: 28, audioMs: 0 });
+  assert.deepEqual(m.find((x) => x.purpose === 'live-reply'), { purpose: 'live-reply', model: 'm', calls: 8, failed: 1, failedBy: { aborted: 1 }, avgMs: 175, tokensIn: 70, tokensOut: 28, audioMs: 0 });
   assert.equal(m.find((x) => x.purpose === 'scam-text').avgMs, null); assert.deepEqual(m.map((x) => x.purpose), ['live-reply', 'scam-text']);
 });
 
@@ -32,9 +32,9 @@ test('reasoning comparison rows and the printed tables carry the numbers and the
   const rows = R.reasoningRows({ low_warned: 1, low_falseWarn: 0, low_pauseInProgress: 1, low_avgMs: 3400, low_p90Ms: 5000, low_tokensIn: 700, low_tokensOut: 620, minimal_warned: 0.97, minimal_falseWarn: 0, minimal_pauseInProgress: 0.8, minimal_avgMs: 1500, minimal_p90Ms: 2200, minimal_tokensIn: 700, minimal_tokensOut: 90 });
   assert.deepEqual(rows.map((r) => r.setting), ['low', 'minimal']); assert.equal(rows[1].avgMs, 1500); assert.deepEqual(R.reasoningRows({}), []); assert.deepEqual(R.reasoningRows(undefined), []);
   const t = R.tables({ metrics: {}, checks: [{ status: 'pass', text: 'a check' }, { status: 'FAIL', text: 'another' }], cmp: [{ key: 'scam.warned', now: 0.9, was: 1, status: 'REGRESSED' }, { key: 'x.y', now: null, was: 1, status: 'n/a' }],
-    usage: [{ purpose: 'live-reply', model: 'muse-spark-1.3', calls: 8, failed: 0, avgMs: 175, tokensIn: 70, tokensOut: 28 }], reasoning: rows });
+    usage: [{ purpose: 'live-reply', model: 'muse-spark-1.3', calls: 8, failed: 3, failedBy: { aborted: 2 }, avgMs: 175, tokensIn: 70, tokensOut: 28 }], reasoning: rows });
   assert.match(t, /GUARD RAILS/); assert.match(t, /FAIL +another/); assert.match(t, /REGRESSED +scam\.warned +was 100% +now 90%/); assert.doesNotMatch(t, /x\.y/, 'n/a rows are not printed');
-  assert.match(t, /META MODELS DOING THE WORK/); assert.match(t, /live-reply +muse-spark-1\.3 +8/); assert.match(t, /REASONING SETTING \(dev half; measurement only, nothing live changed\)/); assert.match(t, /minimal +97% +0% +80% +1500/);
+  assert.match(t, /META MODELS DOING THE WORK/); assert.match(t, /live-reply +muse-spark-1\.3 +8 +2 +1 +175/, 'calls, cancelled on purpose, real failures, speed'); assert.match(t, /cancelled = stopped on purpose/); assert.match(t, /REASONING SETTING \(dev half; measurement only, nothing live changed\)/); assert.match(t, /minimal +97% +0% +80% +1500/);
 });
 
 test('safety of the runner: children always get throwaway data folders and the ledger, the voice cannot be reached, and the held-out scam half is never read', () => {

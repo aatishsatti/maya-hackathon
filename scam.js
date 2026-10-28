@@ -103,7 +103,7 @@ function typeLabel(raw, signals) {
 async function assess(buf, mime, signal) {
   const brain = require('./brain'), lm = require('./meta').begin('scam-photo', brain.liveModel()), note = { usage: null };
   try { const out = await assessCore(note, buf, mime, signal); lm.done(true, { usage: note.usage }); return out; }
-  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+  catch (e) { lm.done(false, { usage: note.usage, err: e }); throw e; }
 }
 async function assessCore(note, buf, mime, signal) {
   const brain = require('./brain');
@@ -133,7 +133,7 @@ async function assessCore(note, buf, mime, signal) {
 async function assessText(text, signal, opts = {}) {
   const brain = require('./brain'), lm = require('./meta').begin('scam-text', brain.liveModel()), note = { usage: null };
   try { const out = await assessTextCore(note, text, signal, opts); lm.done(true, { usage: note.usage }); return out; }
-  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+  catch (e) { lm.done(false, { usage: note.usage, err: e }); throw e; }
 }
 async function assessTextCore(note, text, signal, opts) {
   const brain = require('./brain');

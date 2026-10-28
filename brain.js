@@ -76,7 +76,7 @@ async function sparkStreamOnce(history, roster, signal, onDelta) {
   const lm = meta.begin('live-reply', liveModel());
   const note = { usage: null };
   try { const text = await sparkStreamCore(lm, note, history, roster, signal, onDelta); lm.done(true, { usage: note.usage }); return text; }
-  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+  catch (e) { lm.done(false, { usage: note.usage, err: e }); throw e; }
 }
 async function sparkStreamCore(lm, note, history, roster, signal, onDelta) {
   const t0 = Date.now();
@@ -188,7 +188,7 @@ async function sparkComplete(instructions, userText, signal) {
   const lm = meta.begin('memory-filing', memoryModel());
   const note = { usage: null };
   try { const text = await sparkCompleteCore(note, instructions, userText, signal); lm.done(true, { usage: note.usage }); return text; }
-  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+  catch (e) { lm.done(false, { usage: note.usage, err: e }); throw e; }
 }
 async function sparkCompleteCore(note, instructions, userText, signal) {
   const r = await fetch(META_URL, {
@@ -221,7 +221,7 @@ async function describeImage(buf, mime, signal) {
   const lm = meta.begin('vision-describe', liveModel());
   const note = { usage: null };
   try { const text = await describeImageCore(note, buf, mime, signal); lm.done(true, { usage: note.usage }); return text; }
-  catch (e) { lm.done(false, { usage: note.usage }); throw e; }
+  catch (e) { lm.done(false, { usage: note.usage, err: e }); throw e; }
 }
 async function describeImageCore(note, buf, mime, signal) {
   const r = await fetch(META_URL, {

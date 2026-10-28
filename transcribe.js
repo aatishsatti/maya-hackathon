@@ -119,7 +119,7 @@ const FILE_URL = 'https://api.meta.ai/v1/asr/transcribe';
 async function transcribeWav(apiKey, wav, signal) {
   const lm = meta.begin('transcribe-voice-note', MODEL), note = {};
   try { const words = await transcribeWavCore(note, apiKey, wav, signal); lm.done(true, { audioMs: note.audioMs }); return words; }
-  catch (e) { lm.done(false); throw e; }
+  catch (e) { lm.done(false, { err: e }); throw e; }
 }
 async function transcribeWavCore(note, apiKey, wav, signal) {
   const fd = new FormData();

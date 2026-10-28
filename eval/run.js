@@ -38,12 +38,13 @@ function parseChild(stdout) {
 function mergeUsage(tables) {
   const by = new Map();
   for (const rows of tables) for (const r of rows || []) {
-    const k = `${r.purpose}|${r.model}`, s = by.get(k) || { purpose: r.purpose, model: r.model, calls: 0, failed: 0, msSum: 0, msN: 0, tokensIn: 0, tokensOut: 0, audioMs: 0 };
+    const k = `${r.purpose}|${r.model}`, s = by.get(k) || { purpose: r.purpose, model: r.model, calls: 0, failed: 0, failedBy: {}, msSum: 0, msN: 0, tokensIn: 0, tokensOut: 0, audioMs: 0 };
+    for (const [e, n] of Object.entries(r.failedBy || {})) s.failedBy[e] = (s.failedBy[e] || 0) + n;
     s.calls += r.calls; s.failed += r.failed; s.tokensIn += r.tokensIn; s.tokensOut += r.tokensOut; s.audioMs += r.audioMs;
     if (r.avgMs !== null && r.avgMs !== undefined) { s.msSum += r.avgMs * r.calls; s.msN += r.calls; }
     by.set(k, s);
   }
-  return [...by.values()].map((s) => ({ purpose: s.purpose, model: s.model, calls: s.calls, failed: s.failed, avgMs: s.msN ? Math.round(s.msSum / s.msN) : null, tokensIn: s.tokensIn, tokensOut: s.tokensOut, audioMs: s.audioMs })).sort((a, b) => a.purpose.localeCompare(b.purpose));
+  return [...by.values()].map((s) => ({ purpose: s.purpose, model: s.model, calls: s.calls, failed: s.failed, failedBy: s.failedBy, avgMs: s.msN ? Math.round(s.msSum / s.msN) : null, tokensIn: s.tokensIn, tokensOut: s.tokensOut, audioMs: s.audioMs })).sort((a, b) => a.purpose.localeCompare(b.purpose));
 }
 
 // The reasoning-setting comparison, from the scam suite's metrics: one row per setting.
@@ -60,8 +61,9 @@ function tables({ metrics, checks, cmp, usage, reasoning }) {
   const L = [];
   L.push('GUARD RAILS'); for (const c of checks) L.push(`  ${pad(c.status, 8)} ${c.text}`);
   if (cmp && cmp.length) { L.push('', 'VERSUS BASELINE'); for (const r of cmp.filter((x) => x.status !== 'n/a')) L.push(`  ${pad(r.status, 10)} ${pad(r.key, 34)} was ${fmtVal(r.key, r.was)}  now ${fmtVal(r.key, r.now)}`); }
-  L.push('', 'META MODELS DOING THE WORK (this run)', `  ${pad('job', 24)} ${pad('model', 24)} ${pad('calls', 6)} ${pad('failed', 7)} ${pad('avg ms', 8)} ${pad('tokens in', 10)} tokens out`);
-  for (const u of usage) L.push(`  ${pad(u.purpose, 24)} ${pad(u.model, 24)} ${pad(u.calls, 6)} ${pad(u.failed, 7)} ${pad(u.avgMs ?? 'n/a', 8)} ${pad(u.tokensIn, 10)} ${u.tokensOut}`);
+  L.push('', 'META MODELS DOING THE WORK (this run)', `  ${pad('job', 24)} ${pad('model', 24)} ${pad('calls', 6)} ${pad('cancelled', 10)} ${pad('failed', 7)} ${pad('avg ms', 8)} ${pad('tokens in', 10)} tokens out`);
+  for (const u of usage) { const cancelled = (u.failedBy || {}).aborted || 0; L.push(`  ${pad(u.purpose, 24)} ${pad(u.model, 24)} ${pad(u.calls, 6)} ${pad(cancelled, 10)} ${pad(u.failed - cancelled, 7)} ${pad(u.avgMs ?? 'n/a', 8)} ${pad(u.tokensIn, 10)} ${u.tokensOut}`); }
+  L.push('  (cancelled = stopped on purpose by Maya, e.g. when a reply is rewritten; failed = a real error from Meta or the network)');
   if (reasoning && reasoning.length) { L.push('', 'SCAM CHECK ON TALK: REASONING SETTING (dev half; measurement only, nothing live changed)', `  ${pad('setting', 9)} ${pad('warned', 8)} ${pad('false warn', 11)} ${pad('pause', 7)} ${pad('avg ms', 8)} ${pad('p90 ms', 8)} ${pad('tok in', 7)} tok out`); for (const r of reasoning) L.push(`  ${pad(r.setting, 9)} ${pad(pc(r.warned), 8)} ${pad(pc(r.falseWarn), 11)} ${pad(pc(r.pause), 7)} ${pad(r.avgMs, 8)} ${pad(r.p90Ms, 8)} ${pad(r.tokensIn, 7)} ${r.tokensOut}`); }
   return L.join('\n');
 }

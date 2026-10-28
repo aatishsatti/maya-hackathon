@@ -25,10 +25,10 @@ async function run({ runs = 2, limit = null, settings = SETTINGS } = {}) {
   for (const setting of settings) {
     per[setting] = [];
     for (let r = 0; r < (limit ? 1 : runs); r++) {
-      meta.reset();
+      const before = meta.snapshot().length;   // the ledger keeps accumulating (the usage table must count every call); this batch is the rows after this point
       const res = await C.pool(4, items, (it) => detect(scam, it, setting));
       const byId = Object.fromEntries(items.map((it, i) => [it.id, res[i]]));
-      per[setting].push({ ...score.scamMetrics(items, byId), cost: score.costMetrics(meta.snapshot().filter((x) => x.purpose === 'scam-text')), errors: res.filter((x) => x.error).length });
+      per[setting].push({ ...score.scamMetrics(items, byId), cost: score.costMetrics(meta.snapshot().slice(before).filter((x) => x.purpose === 'scam-text')), errors: res.filter((x) => x.error).length });
     }
   }
   const avg = (setting, f) => score.mean(per[setting].map(f));

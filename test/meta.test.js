@@ -33,8 +33,8 @@ test('only numbers and a purpose label get in: everything else handed to the led
   meta.record({ purpose: 'live-reply', model: 'muse-spark-1.3', ok: true, ms: 812.6, firstMs: 301, usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, secret: 'purple elephant' },
     text: 'my xylophone is out of tune', transcript: 'Margaret said hello', audio: Buffer.from('audio'), apiKey: 'sk-test-key-not-real-7788', authorization: 'Bearer abc', name: 'Margaret' });
   const [row] = meta.snapshot();
-  assert.deepEqual(Object.keys(row).sort(), ['audioMs', 'firstMs', 'tokensIn', 'tokensOut', 'model', 'ms', 'ok', 'purpose'].sort());
-  assert.deepEqual(row, { purpose: 'live-reply', model: 'muse-spark-1.3', ok: true, ms: 813, firstMs: 301, tokensIn: 100, tokensOut: 20, audioMs: null });
+  assert.deepEqual(Object.keys(row).sort(), ['audioMs', 'error', 'firstMs', 'tokensIn', 'tokensOut', 'model', 'ms', 'ok', 'purpose'].sort());
+  assert.deepEqual(row, { purpose: 'live-reply', model: 'muse-spark-1.3', ok: true, error: null, ms: 813, firstMs: 301, tokensIn: 100, tokensOut: 20, audioMs: null });
   const dump = JSON.stringify([meta.snapshot(), meta.summary()]);
   for (const w of SECRET_WORDS) assert.ok(!dump.includes(w), `${w} must never be in the ledger`);
   off();
@@ -57,7 +57,7 @@ test('summary: one line per purpose and model with calls, failures, speed, token
   meta.record({ purpose: 'live-reply', model: 'm1', ok: false, ms: 50 });
   meta.record({ purpose: 'transcribe-call', model: 't1', audioMs: 1500 }); meta.record({ purpose: 'transcribe-call', model: 't1', audioMs: 500 });
   const s = Object.fromEntries(meta.summary().map((x) => [x.purpose, x]));
-  assert.deepEqual(s['live-reply'], { purpose: 'live-reply', model: 'm1', calls: 4, failed: 1, avgMs: 163, medianMs: 200, avgFirstMs: 100, tokensIn: 30, tokensOut: 15, audioMs: 0 });
+  assert.deepEqual(s['live-reply'], { purpose: 'live-reply', model: 'm1', calls: 4, failed: 1, failedBy: { other: 1 }, avgMs: 163, medianMs: 200, avgFirstMs: 100, tokensIn: 30, tokensOut: 15, audioMs: 0 });
   assert.equal(s['transcribe-call'].calls, 2); assert.equal(s['transcribe-call'].audioMs, 2000); assert.equal(s['transcribe-call'].avgMs, null, 'unknown speed stays unknown, not zero');
   assert.deepEqual(meta.summary().map((x) => x.purpose), ['live-reply', 'transcribe-call'], 'sorted');
   off();
@@ -67,6 +67,22 @@ test('bounded: a long-running server never grows the ledger without limit (oldes
   on();
   for (let i = 0; i < meta.MAX_ROWS + 50; i++) meta.record({ purpose: 'scam-text', model: 'm', ms: i });
   assert.equal(meta.snapshot().length, meta.MAX_ROWS); assert.equal(meta.snapshot()[0].ms, 50);
+  off();
+});
+
+test('failure categories: a failed call is filed under a fixed category (cancelled on purpose, timeout, empty, rate limit, server, client, other), never with its message', async () => {
+  on();
+  const cases = [[Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }), 'aborted'], [new Error('This operation was aborted'), 'aborted'], [Object.assign(new Error('x'), { name: 'TimeoutError' }), 'timeout'],
+    [Object.assign(new Error('Meta Spark returned no reply text'), { empty: true }), 'empty'], [new Error('Meta Spark failed (HTTP 429) too many xylophone requests'), 'http-429'], [new Error('Meta Spark failed (HTTP 503) busy'), 'http-5xx'],
+    [new Error('Meta vision failed (HTTP 400) bad image'), 'http-4xx'], [new Error('something else Margaret'), 'other'], [null, 'other']];
+  for (const [e, want] of cases) assert.equal(meta.classify(e), want, String(e && e.message));
+  for (const [e] of cases) meta.begin('live-reply', 'm').done(false, { err: e });
+  meta.begin('live-reply', 'm').done(true);
+  const [row] = meta.summary(); assert.equal(row.calls, 10); assert.equal(row.failed, 9);
+  assert.deepEqual(row.failedBy, { aborted: 2, timeout: 1, empty: 1, 'http-429': 1, 'http-5xx': 1, 'http-4xx': 1, other: 2 });
+  const dump = JSON.stringify([meta.snapshot(), meta.summary()]); for (const w of ['xylophone', 'Margaret', 'bad image', 'busy']) assert.ok(!dump.includes(w), `${w}: the message never reaches the ledger`);
+  meta.record({ purpose: 'live-reply', ok: false, error: 'a free-text reason with Margaret' }); assert.equal(meta.snapshot().at(-1).error, 'other', 'an unknown category becomes other');
+  assert.equal(meta.snapshot().at(0).error, 'aborted'); assert.equal(meta.snapshot().at(-2).error, null, 'a successful call has no category');
   off();
 });
 
@@ -114,7 +130,7 @@ test('a failed call records a failed row and still throws the same error; an unu
   global.fetch = reply('not json at all');
   await assert.rejects(scam.assessText('hello there my friend'), /no usable scam check/);
   const s = Object.fromEntries(meta.summary().map((x) => [x.purpose, x]));
-  assert.deepEqual([s['memory-filing'].calls, s['memory-filing'].failed], [1, 1]); assert.deepEqual([s['scam-text'].calls, s['scam-text'].failed], [2, 2]); assert.deepEqual([s['transcribe-voice-note'].calls, s['transcribe-voice-note'].failed], [1, 1]);
+  assert.deepEqual(s['memory-filing'].failedBy, { 'http-5xx': 1 }); assert.deepEqual([s['memory-filing'].calls, s['memory-filing'].failed], [1, 1]); assert.deepEqual([s['scam-text'].calls, s['scam-text'].failed], [2, 2]); assert.deepEqual([s['transcribe-voice-note'].calls, s['transcribe-voice-note'].failed], [1, 1]);
   off();
 });
 
