@@ -11,5 +11,9 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "ogg-opus-decoder": "1.7.5",
+    "opusscript": "0.1.1"
   }
 }

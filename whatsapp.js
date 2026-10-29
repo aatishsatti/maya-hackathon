@@ -1,4 +1,4 @@
-// WhatsApp door to the same Maya (Feature 6, prototype step 1: text). Not a second bot: an incoming text goes through chat.sendText, so it
+// WhatsApp door to the same Maya (Feature 6, prototype steps 1 text and 2 voice notes). Not a second bot: an incoming text goes through chat.sendText, so it
 // uses the same Spark brain, profile memory, scam rules, family question and dashboard flag as the app chat. Only the door differs.
 // Docs read at build time (developers.facebook.com/documentation/business-messaging/whatsapp):
 //   Webhook verify (GET): query hub.mode=subscribe, hub.verify_token (our own string), hub.challenge. Valid -> 200 and the challenge echoed as the body;
@@ -9,6 +9,11 @@
 //     { from (wa id, digits), id (wamid...), timestamp, type: "text", text: { body } }; value.statuses[] { id, status, recipient_id, errors? }.
 //   Send (POST https://graph.facebook.com/{Version}/{Phone-Number-ID}/messages, Authorization: Bearer <token>):
 //     { messaging_product: "whatsapp", recipient_type: "individual", to, type: "text", text: { body } }  -> { messages: [{ id }] }
+//   Media (step 2): GET {Version}/{MEDIA_ID} with the bearer token -> { url, mime_type, file_size }; the url (valid 5 minutes) is then fetched with the SAME bearer token.
+//     Upload: POST {Version}/{Phone-Number-ID}/media, multipart: messaging_product=whatsapp, file (type "audio/ogg; codecs=opus") -> { id } (kept 30 days).
+//     Send a voice note: { messaging_product, recipient_type, to, type: "audio", audio: { id, voice: true } }. Voice notes must be mono Ogg/Opus (oggopus.js);
+//     the play icon shows only up to 512 KB. Incoming voice note: type "audio", audio.id and audio.mime_type ("audio/ogg; codecs=opus"). The pages read did not
+//     list the other inbound audio fields, so only id and mime_type are used.
 //   The Graph API version is not named on the pages read: WHATSAPP_API_VERSION in the server env, default below, change it there if Meta retires it.
 // Server env only (never in the repo, the page or a log): WHATSAPP_TOKEN, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN, WHATSAPP_PHONE_ID.
 // Privacy: message words are never logged and never stored here. This file keeps only: which phone belongs to which profile, whether they opted in,
@@ -18,6 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const chat = require('./chat');
+const oggopus = require('./oggopus');
 const memory = require('./memory');
 
 const DIR = () => process.env.MAYA_WA_DIR || path.join(__dirname, 'data', 'whatsapp'); // env override is for tests
@@ -25,6 +31,7 @@ const API_VERSION = () => (/^v\d+\.\d+$/.test(process.env.WHATSAPP_API_VERSION |
 const GRAPH = 'https://graph.facebook.com';
 const SEEN_KEEP = 50;
 const WINDOW_MS = 24 * 60 * 60 * 1000;
+const MAX_INBOUND_AUDIO = 2 * 1024 * 1024; // a long monologue is not worth a minute of Transcribe; ~2 MB of Opus is several minutes
 
 // Network edge, replaceable in tests.
 const deps = { fetch: (...a) => globalThis.fetch(...a) };
@@ -111,6 +118,46 @@ async function sendTextTo(to, body) {
   return d && d.messages && d.messages[0] ? d.messages[0].id : null;
 }
 
+// ---- media (voice notes) ----
+async function graphGet(url, binary) {
+  if (!configured()) throw new WaError('WhatsApp is not set up on this server.', 503);
+  let r;
+  try { r = await deps.fetch(url, { headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` }, signal: AbortSignal.timeout(20000) }); }
+  catch (e) { throw new WaError(`WhatsApp could not be reached: ${e.message}`, 502); }
+  if (!r.ok) { let er = {}; try { er = (await r.json()).error || {}; } catch { /* not json */ } throw new WaError(`WhatsApp refused it (${er.code || r.status}): ${er.message || 'no reason given'}`, 502, er.code || null); }
+  return binary ? Buffer.from(await r.arrayBuffer()) : r.json();
+}
+async function downloadMedia(id) {
+  if (!/^[\w-]{1,100}$/.test(String(id))) throw new WaError('Bad media id.', 400);
+  const meta = await graphGet(`${GRAPH}/${API_VERSION()}/${id}`);
+  if (!meta || typeof meta.url !== 'string' || !/^https:\/\//.test(meta.url)) throw new WaError('WhatsApp gave no download link.');
+  if (Number(meta.file_size) > MAX_INBOUND_AUDIO) throw new WaError('That voice note is too long.', 413);
+  const buf = await graphGet(meta.url, true);
+  if (buf.length > MAX_INBOUND_AUDIO) throw new WaError('That voice note is too long.', 413);
+  return buf;
+}
+async function uploadAudio(ogg) {
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', new Blob([ogg], { type: 'audio/ogg; codecs=opus' }), 'maya.ogg');
+  let r;
+  try { r = await deps.fetch(`${GRAPH}/${API_VERSION()}/${process.env.WHATSAPP_PHONE_ID}/media`, { method: 'POST', headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` }, body: form, signal: AbortSignal.timeout(20000) }); }
+  catch (e) { throw new WaError(`WhatsApp could not be reached: ${e.message}`, 502); }
+  let d = null; try { d = await r.json(); } catch { /* not json */ }
+  if (!r.ok || !d || !d.id) { const er = (d && d.error) || {}; throw new WaError(`WhatsApp refused the voice note (${er.code || r.status}): ${er.message || 'no reason given'}`, 502, er.code || null); }
+  return d.id;
+}
+async function sendAudioTo(to, ogg) {
+  const id = await uploadAudio(ogg);
+  const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'audio', audio: { id, voice: true } });
+  return d && d.messages && d.messages[0] ? d.messages[0].id : null;
+}
+// Maya's WAV (24 kHz mono PCM16, chat.pcmToWav: a 44 byte header) -> a WhatsApp voice note. Null when it is too big for the play icon (the caller sends the words instead).
+function wavToVoiceNote(wav) {
+  const ogg = oggopus.encode(wav.subarray(44), 24000);
+  return ogg.length <= oggopus.MAX_PLAY_BYTES ? ogg : null;
+}
+
 // ---- Maya's words must be true about WhatsApp ----
 // A text door cannot ring a phone or hold a live WhatsApp call. A reply that promises one is replaced by the plain truth.
 const CALL_CLAIM = /\b(?:i(?:'| a)?m|i am|i(?:'| wi)ll|i will|let me|going to|gonna|i can|shall i|want me to|should i)\s+(?:be\s+)?(?:call(?:ing)?|ring(?:ing)?|phon(?:e|ing)|video[- ]?call(?:ing)?|dial(?:l?ing)?)\b|\bcalling you (?:now|right now|back|in a)|\bgive you a (?:call|ring)\b|\bi(?:'| wi)ll (?:be )?on the phone\b/i;
@@ -139,6 +186,29 @@ async function onText(l, msg) {
   await sendTextTo(l.phone, mayaWords(reply.text));
 }
 
+// A voice note in -> Transcribe -> the same Maya (chat.sendVoiceNote: same scam rules, memory, family flow) -> a voice note out, same voice and tones as the app.
+// If her voice cannot be made (or the note is too long to play), the same words go out as text: a real answer is never replaced by silence or a fake note.
+async function onAudio(l, msg) {
+  const a = msg.audio || {};
+  if (typeof a.id !== 'string' || !/^audio\/ogg/i.test(String(a.mime_type || 'audio/ogg'))) { await sendTextTo(l.phone, 'I could not play that. Please send it again as a voice note, or type it for me.'); return 'unsupported'; }
+  let wav;
+  try { wav = chat.pcmToWav(await oggopus.decode(await downloadMedia(a.id), 24000)); }
+  catch (e) { console.error('whatsapp voice note unreadable:', e.message); await sendTextTo(l.phone, 'I could not hear that voice note. Could you send it again, or type it for me?'); return 'unreadable'; }
+  let r;
+  try { r = await chat.sendVoiceNote(l.profileId, wav, null, { source: 'whatsapp' }); }
+  catch (e) { if (e.status === 422) { await sendTextTo(l.phone, 'I could not hear any words in that voice note. Could you try again, or type it for me?'); return 'unheard'; } throw e; }
+  const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
+  if (!reply || !reply.text) throw new WaError('Maya had no reply.');
+  const words = mayaWords(reply.text);
+  const file = reply.kind === 'voice' && words === reply.text && /([a-f0-9]{16}\.wav)$/.exec(reply.mediaUrl || '');
+  const media = file && chat.readMedia(l.profileId, file[1]);
+  let note = null;
+  if (media) { try { note = wavToVoiceNote(media.data); } catch (e) { console.error('whatsapp voice reply encode failed:', e.message); } }
+  if (!note) { await sendTextTo(l.phone, words); return 'text-reply'; }
+  await sendAudioTo(l.phone, note);
+  return 'voice';
+}
+
 async function onMessage(msg) {
   const l = findByPhone(msg.from);
   if (!l || !l.optIn) return 'ignored'; // unknown or not opted in: no reply, so a stranger can never use Maya (or make her message them)
@@ -148,8 +218,9 @@ async function onMessage(msg) {
     x.seen = [...(x.seen || []), msg.id].slice(-SEEN_KEEP);
   });
   if (msg.type === 'text' && msg.text && typeof msg.text.body === 'string') { await onText(l, msg); return 'text'; }
-  // Step 1 is text only. Any other kind is answered once, truthfully, never guessed at.
-  await sendTextTo(l.phone, 'I can only read written messages here for now. Please type it for me.');
+  if (msg.type === 'audio') return onAudio(l, msg);
+  // Photos, documents, stickers, locations: not read here. Answered once, truthfully, never guessed at.
+  await sendTextTo(l.phone, 'I can read your typed messages and listen to voice notes here. Please type it or send a voice note.');
   return 'unsupported';
 }
 
@@ -169,4 +240,4 @@ async function handleWebhook(payload) {
   return Promise.all(done);
 }
 
-module.exports = { deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, handleWebhook, sendTextTo, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, handleWebhook, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

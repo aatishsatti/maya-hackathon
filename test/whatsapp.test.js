@@ -28,6 +28,7 @@ const care = require('../care');
 const chat = require('../chat');
 const S = require('../scam');
 const wa = require('../whatsapp');
+const oggopus = require('../oggopus');
 
 const tag = (o) => `[[feel: ${Object.entries(o).map(([k, v]) => `${k}=${v}`).join(' ')}]]`;
 const PLAIN = `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} That sounds nice. Tell me more about it.`;
@@ -43,15 +44,23 @@ const rd = (...on) => Object.fromEntries(S.READS.map((k) => [k, on.includes(k)])
 chat.deps.web = async () => ({ topics: [] }); // no web check in these tests
 chat.deps.scamText = async () => ({ level: 'none', type: 'none', reading: '', signals: sig(), reads: rd(), count: 0 });
 
-// Graph stub: records every call, answers like Meta.
+// Graph stub: records every call, answers like Meta (media lookup, media download, upload, send).
 const graphCalls = [];
 let graphFail = null;
-wa.deps.fetch = async (url, opts) => {
-  graphCalls.push({ url, opts, body: opts.body ? JSON.parse(opts.body) : null });
+const inboundMedia = new Map(); // media id -> Buffer (what WhatsApp would hold for a voice note)
+wa.deps.fetch = async (url, opts = {}) => {
+  const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : null;
+  graphCalls.push({ url, opts, body });
+  const done = (data) => ({ ok: true, status: 200, json: async () => data, arrayBuffer: async () => data });
   if (graphFail) return { ok: false, status: 400, json: async () => ({ error: graphFail }) };
-  return { ok: true, status: 200, json: async () => ({ messages: [{ id: `wamid.out${graphCalls.length}` }] }) };
+  if (/^https:\/\/lookaside\.test\//.test(url)) return done(Uint8Array.from(inboundMedia.get(url.split('/').pop())).buffer);
+  const m = /graph\.facebook\.com\/v[\d.]+\/(\d+|wamid[\w.]*|MEDIA[\w]*)$/.exec(url);
+  if (m && !opts.method) return done({ url: `https://lookaside.test/${m[1]}`, mime_type: 'audio/ogg; codecs=opus', file_size: inboundMedia.get(m[1]).length, id: m[1] });
+  if (/\/media$/.test(url)) return done({ id: `MEDIAUP${graphCalls.length}` });
+  return done({ messages: [{ id: `wamid.out${graphCalls.length}` }] });
 };
 const sent = () => graphCalls.filter((c) => /\/messages$/.test(c.url)).map((c) => c.body);
+const uploads = () => graphCalls.filter((c) => /\/media$/.test(c.url));
 const clearCalls = () => { graphCalls.length = 0; graphFail = null; };
 
 let mid = 0;
@@ -157,3 +166,109 @@ test('a failed Graph send is an error, never a fake success; unset WhatsApp env 
   clearCalls(); const t = process.env.WHATSAPP_TOKEN; delete process.env.WHATSAPP_TOKEN;
   await assert.rejects(wa.sendTextTo('447700900001', 'hi'), /not set up/); process.env.WHATSAPP_TOKEN = t;
 });
+
+// ------------------------------------------------------------------------------------------ step 2: voice notes
+const tone = (sec = 1) => { const N = 24000 * sec, b = Buffer.alloc(N * 2); for (let i = 0; i < N; i++) b.writeInt16LE(Math.round(9000 * Math.sin(2 * Math.PI * 300 * i / 24000)), i * 2); return b; };
+let mediaN = 0;
+const voiceIn = (from, mime = 'audio/ogg; codecs=opus', ogg = oggopus.encode(tone(1))) => {
+  const id = `MEDIAIN${mediaN++}`; inboundMedia.set(id, ogg);
+  return incoming(from, '', { type: 'audio', text: undefined, audio: { id, mime_type: mime, voice: true } });
+};
+const heard = []; let transcript = 'I made some soup today.';
+chat.deps.transcribe = async (wav) => { heard.push(wav); return transcript; };
+const spoken = []; let speakFail = false;
+chat.deps.speak = async (t) => { spoken.push(t); if (speakFail) throw new Error('voice is down'); return tone(1); };
+const voiceReset = () => { clearCalls(); heard.length = 0; spoken.length = 0; speakFail = false; transcript = 'I made some soup today.'; };
+
+test('incoming voice note -> Transcribe gets a real WAV -> the same Maya -> a voice note back (uploaded Ogg/Opus, voice:true), same ElevenLabs voice path as the app', async () => {
+  voiceReset(); const { id, phone } = linked(); reset(PLAIN);
+  assert.deepEqual(await wa.handleWebhook(voiceIn(phone)), ['voice']);
+  assert.equal(heard.length, 1); assert.ok(chat.isWav(heard[0]));
+  assert.ok(Math.abs(heard[0].length - 44 - 48000) < 4000, 'about one second of 24 kHz audio reached Transcribe');
+  assert.match(asked[0].history.at(-1).content, /soup/, 'the transcript reached Spark');
+  assert.ok(spoken.length > 0, 'the reply was spoken through the same speak() the app uses');
+  const up = uploads(); assert.equal(up.length, 1); assert.equal(up[0].opts.headers.Authorization, 'Bearer TEST-TOKEN-NOT-REAL');
+  const file = up[0].opts.body.get('file'); assert.equal(up[0].opts.body.get('messaging_product'), 'whatsapp'); assert.match(file.type, /^audio\/ogg; codecs=opus$/);
+  const ogg = Buffer.from(await file.arrayBuffer()); assert.equal(ogg.toString('latin1', 0, 4), 'OggS'); assert.equal(ogg.toString('latin1', 28, 36), 'OpusHead'); assert.equal(ogg[28 + 9], 1, 'mono');
+  assert.ok(ogg.length <= oggopus.MAX_PLAY_BYTES);
+  const out = sent(); assert.equal(out.length, 1); assert.equal(out[0].type, 'audio'); assert.equal(out[0].to, phone); assert.equal(out[0].audio.voice, true); assert.match(out[0].audio.id, /^MEDIAUP/);
+  assert.equal(out[0].text, undefined, 'a voice reply is not also sent as text');
+  assert.ok(care.get(id).lastActivity.whatsapp); assert.ok(chat.thread(id).some((m) => m.role === 'senior' && m.kind === 'voice'));
+});
+
+test('voice reply is short and decodes back to speech (Ogg/Opus both ways)', async () => {
+  voiceReset(); const { phone } = linked(); reset(PLAIN);
+  await wa.handleWebhook(voiceIn(phone));
+  const ogg = Buffer.from(await uploads()[0].opts.body.get('file').arrayBuffer());
+  const pcm = await oggopus.decode(ogg, 24000);
+  assert.ok(pcm.length / 2 > 20000 && pcm.length / 2 < 60000, 'about the length that was spoken');
+  let e = 0; for (let i = 0; i < pcm.length; i += 2) e += Math.abs(pcm.readInt16LE(i)); assert.ok(e / (pcm.length / 2) > 3000, 'it carries sound, not silence');
+});
+
+test('voice reply too big for the play icon (512 KB) goes out as the same words in text, not a download-icon file', async () => {
+  voiceReset(); const { phone } = linked(); reset(PLAIN);
+  const keep = chat.deps.speak; chat.deps.speak = async () => tone(200);
+  try { assert.deepEqual(await wa.handleWebhook(voiceIn(phone)), ['text-reply']); } finally { chat.deps.speak = keep; }
+  assert.equal(sent()[0].type, 'text'); assert.match(sent()[0].text.body, /That sounds nice/); assert.equal(uploads().length, 0);
+});
+
+test('Maya\'s voice failing: the words go out as text, never a fake or empty voice note', async () => {
+  voiceReset(); const { phone } = linked(); reset(PLAIN); speakFail = true;
+  assert.deepEqual(await wa.handleWebhook(voiceIn(phone)), ['text-reply']);
+  assert.equal(uploads().length, 0); assert.equal(sent()[0].type, 'text'); assert.match(sent()[0].text.body, /That sounds nice/);
+});
+
+test('voice note with no words, an unreadable file, a non-Ogg file: one plain truthful text, no Spark call', async () => {
+  voiceReset(); const { phone } = linked(); reset(PLAIN); transcript = '';
+  assert.deepEqual(await wa.handleWebhook(voiceIn(phone)), ['unheard']); assert.match(sent()[0].text.body, /could not hear any words/); assert.equal(asked.length, 0);
+  voiceReset(); const bad = Buffer.from('this is not audio at all, just some bytes padded out to be long enough');
+  const m = voiceIn(phone, 'audio/ogg; codecs=opus', bad);
+  const errs = []; const e0 = console.error; console.error = (...a) => errs.push(a.join(' '));
+  try { assert.deepEqual(await wa.handleWebhook(m), ['unreadable']); } finally { console.error = e0; }
+  assert.match(sent()[0].text.body, /could not hear that voice note/); assert.equal(heard.length, 0);
+  voiceReset(); assert.deepEqual(await wa.handleWebhook(voiceIn(phone, 'audio/mpeg')), ['unsupported']); assert.equal(heard.length, 0); assert.equal(sent().length, 1);
+});
+
+test('voice note from an unknown or opted-out number: ignored before anything is downloaded', async () => {
+  voiceReset(); reset(PLAIN);
+  assert.deepEqual(await wa.handleWebhook(voiceIn('447700900998')), ['ignored']);
+  assert.equal(graphCalls.length, 0, 'no download, no upload, no send'); assert.equal(heard.length, 0);
+});
+
+test('scam voice note on WhatsApp: same warning, the family question comes back as a voice note, yes -> the dashboard flag (topic only)', async () => {
+  voiceReset(); const { id, phone } = linked();
+  chat.deps.scamText = async () => ({ level: 'warn', type: 'impersonation scam', reading: 'Someone says they are from the bank and wants a code.', signals: sig('impersonation', 'payment'), reads: rd(), count: 2 });
+  transcript = 'A lady rang from my bank and wants me to read out the code from my text.'; reset(WARN);
+  assert.deepEqual(await wa.handleWebhook(voiceIn(phone)), ['voice']);
+  assert.match(asked.at(-1).roster, /SCAM CHECK \(a fact from the app, not from them\)/);
+  assert.ok(spoken.some((t) => /family/i.test(t)), 'the spoken reply asks about the family'); assert.equal(care.scamPending(id).channel, 'spoken');
+  assert.equal(care.view(id).scams.length, 0);
+  chat.deps.scamText = async () => ({ level: 'none', type: 'none', reading: '', signals: sig(), reads: rd(), count: 0 });
+  voiceReset(); transcript = 'Yes, tell my family please'; reset(PLAIN); await wa.handleWebhook(voiceIn(phone));
+  assert.equal(care.view(id).scams.length, 1); assert.equal(care.view(id).scams[0].level, 'alert');
+  assert.ok(!/bank|code|lady/i.test(care.get(id).notifications.find((x) => x.to === 'family').text));
+});
+
+test('no live call claim in a voice reply: replaced by the plain truth, sent as text', async () => {
+  voiceReset(); const { phone } = linked(); reset(CALLS);
+  assert.deepEqual(await wa.handleWebhook(voiceIn(phone)), ['text-reply']);
+  assert.equal(sent()[0].type, 'text'); assert.equal(sent()[0].text.body, wa.NO_CALL_LINE); assert.equal(uploads().length, 0);
+});
+
+test('a failed media download is an error in the log (code and reason), never a made-up answer', async () => {
+  voiceReset(); const { phone } = linked(); reset(PLAIN); graphFail = { code: 100, message: 'Media gone' };
+  const logs = []; const e0 = console.error; console.error = (...a) => logs.push(a.join(' '));
+  try { const r = await wa.handleWebhook(voiceIn(phone)); assert.deepEqual(r, ['error']); } finally { console.error = e0; }
+  assert.equal(heard.length, 0); assert.ok(logs.join('').match(/100/));
+});
+
+test('the Ogg muxer: valid pages (CRC), mono OpusHead, granule counts the audio', () => {
+  const ogg = oggopus.encode(tone(1)); let off = 0, pages = 0, last;
+  while (off < ogg.length) {
+    assert.equal(ogg.toString('latin1', off, off + 4), 'OggS'); const nseg = ogg[off + 26]; let body = 0; for (let i = 0; i < nseg; i++) body += ogg[off + 27 + i];
+    const len = 27 + nseg + body, pg = Buffer.from(ogg.subarray(off, off + len)), crc = pg.readUInt32LE(22); pg.writeUInt32LE(0, 22);
+    let c = 0; for (const b of pg) { c = ((c << 8) ^ CRCT[((c >>> 24) ^ b) & 0xff]) >>> 0; } assert.equal(c, crc, 'page CRC'); last = ogg.subarray(off, off + len); off += len; pages++;
+  }
+  assert.ok(pages >= 3); assert.equal(last[5], 0x04, 'last page is flagged end of stream'); assert.equal(Number(last.readBigUInt64LE(6)), 48000 + 312);
+});
+const CRCT = (() => { const t = new Uint32Array(256); for (let i = 0; i < 256; i++) { let r = i << 24; for (let k = 0; k < 8; k++) r = (r & 0x80000000) ? ((r << 1) ^ 0x04c11db7) : (r << 1); t[i] = r >>> 0; } return t; })();

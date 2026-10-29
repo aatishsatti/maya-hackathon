@@ -381,10 +381,10 @@ async function voiceFor(pieces) {
   return pcmToWav(Buffer.concat(bufs));
 }
 
-async function sendVoiceNote(profileId, wav, tz) {
+async function sendVoiceNote(profileId, wav, tz, opts = {}) {
   if (!isWav(wav)) throw new ChatError('The voice note must be a WAV recording.', 415);
   const s = session(profileId, tz);
-  care.touch(profileId, 'app');
+  care.touch(profileId, opts.source === 'whatsapp' ? 'whatsapp' : 'app');
   let words;
   try { words = await deps.transcribe(wav); } catch (e) { throw new ChatError(e.message); }
   if (!words) throw new ChatError('I could not hear any words in that voice note. Please try recording it again.', 422);
