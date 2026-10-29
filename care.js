@@ -555,9 +555,14 @@ function scamToldLine(sc, name, type) {
   return `${name} showed Maya a message that looks like a possible ${type}.`;
 }
 // opts.channel: how Maya learned of it (photo | text | spoken); opts.pause: they may have been about to pay or act. Both are topic-only facts.
+// After a no on an incident Maya never asks again about it: an open dashboard flag of the same kind of scam means they already said no.
+// A different kind of scam is a new incident and is asked about as usual. (Enforced here, so a call, the chat and a photo all obey it.)
+const scamKind = (t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+function scamDeclined(id, type) { const p = get(id); return (p && (p.scams || []).find((x) => x.level === 'flag' && x.status === 'active' && scamKind(x.type) === scamKind(type))) || null; }
 function scamAsk(id, type, opts = {}) {
   const p = get(id);
   if (!p) return null;
+  if (scamDeclined(id, type)) return null;   // they said no to this one: never asked again
   p.pendingScam = { type, left: 2, at: Date.now(), channel: SCAM_CHANNELS.has(opts.channel) ? opts.channel : 'photo', pause: opts.pause === true }; save(id);
   return p.pendingScam;
 }
@@ -938,7 +943,7 @@ module.exports = {
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
   addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

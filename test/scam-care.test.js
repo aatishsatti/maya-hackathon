@@ -65,11 +65,12 @@ test('scam: Seen clears an alert (same route as every other alert), and the fami
   assert.ok(ev.some((e) => e.ev === 'refresh'));
 });
 
-test('scam: a second yes in the same incident adds no second alert; a flag the person declined earlier becomes the alert on a later yes', () => {
+test('scam: a second yes in the same incident adds no second alert; a flag the person declined earlier becomes the alert only by scamAlert (she never asks again after a no)', () => {
   const id = senior();
   care.scamAsk(id, 'prize scam'); care.scamAnswer(id, false);
   assert.equal(care.view(id).scams.length, 1);
-  care.scamAsk(id, 'prize scam'); const up = care.scamAnswer(id, true);
+  assert.equal(care.scamAsk(id, 'prize scam'), null, 'after a no she never asks again');
+  const up = care.scamAlert(id, 'prize scam');
   assert.equal(up.isNew, true);
   assert.equal(care.view(id).scams.length, 1, 'upgraded, not duplicated');
   assert.equal(care.view(id).scams[0].level, 'alert');

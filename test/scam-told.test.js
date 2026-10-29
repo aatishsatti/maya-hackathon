@@ -165,6 +165,38 @@ test('7d the same rule guards the older "is something wrong?" yes', () => {
   c.pendingConcern = { left: 2 }; c.careNotes('yes please let them know'); assert.equal(anyAlert(id), 1);
 });
 
+// ---- never ask again after a no ----
+test('8 after a no on an incident she never asks again; a different kind of scam is a new incident', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'pension scam', { channel: 'spoken' });
+  c.careNotes('no, do not tell them');
+  assert.ok(care.scamDeclined(id, 'pension scam')); assert.equal(care.scamTold(id), null);
+  assert.equal(care.scamAsk(id, 'pension scam', { channel: 'spoken', pause: true }), null, 'the same incident is not asked about again');
+  assert.equal(care.scamAsk(id, 'Pension  Scam', { channel: 'text' }), null, 'however the kind is spelt');
+  assert.equal(care.scamPending(id), null);
+  assert.ok(care.scamAsk(id, 'tech support scam', { channel: 'spoken' }), 'a different scam is asked about as usual');
+  assert.equal(care.scamDeclined(id, 'tech support scam'), null);
+});
+
+test('8b a repeat incident after a no: flag state, no question in her note, still the safety words; and a typed turn gets the same', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'pension scam', { channel: 'spoken' }); care.scamAnswer(id, false);
+  const v = { level: 'pause', type: 'pension scam', signals: {}, reads: null, reading: 'x' };
+  const note = scam.talkNote(v, { declined: true });
+  assert.match(note, /already said NO/); assert.match(note, /do NOT ask again/); assert.ok(!/ask ONE short question/.test(note));
+  assert.match(note, /not to pay or share/);
+  c.scamLater = { scam: v, at: Date.now() };   // the verdict for this turn
+  return Promise.resolve(c.scamForTurn('He is on the line again and wants me to read out my bank code and send money right now')).then((r) => { assert.equal(r.told, true, 'no question this turn'); if (r.note) assert.match(r.note, /already said NO/); assert.equal(care.scamPending(id), null); });
+});
+
+test('8c the no is not a yes later: nothing is sent, and her facts say nobody was told', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'pension scam', { channel: 'spoken' }); care.scamAnswer(id, false);
+  c.careNotes('Yeah, there\'s that man calling.'); c.careNotes('Yes, I will give you my number');
+  assert.equal(care.scamTold(id), null); assert.equal(anyAlert(id), 0);
+  assert.match(care.appFacts(id), /nobody was told/);
+});
+
 test('the chat borrows the same guards (health alert, already-told note)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'chat.js'), 'utf8');
   assert.match(src, /concern === 'urgent' && !this\.health && !this\.safety && !this\.inScamTurn\(lastUser\)/);

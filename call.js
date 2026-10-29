@@ -1004,7 +1004,7 @@ class Call {
     if (later && Date.now() - later.at <= SCAM_LATER_FRESH_MS) now = later.scam;
     const id = this.profile && this.profile.id;
     const told = Boolean(id && care.scamTold(id));   // their family was already told (unseen alert): no new question, nothing new claimed
-    const out = (v) => ({ note: v ? scam.talkNote(v, { told }) : '', scam: v, told });
+    const out = (v) => { const declined = Boolean(v && care.scamDeclined(id, v.type)); return { note: v ? scam.talkNote(v, { told, declined }) : '', scam: v, told: told || declined }; };
     if (!id || this.safety || this.pendingConcern || care.hasActiveSafety(id) || care.scamPending(id) || selfHarmText(heard)) return out(now);
     const plan = scam.checkPlan(heard);
     if (plan.check || now) this.scamAt = Date.now();

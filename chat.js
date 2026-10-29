@@ -298,7 +298,7 @@ async function talkCheck(profileId, words) {
 }
 // After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
 const afterTalkReply = (profileId, scam, channel) => { if (scam && (scam.level === 'warn' || scam.level === 'pause') && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause' }); };
-const talkTurn = (scam, profileId) => ({ note: scam ? require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)) }) : '', scam: scam && scam.level !== 'none' ? scam.level : null });
+const talkTurn = (scam, profileId) => ({ note: scam ? require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)), declined: Boolean(care.scamDeclined(profileId, scam.type)) }) : '', scam: scam && scam.level !== 'none' ? scam.level : null });
 
 async function sendText(profileId, text, tz) {
   const t = String(text || '').trim().slice(0, 2000);
@@ -355,11 +355,12 @@ async function sendVoiceNote(profileId, wav, tz) {
 const SCAM_FEEL = " In your private [[feel: ...]] tag use concern=none and pain=0 and never emotion=crisis: this is about a message, not about their health or safety, so never mark it urgent or unsure.";
 
 // What Maya is told about a photo that looks like a scam. Two or more signals warn; one is caution; none says nothing at all.
-function scamNote(scam) {
+function scamNote(scam, profileId) {
   if (!scam || scam.level === 'none') return '';
+  const declined = Boolean(profileId && care.scamDeclined(profileId, scam.type)), told = Boolean(profileId && care.scamTold(profileId));
   const signs = require('./scam').said(scam.signals).join('; ');
   // Principles only (like the typed / spoken note in scam.js): Spark finds her own words for the warning; the app dictates no phrase.
-  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words of your own: first say in one or two short sentences what it says, from this reading: ${scam.reading}. Then say that it looks like a scam, never that it is certain, and ask them not to pay, send money, share codes or details, or reply yet. Say the safe way is to check with the real company or bank themselves, through a number or website they already trust; never give a number yourself. Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.) No diagnosis, no legal advice, no guarantee, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
+  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words of your own: first say in one or two short sentences what it says, from this reading: ${scam.reading}. Then say that it looks like a scam, never that it is certain, and ask them not to pay, send money, share codes or details, or reply yet. Say the safe way is to check with the real company or bank themselves, through a number or website they already trust; never give a number yourself. ${declined ? 'They already said NO to letting their family know about this: do NOT ask again; nothing was sent.' : told ? 'Their family was ALREADY told about a possible scam earlier: do NOT ask whether to tell them, and do not say you have just told them.' : 'Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.)'} No diagnosis, no legal advice, no guarantee, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
   return `SCAM CHECK (a fact from the app, not from them): what they showed you has one warning sign (${signs}). Say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. No phone numbers, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
 }
 
@@ -379,7 +380,7 @@ async function sendImage(profileId, buf, caption, tz) {
   const mine = saveMedia(profileId, IMAGE_TYPES[mime], buf);
   const you = s.push({ role: 'senior', kind: 'image', text: said, mediaUrl: mediaUrl(profileId, mine) });
   const message = `[They sent a photo. The photo shows: ${seen}]${said ? ` ${said}` : ''}`;
-  const note = scamNote(scam);
+  const note = scamNote(scam, profileId);
   const r = await s.turn({ heard: said, message, how: 'image', note, scam: scam && scam.level !== 'none' ? scam.level : null });
   // Her one question is out: from now on the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
   if (scam && scam.level === 'warn' && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type);

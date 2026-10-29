@@ -175,10 +175,13 @@ const said = (signals, reads = null) => [...SIGNALS.filter((k) => signals[k]).ma
 const FEEL_NOTE = " In your private [[feel: ...]] tag use concern=none and pain=0 and never emotion=crisis: this is about a message or a call, not about their health or safety, so never mark it urgent or unsure.";
 
 // What Maya is told about spoken or typed talk that looks like a scam: FACTS and PRINCIPLES only. Spark phrases every word (nothing here is a sentence to say).
+// opts.declined: they already said no to telling their family about this (an open flag): the question is never asked again.
 // opts.told: their family was ALREADY told about a possible scam (an unseen alert exists): the question is not asked again and nothing new is claimed.
 function talkNote(scam, opts = {}) {
   if (!scam || scam.level === 'none') return '';
-  const ask = (now) => (opts.told
+  const ask = (now) => (opts.declined
+    ? `They already said NO to letting their family know about this, so do NOT ask again and do not suggest it; only a quiet note stays on the family's dashboard and nobody was told. Everything else still applies: say it looks like a scam, ask them not to pay or share anything, and to check with the real company themselves.`
+    : opts.told
     ? `Their family was ALREADY told about a possible scam earlier (the app did it, topic only, and it stays on their dashboard until they see it), so do NOT ask whether to tell them and do not say you have just told them; if it comes up, say plainly and briefly that their family already knows.`
     : `Then ask ONE short question: would they like you to let their family know${now ? ' now' : ''}? (This overrides any earlier instruction about not asking a question: ask it.)`);
   const signs = said(scam.signals || {}, scam.reads).join('; ');
