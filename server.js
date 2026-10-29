@@ -211,7 +211,7 @@ async function handleApi(req, res, url) {
 }
 
 function serveStatic(req, res, url) {
-  const rel = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  const rel = url.pathname === '/' ? '/index.html' : url.pathname === '/privacy' ? '/privacy.html' : decodeURIComponent(url.pathname);
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(file, (err, data) => {
