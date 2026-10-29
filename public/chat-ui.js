@@ -59,6 +59,20 @@
     return b;
   }
 
+  // Where an answer came from: a small eye button under the message; tap to open or close the sources (site, title, excerpt). Never part of the message text.
+  function sourceBox(sources) {
+    const wrap = el('div', 'sources'), btn = el('button', 'eye', '\u{1F441}'), list = el('div', 'source-list');
+    btn.type = 'button'; btn.setAttribute('aria-label', 'Show where this came from'); btn.setAttribute('aria-expanded', 'false'); list.hidden = true;
+    for (const x of sources) {
+      const item = el('div', 'source');
+      item.append(el('strong', '', x.site), el('span', 'source-title', x.title), el('span', 'source-excerpt', x.excerpt));
+      list.append(item);
+    }
+    btn.addEventListener('click', () => { list.hidden = !list.hidden; btn.setAttribute('aria-expanded', String(!list.hidden)); btn.setAttribute('aria-label', list.hidden ? 'Show where this came from' : 'Hide where this came from'); scrollDown(); });
+    wrap.append(btn, list);
+    return wrap;
+  }
+
   function render(m, { pending = false } = {}) {
     const row = el('div', `msg ${m.role === 'maya' ? 'maya' : 'senior'}${pending ? ' pending' : ''}`);
     row.dataset.id = m.id || '';
@@ -75,6 +89,7 @@
       row.append(el('div', 'bubble', m.text));
     }
     if (m.voiceError) row.append(el('p', 'voice-fail', m.voiceError));
+    if (Array.isArray(m.sources) && m.sources.length) row.append(sourceBox(m.sources));
     if (!pending && m.at) row.append(el('span', 'time', clock(m.at)));
     syncVoiceRule();
     return row;

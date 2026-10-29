@@ -524,7 +524,7 @@ test('D1 safety context rides in EVERY roster of a later call while the alert is
   assert.equal(c.safety, undefined);
   const r = c.roster('x');
   assert.match(r, /SAFETY CONTEXT/); assert.match(r, /Never deny it, never say you did not tell anyone, never say you cannot alert anyone or let their family know/);
-  assert.match(r, /answer truthfully in fresh words/); assert.match(r, /not in a greeting/);
+  assert.match(r, /answer truthfully and plainly in fresh words/); assert.match(r, /not in a greeting/);
   // reaches the cold question, the greeting and the silence lines (all go through roster)
   sparkQueue.length = 0; sparkQueue.push('Hi, I am glad you picked up.'); sparkSeen.length = 0;
   await c.dynamicLine({ pool: 'greeting', what: 'greet' });
@@ -569,7 +569,7 @@ test('E1 safety history after family resolution: topic-only fact in later calls;
   const c = mkCall(); c.profile = memory.load(id);
   const r = c.roster('x');
   assert.match(r, /EARLIER SAFETY CONCERN/); assert.match(r, /their family was alerted through the app about a safety concern after they said they might harm themselves/);
-  assert.match(r, /answer truthfully in fresh words: yes, you let their family know/); assert.match(r, /do not know that person by name, but their family was told, and you cannot call someone you do not know/);
+  assert.match(r, /answer truthfully and plainly in fresh words: yes, you let their family know about a safety worry/); assert.doesNotMatch(r, /because they said they might hurt themselves/); assert.match(r, /never "because I care about you"/); assert.match(r, /do not know that person by name, but their family was told, and you cannot call someone you do not know/);
   assert.match(r, /never say you did not tell anyone, never say you cannot alert anyone or let their family know/); assert.match(r, /Never invent a daughter/);
   assert.match(r, /not in a greeting/);
   assert.doesNotMatch(r, /SAFETY CONTEXT/, 'no longer the active-alert text');

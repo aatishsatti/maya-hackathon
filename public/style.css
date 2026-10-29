@@ -220,6 +220,11 @@ body[data-call-layout='small'] #callBtn { display: none; }
 .msg.senior .bubble { background: #f2f2f2; border-bottom-right-radius: 6px; }
 .msg.pending .bubble { opacity: 0.6; }
 .msg .time { font-size: 13px; color: var(--soft); margin: 2px 6px 0; }
+.msg .sources { margin: 2px 6px 0; max-width: 100%; }
+.msg .eye { min-width: 44px; min-height: 44px; font-size: 22px; line-height: 1; background: transparent; border: 1.5px solid var(--line); border-radius: 22px; cursor: pointer; }
+.msg .source-list { margin-top: 6px; }
+.msg .source { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; margin-bottom: 6px; border: 1.5px solid var(--line); border-radius: 14px; font-size: 16px; color: var(--soft); overflow-wrap: anywhere; }
+.msg .source-title { font-weight: 600; }
 .msg .vtext { margin: 4px 6px 0; font-size: 17px; color: var(--soft); text-align: left; overflow-wrap: anywhere; }
 .msg .voice-fail { margin: 4px 6px 0; font-size: 16px; font-weight: 600; color: var(--end); }
 .bubble.voice { display: flex; align-items: center; gap: 12px; min-width: min(260px, 70vw); white-space: normal; }

@@ -70,7 +70,7 @@ test('call, no company clear: ONE reconfirm fact (what they said, what is unclea
   assert.match(roster, /RECONFIRM \(a fact from the app/); assert.match(roster, /What they have already said: no company name and no web address/);
   assert.match(roster, /Still unclear: the company or website/); assert.match(roster, /asked 0 times before this reply/);
   assert.match(roster, /which company or website it was, whether they can spell the website slowly, or whether they can send a screenshot of the message after the call/);
-  assert.match(roster, /ONE short, natural question, the way a friend would/); assert.match(roster, /do not repeat it in later replies/); assert.match(roster, /Never ask for a phone number or a code/);
+  assert.match(roster, /ONE short, natural question, the way a friend would/); assert.match(roster, /Do not ask it again in later replies/); assert.match(roster, /Never ask for a phone number or a code/);
   assert.doesNotMatch(roster, /OFFICIAL SOURCE CHECK/); assert.equal(fetched.length, 0);
   assert.match(roster, /SCAM CHECK/); assert.equal(c.rc.stage, 'asked', 'asked once the reply was spoken');
 });
@@ -158,7 +158,7 @@ test('chat, no link or company: the reconfirm fact asks for the link or a screen
   chatSetup(); const id = senior();
   await chat.sendText(id, NOLINK, null);
   const r = asked.at(-1).roster;
-  assert.match(r, /RECONFIRM \(a fact from the app/); assert.match(r, /whether they can type the link, or send a screenshot or photo of the message/); assert.match(r, /keep the whole reply short/);
+  assert.match(r, /RECONFIRM \(a fact from the app/); assert.match(r, /whether they can type the link, or send a screenshot or photo of the message/); assert.match(r, /TWO SHORT SENTENCES IN ALL/);
   assert.doesNotMatch(r, /OFFICIAL SOURCE CHECK/); assert.equal(fetched.length, 0);
   assert.doesNotMatch(r, /"(Can|Could|Would) you /, 'no sentence is dictated');
   reset(); await chat.sendText(id, 'Yes please.', null);

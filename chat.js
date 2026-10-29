@@ -137,11 +137,11 @@ class ChatSession {
   }
 
   // heard = the person's own words (what the care rules read); message = what the brain is shown (a photo adds its description).
-  turn({ heard, message = heard, how = 'text', note = '', scam = null }) {
-    return this.serial(() => this.runTurn(heard, message, how, note, scam));
+  turn({ heard, message = heard, how = 'text', note = '', scam = null, short = false }) {
+    return this.serial(() => this.runTurn(heard, message, how, note, scam, short));
   }
 
-  async runTurn(heard, message, how, note = '', scam = null) {
+  async runTurn(heard, message, how, note = '', scam = null, short = false) {
     await this.start();
     clearTimeout(this.idleTimer);
     const id = this.profile.id;
@@ -154,6 +154,7 @@ class ChatSession {
     memory.appendTurn(id, this.callId, { label: 'A', text: message, userSaid: true });
     const channelNote = `CHANNEL: this is a written chat message in their app, not a call. ${how === 'voice' ? 'They sent you a voice note and the words above are what they said in it; you will answer by voice note, so write the way you would speak.' : how === 'image' ? 'They sent you a photo; the bracketed words describe it. Answer what matters to them, never claim to see more than the description says.' : 'They cannot hear you; write plainly, warm and short as in a call.'}`;
     this.setFocus(heard, `${extra} ${note}`.trim());
+    this.shortReply = (short || Boolean(scam)) && !ASKS_MORE.test(heard);   // a web / scam / lookup answer is the gist in one or two sentences unless they asked for more
     this.scamReply = scam;   // 'warn' | 'caution' | null: the shape of THIS reply (see reply())
     try {
       const said = await this.reply(`${this.replyNote()} ${channelNote} ${extra} ${note}`.trim());
@@ -162,7 +163,7 @@ class ChatSession {
     } catch (e) {
       if (this.history.length && this.history[this.history.length - 1].role === 'user') this.history.pop(); // a failed turn cannot poison the next one
       throw e instanceof ChatError ? e : new ChatError(e.message);
-    } finally { this.scamReply = null; this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.armIdle(); }
+    } finally { this.scamReply = null; this.shortReply = false; this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.armIdle(); }
   }
 
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.
@@ -194,13 +195,15 @@ class ChatSession {
         else if (concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply && !this.inScamTurn(lastUser)) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
         // A scam reading is a few short sentences, not the usual two: what it says, that it looks like a scam and what not to do yet (in her own words), and (for a
         // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
-        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }
+        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = ASKS_MORE.test(lastUser) ? 4 : ['warn', 'pause'].includes(this.scamReply) && !care.scamTold(this.profile.id) ? 3 : 2; }   // the gist: two short sentences, three when the one question about telling their family is still owed; more only if they asked
+        if (this.shortReply && !this.scamReply && !this.safety && !this.health) d.maxSentences = Math.min(d.maxSentences, 2);
         this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern || this.scamReply));
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear' };
         return d;
       },
       onPiece: (text, kind) => {
+        if (this.breaksFacts(text)) { if (again) return; repeated = text; retryWhy = 'facts'; splitter.halted = true; return; }   // nothing is shown until the whole reply is done: any piece that claims what the app never did, or a stock counselling line, means write it again
         if (!pieces.length && !again && !this.safety) {
           const why = this.repeatsOpening(text) ? 'repeat' : this.beatBlocks(text, delivery) ? 'beat' : null;
           if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
@@ -214,7 +217,7 @@ class ChatSession {
     } catch (e) {
       if (!(e && e.empty && !pieces.length)) throw new ChatError(`Maya could not answer: ${e.message}`);
     }
-    if (splitter.halted && repeated) return this.reply(`${note} ${retryWhy === 'beat' ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.` : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`}`, { again: true });
+    if (splitter.halted && repeated) return this.reply(`${note} ${retryWhy === 'facts' ? `Your draft said "${repeated}", which the app's facts do not support (a family alert that was never made, a reason nobody gave, or a stock comfort line). Write the whole reply again in plain, short, direct words: say only what the FAMILY ALERTS fact says, no excuse, no soothing line.` : retryWhy === 'beat' ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.` : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`}`, { again: true });
     if (splitter.halted && !safetyRetry) { // Spark read the person as in crisis before saying anything: Tier A, then the reply is written again with the safety note
       this.enterSafety();
       return this.reply(`${this.replyNote()} ${this.safetyNote()}`, { safetyRetry: true });
@@ -257,7 +260,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
+for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 
@@ -284,7 +287,36 @@ function mirrorSpoken(profileId, role, text) {
 }
 
 // When the person last wrote to Maya or she wrote to them in the chat (not the lines mirrored from a call), or 0: a fact for the next greeting.
+const ASKS_MORE = /\b(more|details?|explain|in full|everything|the whole|elaborate|go on|longer|in depth)\b/i;
 const lastWrittenAt = (profileId) => { const s = sessions.get(profileId); const m = s && [...s.thread].reverse().find((x) => !x.spoken); return m ? m.at : 0; };
+// Chat -> call continuity, decided in code: when they wrote to Maya minutes ago, these are the facts the next call's greeting picks up from (call.js greetingNote).
+// Topic by code: an open scam question or scam of the last half hour first (the kind only), else the gist of their last written message. Facts only, never a sentence.
+const CONT_MS = 30 * 60000;
+function continuity(profileId, now = Date.now()) {
+  const at = lastWrittenAt(profileId), s = sessions.get(profileId);
+  if (!at || now - at > CONT_MS || !s) return null;
+  const p = care.get(profileId), mins = Math.max(1, Math.round((now - at) / 60000));
+  const last = [...s.thread].reverse().find((m) => !m.spoken && m.role === 'senior');
+  const clip = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const pend = care.scamPending(profileId), recent = (p && p.scams || []).find((x) => now - x.createdAt < CONT_MS), type = (pend && pend.type) || (s.rc && s.rc.scam && s.rc.scam.type) || (recent && recent.type) || null;
+  const bits = [`last chat turn ${mins} minute${mins === 1 ? '' : 's'} ago`];
+  let topic;
+  if (type) {
+    topic = `a possible ${type} message they told you about or showed you`;
+    bits.push(`the chat topic is ${topic}${last && last.text ? ` (their last written words, quoted data: "${clip(last.text)}")` : ''}`);
+    const open = require('./official').asking(s.rc);
+    if (open) bits.push('you asked them for the company name, the web address, or a screenshot, and they have not sent it yet');
+    if (pend) bits.push('you asked whether to let their family know, and it is still unanswered');
+    bits.push(care.scamTold(profileId) ? 'their family WAS told about it (topic only)' : care.scamDeclined(profileId, type) ? 'they said NO to telling their family about it: nobody was told' : 'their family was NOT told about it');
+  } else {
+    topic = last ? (last.kind === 'image' && !last.text ? 'a photo they sent' : `"${clip(last.text)}"`) : null;
+    if (!topic) return null;
+    bits.push(`the chat topic is their last written message (quoted data): ${topic}`);
+  }
+  const owed = (p && p.checks || []).filter((c) => !c.delivered);
+  if (owed.length) bits.push(owed.some((c) => c.status === 'done') ? 'a lookup you started has finished and its result is not yet told' : 'a lookup you started is still running');
+  return { at, topic, facts: bits.join('; ') };
+}
 const callLive = (profileId) => care.liveCalls.has(profileId);
 const thread = (profileId) => { session(profileId); return sessions.get(profileId).thread.slice(); };
 
@@ -321,16 +353,17 @@ async function sendText(profileId, text, tz) {
   if (!off) { scam = await talkCheck(profileId, t); if (scam && (scam.level === 'warn' || scam.level === 'pause')) off = await officialStep(s, profileId, t, scam); }
   // Anything else that needs checking (news, a claim, a medicine): the general web check; a failed search tells her she cannot verify it.
   const tt = talkTurn(scam, profileId, off);
+  let sources = [];
   if (!off && (!scam || scam.level === 'none') && !care.hasActiveSafety(profileId) && !s.health && !s.safety && !selfHarmText(t)) {
     let g = null;
     try { g = await deps.web(t, {}); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; }
-    const wn = require('./web').note(g); if (wn) tt.note = [tt.note, wn].filter(Boolean).join(' ');
+    const wn = require('./web').note(g); if (wn) { tt.note = [tt.note, wn].filter(Boolean).join(' '); tt.short = true; sources = require('./web').sources(g); }
   }
   const due = care.checkDueIds(profileId);
   const r = await s.turn({ heard: t, ...tt });
   care.checkDelivered(profileId, due);   // a finished lookup was handed to her with this reply: told once
   afterTalkReply(profileId, scam, 'text', off);
-  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
+  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text, ...(sources.length ? { sources } : {}) })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
 }
 
 // Maya's voice for a written reply: each piece with the same delivery tag and gain as a call (call.js TONES), joined as WAV.
@@ -442,4 +475,4 @@ function forget(profileId) {
 // Test and shutdown helper: files every open chat into memory now.
 function endAll() { for (const [id, s] of sessions) { sessions.delete(id); s.finish(); } }
 
-module.exports = { lastWrittenAt, mirrorSpoken, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
+module.exports = { continuity, lastWrittenAt, mirrorSpoken, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };

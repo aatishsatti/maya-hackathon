@@ -73,7 +73,7 @@ test('P2 Tier A in a NEW call while the alert is active -> no new alert, no anno
   assert.equal(active(id).length, 1); assert.equal(fam.filter((e) => e.ev === 'notify').length, 1, 'no second note');
   assert.doesNotMatch(note, /just alerted/); assert.match(note, /Do not announce it again/);
   const r = c2.roster('');
-  assert.match(r, /already been told by you; that was done once/); assert.match(r, /answer truthfully in fresh words/); assert.match(r, /not in a greeting/);
+  assert.match(r, /already been told by you; that was done once/); assert.match(r, /answer truthfully and plainly in fresh words/); assert.match(r, /not in a greeting/);
 });
 
 test('P3 Tier A after the family pressed Seen -> a fresh alert and a fresh announcement', stubbed, () => {
@@ -113,7 +113,7 @@ test('P5 after safety, the next call greets gently with no incident details, and
   assert.match(note, /glad they are back and have been thinking about them/); assert.match(note, /Do NOT mention any incident, alert, family or what they said/);
   assert.doesNotMatch(note, /Warm and slightly bright|very short/);
   const r = c2.roster('');
-  assert.match(r, /EARLIER SAFETY CONCERN/); assert.match(r, /yes, you let their family know because they said they might hurt themselves/);
+  assert.match(r, /EARLIER SAFETY CONCERN/); assert.match(r, /yes, you let their family know about a safety worry/); assert.doesNotMatch(r, /because they said they might hurt themselves/);
   assert.match(r, /last safety ticket .* is closed: their family marked it seen/);
 });
 
@@ -655,7 +655,7 @@ test('R1 no repeated openings: identity said once, stock comfort and recent open
   assert.equal(c.identitySaid, true);
   assert.match(c.replyNote(), /already said who you are/);
   assert.doesNotMatch(await run(2, T + "Of course I'm Maya, your companion, and your friend."), /Maya/); // second time: rewritten
-  assert.match(await run(3, T + "I'm right here with you. Tell me more."), /right here with you/); // first use of the comfort line is allowed
+  assert.doesNotMatch(await run(3, T + "I'm right here with you. Tell me more."), /right here with you/); // the stock comfort line is never a reply, not even the first time
   assert.doesNotMatch(await run(4, T + "I'm right here with you, truly. More."), /right here with you/); // repeat: rewritten
   assert.doesNotMatch(await run(5, T + "I'm here with you. Okay."), /here with you/); // same stock phrase as a recent opening, other words
   assert.deepEqual(c.recentOpenings().length, 3);

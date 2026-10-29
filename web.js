@@ -103,7 +103,7 @@ const WHY = { 'no-key': 'the search service is not set up', limit: 'the search l
 function note(w) {
   if (!w || !w.topics || !w.topics.length) return '';
   const lead = 'WEB CHECK (a fact from the app: a general web search, NOT an official source and not from them)';
-  const rules = 'Say only what is written in this fact and name the site it came from; never invent a source, a link, a number or a phone number, and never give a link or number yourself. If the pages do not answer it, or disagree, say you cannot verify it. Keep it short, plain and calm; for a medicine or health question this is not medical advice: suggest their doctor or pharmacist.';
+  const rules = 'Say only what is written in this fact; never invent a source, a link, a number or a phone number, and never give a link or number yourself. If the pages do not answer it, or disagree, say you cannot verify it. ANSWER IN ONE OR TWO SHORT SENTENCES, the gist only: do not name sites or titles, quote excerpts, list points or add background, because the app keeps the sources apart and shows them if the person taps for them. Longer only if they asked for more. For a medicine or health question this is not medical advice: suggest their doctor or pharmacist.';
   const parts = w.topics.map((tp) => {
     if (tp.failed) return `Searched for ${tp.label}, but the search could not be done (${WHY[tp.failed] || 'it failed'}), so NOTHING can be verified about it: say plainly that you cannot verify it right now, and do not guess.`;
     if (!tp.results.length) return `Searched for ${tp.label} and found NO usable page, so it cannot be verified: say plainly that you cannot verify it.`;
@@ -116,4 +116,12 @@ function note(w) {
   return `${lead}: ${parts.join(' ')} ${rules}`;
 }
 
-module.exports = { tierOf, extract, search, lookup, note, safeQuery, cache, spent, HOURLY_CAP };
+// The sources behind a reply, for the eye button under it: what the search found, kept SEPARATE from the reply text. Site, title and excerpt only (already https,
+// public and length-limited by search()); nothing from the person. [] when nothing was found.
+function sources(w) {
+  const out = [];
+  for (const tp of (w && w.topics) || []) for (const x of tp.results || []) if (!out.some((o) => o.site === x.host)) out.push({ site: x.host, title: x.title || '', excerpt: x.content || '' });
+  return out.slice(0, 5);
+}
+
+module.exports = { sources, tierOf, extract, search, lookup, note, safeQuery, cache, spent, HOURLY_CAP };

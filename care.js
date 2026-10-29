@@ -762,6 +762,26 @@ function safetyHistoryNote(id) {
 const hasActiveSafety = (id) => Boolean(get(id) && safetyFlag(get(id)));
 const hasActiveFlag = (id) => Boolean(get(id) && get(id).flags.some((f) => f.status === 'active' && !f.safety));
 
+// What the family was actually told, by TOPIC, from the records only (never from what anyone said): safety / health tickets (last 7 days), a scam alert,
+// "tell my family" notes (last day), a could-not-reach alert. [] = nobody was told anything. The one source of truth for every reply (appFacts) and
+// for the guard that stops a reply claiming an alert that does not exist (call.js breaksFacts).
+function familyToldTopics(id, now = Date.now()) {
+  const p = get(id);
+  if (!p) return [];
+  const out = [], DAY = 24 * 60 * MIN;
+  for (const f of p.flags) if (f.safety && now - f.createdAt < 7 * DAY) out.push(f.kind === 'health' ? 'a health worry' : 'a safety worry');
+  for (const f of p.flags) if (!f.safety && f.level === 'alert' && now - f.createdAt < DAY) out.push('that they could not be reached');
+  for (const x of p.scams || []) if (x.level === 'alert' && (x.status === 'active' || now - (x.resolvedAt || x.createdAt) < DAY)) out.push(`a possible ${x.type}`);
+  for (const n of p.notifications) if (n.to === 'family' && (n.ref === 'asked' || n.ref === 'family_ask') && now - n.times.sent < DAY) out.push(n.ref === 'asked' ? 'a worry they said yes to sharing' : 'that they would like to hear from them');
+  return [...new Set(out)];
+}
+// Facts only. No alert = say so plainly; an alert = its topic only. Never a sentence to copy, never a reason, never their words.
+function familyFacts(id, now = Date.now()) {
+  const t = familyToldTopics(id, now);
+  if (!t.length) return 'FAMILY ALERTS (facts from the app): the app has told their family NOTHING about them: no alert, no note, on any topic, and no safety concern was ever raised. If they ask whether or why you told their family, say plainly in your own words that nobody was told. Never claim you told or alerted anyone, never give a reason for an alert, and never say or suggest they spoke of hurting themselves: if they say they never said that, agree plainly that you got it wrong, with no soothing line.';
+  return `FAMILY ALERTS (facts from the app): the app has told their family about ONLY these topics: ${t.join('; ')} (topic only: no words of theirs, no photo). If they ask, name that topic and nothing else, plainly. Never give a reason beyond the topic, never say "because I care about you", never quote or guess what they said, and never claim anything else was sent: for any other topic nobody was told.`;
+}
+
 // What the app is doing right now, as plain FACTS for Maya's notes (never a script, never read out as written). She decides the
 // wording; nothing here says an action happened unless the code did it. Topic-only for safety: no words, diagnosis or place.
 function appFacts(id, now = Date.now()) {
@@ -792,6 +812,7 @@ function appFacts(id, now = Date.now()) {
   const sc = (p.scams || []).find((x) => x.status === 'active' || now - (x.resolvedAt || x.createdAt) < 24 * 60 * MIN);
   if (sc && sc.level === 'alert') f.push(`The app has told their family about a possible ${sc.type} (topic only), ${ago(sc.createdAt)}, because they said yes. That is true and on the family's dashboard: if they ask whether you told their family, say yes and name the topic, never "an earlier message". ${sc.status === 'active' ? 'Their family has not marked it seen yet.' : 'Their family has seen it.'} Nothing more is known, and it is not sent again. If they are upset about it, be factual about what was sent (only the kind of scam, no words, no photo) and that it was already sent and cannot be undone; never deny it, and never excuse it by saying you did it because you care about them.`);
   else if (sc && sc.level === 'flag') f.push(`They said no to letting their family know about a possible ${sc.type}, so nobody was told: no message, no alert (only a quiet note on the family's dashboard). If they ask, say honestly that you did not tell their family.`);
+  f.push(familyFacts(id, now));
   const pc = painCount(id, now);
   f.push(pc ? `They have mentioned pain or discomfort ${pc} time${pc > 1 ? 's' : ''} before this turn in the last 3 days (not counting what they say next).` : 'They have not mentioned pain or discomfort in the last 3 days.');
   const fl = p.flags.find((x) => x.status === 'active' && !x.safety);
@@ -990,7 +1011,7 @@ module.exports = {
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, assess, raise, ring,
   addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

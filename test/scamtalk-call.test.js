@@ -66,7 +66,7 @@ test('happening right now: the check is awaited, the SAME answer carries the pau
   assert.equal(calls, 2, 'one check from the probe above and one from the turn itself');
   const roster = lastRoster();
   assert.match(roster, /about to act on it right now/); assert.match(roster, /Slow down: be steady, calm and brief/); assert.match(roster, /simply hang up or say they will call back/);
-  assert.equal(sentences(said), 4, said);
+  assert.equal(sentences(said), 3, said);   // the gist: three at most while the family question is owed (was four)
   const p = care.scamPending(c.profile.id); assert.equal(p.channel, 'spoken'); assert.equal(p.pause, true); assert.equal(p.type, 'gift card scam');
   assert.equal(care.view(c.profile.id).scams.length, 0, 'no ticket until they answer');
 });

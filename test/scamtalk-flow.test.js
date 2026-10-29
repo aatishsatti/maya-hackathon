@@ -69,7 +69,7 @@ test('pause (about to act): a steadier note (stop, hang up, check yourself, ask 
   assert.match(roster, /about to act on it right now/); assert.match(roster, /Slow down: be steady, calm and brief, with no cheerfulness/); assert.match(roster, /simply hang up or say they will call back/);
   assert.match(roster, /say once, gently, why you are worried[^.]*do not nag or argue/); assert.match(roster, /let their family know now\?/);
   assert.equal(care.scamPending(id).pause, true);
-  assert.equal(sentences(r.messages[1].text), 4, 'a pause is never cut short to two sentences: ' + r.messages[1].text);
+  assert.equal(sentences(r.messages[1].text), 3, 'a pause keeps the family question (three at most): ' + r.messages[1].text);
 });
 
 test('caution (one sign): a gentle double-check, never called a scam, no family question, nothing remembered or sent', async () => {

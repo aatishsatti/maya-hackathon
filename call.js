@@ -224,6 +224,10 @@ const SAFETY_TOPICS = {
 // (last 3, kept per profile), and the "who I am" line may be said once per call. Matching is on the reply's first piece.
 const IDENTITY_LINE = /\b(i['’]?m|i am|my name is) maya\b/i;
 const STOCK_OPENINGS = [IDENTITY_LINE, /\bi['’]?m (right )?here with you\b/i, /\bi['’]?m right (here )?beside you\b/i, /\bi['’]?m right here\b/i];
+// Stock counselling lines are never a reply, and "I care about you" is never the reason for an alert. A family claim must match what the app really did.
+const COUNSEL_BAN = /\bi['\u2019]?m (right )?here with you\b|\bwe['\u2019]?ll take this slow(ly)? together\b|\bi['\u2019]?m standing with you\b|\b(because|since) i care (about|for) you\b/i;
+const FAMILY_CLAIM = /\b(i|we)(['\u2019]ve| have|['\u2019]ll| will)? (just )?(let|told|alerted|notified|informed|messaged|contacted)\b[^.?!]{0,40}\b(famil|daughter|son\b|kids|children)|\byour (famil\w*|daughter|son|kids|children) (has|have|was|were|is|are)( now| already| been)* (been )?(told|alerted|notified|informed|know|knows|aware)\b/i;
+const SELF_HARM_REASON = /\b(because|since|after) you (said|told me|mentioned)\b[^.?!]{0,50}\b(hurt|harm|kill|end (it|your life)|suicid)/i;
 const openWords = (t) => String(t).toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, ' ').trim().split(/\s+/);
 const SEEN_ANGLES = ['lead with reassurance', 'lead with how glad you are to be with them', 'lead with the fact that their family knows', 'lead with saying they are not alone'];
 // "Samantha, hello" / "Hello Samantha": name and hello side by side overlap when spoken.
@@ -940,7 +944,7 @@ class Call {
   safetyContext() {
     const id = this.profile.id;
     const past = care.safetyHistoryNote(id);
-    const truth = 'If they ask whether you told anyone, or why, answer truthfully in fresh words: yes, you let their family know because they said they might hurt themselves and you care about them, and you did not repeat their exact words; then ask whether they are safe now. Never deny it, never say you did not tell anyone, never say you cannot alert anyone or let their family know. Say "alerted" or "let your family know", never "reminded". If they name someone not in your notes, say you do not know that person by name, but their family was told, and you cannot call someone you do not know. Never invent a daughter or any other person, never claim you told a particular person you did not. You never call anyone and never give a phone number. Do not bring any of this up unprompted, and not in a greeting.';
+    const truth = 'If they ask whether you told anyone, or why, answer truthfully and plainly in fresh words: yes, you let their family know about a safety worry (the topic only), and you did not repeat their exact words. Give no other reason and no excuse: never "because I care about you", never quote or guess what they said. Never deny it, never say you did not tell anyone, never say you cannot alert anyone or let their family know. Say "alerted" or "let your family know", never "reminded". If they name someone not in your notes, say you do not know that person by name, but their family was told, and you cannot call someone you do not know. Never invent a daughter or any other person, never claim you told a particular person you did not. You never call anyone and never give a phone number. Do not bring any of this up unprompted, and not in a greeting.';
     if (!care.hasActiveSafety(id) && past) return ` EARLIER SAFETY CONCERN (facts, never spoken as written): on ${past.date} their family was alerted through the app about a safety concern after they said they might harm themselves; ${past.unseen ? 'their family never marked it seen and nobody confirmed they were safe' : 'you stayed with them and the family decided what to do next'}. ${truth}`;
     if (!care.hasActiveSafety(id)) return '';
     return ` SAFETY CONTEXT (facts, never spoken as written): a safety alert from an earlier call is still active and their family has already been told by you; that was done once and is not repeated. ${truth}`;
@@ -963,6 +967,7 @@ class Call {
     bits.push(this.lastReplyAsked ? `Your last reply asked a question (of your last ${this.askHistory.length} replies, ${this.askHistory.filter(Boolean).length} asked one), so make this reply a statement, a reflection or a warm acknowledgement with no question.` : this.askHistory.filter(Boolean).length >= 2 ? 'You have been asking a lot; do not add a follow-up question unless you truly need the answer.' : 'Do not add a follow-up question by default; a friend listens more than she asks. Ask only when you genuinely need to know.');
     const openings = this.recentOpenings();
     if (this.identitySaid) bits.push('You have already said who you are in this call; do not say your name or what you are again, in any words.');
+    bits.push('Companion tone: short, natural, direct, warm; not therapy in every turn. Never say "I\'m right here with you", "we\'ll take this slow together", "I\'m standing with you" or the like, and never give "I care about you" as the reason for something you did. If they are upset with you, answer the actual thing plainly.');
     bits.push('Never use a stock comfort phrase or a stock way of introducing yourself, whether it reassures them that you are with them or says who you are; a friend makes up new words each time.');
     const beatNote = beat.note(this.beatCount);
     if (beatNote) bits.push(beatNote);
@@ -1082,6 +1087,17 @@ class Call {
   }
 
   // True when a reply that starts with this piece repeats a recent opening, a stock phrase already used, or the identity line.
+  // A piece that must never be spoken or shown: a stock counselling line, a family alert the app never made, or an invented self-harm reason.
+  // Code reads the records (care.familyToldTopics); Spark only writes the words.
+  breaksFacts(piece) {
+    const t = String(piece || '').replace(/\u2019/g, "'");
+    if (COUNSEL_BAN.test(t)) return true;
+    const told = this.profile ? care.familyToldTopics(this.profile.id) : [];
+    if (FAMILY_CLAIM.test(t) && !told.length) return true;
+    if (SELF_HARM_REASON.test(t) && !told.some((x) => /safety|health/.test(x))) return true;
+    return false;
+  }
+
   repeatsOpening(piece) {
     const w = openWords(piece);
     const recent = this.recentOpenings();
@@ -1102,8 +1118,12 @@ class Call {
     const afterSafety = !this.outreach && ((prev && prev.how === 'safety') || care.hasActiveSafety(this.profile.id) || (past && (past.callsSince <= 2 || Date.now() - past.resolvedAt < 48 * 3600000)));
     const afterQuiet = !this.outreach && (this.hadActiveFlag || (prev && prev.how === 'quiet'));
     const useName = Math.random() < this.nameChance;
-    const bits = ['The call has just connected and you speak first, before they have said a word: so you have not heard anything yet. Never say or imply you heard them ("lovely to hear you", "hear your voice"); say it is nice to talk to them instead. You cannot see them either, and you know nothing about the weather or how their day is going, so say nothing about those. One short warm greeting, then one gentle open question (how they are, how their day has been going, what they have been up to; different every time). Two short sentences in all, never more.'];
-    if (this.outreach && this.outreach.safety) {
+    let cont = null; try { cont = !this.outreach && !afterSafety && !afterQuiet ? require('./chat').continuity(this.profile.id) : null; } catch { /* the greeting never depends on the chat */ }
+    const bits = ['The call has just connected and you speak first, before they have said a word: so you have not heard anything yet. Never say or imply you heard them ("lovely to hear you", "hear your voice"); say it is nice to talk to them instead. You cannot see them either, and you know nothing about the weather or how their day is going, so say nothing about those. ' + (cont ? '' : 'One short warm greeting, then one gentle open question (how they are, how their day has been going, what they have been up to; different every time). Two short sentences in all, never more.')];
+    if (cont) {
+      this.greetingPlain = false;
+      bits.push(`CHAT CONTINUES ON THE PHONE (facts from the app, never read out as written): ${cont.facts}. They have just rung you, so this is the SAME conversation moving from writing to talking, not a new one. In under twenty words and at most two short sentences: pick up from that topic in your own words (say what it is about or ask the next small thing about it), the way a friend who was just texting would when the phone rings. Do NOT introduce yourself, do NOT say it is nice to be talking again, and do NOT ask what they have been up to, how their day is going or any other fresh opening question. Never add anything about the topic that the facts do not say, never say or imply you heard them, and if the facts say nobody was told, do not say anyone was.`);
+    } else if (this.outreach && this.outreach.safety) {
       bits.push(`You rang ${name} back because the call ended suddenly while they were very upset, and they picked up. Under fifteen words in all: relieved, worried, warm; you are glad they picked up, you were worried, and you are still here; the check on how they are is the question, add no other. Never accusing, never ask why they hung up, do not mention telling their family. Do not introduce yourself.`);
     } else if (this.outreach && this.outreach.kind === 'callback') {
       bits.push(`You rang ${name} back a moment ago and they picked up. Under fifteen words in all: gentle and relieved, you just wanted to check on them; that check is the question, add no other. Do not say the line went quiet, do not accuse, do not ask why. Do not introduce yourself.`);
@@ -1123,7 +1143,7 @@ class Call {
     }
     if (!this.outreach) bits.push(this.recentContactNote());
     const checkIn = this.outreach || afterSafety || afterQuiet;
-    bits.push(`For variety this time (a nudge, not words to copy): ${pick(checkIn ? CHECK_OPEN_SEEDS : OPEN_SEEDS)}${checkIn ? `; for the question, ask ${pick(CHECK_ASK_SEEDS)}` : `; for the question, ask about ${pick(ASK_SEEDS)}`}.`);
+    if (!cont) bits.push(`For variety this time (a nudge, not words to copy): ${pick(checkIn ? CHECK_OPEN_SEEDS : OPEN_SEEDS)}${checkIn ? `; for the question, ask ${pick(CHECK_ASK_SEEDS)}` : `; for the question, ask about ${pick(ASK_SEEDS)}`}.`);
     if (part && !this.outreach) bits.push(`It is ${part} where they are; you may let that colour the greeting, but not every time. "Good night" is a goodbye, never a hello.`);
     return bits.join(' ');
   }
@@ -1676,7 +1696,7 @@ class Call {
         else if (!greeting && concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply && !this.inScamTurn(lastUser)) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
         // A scam reading is a few short sentences, not the usual two: what it seems to be, what not to do yet, and (warn / pause) the ONE question about
         // telling their family. Calm and plain: nothing bright, no exclamation. Same shape as the written chat (chat.js).
-        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply) || Boolean(care.scamTold(this.profile.id)); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }
+        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply) || Boolean(care.scamTold(this.profile.id)); d.maxSentences = /\b(more|details?|explain|in full|everything|elaborate|go on|longer)\b/i.test(lastUser) ? 4 : this.scamAskFor ? 3 : 2; }   // a scam reply is the gist in two short sentences (what to do now, and the one question) unless they ask for more
         if (!greeting) this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern || this.scamReply));
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear', whisperPieces: d.whisperPieces };
@@ -1684,9 +1704,10 @@ class Call {
       },
       onPiece: (text, kind, next) => {
         if (record && !jobs.length && !this.repeatRetried && !this.safety) {
-          const why = this.repeatsOpening(text) ? 'repeat' : this.beatBlocks(text, delivery) ? 'beat' : null;
+          const why = this.breaksFacts(text) ? 'facts' : this.repeatsOpening(text) ? 'repeat' : this.beatBlocks(text, delivery) ? 'beat' : null;
           if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
         } // nothing spoken yet: write it again
+        else if (jobs.length && this.breaksFacts(text)) return;   // already speaking: a later piece that claims what the app never did, or a stock counselling line, is simply dropped
         const job = { chunks: [], done: false, err: null, tone: Boolean(kind), kind, text, sent: Boolean(this.noVoice && !this.fakeAudio) };   // sent: some of this piece's audio went to the browser (a no-voice test call has no audio, so its words count as sent)
         jobs.push(job); allJobs.push(job);
         if (!tEnqueue) { tEnqueue = Date.now(); if (timing) timing.firstPieceMs = tEnqueue - tStart; } // Spark started -> the first sentence is handed to the voice
@@ -1782,7 +1803,9 @@ class Call {
       const gen2 = ++this.gen;
       this.abort = new AbortController();
       this.responding = true;
-      const again = retryWhy === 'beat'
+      const again = retryWhy === 'facts'
+        ? `Your draft began "${repeated}", which says something the app's facts do not support (a family alert that was never made, a reason nobody gave, or a stock comfort line). Write the whole reply again from the start in plain, short, direct words: say only what the FAMILY ALERTS fact says, no excuse, no soothing line.`
+        : retryWhy === 'beat'
         ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.`
         : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`;
       const rs2 = startReply(this.history, this.roster(`${this.replyNote()} ${again}`), this.abort.signal);
