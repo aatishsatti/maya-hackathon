@@ -135,6 +135,36 @@ test('6c outside a scam conversation the unsure question still opens as before',
   assert.ok(c.pendingConcern);
 });
 
+// ---- a yes must be an answer TO MAYA (steve and roger: a false yes made a family alert) ----
+const { saysYesToFamily, asksFamily } = require('../call');
+test('7 yes-words that are not an answer to her question never count: caller, hand-over, past tense, question, statement', () => {
+  for (const t of ['Yeah, there\'s that man calling.', 'what should I tell him?', 'Yeah you did let them know', 'Yes, I will give you my social security number', 'I will give you my Social Security number', 'Yes ok my account number is 4455', 'Yes he is still on the line', 'yes he wants me to call my son', 'I told you not to let my family know', 'no'])
+    assert.equal(saysYesToFamily(t), false, t);
+});
+
+test('7b plain answers and explicit requests still count', () => {
+  for (const t of ['yes', 'Yes please', 'yeah go ahead', 'please tell my family', 'Yes, tell my family', 'Yes tell them', 'okay yes', 'Yes, I think you should'])
+    assert.equal(saysYesToFamily(t), true, t);
+  assert.equal(asksFamily('please let my daughter know'), true); assert.equal(asksFamily('he says to call my son'), false);
+});
+
+test('7c an open scam question: talk to the caller does not make an alert; a real yes does; the old no stays a no', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'phone scam', { channel: 'spoken', pause: true });
+  const n1 = c.careNotes('Yes, I will give you my Social Security number');
+  assert.equal(care.scamTold(id), null, 'no alert from a line to the caller'); assert.ok(!/has now sent their family an alert/.test(n1));
+  care.scamAsk(id, 'phone scam', { channel: 'spoken', pause: true });
+  c.careNotes('Yeah, there\'s that man calling.'); assert.equal(care.scamTold(id), null);
+  care.scamAsk(id, 'phone scam', { channel: 'spoken', pause: true });
+  c.careNotes('yes please tell my family'); assert.ok(care.scamTold(id), 'a real yes still alerts');
+});
+
+test('7d the same rule guards the older "is something wrong?" yes', () => {
+  const { id, c } = senior(); c.pendingConcern = { left: 2 };
+  c.careNotes('Yeah, there\'s that man calling.'); assert.equal(anyAlert(id), 0);
+  c.pendingConcern = { left: 2 }; c.careNotes('yes please let them know'); assert.equal(anyAlert(id), 1);
+});
+
 test('the chat borrows the same guards (health alert, already-told note)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'chat.js'), 'utf8');
   assert.match(src, /concern === 'urgent' && !this\.health && !this\.safety && !this\.inScamTurn\(lastUser\)/);

@@ -124,6 +124,25 @@ const NEGATION = /\b(do not|don'?t|dont|not|never|won'?t|wont|no|nope|nah|withou
 function affirmed(re, text) {
   return String(text || '').replace(/[\u2018\u2019]/g, "'").split(/[,.?!;]/).some((c) => re.test(c) && !NEGATION.test(c));
 }
+// A "yes" to Maya's family question must be an answer TO HER. These are not: talk to the caller ("I will give you my number", "what should I tell him"),
+// handing over details, a question, or something about what she already did in the past ("you did let them know"). Such a line never counts as a yes,
+// however many yes-words it holds. Code decides this; Spark only writes the words.
+const NOT_AN_ANSWER = /\b(you (did|told|have|had|already|said|let|went|sent)|i (will|am going to|gave|give|told (him|her|them))|let me|here (is|are)|(he|she|they|the man|the caller) (want|wants|says|said|is asking|asked|is saying)|wants me|what|how|why|who|where|when|should i)\b|\b(my (account|card|bank|social|security|pin|password|number|code|address)|social security|account number|password|pin)\b|\d{3,}|\?/i;
+const CONCERN_YES_G = new RegExp(CONCERN_YES.source, 'gi');
+const ANSWER_FILLER = new Set(['ok', 'okay', 'sure', 'right', 'thanks', 'thank', 'you', 'maya', 'dear', 'now', 'so', 'then', 'and', 'do', 'it', 'that', 'them', 'please', 'yes', 'yeah', 'yep', 'oh', 'well', 'um', 'uh', 'to', 'i', 'would', 'like', 'me', 'for', 'think', 'should']);
+const cleanSpeech = (text) => String(text || '').replace(/[\u2018\u2019]/g, "'");
+// A request to tell their family, addressed to Maya (not negated, not talk to someone else).
+const asksFamily = (text) => !NOT_AN_ANSWER.test(cleanSpeech(text)) && affirmed(FAMILY_ASK, text);
+// A yes to her question: an explicit request, or a short plain answer made of yes-words (a long sentence with one "yeah" in it is not an answer).
+const saysYesToFamily = (text) => {
+  const t = cleanSpeech(text);
+  if (NOT_AN_ANSWER.test(t)) return false;
+  if (affirmed(FAMILY_ASK, t)) return true;
+  if (!affirmed(CONCERN_YES, t)) return false;
+  // Only yes-words and small fillers: "yes", "yes please", "yeah go ahead". Anything else in the line (a statement about the caller, a story) is not an answer.
+  const rest = t.toLowerCase().replace(CONCERN_YES_G, ' ').replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter((w) => w && !ANSWER_FILLER.has(w));
+  return rest.length <= 1;
+};
 // They named their family in a clause that refuses it ("do not tell my son"): a no, whether or not a question was open.
 const refusedFamily = (text) => String(text || '').replace(/[\u2018\u2019]/g, "'").split(/[,.?!;]/).some((c) => FAMILY_ASK.test(c) && NEGATION.test(c));
 // Asks that need what they said earlier in THIS call (the filed memory only exists after the call ends).
@@ -1448,7 +1467,7 @@ class Call {
     if (scamQ) {
       if (this.safety || this.health) care.scamClear(id);
       else if (CONCERN_NO.test(heard) || refusedFamily(heard)) { const told = care.scamTold(id); care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; notes.push(told ? `FACT: they do not want their family told about the possible ${scamQ.type}, but the app ALREADY told their family earlier (topic only: the kind of scam, no words, no photo) and that cannot be undone. Say so plainly and briefly in fresh words: never deny it, never say nothing was sent, and do not excuse it by saying you did it because you care about them. Acknowledge what they wanted, ask nothing about telling the family again.` : `FACT: they said no to letting their family know about the possible ${scamQ.type} they told you about. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.`); }
-      else if (affirmed(CONCERN_YES, heard) || affirmed(FAMILY_ASK, heard)) { const r = care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; notes.push(r && r.isNew === false ? `FACT: their family was ALREADY told about the possible ${scamQ.type} earlier, so nothing new was sent now. Say that, in one short sentence in fresh words, naming the topic and saying "your family" and never naming a particular relative. Do not say you have just sent anything. Promise nothing else.` : `FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). The kind: a possible ${scamQ.type}. Confirm that in one short sentence in fresh words, naming the topic as they would know it (not "the earlier message"), saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.`); }
+      else if (saysYesToFamily(heard)) { const r = care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; notes.push(r && r.isNew === false ? `FACT: their family was ALREADY told about the possible ${scamQ.type} earlier, so nothing new was sent now. Say that, in one short sentence in fresh words, naming the topic and saying "your family" and never naming a particular relative. Do not say you have just sent anything. Promise nothing else.` : `FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). The kind: a possible ${scamQ.type}. Confirm that in one short sentence in fresh words, naming the topic as they would know it (not "the earlier message"), saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.`); }
       else if (care.scamTold(id)) care.scamClear(id);   // their family is already told: the open question is dropped, never asked again
       else { care.scamUnclear(id); notes.push('FACT: you asked whether they would like their family to know about the message and they have not answered that yet. Answer what they just said; do not push, and do not ask the same question again word for word.'); }
     }
@@ -1463,11 +1482,11 @@ class Call {
     else if (this.pendingConcern && !this.health) {
       // Maya was unsure and asked. Decide from the answer: yes -> alert; no -> nothing; neither -> she may lean in once more.
       if (CONCERN_NO.test(heard) || refusedFamily(heard)) { this.pendingConcern = null; this.familyDeclined = true; notes.push('FACT: they said it is fine or normal. No alert was made and none will be. Take them at their word, carry on warmly, and do not ask about it again.'); }
-      else if (affirmed(CONCERN_YES, heard) || affirmed(FAMILY_ASK, heard)) { this.pendingConcern = null; this.familyAsked = true; care.concernAlert(id); notes.push('FACT: they said yes, so the app has now sent their family an alert (topic only) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.'); }
+      else if (saysYesToFamily(heard)) { this.pendingConcern = null; this.familyAsked = true; care.concernAlert(id); notes.push('FACT: they said yes, so the app has now sent their family an alert (topic only) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.'); }
       else { this.pendingConcern.left -= 1; if (this.pendingConcern.left <= 0) this.pendingConcern = null; notes.push('FACT: you asked whether to let their family know and they have not answered that yet. Respond to what they said; if it is still unclear, you may ask once more, gently. Do not alert on a guess.'); }
     } else if (refusedFamily(heard)) {
       this.familyDeclined = true;   // a refusal with no question open is still a refusal, kept for the call (nothing is sent)
-    } else if (affirmed(FAMILY_ASK, heard) && !this.familyAsked && !scamHandled) {
+    } else if (asksFamily(heard) && !this.familyAsked && !scamHandled) {
       this.familyAsked = true;
       care.familyAsk(id);
       notes.push('FACT: they asked you to let their family know, and the app has sent their family a gentle note (not an alert) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.');
@@ -1814,4 +1833,4 @@ class Call {
   }
 }
 
-module.exports = { simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
