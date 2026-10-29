@@ -233,6 +233,7 @@ function callWords(said, heard) {
 const callDeps = { awaitMs: SCAM_AWAIT_MS_DEFAULT, scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null) };
 // A turn about a scam is never a health emergency by its urgency alone (a panicked "he is on the phone" is not a fall): unless their own words name an injury.
 const EMERGENCY_WORDS = /\b(i fell|i have fallen|fell down|chest pain|can'?t breathe|cannot breathe|bleeding|stroke|collapsed|heart attack|passed out|can'?t get up|cannot get up)\b/i;
+const SCAM_CONTEXT_MS = 10 * 60000; // after a scam-looking turn, this long counts as the same scam conversation
 const SCAM_LATER_FRESH_MS = 30000; // a verdict that arrives after her answer shapes the NEXT answer only if that comes within this long
 const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
 
@@ -354,6 +355,7 @@ class Call {
     this.greeted = false;        // a call is greeted once, at its start, never again
     this.replyCount = 0;         // normal replies so far
     this.lastReplyAsked = false; // her last reply ended in a question
+    this.scamAt = 0;             // when this call last had a scam-looking turn (inScamTurn: urgency in the minutes after it is the scam's)
     this.scamLater = null;       // { scam, at }: a scam verdict that arrived after her answer, used for the next one only
     this.scamReply = null;       // 'warn' | 'pause' | 'caution' | null: the shape of THIS reply (see onFeel)
     this.scamAskFor = null;      // the verdict whose one question to the family she is about to ask
@@ -968,7 +970,8 @@ class Call {
   inScamTurn(heard) {
     const id = this.profile && this.profile.id;
     if (EMERGENCY_WORDS.test(String(heard || '').replace(/[\u2018\u2019]/g, "'"))) return false;
-    return Boolean(this.scamReply || (id && care.scamPending(id)) || require('./scam').needsCheck(heard));
+    if (this.scamReply || (id && care.scamPending(id)) || require('./scam').needsCheck(heard)) { this.scamAt = Date.now(); return true; }
+    return Date.now() - this.scamAt < SCAM_CONTEXT_MS;   // the follow-ups of a scam conversation ("he is still there", "yeah you did") are part of it
   }
 
   // Scam shield on a call: what the person just said. Decides in code (the cheap word filter) whether it is worth one Spark check, and whether
@@ -985,6 +988,7 @@ class Call {
     const out = (v) => ({ note: v ? scam.talkNote(v, { told }) : '', scam: v, told });
     if (!id || this.safety || this.pendingConcern || care.hasActiveSafety(id) || care.scamPending(id) || selfHarmText(heard)) return out(now);
     const plan = scam.checkPlan(heard);
+    if (plan.check || now) this.scamAt = Date.now();
     if (!plan.check) return out(now);   // ordinary talk: synchronous, nothing awaited, no added delay
     const p = Promise.resolve().then(() => callDeps.scamText(heard)).catch((e) => { console.error('scam check failed:', e.message); return null; });
     if (!plan.await) { p.then((v) => { if (v && v.level !== 'none') this.scamLater = { scam: v, at: Date.now() }; }); return out(now); }
@@ -1454,6 +1458,7 @@ class Call {
     }
     if (this.health) notes.push(this.healthNote());
     if (this.familyDeclined && !this.health && !this.safety) notes.push('FACT: earlier in this call they told you no to letting their family know. Take them at their word for the rest of the call: do not ask again whether to tell their family, and no alert will be made unless something truly urgent happens. You still listen and care about how they are.');
+    if (this.pendingConcern && this.inScamTurn(heard)) this.pendingConcern = null;   // a scam conversation is not the older "is something wrong?" question: its words never count as that yes
     if (this.safety) notes.push(this.safetyNote());
     else if (this.pendingConcern && !this.health) {
       // Maya was unsure and asked. Decide from the answer: yes -> alert; no -> nothing; neither -> she may lean in once more.
@@ -1631,7 +1636,7 @@ class Call {
         d.noQuestion = !greeting && this.lastReplyAsked && concern !== 'unsure'; // asking because she genuinely does not know is the one exception
         if (!greeting && concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // they already said no to telling family: no second ask, however often the pain comes back
         if (!greeting && concern === 'urgent' && !this.health && !this.safety && !this.inScamTurn(lastUser)) this.enterHealth();
-        else if (!greeting && concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
+        else if (!greeting && concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply && !this.inScamTurn(lastUser)) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
         // A scam reading is a few short sentences, not the usual two: what it seems to be, what not to do yet, and (warn / pause) the ONE question about
         // telling their family. Calm and plain: nothing bright, no exclamation. Same shape as the written chat (chat.js).
         if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply) || Boolean(care.scamTold(this.profile.id)); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }

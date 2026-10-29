@@ -189,7 +189,7 @@ class ChatSession {
         d.noQuestion = this.lastReplyAsked && concern !== 'unsure';
         if (concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // already said no to telling family: no second ask
         if (concern === 'urgent' && !this.health && !this.safety && !this.inScamTurn(lastUser)) this.enterHealth();
-        else if (concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
+        else if (concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply && !this.inScamTurn(lastUser)) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
         // A scam reading is a few short sentences, not the usual two: what it says, that it looks like a scam and what not to do yet (in her own words), and (for a
         // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
         if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }

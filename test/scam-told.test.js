@@ -107,10 +107,39 @@ test('5 the apology fact is factual: what was sent, that it cannot be undone, ne
   assert.ok(!/earlier message/.test(f.replace(/never "an earlier message"/, '')));
 });
 
+test('6 the "is something wrong?" question is never opened on a scam turn, and its yes-words never become a family alert', async () => {
+  const { id, c } = senior();
+  c.gen = 1; c.abort = new AbortController(); c.history.push({ role: 'user', content: `A: ${PANIC}` });
+  await c.speakReply(fixedReply('[[feel: emotion=anxious intensity=4 intent=share concern=unsure]] Hang up now.'), null, 1, { record: true });
+  assert.equal(c.pendingConcern, null, 'no concern question on a scam turn');
+  const note = c.careNotes('Yeah you did let them know');
+  assert.ok(!/has now sent their family an alert/.test(note)); assert.equal(anyAlert(id), 0);
+  assert.equal(c.health, false);
+});
+
+test('6b the follow-ups of a scam conversation (no scam words of their own) are still the scam\'s: no health alert, no concern question; a real injury still is', async () => {
+  const { id, c } = senior();
+  c.inScamTurn(PANIC);   // the scam turn
+  assert.equal(c.inScamTurn('he is still there, what do I do'), true);
+  c.gen = 1; c.abort = new AbortController(); c.history.push({ role: 'user', content: 'A: he is still there, what do I do' });
+  await c.speakReply(fixedReply('[[feel: emotion=anxious intensity=5 intent=share concern=urgent]] Stay calm.'), null, 1, { record: true });
+  assert.equal(c.health, false); assert.equal(anyAlert(id), 0);
+  assert.equal(c.inScamTurn('I fell down and cannot get up'), false, 'an injury is never swallowed');
+  c.scamAt = Date.now() - 11 * 60000; assert.equal(c.inScamTurn('he is still there'), false, 'the window closes after ten minutes');
+});
+
+test('6c outside a scam conversation the unsure question still opens as before', async () => {
+  const { c } = senior();
+  c.gen = 1; c.abort = new AbortController(); c.history.push({ role: 'user', content: 'A: my knee feels a bit odd today' });
+  await c.speakReply(fixedReply('[[feel: emotion=worried intensity=3 intent=share concern=unsure]] Oh dear.'), null, 1, { record: true });
+  assert.ok(c.pendingConcern);
+});
+
 test('the chat borrows the same guards (health alert, already-told note)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'chat.js'), 'utf8');
   assert.match(src, /concern === 'urgent' && !this\.health && !this\.safety && !this\.inScamTurn\(lastUser\)/);
   assert.match(src, /care\.scamTold\(profileId\)/);
+  assert.match(src, /concern === 'unsure'[^\n]*!this\.inScamTurn\(lastUser\)/);
 });
 
 test.after(() => { calls.forEach((c) => c.end && c.end()); chat.endAll(); care.stop(); setTimeout(() => process.exit(), 50).unref(); });
