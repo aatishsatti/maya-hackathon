@@ -235,6 +235,11 @@ const CALL_LIMIT_ABSOLUTE = /\bcan(?:['\u2019]?t|not) (?:see|look at|view|open) 
 // With no family record: a past-tense send aimed at "them" (the family was just named), and any talk of what they have seen / read (nothing was sent to be seen).
 const PAST_SEND_THEM = /\b(i|we)(['\u2019]ve| have)? (just |already )?(let|told|alerted|notified|informed|messaged|contacted|texted|called)\b[^.?!]{0,25}\b(them|him|her|everyone|someone)\b/i;
 const SEEN_TALK = /\b(what|whether|if|how much) (they|your (family|daughter|son)|he|she)(['\u2019]ve| have| has| had)? (seen|read|opened|looked at|got it|received)|\b(seen|read|opened|received) (it|that|the (note|message|alert)) (yet|on their)|\bon their side\b|\bmarked (it )?(as )?seen\b|\b(i|we) (don['\u2019]?t|do not) know (what|whether|if) (they|your (family|daughter|son))\b/i;
+// They ask her to GIVE a link or a number (an official site, a helpline). Never given, whatever the source: the reason is safety, never "no browsing".
+const ASKS_LINK_NUMBER = /\b(link|links|url|web ?site|web address|helpline|hotline|help ?line|phone number|telephone number|contact (?:number|details)|number to call|number for|official (?:site|page|number))\b/i;
+const GIVE_VERB = /\b(give|send|share|tell|show|find|get|have|need|want|what(?:'s| is)|where|which|can you|could you|do you have|looking for)\b/i;
+const asksLinkNumber = (t) => ASKS_LINK_NUMBER.test(t) && GIVE_VERB.test(t);
+const BROWSE_EXCUSE = /\b(?:don['\u2019]?t|do not|can(?:['\u2019]?t|not)|unable to|not able to) (?:have )?(?:any )?(?:browsing|browse|internet access|access to the internet|web access|look (?:it |that |this |things )?up|go online|search(?: for it| online)?)\b/i;
 const SELF_HARM_REASON = /\b(because|since|after) you (said|told me|mentioned)\b[^.?!]{0,50}\b(hurt|harm|kill|end (it|your life)|suicid)/i;
 const openWords = (t) => String(t).toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, ' ').trim().split(/\s+/);
 const SEEN_ANGLES = ['lead with reassurance', 'lead with how glad you are to be with them', 'lead with the fact that their family knows', 'lead with saying they are not alone'];
@@ -1098,9 +1103,15 @@ class Call {
   // True when a reply that starts with this piece repeats a recent opening, a stock phrase already used, or the identity line.
   // What she can and cannot do HERE, as facts (the wording is Spark's). A call cannot start a photo check or a web search yet; the written chat does both.
   // A phone number is never looked up, in a call or in the chat; she says so straight away.
+  lastHeard(heard = '') {
+    const lastU = ([...(this.history || [])].reverse().find((m) => m.role === 'user') || { content: '' }).content;
+    return String(heard || (this.focus && this.focus.text) || lastU || '');
+  }
+
   limitsFacts(heard = '') {
-    const text = String(heard || (this.focus && this.focus.text) || '');
+    const text = this.lastHeard(heard);
     const bits = [];
+    if (asksLinkNumber(text)) bits.push(`LINK OR NUMBER REQUEST: they want a website link or a phone number (for a bank, a helpline or anything else). You NEVER give one, not even for the real bank, because a wrong one is dangerous. The reason is SAFETY: it is NOT that you have no browsing or cannot look things up, so never say that. In a few plain words of your own, two sentences at most: you won't share a link or number, even an official one, because a wrong one could hurt them; they should type the bank's name into their browser themselves, or use the official app or the number printed on their card. Never invent or guess a link or number.${this.channel !== 'chat' ? ' On a call also say: for anything to check, send it in the chat and you will check it there.' : ''}`);
     if (this.channel !== 'chat') bits.push('ON A CALL she cannot look at a photo or screenshot and cannot search the web yet; the written chat in the app can do both. If they offer a photo or screenshot, or ask her to find something out online, say so in a few words WITHOUT a flat "I can\'t": tell them to send it in the chat (after this call is fine) and she will check it there. Never say "I can\'t see pictures" or "I can\'t look things up online".');
     if (/(?:\d[\s().-]*){7,}/.test(text) || /\b(?:phone |telephone )?number\b/i.test(text)) bits.push('A PHONE NUMBER: you never look numbers up and cannot tell if one is real (callers can fake the number shown). If they give or ask about a number, say that straight away, in a few plain words ("I can\'t look numbers up"), never "I\'m not sure what you want me to do with it".');
     return bits.length ? ` LIMITS (facts for you, never read out as written): ${bits.join(' ')}` : '';
@@ -1126,6 +1137,7 @@ class Call {
     if (COUNSEL_BAN.test(t)) return true;
     if (FAMILY_TELL_TALK.test(t) && !this.familyRelevant()) return true;   // the family fact is internal: not volunteered on a turn that is not about it
     const told = this.profile ? care.familyToldTopics(this.profile.id) : [];
+    if (BROWSE_EXCUSE.test(t) && asksLinkNumber(this.lastHeard())) return true;   // the reason for not giving a link / number is safety, never "no browsing"
     if (this.channel !== 'chat' && CALL_LIMIT_ABSOLUTE.test(t) && !/\b(chat|after|yet|later)\b/i.test(t)) return true;   // in a call: where and when she CAN, never a flat "can't"
     if (FAMILY_CLAIM.test(t) && !told.length) return true;
     if (!told.length && (SEEN_TALK.test(t) || (PAST_SEND_THEM.test(t) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|yet)\b/i.test(t) && this.familyRelevant()))) return true;   // no record: no past-tense send to "them", and nothing about what they have seen

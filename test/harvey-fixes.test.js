@@ -216,7 +216,7 @@ test('voice: on a call the limits are facts (send it in the chat), a flat "can\'
   assert.equal(c.breaksFacts("I can't search from a call yet, send it in the chat and I'll check it there."), false);
   assert.equal(c.breaksFacts("Send the screenshot in the chat after this call and I'll check it there."), false);
   assert.equal(c.breaksFacts("I can't look numbers up for you."), false);
-  const ch = { ...c, channel: 'chat' }; assert.doesNotMatch(Call.prototype.limitsFacts.call(ch, 'hello'), /ON A CALL/);
+  const ch = Object.create(c); ch.channel = 'chat'; assert.doesNotMatch(Call.prototype.limitsFacts.call(ch, 'hello'), /ON A CALL/);
 });
 
 test('number: the fact says it plainly at once, and the weak "not sure what you would like me to do" is rewritten (chat and call)', async () => {
@@ -257,6 +257,18 @@ test('no record: ANY past-tense family send claim and any Seen talk is blocked a
 test('with a real family note on record, Seen talk and naming it are allowed', () => {
   const id = senior(); care.familyAsk(id); const c = mkCall(id); c.history.push({ role: 'user', content: 'A: Did you tell my family?' });
   assert.equal(c.breaksFacts("Yes, I let your family know you'd like to hear from them. I don't know what they've seen yet."), false);
+});
+
+test('link / number request: never given, the reason is safety not "no browsing"; chat and call facts; a browsing excuse is rewritten', async () => {
+  const id = senior(); chat.deps.scamText = verdict('none');
+  reset(`${FEEL} I don't have browsing here, so I can't look that up.`, `${FEEL} I won't share a link, even for the official bank, because a wrong one is dangerous. Type the bank's name into your browser yourself, or use the app.`);
+  const out = await chat.sendText(id, 'can you give me the link to the official bank help page', null);
+  assert.match(asked[0].roster, /LINK OR NUMBER REQUEST/); assert.match(asked[0].roster, /The reason is SAFETY/); assert.doesNotMatch(asked[0].roster, /send it in the chat and you will check/);
+  assert.equal(asked.length, 2); assert.doesNotMatch(out.messages[1].text, /browsing/i); assert.match(out.messages[1].text, /won't share a link/);
+  const c = mkCall(senior()); assert.match(c.limitsFacts('what is the helpline number for the bank?'), /On a call also say: for anything to check, send it in the chat/);
+  c.history.push({ role: 'user', content: 'A: what is the helpline number for the bank?' });
+  assert.equal(c.breaksFacts("I can't look that up, I don't have browsing here."), true); assert.equal(c.breaksFacts("I won't share a number, even an official one, because a wrong one is dangerous."), false);
+  assert.doesNotMatch(c.limitsFacts('I had a lovely walk today'), /LINK OR NUMBER/);
 });
 
 test.after(() => { made.forEach((c) => c.end()); for (const s of chat.sessions.values()) s.finish(); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });

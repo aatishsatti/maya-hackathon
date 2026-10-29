@@ -260,7 +260,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'familyRelevant', 'limitsFacts', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
+for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'familyRelevant', 'limitsFacts', 'lastHeard', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 
