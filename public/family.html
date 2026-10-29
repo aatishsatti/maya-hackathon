@@ -72,6 +72,25 @@
           </form>
         </section>
 
+        <section class="panel" id="waPanel">
+          <div class="sec-head"><h2>WhatsApp</h2><span id="waState" class="pill pill-plain"></span></div>
+          <p id="waLine" class="hint"></p>
+          <form id="waLink" class="form" hidden>
+            <input id="waPhone" inputmode="tel" placeholder="Their WhatsApp number with country code, e.g. 447700900123" maxlength="20" required aria-label="WhatsApp number">
+            <label class="hint" style="margin:0"><input id="waOpt" type="checkbox"> They have agreed to hear from Maya on WhatsApp</label>
+            <button class="btn primary" type="submit">Link this number</button>
+          </form>
+          <form id="waSend" class="form" hidden>
+            <input id="waText" placeholder="A short note for them (Maya says it is from you)" maxlength="300" aria-label="WhatsApp message">
+            <div class="form-row">
+              <button class="btn primary" type="submit" data-kind="text">Send as text</button>
+              <button class="btn" type="submit" data-kind="voice">Send as voice note</button>
+            </div>
+            <button id="waInvite" class="btn" type="button" hidden>Send a standard invitation to reply</button>
+          </form>
+          <p class="hint" id="waNote" hidden>No calls: Maya never rings or calls on WhatsApp. Words are never stored here.</p>
+        </section>
+
         <section>
           <div class="sec-head"><h2>Notifications</h2></div>
           <div id="notifs" class="stack"></div>

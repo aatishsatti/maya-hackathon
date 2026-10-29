@@ -193,10 +193,53 @@
     list($('notifs'), nots, 'Nothing sent yet.');
   }
 
+  // ---- WhatsApp (whatsapp.js): link a number with the person's opt-in, send a note as text or a voice note. Every rule (opt-in, 24 h window, template, spam)
+  // is enforced by the server; this only shows its answer and never decides. No message words are shown or kept here.
+  const WA_STATUS = { sending: 'Sending', sent: 'Sent', delivered: 'Delivered', read: 'Seen', failed: 'Not delivered' };
+  let waSubmitKind = 'text';
+  async function waCall(path, method, body) {
+    const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+    const j = await r.json().catch(() => ({}));
+    return { ok: r.ok, j };
+  }
+  async function loadWa() {
+    const mine = id;
+    let v;
+    try { v = (await waCall(`/api/whatsapp/${mine}`, 'GET')).j; } catch { return; }
+    if (mine !== id) return;
+    $('waLink').hidden = Boolean(v.linked && v.optIn);
+    $('waSend').hidden = !(v.linked && v.optIn);
+    $('waNote').hidden = !v.linked;
+    $('waState').textContent = !v.linked ? 'Not linked' : !v.optIn ? 'Opted out' : v.windowOpen ? 'Can message' : 'Waiting for them to write';
+    $('waState').className = `pill ${v.linked && v.optIn && v.windowOpen ? 'pill-ok' : 'pill-plain'}`;
+    const last = v.lastSent ? ` Last: ${v.lastSent.kind} ${t(v.lastSent.at)}, ${WA_STATUS[v.lastSent.status] || v.lastSent.status}${v.lastSent.error ? ` (code ${v.lastSent.error.code})` : ''}.` : '';
+    $('waLine').textContent = !v.configured ? 'WhatsApp is not set up on this server yet.'
+      : !v.linked ? 'Link their number once they have agreed to hear from Maya on WhatsApp.'
+      : !v.optIn ? `They stopped messages from Maya (number ending ${v.phoneEnd}).`
+      : v.windowOpen ? `Number ending ${v.phoneEnd}. They wrote in the last 24 hours, so you can send a note.${last}`
+      : `Number ending ${v.phoneEnd}. They have not written in the last 24 hours, so WhatsApp only allows a standard invitation to reply.${last}`;
+  }
+  $('waLink').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const r = await waCall(`/api/whatsapp/${id}/link`, 'POST', { phone: $('waPhone').value, optIn: $('waOpt').checked });
+    if (!r.ok) return showErr(r.j.error || 'Could not link.');
+    showErr(''); $('waPhone').value = ''; $('waOpt').checked = false; loadWa();
+  });
+  $('waSend').addEventListener('click', (e) => { const b = e.target.closest('button[data-kind]'); if (b) waSubmitKind = b.dataset.kind; });
+  async function waSend(useTemplate) {
+    const r = await waCall(`/api/whatsapp/${id}/send`, 'POST', { kind: waSubmitKind, text: $('waText').value, useTemplate });
+    $('waInvite').hidden = !r.j.needsTemplate;
+    if (!r.ok) return showErr(r.j.error || 'Could not send.');
+    showErr(''); $('waText').value = ''; $('waInvite').hidden = true; loadWa();
+  }
+  $('waSend').addEventListener('submit', (e) => { e.preventDefault(); waSend(false); });
+  $('waInvite').addEventListener('click', () => waSend(true));
+
   async function load() {
     if (!id) return;
     try { render(await api(`/api/care/${id}`)); showErr(''); } catch (e) { showErr(e.message); }
     loadTrend();
+    loadWa();
   }
   // Who the page is about: their name large at the top, and one chip per person (the chosen one dark, the others quiet). Only the picture
   // of the page changes here: the data calls and the choice itself (pick) are unchanged. Many people: the dropdown takes over from the chips.
