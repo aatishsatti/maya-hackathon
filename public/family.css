@@ -27,6 +27,19 @@ h2 { font-size: 18px; margin: 0; font-weight: 650; }
 .who { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .who label { color: var(--soft); font-size: 14px; }
 .presence { color: var(--soft); font-size: 14px; }
+/* Who this page is about: the name large, then a chip per person (chosen = dark, others quiet). With many people the dropdown in the bar is used. */
+.person { background: #f2f2f2; border-bottom: 1px solid var(--line); }
+.person-in { max-width: 1100px; margin: 0 auto; padding: 14px 32px 16px; }
+.person-label { margin: 0; color: var(--soft); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; }
+.person-name { margin: 0 0 10px; font-size: 34px; line-height: 1.15; font-weight: 700; overflow-wrap: anywhere; }
+.chips[hidden] { display: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font: inherit; font-size: 16px; font-weight: 600; min-height: 44px; padding: 8px 18px; border-radius: 999px; border: 1.5px solid #d9d9d9; background: #fff; color: var(--soft); cursor: pointer; }
+.chip:hover { color: var(--ink); border-color: #999; }
+.chip.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.chip:focus-visible { outline: 3px solid #1a1a1a; outline-offset: 2px; }
+.who[hidden] { display: none; }
+@media (max-width: 560px) { .person-in { padding: 12px 16px 14px; } .person-name { font-size: 30px; } }
 
 .wrap { padding: 20px 32px 64px; }
 .note { margin: 0 0 20px; color: var(--soft); font-size: 14px; max-width: 80ch; }

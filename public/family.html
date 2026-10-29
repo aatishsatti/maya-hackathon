@@ -10,13 +10,20 @@
 <header class="bar">
   <div class="bar-in">
     <div class="brand">Maya <span>Family</span></div>
-    <div class="who">
-      <label for="who">Senior</label>
+    <div id="whoBox" class="who" hidden>
+      <label for="who">Switch person</label>
       <select id="who"></select>
       <span id="presence" class="presence"></span>
     </div>
   </div>
 </header>
+<div class="person" role="region" aria-label="Who this page is about">
+  <div class="person-in">
+    <p class="person-label">Showing</p>
+    <h2 id="whoName" class="person-name"></h2>
+    <div id="chips" class="chips" role="group" aria-label="Switch person"></div>
+  </div>
+</div>
 <main class="wrap">
   <p class="note">Information only. Maya never diagnoses or recommends. Flags are yellow and show here only. Alerts are red and send a notification that opens this page. Calls and notifications reach the senior's page and this page only while they are open; there is no phone push yet.</p>
   <p id="err" class="err" role="alert" hidden></p>

@@ -198,7 +198,24 @@
     try { render(await api(`/api/care/${id}`)); showErr(''); } catch (e) { showErr(e.message); }
     loadTrend();
   }
-  function pick(newId) { id = newId; store.set(id); clearInterval(timer); load(); timer = setInterval(load, 3000); }
+  // Who the page is about: their name large at the top, and one chip per person (the chosen one dark, the others quiet). Only the picture
+  // of the page changes here: the data calls and the choice itself (pick) are unchanged. Many people: the dropdown takes over from the chips.
+  let people = [];
+  const CHIP_MAX = 5;
+  function showPeople() {
+    const me = people.find((p) => p.id === id);
+    $('whoName').textContent = me ? me.name : '';
+    const chips = people.length > 1 && people.length <= CHIP_MAX;
+    $('chips').hidden = !chips;
+    $('whoBox').hidden = people.length <= CHIP_MAX;   // the dropdown only when there are too many people for chips
+    $('chips').replaceChildren(...(chips ? people.map((p) => {
+      const b = el('button', 'chip' + (p.id === id ? ' on' : ''), p.name);
+      b.type = 'button'; if (b.setAttribute) b.setAttribute('aria-pressed', String(p.id === id));
+      b.addEventListener('click', () => { if (p.id !== id) { $('who').value = p.id; pick(p.id); } });
+      return b;
+    }) : []));
+  }
+  function pick(newId) { id = newId; store.set(id); showPeople(); clearInterval(timer); load(); timer = setInterval(load, 3000); }
 
   $('who').addEventListener('change', () => pick($('who').value));
   $('remForm').addEventListener('submit', (e) => {
@@ -223,6 +240,7 @@
 
   api('/api/profiles').then((b) => {
     const ps = b.profiles || [];
+    people = ps;
     if (!ps.length) { showErr('No one is set up yet. Add a person on the main page first.'); return; }
     $('who').replaceChildren(...ps.map((p) => { const o = el('option', null, p.name); o.value = p.id; return o; }));
     const saved = ps.find((p) => p.id === store.get());
