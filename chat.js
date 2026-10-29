@@ -341,11 +341,11 @@ const afterTalkReply = (profileId, scam, channel, off = null) => {
 };
 const talkTurn = (scam, profileId, off = null) => ({ note: [scam && !(off && off.resolved) ? require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)), declined: Boolean(care.scamDeclined(profileId, scam.type)) }) : '', off ? off.note : ''].filter(Boolean).join(' '), scam: scam && scam.level !== 'none' ? scam.level : null });
 
-async function sendText(profileId, text, tz) {
+async function sendText(profileId, text, tz, opts = {}) {
   const t = String(text || '').trim().slice(0, 2000);
   if (!t) throw new ChatError('Please type a message first.', 400);
   const s = session(profileId, tz);
-  care.touch(profileId, 'app');
+  care.touch(profileId, opts.source === 'whatsapp' ? 'whatsapp' : 'app'); // whatsapp.js: the same chat, a different door
   const you = s.push({ role: 'senior', kind: 'text', text: t });
   // A reconfirm question is open: this message may settle it (a plain yes / no to the family question does not). Otherwise the usual scam check.
   let scam = null, off = null;

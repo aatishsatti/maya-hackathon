@@ -1,4 +1,4 @@
-# Render Blueprint: Maya on the FREE plan only. No secret is in this file: the three keys are asked for in the Render dashboard
+# Render Blueprint: Maya on the FREE plan only. No secret is in this file: the keys are asked for in the Render dashboard
 # (sync: false) and live only in Render's server environment, never in the browser or in git.
 # plan MUST stay "free": if it is left out, Render defaults a new web service to a paid instance.
 services:
@@ -21,4 +21,12 @@ services:
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_ID
         sync: false

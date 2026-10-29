@@ -10,6 +10,7 @@ const memory = require('./memory');
 const care = require('./care');
 const chat = require('./chat');
 const origin = require('./origin');
+const whatsapp = require('./whatsapp');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env: use defaults */ }
 
@@ -22,6 +23,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const MAX_VOICE_NOTE_BYTES = 12 * 1024 * 1024; // a WAV voice note (Meta takes up to 10 minutes / 32 MB; the app sends 24 kHz mono)
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_WEBHOOK_BYTES = 1024 * 1024;
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -141,6 +143,37 @@ async function handleChat(req, res, url) {
   return sendJson(res, 404, { error: 'Not found' });
 }
 
+// WhatsApp (whatsapp.js). The webhook is called by Meta, so it is not same-origin: it is protected by the verify token (GET) and the
+// X-Hub-Signature-256 signature over the raw body (POST). Everything else here is the family dashboard, same-origin only.
+async function handleWhatsapp(req, res, url) {
+  const [a, b] = url.pathname.split('/').filter(Boolean).slice(2); // after /api/whatsapp
+  if (a === 'webhook') {
+    if (req.method === 'GET') {
+      const c = whatsapp.verifyChallenge(url.searchParams);
+      if (c === null) return sendJson(res, 403, { error: 'Forbidden' });
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(c);
+    }
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    let raw;
+    try { raw = await readBody(req, MAX_WEBHOOK_BYTES); } catch (e) { return sendJson(res, e.status || 400, { error: 'Bad request' }); }
+    if (!whatsapp.validSignature(raw, req.headers['x-hub-signature-256'])) return sendJson(res, 403, { error: 'Forbidden' });
+    if (MODE !== 'real') return sendJson(res, 503, { error: 'WhatsApp needs real mode.' });
+    let payload; try { payload = JSON.parse(raw.toString('utf8')); } catch { return sendJson(res, 400, { error: 'Bad request' }); }
+    sendJson(res, 200, { ok: true }); // answer Meta first, then do the work
+    whatsapp.handleWebhook(payload);
+    return;
+  }
+  if (!sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
+  if (!/^[a-f0-9]{8}$/.test(a || '') || !memory.load(a)) return sendJson(res, 404, { error: 'Not found' });
+  try {
+    if (req.method === 'GET' && !b) return sendJson(res, 200, whatsapp.view(a));
+    if (req.method === 'DELETE' && !b) return sendJson(res, 200, { ok: whatsapp.unlink(a) });
+    if (req.method === 'POST' && b === 'link') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, whatsapp.link(a, body.phone, body.optIn)); }
+  } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
+  return sendJson(res, 404, { error: 'Not found' });
+}
+
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { mode: MODE, commit: COMMIT });
@@ -157,6 +190,7 @@ async function handleApi(req, res, url) {
   }
   const del = /^\/api\/profiles\/([a-f0-9]{8})$/.exec(url.pathname);
   if (del && req.method === 'DELETE') { care.remove(del[1]); chat.forget(del[1]); return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); }
+  if (url.pathname.startsWith('/api/whatsapp/')) return handleWhatsapp(req, res, url);
   if (url.pathname.startsWith('/api/care')) return handleCare(req, res, url);
   if (url.pathname.startsWith('/api/chat/')) return handleChat(req, res, url);
   // Real mode runs over the /ws call socket; these HTTP endpoints are mock only.
