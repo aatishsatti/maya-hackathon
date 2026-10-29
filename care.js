@@ -123,6 +123,8 @@ function recentLines(id, pool, now = Date.now()) {
   if (list.length !== (p.lines[pool] || []).length) { p.lines[pool] = list; save(id); }
   return list.map((l) => l.text);
 }
+// How many lines of this pool were said within the last `withinMs` (a count only, never the words).
+const linesWithin = (id, pool, withinMs, now = Date.now()) => { const p = get(id); return p ? (p.lines[pool] || []).filter((l) => now - l.t < withinMs).length : 0; };
 const isRepeatLine = (id, pool, text, now) => recentLines(id, pool, now).some((l) => similar(l, text));
 function addLine(id, pool, text, now = Date.now()) {
   const p = get(id);
@@ -930,7 +932,7 @@ function overview() { return memory.listProfiles().map((x) => { const v = view(x
 module.exports = {
   cfg, MODES, get, remove, start, stop, tick,
   trendEvent, trendTurn, trendView, localParts,
-  touch, lastSeen, callStarted, callEnded, callCount, liveCalls, liveChats, pushSenior, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
+  linesWithin, touch, lastSeen, callStarted, callEnded, callCount, liveCalls, liveChats, pushSenior, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,

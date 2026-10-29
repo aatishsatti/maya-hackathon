@@ -75,6 +75,8 @@ const SILENCE_WAIT_MS = [null, 10000, 8000]; // null = this call's own random fi
 const firstSilenceWait = () => SILENCE_FIRST_MIN_MS + Math.floor(Math.random() * (SILENCE_FIRST_MAX_MS - SILENCE_FIRST_MIN_MS + 1));
 // A greeting shortens ("Hi Mike") once a known profile has had this many calls; first calls keep the warm greeting.
 const SHORT_GREETING_AFTER_CALLS = 1;
+// Greeting facts about how recently they were in touch (recentContactNote): within this long, a call is a quick return, not a new day's first hello.
+const RECENT_TOUCH_MS = 30 * 60000, GREETED_TODAY_MS = 12 * 3600000;
 // In-call timer ("remind me in 30 seconds"): spoken at the time, after a pause if possible, never talking over for long.
 const TIMER_MAX_WAIT_MS = 12000;
 const TIMER_MAX_SECONDS = 30 * 60;
@@ -1069,10 +1071,27 @@ class Call {
       if (this.profile.lastCallHeavy) bits.push('Their last call ended on a heavy topic. Greet them extra gently and do not mention specifics unless they do.');
       else if (topics.length) bits.push(`Their last call was about: "${topics[topics.length - 1].text}". You may refer to it briefly if it fits, but never add details you were not told.`);
     }
+    if (!this.outreach) bits.push(this.recentContactNote());
     const checkIn = this.outreach || afterSafety || afterQuiet;
     bits.push(`For variety this time (a nudge, not words to copy): ${pick(checkIn ? CHECK_OPEN_SEEDS : OPEN_SEEDS)}${checkIn ? `; for the question, ask ${pick(CHECK_ASK_SEEDS)}` : `; for the question, ask about ${pick(ASK_SEEDS)}`}.`);
     if (part && !this.outreach) bits.push(`It is ${part} where they are; you may let that colour the greeting, but not every time. "Good night" is a goodbye, never a hello.`);
     return bits.join(' ');
+  }
+
+  // FACTS about how recent the last contact was, so a quick call-back after a drop is not a fresh introduction and a first call of the day still is.
+  // Principles only: Spark writes the words, and nothing here is a sentence to say. Not used for Maya's own call-backs (they have their own note).
+  recentContactNote(now = Date.now()) {
+    const id = this.profile.id, mins = (t) => Math.max(1, Math.round((now - t) / 60000));
+    const prev = care.lastCall(id);
+    let chatAt = 0; try { chatAt = require('./chat').lastWrittenAt(id); } catch { /* the greeting never depends on the chat */ }
+    const greetedToday = care.linesWithin(id, 'greeting', GREETED_TODAY_MS, now);
+    const how = { quiet: 'it went quiet and Maya hung up', left: 'they ended it or the line dropped', safety: 'it ended on something worrying', normal: 'it ended normally' };
+    const bits = [];
+    if (prev && now - prev.at < RECENT_TOUCH_MS) bits.push(`Their last call with you ended ${mins(prev.at)} minute${mins(prev.at) === 1 ? '' : 's'} ago (${how[prev.how] || how.normal}), so this is a quick return to the same conversation, not a new day's first hello.`);
+    if (chatAt && now - chatAt < RECENT_TOUCH_MS) bits.push(`They were writing with you in the chat ${mins(chatAt)} minute${mins(chatAt) === 1 ? '' : 's'} ago, so you are already in touch.`);
+    if (greetedToday) bits.push(`You have already greeted them ${greetedToday === 1 ? 'once' : `${greetedToday} times`} in the last 12 hours.`);
+    if (!bits.length) return 'FIRST CONTACT TODAY (a fact): you have not spoken to them in the last 12 hours, so a normal warm greeting fits.';
+    return `RECENT CONTACT (facts): ${bits.join(' ')} Principles: skip any introduction and any full welcome; keep it short and natural, like picking the conversation back up, in a few words; do not repeat a warm line you already used earlier today (for example about how good it is to be talking), and say nothing that suggests it has been a long time.`;
   }
 
   // ---- Silence flow ----

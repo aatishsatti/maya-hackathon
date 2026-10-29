@@ -281,6 +281,8 @@ function mirrorSpoken(profileId, role, text) {
   } catch { return null; }
 }
 
+// When the person last wrote to Maya or she wrote to them in the chat (not the lines mirrored from a call), or 0: a fact for the next greeting.
+const lastWrittenAt = (profileId) => { const s = sessions.get(profileId); const m = s && [...s.thread].reverse().find((x) => !x.spoken); return m ? m.at : 0; };
 const callLive = (profileId) => care.liveCalls.has(profileId);
 const thread = (profileId) => { session(profileId); return sessions.get(profileId).thread.slice(); };
 
@@ -401,4 +403,4 @@ function forget(profileId) {
 // Test and shutdown helper: files every open chat into memory now.
 function endAll() { for (const [id, s] of sessions) { sessions.delete(id); s.finish(); } }
 
-module.exports = { mirrorSpoken, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
+module.exports = { lastWrittenAt, mirrorSpoken, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
