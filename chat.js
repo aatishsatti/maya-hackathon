@@ -37,6 +37,7 @@ const deps = {
   describe: (buf, mime) => require('./brain').describeImage(buf, mime),
   scam: (buf, mime) => (process.env.META_API_KEY ? require('./scam').assess(buf, mime) : null), // Spark vision: is this a scam? (null = no key, no check)
   scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null), // Spark text: is what they typed or said a scam? (null = no key, no check)
+  official: (words) => require('./official').check(words), // the company they named, looked up on its official site only (official.js; typed chat only). Lookup failure is a fact, never a guess
   speak: (text, previous) => new Promise((resolve, reject) => { // one ElevenLabs piece -> Buffer of PCM16 24 kHz
     const parts = [];
     require('./brain').streamSpeech(text, new AbortController().signal, (c) => parts.push(c), previous).then(() => resolve(Buffer.concat(parts)), reject);
@@ -291,14 +292,20 @@ const thread = (profileId) => { session(profileId); return sessions.get(profileI
 // latency-critical, so the check is simply awaited before Maya answers. A failed check never blocks the reply and never invents a verdict.
 // Safety first: nothing is checked while a safety alert is active or when the words themselves are about self-harm, and a pending
 // "shall I tell your family?" question is answered, not re-asked.
-async function talkCheck(profileId, words) {
+async function talkCheck(profileId, words, { official = false } = {}) {
   const scam = require('./scam');
   if (!scam.needsCheck(words) || care.hasActiveSafety(profileId) || care.scamPending(profileId) || selfHarmText(words)) return null;
-  try { return await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); return null; }
+  let found;
+  try { found = await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); return null; }
+  // Typed chat only, and only when the scam check says warn / pause: if a company is named, its official site is looked up (official.js).
+  if (official && found && (found.level === 'warn' || found.level === 'pause')) {
+    try { const o = await deps.official(words); if (o) return { ...found, official: o }; } catch (e) { console.error('official check failed:', e.message); return { ...found, official: { named: true, found: false, name: null, reason: 'lookup-failed' } }; }
+  }
+  return found;
 }
 // After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
-const afterTalkReply = (profileId, scam, channel) => { if (scam && (scam.level === 'warn' || scam.level === 'pause') && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause' }); };
-const talkTurn = (scam, profileId) => ({ note: scam ? require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)), declined: Boolean(care.scamDeclined(profileId, scam.type)) }) : '', scam: scam && scam.level !== 'none' ? scam.level : null });
+const afterTalkReply = (profileId, scam, channel) => { if (scam && (scam.level === 'warn' || scam.level === 'pause') && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause', official: require('./official').forDashboard(scam.official) }); };
+const talkTurn = (scam, profileId) => ({ note: scam ? [require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)), declined: Boolean(care.scamDeclined(profileId, scam.type)) }), require('./official').note(scam.official)].filter(Boolean).join(' ') : '', scam: scam && scam.level !== 'none' ? scam.level : null });
 
 async function sendText(profileId, text, tz) {
   const t = String(text || '').trim().slice(0, 2000);
@@ -306,7 +313,7 @@ async function sendText(profileId, text, tz) {
   const s = session(profileId, tz);
   care.touch(profileId, 'app');
   const you = s.push({ role: 'senior', kind: 'text', text: t });
-  const scam = await talkCheck(profileId, t);
+  const scam = await talkCheck(profileId, t, { official: true });
   const r = await s.turn({ heard: t, ...talkTurn(scam, profileId) });
   afterTalkReply(profileId, scam, 'text');
   return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };

@@ -563,7 +563,7 @@ function scamAsk(id, type, opts = {}) {
   const p = get(id);
   if (!p) return null;
   if (scamDeclined(id, type)) return null;   // they said no to this one: never asked again
-  p.pendingScam = { type, left: 2, at: Date.now(), channel: SCAM_CHANNELS.has(opts.channel) ? opts.channel : 'photo', pause: opts.pause === true }; save(id);
+  p.pendingScam = { type, left: 2, at: Date.now(), channel: SCAM_CHANNELS.has(opts.channel) ? opts.channel : 'photo', pause: opts.pause === true, official: opts.official || null }; save(id);
   return p.pendingScam;
 }
 function scamPending(id) {
@@ -579,7 +579,7 @@ function scamClear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingS
 function scamUnclear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam.left -= 1; if (p.pendingScam.left <= 0) p.pendingScam = null; save(id); } }
 function scamTicket(p, type, level, how = {}) {
   const now = Date.now();
-  const sc = { id: uid(), level, type, createdAt: now, status: 'active', notified: 'none', notifId: null, resolvedAt: null, channel: SCAM_CHANNELS.has(how.channel) ? how.channel : 'photo', pause: how.pause === true };
+  const sc = { id: uid(), level, type, createdAt: now, status: 'active', notified: 'none', notifId: null, resolvedAt: null, channel: SCAM_CHANNELS.has(how.channel) ? how.channel : 'photo', pause: how.pause === true, official: how.official ? { checked: true, found: how.official.found === true, name: how.official.found === true ? String(how.official.name || '').slice(0, 60) : null } : null };
   p.scams.unshift(sc); p.scams.length = Math.min(p.scams.length, SCAM_KEEP);
   return sc;
 }
@@ -590,6 +590,7 @@ function scamAlert(id, type, how = {}) {
   if (sc) { sc.repeats = (sc.repeats || 0) + 1; save(id); return { isNew: false, ticket: sc }; } // same incident: no second alert
   sc = p.scams.find((x) => x.status === 'active' && x.level === 'flag') || scamTicket(p, type, 'flag', how); // they said no, then changed their mind: the flag becomes the alert
   sc.level = 'alert'; sc.type = type; sc.notified = 'alert'; if (how.channel) { sc.channel = SCAM_CHANNELS.has(how.channel) ? how.channel : sc.channel; sc.pause = how.pause === true || sc.pause; }
+  if (how.official && !sc.official) sc.official = { checked: true, found: how.official.found === true, name: how.official.found === true ? String(how.official.name || '').slice(0, 60) : null };
   const name = nameOf(id);
   const told = scamToldLine(sc, name, type);
   const text = `${told} ${sc.pause ? `${name} may have been about to pay or share details, so Maya asked ${name} to stop and check first, and` : `Maya told ${name} not to pay or share any details, and`} ${name} asked Maya to let you know. Please check in with ${name}.`;
