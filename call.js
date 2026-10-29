@@ -232,6 +232,9 @@ const FAMILY_TELL_TALK = /\b(told|tell|telling|alert\w*|notif\w*|contact\w*|info
 const SENT_CLAIM = /\b(went over|went through|was sent|got sent|has gone|passed (it |a note |that |this )?(along|on)|sent (them|him|her|your family|a note|it|the note)|(i|we)['\u2019]?(ve| have)? (just )?(sent|passed|forwarded)\b)|\byou(['\u2019]d| had| have)? (asked|told me|wanted|requested)\b[^.?!]{0,50}\b(hear from|famil|let them|tell|note|message)/i;
 // On a call she cannot look at a photo or search yet (the written chat does both): never said as an absolute "can't", always where it can be done.
 const CALL_LIMIT_ABSOLUTE = /\bcan(?:['\u2019]?t|not) (?:see|look at|view|open) (?:any |the |your )?(?:pictures?|photos?|images?|screenshots?|emails?)\b|\bcan(?:['\u2019]?t|not) (?:look (?:things|that|it|this) up|search|check (?:the )?(?:internet|web|online)|go online|look (?:things )?up online)\b/i;
+// With no family record: a past-tense send aimed at "them" (the family was just named), and any talk of what they have seen / read (nothing was sent to be seen).
+const PAST_SEND_THEM = /\b(i|we)(['\u2019]ve| have)? (just |already )?(let|told|alerted|notified|informed|messaged|contacted|texted|called)\b[^.?!]{0,25}\b(them|him|her|everyone|someone)\b/i;
+const SEEN_TALK = /\b(what|whether|if|how much) (they|your (family|daughter|son)|he|she)(['\u2019]ve| have| has| had)? (seen|read|opened|looked at|got it|received)|\b(seen|read|opened|received) (it|that|the (note|message|alert)) (yet|on their)|\bon their side\b|\bmarked (it )?(as )?seen\b|\b(i|we) (don['\u2019]?t|do not) know (what|whether|if) (they|your (family|daughter|son))\b/i;
 const SELF_HARM_REASON = /\b(because|since|after) you (said|told me|mentioned)\b[^.?!]{0,50}\b(hurt|harm|kill|end (it|your life)|suicid)/i;
 const openWords = (t) => String(t).toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, ' ').trim().split(/\s+/);
 const SEEN_ANGLES = ['lead with reassurance', 'lead with how glad you are to be with them', 'lead with the fact that their family knows', 'lead with saying they are not alone'];
@@ -1125,6 +1128,7 @@ class Call {
     const told = this.profile ? care.familyToldTopics(this.profile.id) : [];
     if (this.channel !== 'chat' && CALL_LIMIT_ABSOLUTE.test(t) && !/\b(chat|after|yet|later)\b/i.test(t)) return true;   // in a call: where and when she CAN, never a flat "can't"
     if (FAMILY_CLAIM.test(t) && !told.length) return true;
+    if (!told.length && (SEEN_TALK.test(t) || (PAST_SEND_THEM.test(t) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|yet)\b/i.test(t) && this.familyRelevant()))) return true;   // no record: no past-tense send to "them", and nothing about what they have seen
     if (!told.length && t.split(/(?<=[.!?])\s+/).some((x) => SENT_CLAIM.test(x) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|wasn't|yet)\b/i.test(x))) return true;   // a denial ("no note was sent") is not a claim return true;   // "I can" is an ability; a note that "went over" or an invented "you'd asked" needs a record on the dashboard
     if (SELF_HARM_REASON.test(t) && !told.some((x) => /safety|health/.test(x))) return true;
     return false;

@@ -245,4 +245,18 @@ test('safety: "thinking of ending my life" is caught in code and creates the rea
   assert.ok(care.view(id).alerts.some((f) => f.status === 'active'), 'the dashboard shows the red alert');
 });
 
+test('no record: ANY past-tense family send claim and any Seen talk is blocked and rewritten; "nobody was told, no note was sent" passes', async () => {
+  const id = senior(); chat.deps.scamText = verdict('none'); const c = mkCall(id); c.history.push({ role: 'user', content: 'A: Did you tell my family?' });
+  for (const bad of ["Yes, I let your family know you'd like to hear from them.", 'I told them.', "I let them know you'd like to hear from them.", "I don't know what they've seen yet on their side.", 'I have messaged them.', 'They have not opened it yet.']) assert.equal(c.breaksFacts(bad), true, bad);
+  for (const ok of ['Nobody was told, and no note was sent.', "I haven't told them anything.", 'I have not told anyone.']) assert.equal(c.breaksFacts(ok), false, ok);
+  reset(`${FEEL} Yes, I let your family know you'd like to hear from them. I don't know what they've seen yet on their side.`, `${FEEL} Nobody was told, and no note was sent.`);
+  const out = await chat.sendText(id, 'Did you tell my family?', null);
+  assert.equal(asked.length, 2); assert.match(out.messages[1].text, /Nobody was told, and no note was sent/); assert.doesNotMatch(out.messages[1].text, /hear from them|seen/i);
+});
+
+test('with a real family note on record, Seen talk and naming it are allowed', () => {
+  const id = senior(); care.familyAsk(id); const c = mkCall(id); c.history.push({ role: 'user', content: 'A: Did you tell my family?' });
+  assert.equal(c.breaksFacts("Yes, I let your family know you'd like to hear from them. I don't know what they've seen yet."), false);
+});
+
 test.after(() => { made.forEach((c) => c.end()); for (const s of chat.sessions.values()) s.finish(); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });
