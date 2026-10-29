@@ -229,6 +229,7 @@ const COUNSEL_BAN = /\blet['\u2019]?s (just )?drop it\b|\bforget (about )?it\b|\
 const FAMILY_CLAIM = /\b(i|we)(['\u2019]ve| have|['\u2019]ll| will)? (just )?(let|told|alerted|notified|informed|messaged|contacted)\b[^.?!]{0,40}\b(famil|daughter|son\b|kids|children)|\byour (famil\w*|daughter|son|kids|children) (has|have|was|were|is|are)( now| already| been)* (been )?(told|alerted|notified|informed|know|knows|aware)\b/i;
 const FAMILY_ASKED = /\b(famil\w*|daughters?|sons?|kids|children|wife|husband|sister|brother|grand(son|daughter)s?|alert\w*|notif\w*|told (anyone|anybody|someone|them)|tell (anyone|anybody|someone|them)|who did you (tell|call|contact)|did you (tell|say|send|contact|call|message|let)|let (them|him|her|\w+) know)\b/i;
 const FAMILY_TELL_TALK = /\b(told|tell|telling|alert\w*|notif\w*|contact\w*|inform\w*)\b[^.?!]{0,30}\b(anyone|anybody|nobody|no ?one|family|daughter|son)\b|\bno news\b|\b(nobody|no one) (was|has been|got) (told|alerted|notified)\b|\bhaven['\u2019]?t (told|alerted|contacted)\b/i;
+const SENT_CLAIM = /\b(went over|went through|was sent|got sent|has gone|passed (it |a note |that |this )?(along|on)|sent (them|him|her|your family|a note|it|the note)|(i|we)['\u2019]?(ve| have)? (just )?(sent|passed|forwarded)\b)|\byou(['\u2019]d| had| have)? (asked|told me|wanted|requested)\b[^.?!]{0,50}\b(hear from|famil|let them|tell|note|message)/i;
 const SELF_HARM_REASON = /\b(because|since|after) you (said|told me|mentioned)\b[^.?!]{0,50}\b(hurt|harm|kill|end (it|your life)|suicid)/i;
 const openWords = (t) => String(t).toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, ' ').trim().split(/\s+/);
 const SEEN_ANGLES = ['lead with reassurance', 'lead with how glad you are to be with them', 'lead with the fact that their family knows', 'lead with saying they are not alone'];
@@ -1111,6 +1112,7 @@ class Call {
     if (FAMILY_TELL_TALK.test(t) && !this.familyRelevant()) return true;   // the family fact is internal: not volunteered on a turn that is not about it
     const told = this.profile ? care.familyToldTopics(this.profile.id) : [];
     if (FAMILY_CLAIM.test(t) && !told.length) return true;
+    if (!told.length && t.split(/(?<=[.!?])\s+/).some((x) => SENT_CLAIM.test(x) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|wasn't|yet)\b/i.test(x))) return true;   // a denial ("no note was sent") is not a claim return true;   // "I can" is an ability; a note that "went over" or an invented "you'd asked" needs a record on the dashboard
     if (SELF_HARM_REASON.test(t) && !told.some((x) => /safety|health/.test(x))) return true;
     return false;
   }

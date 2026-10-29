@@ -189,4 +189,22 @@ test('leak: "Did you tell my family?" with an alert -> topic only, no excuse', a
   assert.match(asked[0].roster, /ONLY these topics: a possible gift card scam/); assert.match(asked[0].roster, /never say "because I care about you"/); assert.match(out.messages[1].text, /gift card scam/);
 });
 
+test('leak: ability is not an act: "you\'d asked, so that\'s what went over" is blocked without a record, allowed words about ability are not', async () => {
+  const id = senior(); chat.deps.scamText = verdict('none'); const c = mkCall(id); c.history.push({ role: 'user', content: 'A: Do you mean you can let my family know?' });
+  for (const bad of ["You'd asked to hear from them, so that's what went over.", 'I passed along a note.', 'I sent them a note.', 'The note was sent.', 'You asked me to let them know.']) assert.equal(c.breaksFacts(bad), true, bad);
+  for (const ok of ["Yes, I can when you ask me to. I have not sent anything yet.", 'Nobody was told and no note was sent.']) assert.equal(c.breaksFacts(ok), false, ok);
+  reset(`${FEEL} That's right, I can pass along a note when you ask. You'd asked to hear from them, so that's what went over.`, `${FEEL} Yes, I can when you ask me to. I have not sent anything yet.`);
+  const out = await chat.sendText(id, 'Do you mean you can let my family know about something, and would I like to hear from them?', null);
+  assert.doesNotMatch(out.messages[1].text, /went over|you'd asked/i); assert.match(out.messages[1].text, /have not sent anything/);
+  assert.match(asked[0].roster, /Being ABLE to let their family know/); assert.deepEqual(care.familyToldTopics(id), []);
+  reset(`${FEEL} Nobody was told, and no note was sent.`);
+  const o2 = await chat.sendText(id, 'Did you tell my family?', null); assert.match(o2.messages[1].text, /no note was sent/);
+});
+
+test('leak: with a real record ("they asked to hear from them") that note may be named', () => {
+  const id = senior(); care.familyAsk(id); const c = mkCall(id);
+  assert.deepEqual(care.familyToldTopics(id), ['that they would like to hear from them']);
+  assert.equal(c.breaksFacts('Yes, I sent a note saying you would like to hear from them.'), false);
+});
+
 test.after(() => { made.forEach((c) => c.end()); for (const s of chat.sessions.values()) s.finish(); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });
