@@ -826,3 +826,29 @@ test('C7 safetyCut: family already pressed Seen -> no ring (family is handling i
   assert.ok(!care.activeByProfile.get(b));
   slow();
 });
+
+// ---- scam shield state reaches every reply (Lucy kept denying an alert that the dashboard showed) ----
+test('scam facts: an alert stays in her facts for the whole conversation, by topic, this person only', () => {
+  const lucy = newSenior(), martin = newSenior();
+  care.scamAsk(lucy, 'tech support scam', { channel: 'spoken' }); care.scamAnswer(lucy, true);
+  const f = care.appFacts(lucy);
+  assert.match(f, /told their family about a possible tech support scam/); assert.match(f, /not marked it seen yet/); assert.match(f, /never "an earlier message"/);
+  assert.ok(!/scam/.test(care.appFacts(martin)), 'another person\'s facts carry nothing of it');
+  care.scamAsk(martin, 'pension scam'); care.scamAnswer(martin, false);
+  assert.match(care.appFacts(martin), /said no[^.]*possible pension scam[^.]*nobody was told/);
+  assert.ok(!/pension/.test(care.appFacts(lucy)) && !/tech support/.test(care.appFacts(martin)), 'no topic crosses between people');
+});
+
+test('scam notes: yes names the topic; a repeat yes says the family was already told; no names the topic and sends nothing', () => {
+  const id = newSenior(); const c = mkCall(); c.profile = memory.load(id); c.callId = 'x';
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' });
+  const yes = c.careNotes('yes please tell my family');
+  assert.match(yes, /possible tech support scam/); assert.match(yes, /not "the earlier message"/);
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' });
+  const again = c.careNotes('yes please tell my family');
+  assert.match(again, /ALREADY told/); assert.match(again, /nothing new was sent/); assert.ok(!/has now sent/.test(again));
+  const id2 = newSenior(); const c2 = mkCall(); c2.profile = memory.load(id2); c2.callId = 'y';
+  care.scamAsk(id2, 'pension scam', { channel: 'spoken' });
+  const no = c2.careNotes('no, do not tell them');
+  assert.match(no, /possible pension scam/); assert.match(no, /NOT sending/);
+});

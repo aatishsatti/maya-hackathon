@@ -732,6 +732,11 @@ function appFacts(id, now = Date.now()) {
   // cover them. She must be able to say they exist and must never deny them; what the family has done with them she does not know.
   const asked = p.notifications.filter((n) => n.to === 'family' && (n.ref === 'asked' || n.ref === 'family_ask') && now - n.times.sent < 24 * 60 * MIN);
   if (asked.length) f.push(`The app has sent their family ${asked.length} note${asked.length > 1 ? 's' : ''} in the last day because they said yes or asked you to (topic only, the latest ${ago(asked[0].times.sent)}). That is true and on the family's dashboard: if they ask whether you told their family, or why there is a note, say yes plainly; never say you have not told them or that nothing was sent. You do not know whether the family has opened it or what they will do, so say you do not know what the dashboard shows now.`);
+  // Scam shield state, this person only: what the family was (or was not) told about, by topic. Kept for the whole conversation so she never
+  // denies an alert that exists, and never claims one that was refused. The kind of scam only: no words from the message or the call.
+  const sc = (p.scams || []).find((x) => x.status === 'active' || now - (x.resolvedAt || x.createdAt) < 24 * 60 * MIN);
+  if (sc && sc.level === 'alert') f.push(`The app has told their family about a possible ${sc.type} (topic only), ${ago(sc.createdAt)}, because they said yes. That is true and on the family's dashboard: if they ask whether you told their family, say yes and name the topic, never "an earlier message". ${sc.status === 'active' ? 'Their family has not marked it seen yet.' : 'Their family has seen it.'} Nothing more is known, and it is not sent again.`);
+  else if (sc && sc.level === 'flag') f.push(`They said no to letting their family know about a possible ${sc.type}, so nobody was told: no message, no alert (only a quiet note on the family's dashboard). If they ask, say honestly that you did not tell their family.`);
   const pc = painCount(id, now);
   f.push(pc ? `They have mentioned pain or discomfort ${pc} time${pc > 1 ? 's' : ''} before this turn in the last 3 days (not counting what they say next).` : 'They have not mentioned pain or discomfort in the last 3 days.');
   const fl = p.flags.find((x) => x.status === 'active' && !x.safety);
