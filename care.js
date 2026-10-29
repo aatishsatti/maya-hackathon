@@ -612,6 +612,17 @@ function scamFlag(id, type, how = {}) {
   return { isNew: true, ticket: t };
 }
 // The person answered Maya's one question: yes -> alert, no -> flag only. The pending question is always cleared.
+// The reconfirm was answered after the family question was already asked (or answered): the official-source line is attached to the open question and to the
+// newest ticket of this conversation that has none. Topic only: the flag, the found flag and the official name.
+function scamOfficial(id, official) {
+  const p = get(id);
+  if (!p || !official) return;
+  const o = { checked: true, found: official.found === true, name: official.found === true ? String(official.name || '').slice(0, 60) : null };
+  if (p.pendingScam && !p.pendingScam.official) p.pendingScam.official = o;
+  const sc = (p.scams || []).find((x) => x.status === 'active' && !x.official && Date.now() - x.createdAt <= SCAM_ASK_MS);
+  if (sc) sc.official = o;
+  save(id);
+}
 function scamAnswer(id, yes) {
   const pend = scamPending(id);
   if (!pend) return null;
@@ -944,7 +955,7 @@ module.exports = {
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
   addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

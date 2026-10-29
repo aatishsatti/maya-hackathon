@@ -37,7 +37,7 @@ const deps = {
   describe: (buf, mime) => require('./brain').describeImage(buf, mime),
   scam: (buf, mime) => (process.env.META_API_KEY ? require('./scam').assess(buf, mime) : null), // Spark vision: is this a scam? (null = no key, no check)
   scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null), // Spark text: is what they typed or said a scam? (null = no key, no check)
-  official: (words) => require('./official').check(words), // the company they named, looked up on its official site only (official.js; typed chat only). Lookup failure is a fact, never a guess
+  official: (words, opts) => require('./official').check(words, opts), // the company they named, looked up on its official site only (official.js; typed chat only). Lookup failure is a fact, never a guess
   speak: (text, previous) => new Promise((resolve, reject) => { // one ElevenLabs piece -> Buffer of PCM16 24 kHz
     const parts = [];
     require('./brain').streamSpeech(text, new AbortController().signal, (c) => parts.push(c), previous).then(() => resolve(Buffer.concat(parts)), reject);
@@ -95,7 +95,7 @@ class ChatSession {
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
-    this.familyDeclined = false; this.said = []; this.reminderShown = null; this.seenShown = false; this.safetyAsked = new Set(); this.safetyFreshShown = false; this.healthFreshShown = false; this.scamOwed = null;   // as in call.js: a no to telling family lasts the whole chat; what they said, for recall asks
+    this.familyDeclined = false; this.said = []; this.reminderShown = null; this.seenShown = false; this.safetyAsked = new Set(); this.safetyFreshShown = false; this.healthFreshShown = false; this.scamOwed = null; this.rc = require('./official').newRc();   // rc: the one clarifying question about which company / link (official.js); as in call.js: a no to telling family lasts the whole chat; what they said, for recall asks
     this.prevDelivery = null; this.askWhat = false;
     this.reminderFacts = null; this.reminderPending = null; this.awaitAck = null; this.nameChance = 0;
   }
@@ -292,20 +292,21 @@ const thread = (profileId) => { session(profileId); return sessions.get(profileI
 // latency-critical, so the check is simply awaited before Maya answers. A failed check never blocks the reply and never invents a verdict.
 // Safety first: nothing is checked while a safety alert is active or when the words themselves are about self-harm, and a pending
 // "shall I tell your family?" question is answered, not re-asked.
-async function talkCheck(profileId, words, { official = false } = {}) {
+async function talkCheck(profileId, words) {
   const scam = require('./scam');
   if (!scam.needsCheck(words) || care.hasActiveSafety(profileId) || care.scamPending(profileId) || selfHarmText(words)) return null;
-  let found;
-  try { found = await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); return null; }
-  // Typed chat only, and only when the scam check says warn / pause: if a company is named, its official site is looked up (official.js).
-  if (official && found && (found.level === 'warn' || found.level === 'pause')) {
-    try { const o = await deps.official(words); if (o) return { ...found, official: o }; } catch (e) { console.error('official check failed:', e.message); return { ...found, official: { named: true, found: false, name: null, reason: 'lookup-failed' } }; }
-  }
-  return found;
+  try { return await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); return null; }
 }
+// Official source (official.js), typed chat only: on a warn / pause the company they named is looked up on its official site; if none is clear, ONE
+// reconfirm question is asked first (type the link, or send a photo) and the family question waits for their answer. Returns facts for Spark.
+const familyState = (profileId, type) => ({ told: Boolean(care.scamTold(profileId)), declined: Boolean(type && care.scamDeclined(profileId, type)), pending: Boolean(care.scamPending(profileId)) });
+const officialStep = (s, profileId, words, scam) => require('./official').step(s.rc, { words, scam, channel: 'text', run: (w, o) => deps.official(w, o), family: familyState(profileId, (scam || s.rc.scam || {}).type) });
 // After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
-const afterTalkReply = (profileId, scam, channel) => { if (scam && (scam.level === 'warn' || scam.level === 'pause') && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause', official: require('./official').forDashboard(scam.official) }); };
-const talkTurn = (scam, profileId) => ({ note: scam ? [require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)), declined: Boolean(care.scamDeclined(profileId, scam.type)) }), require('./official').note(scam.official)].filter(Boolean).join(' ') : '', scam: scam && scam.level !== 'none' ? scam.level : null });
+const afterTalkReply = (profileId, scam, channel, off = null) => {
+  if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { channel, pause: off.askFor.level === 'pause', official: off.askFor.official }); else care.scamOfficial(profileId, off.official); return; }   // the reconfirm was answered: the family question now, if it is still owed
+  if (scam && (scam.level === 'warn' || scam.level === 'pause') && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause', official: off ? off.official : null });
+};
+const talkTurn = (scam, profileId, off = null) => ({ note: [scam && !(off && off.resolved) ? require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)), declined: Boolean(care.scamDeclined(profileId, scam.type)) }) : '', off ? off.note : ''].filter(Boolean).join(' '), scam: scam && scam.level !== 'none' ? scam.level : null });
 
 async function sendText(profileId, text, tz) {
   const t = String(text || '').trim().slice(0, 2000);
@@ -313,9 +314,12 @@ async function sendText(profileId, text, tz) {
   const s = session(profileId, tz);
   care.touch(profileId, 'app');
   const you = s.push({ role: 'senior', kind: 'text', text: t });
-  const scam = await talkCheck(profileId, t, { official: true });
-  const r = await s.turn({ heard: t, ...talkTurn(scam, profileId) });
-  afterTalkReply(profileId, scam, 'text');
+  // A reconfirm question is open: this message may settle it (a plain yes / no to the family question does not). Otherwise the usual scam check.
+  let scam = null, off = null;
+  if (require('./official').asking(s.rc) && !care.hasActiveSafety(profileId) && !selfHarmText(t)) { off = await officialStep(s, profileId, t, null); if (off) scam = off.scam; }
+  if (!off) { scam = await talkCheck(profileId, t); if (scam && (scam.level === 'warn' || scam.level === 'pause')) off = await officialStep(s, profileId, t, scam); }
+  const r = await s.turn({ heard: t, ...talkTurn(scam, profileId, off) });
+  afterTalkReply(profileId, scam, 'text', off);
   return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
 }
 
@@ -387,10 +391,20 @@ async function sendImage(profileId, buf, caption, tz) {
   const mine = saveMedia(profileId, IMAGE_TYPES[mime], buf);
   const you = s.push({ role: 'senior', kind: 'image', text: said, mediaUrl: mediaUrl(profileId, mine) });
   const message = `[They sent a photo. The photo shows: ${seen}]${said ? ` ${said}` : ''}`;
-  const note = scamNote(scam, profileId);
-  const r = await s.turn({ heard: said, message, how: 'image', note, scam: scam && scam.level !== 'none' ? scam.level : null });
+  // Official source (official.js): what the vision read says about the company / link (the photo's text, never kept) is checked like typed words. A photo
+  // asked for by a reconfirm question settles it; a photo that is itself a warn gets the check too. Nothing readable = cannot verify, never invented.
+  const O = require('./official'), asking = O.asking(s.rc), photoWarn = Boolean(scam && scam.level === 'warn');
+  let off = null;
+  if (!care.hasActiveSafety(profileId)) {
+    if (asking) off = await officialStep(s, profileId, `${seen} ${said}`, null);   // the photo answers the question that was asked
+    else if (photoWarn) off = await O.look(`${seen} ${said}`, { run: (w, o) => deps.official(w, o) });
+  }
+  const shaped = off && off.scam ? off.scam : scam;
+  const note = [off && off.resolved ? '' : scamNote(scam, profileId), off ? off.note : ''].filter(Boolean).join(' ');
+  const r = await s.turn({ heard: said, message, how: 'image', note, scam: shaped && shaped.level !== 'none' ? shaped.level : null });
   // Her one question is out: from now on the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
-  if (scam && scam.level === 'warn' && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type);
+  if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { official: off.askFor.official }); else care.scamOfficial(profileId, off.official); }
+  else if (photoWarn && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { official: off ? off.official : null });
   const level = scam ? scam.level : 'none';
   // A warning is read aloud (a voice note) unless a call is live: then it is written, so two Mayas never talk at once.
   if (level !== 'none' && !callLive(profileId)) {

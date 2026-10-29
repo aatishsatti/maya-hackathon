@@ -249,7 +249,7 @@ function callWords(said, heard) {
   for (let k = said.length - 1; k >= 0 && used < MAX_SAID_CHARS; k--) { out = `${said[k]}\n${out}`; used += said[k].length + 1; }
   return ` WHAT THEY TOLD YOU EARLIER IN THIS CONVERSATION (their own words, oldest first, today; it is not in your saved notes yet, so it counts as something you know; a name, relationship or story that appears here is known, do not say you cannot remember it):\n${out.trim()}\n`;
 }
-const callDeps = { awaitMs: SCAM_AWAIT_MS_DEFAULT, scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null) };
+const callDeps = { awaitMs: SCAM_AWAIT_MS_DEFAULT, officialMs: 4000, official: (words, opts) => require('./official').check(words, opts), scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null) };
 // A turn about a scam is never a health emergency by its urgency alone (a panicked "he is on the phone" is not a fall): unless their own words name an injury.
 const EMERGENCY_WORDS = /\b(i fell|i have fallen|fell down|chest pain|can'?t breathe|cannot breathe|bleeding|stroke|collapsed|heart attack|passed out|can'?t get up|cannot get up)\b/i;
 const SCAM_CONTEXT_MS = 10 * 60000; // after a scam-looking turn, this long counts as the same scam conversation
@@ -374,6 +374,7 @@ class Call {
     this.greeted = false;        // a call is greeted once, at its start, never again
     this.replyCount = 0;         // normal replies so far
     this.lastReplyAsked = false; // her last reply ended in a question
+    this.rc = require('./official').newRc();   // the one clarifying question about which company / website (official.js)
     this.scamAt = 0;             // when this call last had a scam-looking turn (inScamTurn: urgency in the minutes after it is the scam's)
     this.scamLater = null;       // { scam, at }: a scam verdict that arrived after her answer, used for the next one only
     this.scamReply = null;       // 'warn' | 'pause' | 'caution' | null: the shape of THIS reply (see onFeel)
@@ -997,7 +998,23 @@ class Call {
   // that check must be AWAITED (the person is on the way to pay, or the caller is still on the line) or can run beside her answer and shape the
   // next one. Never while a safety matter is active, never for self-harm words, never while her family question is still open.
   // Returns { note, level } for THIS reply (empty when nothing applies); a failed or slow check changes nothing and is never replaced by a guess.
+  // Official source (official.js): a warn / pause on a call gets the company they named looked up on its official site (waited for at most officialMs; slower =
+  // cannot verify, never a guess), or ONE reconfirm question when no company is clear; what they say next settles it. No warn and nothing open: synchronous, unchanged.
   scamForTurn(heard) {
+    const base = this.scamForTurnCore(heard), O = require('./official'), id = this.profile && this.profile.id;
+    const wrap = (res) => {
+      const warn = Boolean(res.scam && ['warn', 'pause'].includes(res.scam.level));
+      if (!id || (!warn && !O.asking(this.rc)) || this.safety || care.hasActiveSafety(id)) return res;
+      const v = O.asking(this.rc) ? this.rc.scam : res.scam;
+      return O.step(this.rc, { words: heard, scam: res.scam, channel: 'call', run: (w, o) => callDeps.official(w, o), timeoutMs: callDeps.officialMs, commit: false, family: { told: Boolean(care.scamTold(id)), declined: Boolean(v && care.scamDeclined(id, v.type)), pending: Boolean(care.scamPending(id)) } }).then((o) => {
+        if (!o) return res;
+        if (o.resolved) return { note: o.note, scam: o.scam, told: !o.askFor, askFor: o.askFor, official: o.official };
+        return { ...res, note: [res.note, o.note].filter(Boolean).join(' '), official: o.official, ...(o.official && !res.told ? { askFor: { ...res.scam, official: o.official } } : {}) };
+      });
+    };
+    return base && typeof base.then === 'function' ? base.then(wrap) : wrap(base);
+  }
+  scamForTurnCore(heard) {
     const scam = require('./scam');
     let now = null;
     const later = this.scamLater; this.scamLater = null;
@@ -1440,14 +1457,14 @@ class Call {
       this.abort.signal.addEventListener('abort', () => spec.abort.abort(), { once: true });
       rs = spec.rs;
     } else {
-      this.scamReply = scamTurn.scam ? scamTurn.scam.level : null; this.scamAskFor = scamTurn.scam && !scamTurn.told && ['warn', 'pause'].includes(scamTurn.scam.level) ? scamTurn.scam : null;
+      this.scamReply = scamTurn.scam ? scamTurn.scam.level : null; this.officialNow = scamTurn.official && scamTurn.askFor === null ? scamTurn.official : null; this.scamAskFor = 'askFor' in scamTurn ? scamTurn.askFor : scamTurn.scam && !scamTurn.told && ['warn', 'pause'].includes(scamTurn.scam.level) ? scamTurn.scam : null;
       this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
     this.scamOwed = scamTurn && scamTurn.scam && scamTurn.scam.level !== 'none' ? scamTurn.scam : null;
     try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); }
     finally {
-      this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null;
+      this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null; this.officialNow = null;
       if (this.scamOwed) { this.scamLater = { scam: this.scamOwed, at: Date.now() }; this.scamOwed = null; }   // cut off before it was heard: the next reply carries the warning again
     }
   }
@@ -1803,7 +1820,9 @@ class Call {
       for (const n of this.names.values()) if (new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(all)) this.lastNameUse = this.replyCount;
       this.replyCount += 1;
       if (delivery && delivery.beatN != null) this.beatCount = delivery.beatN;
-      if (this.scamAskFor) { care.scamAsk(this.profile.id, this.scamAskFor.type, { channel: 'spoken', pause: this.scamAskFor.level === 'pause' }); this.scamAskFor = null; }   // her one question is out: their yes or no settles it (careNotes)
+      if (this.officialNow) { care.scamOfficial(this.profile.id, this.officialNow); this.officialNow = null; }   // answered after the family question: attach it
+      if (this.rc.stage === 'offered') { this.rc.stage = 'asked'; this.rc.at = Date.now(); }   // the reconfirm question was really spoken: now it is asked
+      if (this.scamAskFor) { care.scamAsk(this.profile.id, this.scamAskFor.type, { channel: 'spoken', pause: this.scamAskFor.level === 'pause', official: this.scamAskFor.official || null }); this.scamAskFor = null; }   // her one question is out: their yes or no settles it (careNotes)
       care.trendTurn(this.profile.id, delivery);   // counts only: the feeling, its strength, pain, concern; never the words   // committed only once the reply is really spoken (a rewrite recomputes from the same count)
       this.lastReplyAsked = isQuestion(all);
       this.lastExclaimed = /!/.test(all);
