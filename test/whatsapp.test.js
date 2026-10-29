@@ -272,3 +272,106 @@ test('the Ogg muxer: valid pages (CRC), mono OpusHead, granule counts the audio'
   assert.ok(pages >= 3); assert.equal(last[5], 0x04, 'last page is flagged end of stream'); assert.equal(Number(last.readBigUInt64LE(6)), 48000 + 312);
 });
 const CRCT = (() => { const t = new Uint32Array(256); for (let i = 0; i < 256; i++) { let r = i << 24; for (let k = 0; k < 8; k++) r = (r & 0x80000000) ? ((r << 1) ^ 0x04c11db7) : (r << 1); t[i] = r >>> 0; } return t; })();
+
+// ------------------------------------------------------------------------------------------ step 3: outgoing from the dashboard
+const LF = () => path.join(process.env.MAYA_WA_DIR, 'links.json');
+const shift = (id, ms) => { const all = JSON.parse(fs.readFileSync(LF(), 'utf8')); for (const m of all[id].sent || []) m.at -= ms; fs.writeFileSync(LF(), JSON.stringify(all)); }; // time passes
+const setInbound = (id, ago) => { const all = JSON.parse(fs.readFileSync(LF(), 'utf8')); all[id].lastInboundAt = ago === null ? null : Date.now() - ago; fs.writeFileSync(LF(), JSON.stringify(all)); };
+const H = 3600 * 1000;
+const inWindow = () => { const x = linked(); setInbound(x.id, 2 * H); return x; };
+const outside = () => { const x = linked(); setInbound(x.id, 25 * H); return x; };
+const refusal = async (p, re, props = {}) => { await assert.rejects(p, (e) => re.test(e.message) && Object.entries(props).every(([k, v]) => e[k] === v)); };
+
+test('dashboard text inside the 24 h window: one Graph text to the linked number, announced as the family\'s, status words come back from Meta', async () => {
+  voiceReset(); const { id, phone } = inWindow();
+  assert.deepEqual(await wa.sendOut(id, { kind: 'text', text: 'Thinking of you, call me later!' }), { sent: true, via: 'free', kind: 'text' });
+  const o = sent(); assert.equal(o.length, 1); assert.equal(o[0].type, 'text'); assert.equal(o[0].to, phone); assert.equal(o[0].text.body, `${wa.FAMILY_PREFIX}Thinking of you, call me later!`);
+  assert.equal(wa.view(id).lastSent.status, 'sent'); assert.equal(wa.view(id).windowOpen, true);
+  const wamid = JSON.parse(fs.readFileSync(LF(), 'utf8'))[id].sent[0].id; assert.match(wamid, /^wamid\.out/);
+  const status = (st, extra = {}) => ({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: '1409237678935671' }, statuses: [{ id: wamid, status: st, recipient_id: phone, ...extra }] } }] }] });
+  await wa.handleWebhook(status('delivered')); assert.equal(wa.view(id).lastSent.status, 'delivered');
+  await wa.handleWebhook(status('read')); assert.equal(wa.view(id).lastSent.status, 'read');
+  await wa.handleWebhook(status('delivered')); assert.equal(wa.view(id).lastSent.status, 'read', 'a late delivered never lowers read');
+  await wa.handleWebhook(status('failed', { errors: [{ code: 131047, title: 'Re-engagement message' }] })); assert.deepEqual(wa.view(id).lastSent, { ...wa.view(id).lastSent, status: 'failed', error: { code: 131047, title: 'Re-engagement message' } });
+  assert.equal(sent().length, 1, 'a status never makes Maya reply');
+});
+
+test('dashboard voice note inside the window: Maya\'s voice reads the words (announced as the family\'s), uploaded as Ogg/Opus, sent as audio voice:true', async () => {
+  voiceReset(); const { id, phone } = inWindow();
+  assert.deepEqual(await wa.sendOut(id, { kind: 'voice', text: 'Happy birthday Mum' }), { sent: true, via: 'free', kind: 'voice' });
+  assert.deepEqual(spoken, [`${wa.FAMILY_PREFIX}Happy birthday Mum`]);
+  const ogg = Buffer.from(await uploads()[0].opts.body.get('file').arrayBuffer()); assert.equal(ogg.toString('latin1', 0, 4), 'OggS');
+  assert.equal(sent()[0].type, 'audio'); assert.equal(sent()[0].audio.voice, true); assert.equal(sent()[0].to, phone);
+});
+
+test('opt-in guard: not linked, never opted in, or STOPped -> refused, nothing reaches Meta', async () => {
+  voiceReset(); const none = senior();
+  await refusal(wa.sendOut(none, { kind: 'text', text: 'hi' }), /no WhatsApp number linked/, { status: 409 });
+  const { id, phone } = inWindow(); reset(PLAIN);
+  await wa.handleWebhook(incoming(phone, 'STOP')); clearCalls();
+  await refusal(wa.sendOut(id, { kind: 'text', text: 'hi' }), /not agreed|stopped/, { status: 403 });
+  await refusal(wa.sendOut(id, { kind: 'text', text: 'hi' }, 'x'), /not agreed|stopped/);
+  assert.equal(graphCalls.length, 0);
+  assert.throws(() => wa.link(senior(), newPhone(), undefined), /agreed/);
+});
+
+test('24 h window guard: outside it a free text is refused (and says so), a voice note is refused; nothing reaches Meta', async () => {
+  voiceReset(); const { id } = outside();
+  await refusal(wa.sendOut(id, { kind: 'text', text: 'Are you ok?' }), /24 hours/, { status: 409, needsTemplate: true, windowClosed: true });
+  await refusal(wa.sendOut(id, { kind: 'voice', text: 'Are you ok?' }), /voice note/, { status: 409, windowClosed: true });
+  const never = linked(); // has never written at all
+  await refusal(wa.sendOut(never.id, { kind: 'text', text: 'hi' }), /24 hours/, { needsTemplate: true });
+  assert.equal(graphCalls.length, 0); assert.equal(wa.view(id).windowOpen, false);
+  setInbound(id, 23 * H); assert.equal(wa.view(id).windowOpen, true, 'a message 23 h ago keeps the window open');
+});
+
+test('template guard: outside the window only the approved template goes out (never the family\'s own words), at most twice a day', async () => {
+  voiceReset(); const { id, phone } = outside();
+  assert.deepEqual(await wa.sendOut(id, { kind: 'text', text: 'my own words must not leak into a template', useTemplate: true }), { sent: true, via: 'template', kind: 'template' });
+  const t = sent()[0]; assert.equal(t.type, 'template'); assert.equal(t.to, phone); assert.deepEqual(t.template, { name: 'hello_world', language: { code: 'en_US' } });
+  assert.ok(!JSON.stringify(t).match(/leak/));
+  shift(id, 60000); await wa.sendOut(id, { kind: 'text', useTemplate: true });
+  shift(id, 60000); await refusal(wa.sendOut(id, { kind: 'text', useTemplate: true }), /already sent today/, { status: 429 });
+  assert.equal(sent().length, 2);
+  process.env.WHATSAPP_TEMPLATE_NAME = 'maya_checkin'; process.env.WHATSAPP_TEMPLATE_LANG = 'en_GB'; const o = outside(); clearCalls();
+  try { await wa.sendOut(o.id, { kind: 'text', useTemplate: true }); assert.deepEqual(sent()[0].template, { name: 'maya_checkin', language: { code: 'en_GB' } }); }
+  finally { delete process.env.WHATSAPP_TEMPLATE_NAME; delete process.env.WHATSAPP_TEMPLATE_LANG; }
+  const back = inWindow(); await wa.sendOut(back.id, { kind: 'text', text: 'free text still works inside', useTemplate: true }); assert.equal(sent().at(-1).type, 'text', 'inside the window a template is never used');
+});
+
+test('spam guard: too soon, two at once, and the daily cap are refused; a failed send gives its slot back', async () => {
+  voiceReset(); const { id } = inWindow();
+  await wa.sendOut(id, { kind: 'text', text: 'one' });
+  await refusal(wa.sendOut(id, { kind: 'text', text: 'two' }), /too soon/, { status: 429 }); assert.equal(sent().length, 1);
+  shift(id, 60000);
+  const both = await Promise.allSettled([wa.sendOut(id, { kind: 'text', text: 'a' }), wa.sendOut(id, { kind: 'text', text: 'b' })]);
+  assert.deepEqual(both.map((x) => x.status).sort(), ['fulfilled', 'rejected']); assert.equal(sent().length, 2);
+  for (let i = 0; i < 20 && sent().length < 10; i++) { shift(id, 60000); await wa.sendOut(id, { kind: 'text', text: `m${i}` }); }
+  assert.equal(sent().length, 10); shift(id, 60000);
+  await refusal(wa.sendOut(id, { kind: 'text', text: 'eleven' }), /Enough messages for today/, { status: 429 }); assert.equal(sent().length, 10);
+  const other = inWindow(); await wa.sendOut(other.id, { kind: 'text', text: 'another person is not limited by the first' });
+  voiceReset(); const f = inWindow(); graphFail = { code: 131047, message: 'Re-engagement message' };
+  await refusal(wa.sendOut(f.id, { kind: 'text', text: 'x' }), /131047/, { code: 131047 });
+  graphFail = null; await wa.sendOut(f.id, { kind: 'text', text: 'right after a failure is fine, the slot was given back' });
+  assert.equal(JSON.parse(fs.readFileSync(LF(), 'utf8'))[f.id].sent.length, 1, 'only the send that worked is kept');
+});
+
+test('never a live call: only text, audio and template ever leave; a call promise from the dashboard is refused; the module has no call function', async () => {
+  voiceReset(); const { id } = inWindow();
+  await refusal(wa.sendOut(id, { kind: 'text', text: 'I will call you in a minute' }), /cannot promise a call/, { status: 400 });
+  await wa.sendOut(id, { kind: 'text', text: 'Your daughter called you earlier, she says hello' });
+  shift(id, 60000); await wa.sendOut(id, { kind: 'voice', text: 'ok' });
+  const o = outside(); shift(o.id, 1); await wa.sendOut(o.id, { kind: 'text', useTemplate: true });
+  assert.ok(sent().length >= 3 && sent().every((b) => ['text', 'audio', 'template'].includes(b.type)));
+  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)), []);
+  await refusal(wa.sendOut(id, { kind: 'call', text: 'x' }), /text message or a voice note/, { status: 400 });
+  await refusal(wa.sendOut(id, { kind: 'text', text: 'x', who: 'stranger' }), /Bad sender/);
+});
+
+test('voice from the dashboard: a voice failure or an over-long note sends nothing and says so', async () => {
+  voiceReset(); const { id } = inWindow(); speakFail = true;
+  await refusal(wa.sendOut(id, { kind: 'voice', text: 'hello' }), /voice could not be made/, { status: 502 }); assert.equal(graphCalls.length, 0);
+  speakFail = false; const keep = chat.deps.speak; chat.deps.speak = async () => tone(200);
+  try { await refusal(wa.sendOut(id, { kind: 'voice', text: 'hello' }), /too long for a voice note/, { status: 400 }); } finally { chat.deps.speak = keep; }
+  assert.equal(graphCalls.length, 0); await wa.sendOut(id, { kind: 'text', text: 'a failed voice note did not use up the slot' });
+});

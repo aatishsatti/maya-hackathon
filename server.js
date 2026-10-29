@@ -169,8 +169,9 @@ async function handleWhatsapp(req, res, url) {
   try {
     if (req.method === 'GET' && !b) return sendJson(res, 200, whatsapp.view(a));
     if (req.method === 'DELETE' && !b) return sendJson(res, 200, { ok: whatsapp.unlink(a) });
+    if (req.method === 'POST' && b === 'send') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, await whatsapp.sendOut(a, { kind: body.kind, text: body.text, who: 'family', useTemplate: body.useTemplate === true })); }
     if (req.method === 'POST' && b === 'link') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, whatsapp.link(a, body.phone, body.optIn)); }
-  } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
+  } catch (e) { return sendJson(res, e.status || 500, { error: e.message, ...(e.needsTemplate ? { needsTemplate: true, windowClosed: true } : e.windowClosed ? { windowClosed: true } : {}) }); }
   return sendJson(res, 404, { error: 'Not found' });
 }
 
@@ -189,7 +190,7 @@ async function handleApi(req, res, url) {
     catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
   }
   const del = /^\/api\/profiles\/([a-f0-9]{8})$/.exec(url.pathname);
-  if (del && req.method === 'DELETE') { care.remove(del[1]); chat.forget(del[1]); return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); }
+  if (del && req.method === 'DELETE') { care.remove(del[1]); chat.forget(del[1]); whatsapp.unlink(del[1]); return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); }
   if (url.pathname.startsWith('/api/whatsapp/')) return handleWhatsapp(req, res, url);
   if (url.pathname.startsWith('/api/care')) return handleCare(req, res, url);
   if (url.pathname.startsWith('/api/chat/')) return handleChat(req, res, url);

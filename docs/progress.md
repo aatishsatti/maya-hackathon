@@ -6,3 +6,4 @@
 - Open: ring only while app is open; family push only on open family page; no locked-phone ringing; no real WhatsApp sends.
 - Open: no fall detection; safety-line wording can still repeat; tired brightness is prompt-only (no code hook).
 - Next: live re-test of tone and repeats, then F4 scam shield, F5 dashboard, F6 WhatsApp.
+- WhatsApp prototype (render-test, WIP): text and voice notes in/out through the same Maya (whatsapp.js), outgoing from the family page with opt-in / 24 h window / template / spam guards, never a call. Server env: WHATSAPP_TOKEN, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN, WHATSAPP_PHONE_ID (+ optional WHATSAPP_TEMPLATE_NAME / _LANG, WHATSAPP_API_VERSION). Webhook URL: /api/whatsapp/webhook. Needs a live test on the Meta test number (recipient must be on its allowed list).

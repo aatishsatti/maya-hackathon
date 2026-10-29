@@ -1,4 +1,4 @@
-// WhatsApp door to the same Maya (Feature 6, prototype steps 1 text and 2 voice notes). Not a second bot: an incoming text goes through chat.sendText, so it
+// WhatsApp door to the same Maya (Feature 6, prototype steps 1 text, 2 voice notes and 3 outgoing from the dashboard). Not a second bot: an incoming text goes through chat.sendText, so it
 // uses the same Spark brain, profile memory, scam rules, family question and dashboard flag as the app chat. Only the door differs.
 // Docs read at build time (developers.facebook.com/documentation/business-messaging/whatsapp):
 //   Webhook verify (GET): query hub.mode=subscribe, hub.verify_token (our own string), hub.challenge. Valid -> 200 and the challenge echoed as the body;
@@ -14,6 +14,11 @@
 //     Send a voice note: { messaging_product, recipient_type, to, type: "audio", audio: { id, voice: true } }. Voice notes must be mono Ogg/Opus (oggopus.js);
 //     the play icon shows only up to 512 KB. Incoming voice note: type "audio", audio.id and audio.mime_type ("audio/ogg; codecs=opus"). The pages read did not
 //     list the other inbound audio fields, so only id and mime_type are used.
+//   Outgoing rules (step 3): the 24 h "customer service window" opens when the person writes and resets with each message they send; only then may free-form
+//     text or audio be sent. Outside it ONLY a pre-approved template can be sent (type "template", template.name, template.language.code; components only when the
+//     template has variables); Meta answers a free-form send outside the window with error 131047. The one template Meta pre-creates is "hello_world" / "en_US".
+//     Template name and language are WHATSAPP_TEMPLATE_NAME / WHATSAPP_TEMPLATE_LANG in the server env (a template with variables is not supported here).
+//   Status webhook: value.statuses[] { id (the wamid we sent), status: sent | delivered | read | failed, recipient_id, errors?: [{ code, title }] }.
 //   The Graph API version is not named on the pages read: WHATSAPP_API_VERSION in the server env, default below, change it there if Meta retires it.
 // Server env only (never in the repo, the page or a log): WHATSAPP_TOKEN, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN, WHATSAPP_PHONE_ID.
 // Privacy: message words are never logged and never stored here. This file keeps only: which phone belongs to which profile, whether they opted in,
@@ -31,6 +36,10 @@ const API_VERSION = () => (/^v\d+\.\d+$/.test(process.env.WHATSAPP_API_VERSION |
 const GRAPH = 'https://graph.facebook.com';
 const SEEN_KEEP = 50;
 const WINDOW_MS = 24 * 60 * 60 * 1000;
+const OUT_MIN_GAP_MS = 10 * 1000;      // never two sends within 10 s
+const OUT_MAX_PER_DAY = 10;            // free-form + template, rolling 24 h, per person: a family cannot flood one phone
+const OUT_MAX_TEMPLATES_PER_DAY = 2;   // an invitation to reply is not repeated
+const OUT_KEEP = 30;
 const MAX_INBOUND_AUDIO = 2 * 1024 * 1024; // a long monologue is not worth a minute of Transcribe; ~2 MB of Opus is several minutes
 
 // Network edge, replaceable in tests.
@@ -77,7 +86,8 @@ function view(profileId) {
   const l = linkOf(profileId);
   if (!l) return { linked: false, configured: configured() };
   const open = Boolean(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS);
-  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null };
+  const last = (l.sent || []).slice(-1)[0] || null;
+  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null };
 }
 
 // ---- webhook security ----
@@ -158,6 +168,80 @@ function wavToVoiceNote(wav) {
   return ogg.length <= oggopus.MAX_PLAY_BYTES ? ogg : null;
 }
 
+// ---- outgoing from the family dashboard (or Maya) ----
+// Every send passes the same guards, in this order, and a refused send says exactly why (nothing is silently dropped or faked):
+//   set up -> linked -> opted in -> not too soon / too many -> inside the 24 h window (free text or voice) or, outside it, an explicit template.
+// Never a call: this module has no way to ring or call anyone; every message sent is of type text, audio or template.
+// who: 'family' (the words are announced as the family's, never passed off as Maya's own) or 'maya' (her own words, no announcement).
+class OutError extends Error { constructor(msg, status, extra = {}) { super(msg); this.status = status; Object.assign(this, extra); } }
+const FAMILY_PREFIX = 'A message from your family: ';
+const templateCfg = () => (process.env.WHATSAPP_TEMPLATE_NAME ? { name: process.env.WHATSAPP_TEMPLATE_NAME, lang: process.env.WHATSAPP_TEMPLATE_LANG || 'en_US' } : null);
+
+function guardOut(l, now, kind, useTemplate) {
+  if (!configured()) throw new OutError('WhatsApp is not set up on this server.', 503);
+  if (!l) throw new OutError('This person has no WhatsApp number linked yet.', 409);
+  if (!l.optIn) throw new OutError('This person has not agreed to (or has stopped) messages from Maya on WhatsApp, so nothing was sent.', 403);
+  const day = (l.sent || []).filter((x) => now - x.at < WINDOW_MS);
+  if (day.length && now - day[day.length - 1].at < OUT_MIN_GAP_MS) throw new OutError('That was too soon after the last one. Please wait a few seconds.', 429);
+  if (day.length >= OUT_MAX_PER_DAY) throw new OutError('Enough messages for today. To avoid flooding their phone, please try again tomorrow.', 429);
+  const open = Boolean(l.lastInboundAt && now - l.lastInboundAt < WINDOW_MS);
+  if (open) return 'free';
+  if (kind === 'voice') throw new OutError('They have not written to Maya on WhatsApp in the last 24 hours, and WhatsApp only allows a voice note inside that window. Nothing was sent.', 409, { windowClosed: true });
+  const t = templateCfg() || { name: 'hello_world', lang: 'en_US' };
+  if (!useTemplate) throw new OutError('They have not written to Maya on WhatsApp in the last 24 hours, so WhatsApp does not allow a free message yet. You can send a standard invitation to reply instead; your own words are not sent.', 409, { windowClosed: true, needsTemplate: true, template: t.name });
+  if (day.filter((x) => x.via === 'template').length >= OUT_MAX_TEMPLATES_PER_DAY) throw new OutError('An invitation was already sent today. Please wait for them to reply.', 429);
+  return 'template';
+}
+
+async function sendOut(profileId, { kind = 'text', text, who = 'family', useTemplate = false } = {}) {
+  if (kind !== 'text' && kind !== 'voice') throw new OutError('Choose a text message or a voice note.', 400);
+  if (who !== 'family' && who !== 'maya') throw new OutError('Bad sender.', 400);
+  const l = linkOf(profileId);
+  const way = guardOut(l, Date.now(), kind, useTemplate === true);
+  const words = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (way === 'free' && !words) throw new OutError('Please type a message first.', 400);
+  if (way === 'free' && CALL_CLAIM.test(words)) throw new OutError('WhatsApp messages cannot promise a call from here. Please rephrase.', 400);
+  const via = way, sentAt = Date.now(), entry = { at: sentAt, kind: via === 'template' ? 'template' : kind, via, who, id: null, status: 'sending', error: null };
+  update(profileId, (x) => { x.sent = [...(x.sent || []), entry].slice(-OUT_KEEP); }); // the slot is taken BEFORE the network call, so two quick requests cannot both pass the guard
+  let id;
+  try {
+    if (way === 'template') {
+      const t = templateCfg() || { name: 'hello_world', lang: 'en_US' };
+      const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to: l.phone, type: 'template', template: { name: t.name, language: { code: t.lang } } });
+      id = d && d.messages && d.messages[0] ? d.messages[0].id : null;
+    } else if (kind === 'text') {
+      id = await sendTextTo(l.phone, who === 'family' ? FAMILY_PREFIX + words : words);
+    } else {
+      let pcm;
+      try { pcm = await chat.deps.speak(who === 'family' ? FAMILY_PREFIX + words : words); } catch (e) { throw new OutError(`Maya's voice could not be made (${e.message}). Nothing was sent; you can send it as text instead.`, 502); }
+      const ogg = oggopus.encode(pcm, 24000);
+      if (ogg.length > oggopus.MAX_PLAY_BYTES) throw new OutError('That is too long for a voice note. Please shorten it. Nothing was sent.', 400);
+      id = await sendAudioTo(l.phone, ogg);
+    }
+  } catch (e) {
+    update(profileId, (x) => { x.sent = (x.sent || []).filter((m) => m.at !== sentAt || m.status !== 'sending'); }); // nothing went out: the slot is given back
+    throw e;
+  }
+  update(profileId, (x) => { const m = (x.sent || []).find((q) => q.at === sentAt && q.status === 'sending'); if (m) { m.id = id; m.status = 'sent'; } });
+  return { sent: true, via, kind: via === 'template' ? 'template' : kind };
+}
+
+// A Meta status for something we sent (sent / delivered / read / failed). Recorded as a status word and an error code only.
+function onStatus(st) {
+  if (!st || typeof st.id !== 'string' || typeof st.status !== 'string') return false;
+  const all = readLinks();
+  for (const pid of Object.keys(all)) {
+    const m = (all[pid].sent || []).find((x) => x.id === st.id);
+    if (!m) continue;
+    const rank = { sent: 1, delivered: 2, read: 3 };
+    if (st.status === 'failed') { m.status = 'failed'; const e = (st.errors || [])[0] || {}; m.error = { code: e.code || null, title: String(e.title || '').slice(0, 120) }; }
+    else if (rank[st.status] && rank[st.status] > (rank[m.status] || 0)) m.status = st.status;
+    writeLinks(all);
+    return true;
+  }
+  return false;
+}
+
 // ---- Maya's words must be true about WhatsApp ----
 // A text door cannot ring a phone or hold a live WhatsApp call. A reply that promises one is replaced by the plain truth.
 const CALL_CLAIM = /\b(?:i(?:'| a)?m|i am|i(?:'| wi)ll|i will|let me|going to|gonna|i can|shall i|want me to|should i)\s+(?:be\s+)?(?:call(?:ing)?|ring(?:ing)?|phon(?:e|ing)|video[- ]?call(?:ing)?|dial(?:l?ing)?)\b|\bcalling you (?:now|right now|back|in a)|\bgive you a (?:call|ring)\b|\bi(?:'| wi)ll (?:be )?on the phone\b/i;
@@ -232,6 +316,7 @@ async function handleWebhook(payload) {
     if (c.field !== 'messages' || !c.value) continue;
     const pid = c.value.metadata && c.value.metadata.phone_number_id;
     if (pid && process.env.WHATSAPP_PHONE_ID && pid !== process.env.WHATSAPP_PHONE_ID) continue; // meant for another number
+    for (const st of c.value.statuses || []) { try { onStatus(st); } catch (err) { console.error('whatsapp status error:', err.message); } }
     for (const msg of c.value.messages || []) {
       if (!msg || typeof msg.from !== 'string' || typeof msg.id !== 'string') continue;
       done.push(serial(msg.from, () => onMessage(msg)).catch((err) => { console.error('whatsapp error:', err.message); return 'error'; }));
@@ -240,4 +325,4 @@ async function handleWebhook(payload) {
   return Promise.all(done);
 }
 
-module.exports = { deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, handleWebhook, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
