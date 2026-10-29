@@ -107,18 +107,21 @@ test('chat: a scam about a company NOT on the allow-list is still searched; the 
   await chat.sendText(id, 'A man from Harbour Light Bank rang me and wants me to read out the code in my text.', null);
   const r = roster();
   assert.match(r, /SCAM CHECK/); assert.match(r, /OFFICIAL SOURCE CHECK/); assert.match(r, /NO official source/);
-  assert.match(r, /WEB CHECK \(a fact from the app: a general web search, NOT an official source/); assert.match(r, /site harbourlight\.example, titled "Harbour Light Bank - Home"/); assert.match(r, /never ask for your PIN by text/);
+  assert.match(r, /WEB CHECK \(a fact from the app: a general web search, NOT an official source/); assert.match(r, /site harbourlight\.example \(tier 3: general web, NOT official\), titled "Harbour Light Bank - Home"/); assert.match(r, /never ask for your PIN by text/);
   assert.match(r, /never invent a source/); assert.ok(sent.some((x) => /harbour light bank/i.test(JSON.parse(x.opts.body).query)));
   assert.deepEqual(care.scamPending(id).official, { checked: true, found: false, name: null }, 'the dashboard still says: no official source, nothing from the web page');
 });
 
-test('chat: a link not on the allow-list is searched; address match / mismatch against the sites found', async () => {
+test('chat: a link not on the allow-list is searched IN THE BACKGROUND (background.test.js covers the delivery); address match / mismatch against the sites found', async () => {
   const id = senior(); setup(PAGES, {}, 'warn');
   await chat.sendText(id, 'The text says to claim my prize at free-gift-prize.example/claim and give the code they sent.', null);
-  assert.match(roster(), /WEB CHECK/); assert.match(roster(), /site scamwatch\.example/); assert.match(roster(), /NOT one of the sites found; that alone does not prove anything/);
-  assert.doesNotMatch(roster(), /RECONFIRM \(a fact/, 'the search gave something, so no question is needed');
+  assert.match(roster(), /BACKGROUND CHECK STARTED/); assert.doesNotMatch(roster(), /WEB CHECK/, 'no result in this reply: it comes later');
+  await require('../checks').idle();
+  assert.ok(sent.length >= 1, 'the search ran');
   const m = await W.lookup('see harbourlight.example/login', { fetch: tavily({ 'harbourlight.example': PAGES.harbour }), key: KEY, scam: true });
   assert.equal(m.topics[0].address, 'match');
+  const mm = await W.lookup('see harbourlight-pay.example/login', { fetch: tavily({ 'harbourlight-pay.example': PAGES.harbour }), key: KEY, scam: true });
+  assert.equal(mm.topics[0].address, 'mismatch'); assert.match(W.note(mm), /NOT one of the sites found; that alone does not prove anything/);
 });
 
 test('chat: a general question (medicine) is searched even without a scam', async () => {

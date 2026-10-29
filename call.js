@@ -1404,6 +1404,7 @@ class Call {
     if (!turns.length || this.closed) return;
     dbg('RESPOND to', JSON.stringify(turns.map((t) => t.text)));
     const extra = this.careNotes(turns.map((t) => t.text).join(' '));
+    this.checkIds = care.checkDueIds(this.profile.id);   // lookups due for this reply (care.checkFacts puts them in the facts)
     let scamTurn = this.scamForTurn(turns.map((t) => t.text).join(' '));
     if (scamTurn && typeof scamTurn.then === 'function') scamTurn = await scamTurn;   // only the rare "happening right now" turn ever waits
     if (this.closed) return;
@@ -1820,6 +1821,7 @@ class Call {
       for (const n of this.names.values()) if (new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(all)) this.lastNameUse = this.replyCount;
       this.replyCount += 1;
       if (delivery && delivery.beatN != null) this.beatCount = delivery.beatN;
+      if (this.checkIds) { care.checkDelivered(this.profile.id, this.checkIds); this.checkIds = null; }   // a finished lookup was spoken to them: told once
       if (this.officialNow) { care.scamOfficial(this.profile.id, this.officialNow); this.officialNow = null; }   // answered after the family question: attach it
       if (this.rc.stage === 'offered') { this.rc.stage = 'asked'; this.rc.at = Date.now(); }   // the reconfirm question was really spoken: now it is asked
       if (this.scamAskFor) { care.scamAsk(this.profile.id, this.scamAskFor.type, { channel: 'spoken', pause: this.scamAskFor.level === 'pause', official: this.scamAskFor.official || null }); this.scamAskFor = null; }   // her one question is out: their yes or no settles it (careNotes)

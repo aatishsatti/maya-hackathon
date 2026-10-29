@@ -623,6 +623,40 @@ function scamOfficial(id, official) {
   if (sc) sc.official = o;
   save(id);
 }
+// ---- Background checks (checks.js): a lookup Maya said she would do. Stored on the profile (server side only; facts from the lookup, never the person's words, a number
+// or a link), delivered ONCE on their next turn (chat or call) as a fact, then marked delivered. Never faked: a lookup that never finished is reported as cannot verify.
+const CHECK_STALE_MS = 5 * MIN, CHECK_KEEP = 10;
+function checkStart(id) {
+  const p = get(id);
+  if (!p) return null;
+  p.checks = p.checks || [];
+  const c = { id: uid(), at: Date.now(), status: 'pending', note: null, delivered: false };
+  p.checks.unshift(c); p.checks.length = Math.min(p.checks.length, CHECK_KEEP); save(id);
+  return c;
+}
+function checkDone(id, checkId, note) {
+  const p = get(id), c = p && (p.checks || []).find((x) => x.id === checkId);
+  if (!c || c.status === 'done') return null;
+  c.status = 'done'; c.doneAt = Date.now(); c.note = String(note || '').slice(0, 3000); save(id);
+  return c;
+}
+// What is due for the next reply: finished and not yet told (or pending for too long = could not finish). One fact string, or ''. Safety first: nothing while a safety ticket is open.
+function checkFacts(p, now = Date.now()) {
+  if (!p || !p.checks || !p.checks.length || hasActiveSafety(p.id)) return '';
+  const ago = (t) => { const m = Math.round((now - t) / MIN); return m < 2 ? 'moments ago' : m < 90 ? `${m} minutes ago` : `${Math.round(m / 60)} hours ago`; };
+  const out = [];
+  for (const c of p.checks) {
+    if (c.delivered) continue;
+    if (c.status === 'pending' && now - c.at > CHECK_STALE_MS) { c.status = 'done'; c.doneAt = now; c.note = 'BACKGROUND CHECK (a fact from the app): the lookup could not be finished, so NOTHING was verified. Say plainly that you could not finish looking into it and cannot verify it; do not guess, and never invent a result.'; }
+    if (c.status === 'done') out.push(`A lookup you started earlier and told them you would look into has FINISHED (${ago(c.doneAt)}). Tell them the result now, in your own words, once, and only what this says: ${c.note}`);
+    else out.push(`You started a lookup ${ago(c.at)} and told them you would look into it; it is still running. If they ask, say you are still looking; give no result and no guess.`);
+  }
+  return out.join(' ');
+}
+// The reply that carried a finished lookup was produced: now it counts as told, once.
+// ids: the lookups that were due when the reply began (a lookup that finished during the reply was not in it and is still owed).
+function checkDueIds(id) { const p = get(id); return p && !hasActiveSafety(id) ? (p.checks || []).filter((c) => !c.delivered && (c.status === 'done' || Date.now() - c.at > CHECK_STALE_MS)).map((c) => c.id) : []; }
+function checkDelivered(id, ids) { const p = get(id); if (!p || !p.checks) return; let any = false; for (const c of p.checks) if (ids.includes(c.id) && !c.delivered) { c.delivered = true; any = true; } if (any) save(id); }
 function scamAnswer(id, yes) {
   const pend = scamPending(id);
   if (!pend) return null;
@@ -767,6 +801,7 @@ function appFacts(id, now = Date.now()) {
   const msgs = p.notifications.filter((n) => n.to === 'senior' && n.kind === 'family_message' && n.status !== 'replied' && n.status !== 'seen').length;
   if (msgs) f.push(`${msgs} family message${msgs > 1 ? 's' : ''} waiting for ${name} that they have not opened yet.`);
   if (p.lastActivity.whatsapp) f.push(`Last seen on WhatsApp ${ago(p.lastActivity.whatsapp)}.`);
+  const chk = checkFacts(p, now); if (chk) f.push(chk);
   return f.join(' ');
 }
 
@@ -955,7 +990,7 @@ module.exports = {
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
   addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

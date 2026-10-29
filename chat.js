@@ -301,7 +301,7 @@ async function talkCheck(profileId, words) {
 // Official source (official.js), typed chat only: on a warn / pause the company they named is looked up on its official site; if none is clear, ONE
 // reconfirm question is asked first (type the link, or send a photo) and the family question waits for their answer. Returns facts for Spark.
 const familyState = (profileId, type) => ({ told: Boolean(care.scamTold(profileId)), declined: Boolean(type && care.scamDeclined(profileId, type)), pending: Boolean(care.scamPending(profileId)) });
-const officialStep = (s, profileId, words, scam) => require('./official').step(s.rc, { words, scam, channel: 'text', run: (w, o) => deps.official(w, o), web: (w, o) => deps.web(w, o), family: familyState(profileId, (scam || s.rc.scam || {}).type) });
+const officialStep = (s, profileId, words, scam) => require('./official').step(s.rc, { words, scam, channel: 'text', run: (w, o) => deps.official(w, o), web: (w, o) => deps.web(w, o), background: (w) => require('./checks').start(profileId, w, { official: deps.official, web: deps.web }), family: familyState(profileId, (scam || s.rc.scam || {}).type) });
 // After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
 const afterTalkReply = (profileId, scam, channel, off = null) => {
   if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { channel, pause: off.askFor.level === 'pause', official: off.askFor.official }); else care.scamOfficial(profileId, off.official); return; }   // the reconfirm was answered: the family question now, if it is still owed
@@ -326,7 +326,9 @@ async function sendText(profileId, text, tz) {
     try { g = await deps.web(t, {}); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; }
     const wn = require('./web').note(g); if (wn) tt.note = [tt.note, wn].filter(Boolean).join(' ');
   }
+  const due = care.checkDueIds(profileId);
   const r = await s.turn({ heard: t, ...tt });
+  care.checkDelivered(profileId, due);   // a finished lookup was handed to her with this reply: told once
   afterTalkReply(profileId, scam, 'text', off);
   return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
 }
@@ -408,8 +410,15 @@ async function sendImage(profileId, buf, caption, tz) {
     else if (photoWarn) off = await O.look(`${seen} ${said}`, { run: (w, o) => deps.official(w, o) });
   }
   const shaped = off && off.scam ? off.scam : scam;
-  const note = [off && off.resolved ? '' : scamNote(scam, profileId), off ? off.note : ''].filter(Boolean).join(' ');
+  // A web address, e-mail or company on the screenshot that the allow-list did not settle: the web look-up runs in the BACKGROUND and she says she is looking into it.
+  let started = '';
+  if ((photoWarn || (off && off.resolved)) && !care.hasActiveSafety(profileId) && require('./web').extract(`${seen} ${said}`, { scam: true }).some((tp) => tp.kind === 'link' || tp.kind === 'company') && !(off && off.official && off.official.found)) {
+    if (require('./checks').start(profileId, `${seen} ${said}`, { official: deps.official, web: deps.web, skipOfficial: true })) started = require('./checks').startedNote();
+  }
+  const note = [off && off.resolved ? '' : scamNote(scam, profileId), off ? off.note : '', started].filter(Boolean).join(' ');
+  const due = care.checkDueIds(profileId);
   const r = await s.turn({ heard: said, message, how: 'image', note, scam: shaped && shaped.level !== 'none' ? shaped.level : null });
+  care.checkDelivered(profileId, due);
   // Her one question is out: from now on the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
   if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { official: off.askFor.official }); else care.scamOfficial(profileId, off.official); }
   else if (photoWarn && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { official: off ? off.official : null });
