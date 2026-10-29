@@ -141,12 +141,15 @@ body[data-call-layout='big'] .orb { touch-action: none; cursor: grab; -webkit-us
      small call, minimized or muted: small orb, Mute + Cut Call, the chat below it
    --------------------------------------------------------------------------------------------------------- */
 .chat { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; width: 100%; }
-body[data-call-layout='big'] .chat { display: none; }
+/* Big orb: the orb, the call buttons (Mute, Cut Call, Aa) under it, a short thread, and the type row. No Voice / Photo / Call row. */
+body[data-call-layout='big'] .chat { flex: 0 1 34dvh; }
+body[data-call-layout='big'] .action-row { display: none; }
+body[data-call-layout='big'] .expand { display: none; }
 body[data-call-layout='big'] .stage, body[data-call-layout='small'] .stage { display: flex; }
 body[data-call-layout='big'] .top-links { visibility: hidden; }
 body[data-call-layout='small'] .top-links { display: none; }
 
-body[data-call-layout='big'] .stage { flex: 1 1 auto; cursor: pointer; }
+body[data-call-layout='big'] .stage { flex: 1 1 auto; }
 body[data-call-layout='big'] .orb { --size: clamp(190px, min(70vw, 42dvh), 340px); }
 /* Minimized: the call is a small floating widget (orb + Mute / Expand / Cut / Aa as one piece). It is out of the page flow, so the chat
    fills the screen; orb.js places it (bottom-right above the composer by default) and lets a finger drag it anywhere on screen. */
@@ -172,6 +175,7 @@ body:not([data-captions='on']) .status, body:not([data-captions='on']) .caption,
 body[data-call-layout='small'] .muted-tag { font-size: 12px; margin-top: 0; max-width: 150px; text-align: center; }
 
 .call-controls { display: none; width: 100%; gap: 14px; margin-top: 10px; justify-content: center; align-items: center; }
+body[data-call-layout='big'] .call-controls { display: flex; }
 body[data-call-layout='small'] .call-controls { display: flex; width: auto; gap: 6px; margin-top: 0; }
 /* Small round icon buttons, like a chat app's call bar: quiet, not toy-coloured. */
 .strip-btn {

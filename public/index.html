@@ -42,7 +42,7 @@
       <p id="status" class="status" aria-live="polite">Press the button to talk with Maya.</p>
       <p id="mutedTag" class="muted-tag" hidden>Muted. Maya cannot hear you.</p>
       <p id="caption" class="caption" aria-live="polite"></p>
-      <p id="fullHint" class="full-hint">Tap anywhere to see the chat and the call buttons.</p>
+      <p id="fullHint" class="full-hint">Type below, or use the buttons.</p>
       <div id="callControls" class="call-controls" role="group" aria-label="Call controls">
         <button id="muteBtn" class="strip-btn mute" type="button" aria-label="Mute" title="Mute">
           <svg class="i-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V22h2v-3.08A7 7 0 0 0 19 12h-2Z"/></svg>
@@ -58,7 +58,7 @@
       </div>
     </section>
 
-    <!-- The chat: a thread, then what the person can do. Hidden while the call is full screen. -->
+    <!-- The chat: a thread, then what the person can do. Beside the big orb it shows the thread and the type row only. -->
     <section id="chat" class="chat" aria-label="Chat with Maya">
       <div id="thread" class="thread" role="log" aria-live="polite" aria-relevant="additions"></div>
       <!-- Photo preview: nothing is sent until Send is tapped; Cancel throws it away. -->
