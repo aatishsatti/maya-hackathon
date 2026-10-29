@@ -127,7 +127,9 @@ test('C: breaksFacts reads the records: an invented alert, an invented reason an
   assert.equal(c.breaksFacts("I'll let your family know because you said you might hurt yourself."), true);
   assert.equal(c.breaksFacts('Your family has been told about it.'), true);
   for (const s of ["I'm right here with you.", "We'll take this slow together.", "I'm standing with you.", 'I did it because I care about you.']) assert.equal(c.breaksFacts(s), true, s);
-  assert.equal(c.breaksFacts('Nobody was told. I have not contacted your family.'), false);
+  assert.equal(c.breaksFacts('Nobody was told. I have not contacted your family.'), true, 'not volunteered on a turn that is not about the family');
+  c.history.push({ role: 'user', content: 'A: Did you tell my family?' });
+  assert.equal(c.breaksFacts('Nobody was told. I have not contacted your family.'), false, 'but plainly allowed when they ask');
   assert.equal(c.breaksFacts('Please hold off on the gift cards for now.'), false);
   care.scamAsk(id, 'gift card scam', {}); care.scamAnswer(id, true);
   assert.equal(c.breaksFacts('Yes, I let your family know about the gift card scam.'), false, 'a real alert can be named');
@@ -152,6 +154,39 @@ test('C: in chat, a stock counselling reply is rewritten, and a second try that 
 test('C: the master prompt and the reply note ban the stock counselling lines and "I care about you" as an excuse', () => {
   const c = mkCall(senior()); const note = c.replyNote();
   assert.match(note, /Never say "I'm right here with you", "we'll take this slow together", "I'm standing with you"/); assert.match(note, /never give "I care about you" as the reason/);
+});
+
+// ---- leak: the family fact is internal, spoken only when the turn is about it ----
+const LEAK = `${FEEL} I haven't told anyone anything. No news went to anyone about you.`;
+test('leak: "Hi Maya", light chat, "What are you talking about?" and "What?" get no family fact in the roster, and a family claim draft is rewritten', async () => {
+  const id = senior(); chat.deps.scamText = verdict('none');
+  for (const line of ['Hi Maya', 'I am baking a lemon cake today.', 'What are you talking about?', 'What?']) {
+    reset(LEAK, `${FEEL} Sorry, I got that wrong. Let's go back to what you were saying.`);
+    const out = await chat.sendText(id, line, null);
+    assert.doesNotMatch(asked[0].roster, /FAMILY ALERTS/, line); assert.doesNotMatch(asked[0].roster, /told their family NOTHING/, line);
+    assert.doesNotMatch(out.messages[1].text, /told anyone|no news|family/i, line); assert.equal(asked.length, 2, `${line}: the leaking draft was written again`);
+  }
+});
+
+test('leak: the reply note says family is internal, and a wrong answer is corrected plainly (no "let us drop it")', async () => {
+  const id = senior(); chat.deps.scamText = verdict('none'); reset(`${FEEL} Sorry about that. Let's drop it.`, `${FEEL} Sorry, I got that wrong. Let's go back to what you were saying.`);
+  const out = await chat.sendText(id, 'What?', null);
+  assert.match(asked[0].roster, /INTERNAL: never bring them up unless they asked/); assert.match(asked[0].roster, /never "let's drop it"/);
+  assert.doesNotMatch(out.messages[1].text, /drop it/i); assert.match(out.messages[1].text, /got that wrong/);
+});
+
+test('leak: "Did you tell my family?" with no alert -> the fact is there and "nobody was told" may be said', async () => {
+  const id = senior(); chat.deps.scamText = verdict('none'); reset(`${FEEL} Nobody was told. I have not contacted your family.`);
+  const out = await chat.sendText(id, 'Did you tell my family?', null);
+  assert.match(asked[0].roster, /told their family NOTHING/); assert.equal(asked.length, 1); assert.match(out.messages[1].text, /Nobody was told/);
+  const out2 = (reset(`${FEEL} Nobody was told.`), await chat.sendText(id, 'Why did you let my family know?', null));
+  assert.match(asked[0].roster, /told their family NOTHING/); assert.match(out2.messages[1].text, /Nobody was told/);
+});
+
+test('leak: "Did you tell my family?" with an alert -> topic only, no excuse', async () => {
+  const id = senior(); chat.deps.scamText = verdict('none'); care.scamAsk(id, 'gift card scam', {}); care.scamAnswer(id, true); reset(`${FEEL} Yes, about the gift card scam only.`);
+  const out = await chat.sendText(id, 'Did you tell my family?', null);
+  assert.match(asked[0].roster, /ONLY these topics: a possible gift card scam/); assert.match(asked[0].roster, /never say "because I care about you"/); assert.match(out.messages[1].text, /gift card scam/);
 });
 
 test.after(() => { made.forEach((c) => c.end()); for (const s of chat.sessions.values()) s.finish(); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });

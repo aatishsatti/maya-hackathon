@@ -225,8 +225,10 @@ const SAFETY_TOPICS = {
 const IDENTITY_LINE = /\b(i['’]?m|i am|my name is) maya\b/i;
 const STOCK_OPENINGS = [IDENTITY_LINE, /\bi['’]?m (right )?here with you\b/i, /\bi['’]?m right (here )?beside you\b/i, /\bi['’]?m right here\b/i];
 // Stock counselling lines are never a reply, and "I care about you" is never the reason for an alert. A family claim must match what the app really did.
-const COUNSEL_BAN = /\bi['\u2019]?m (right )?here with you\b|\bwe['\u2019]?ll take this slow(ly)? together\b|\bi['\u2019]?m standing with you\b|\b(because|since) i care (about|for) you\b/i;
+const COUNSEL_BAN = /\blet['\u2019]?s (just )?drop it\b|\bforget (about )?it\b|\bi['\u2019]?m (right )?here with you\b|\bwe['\u2019]?ll take this slow(ly)? together\b|\bi['\u2019]?m standing with you\b|\b(because|since) i care (about|for) you\b/i;
 const FAMILY_CLAIM = /\b(i|we)(['\u2019]ve| have|['\u2019]ll| will)? (just )?(let|told|alerted|notified|informed|messaged|contacted)\b[^.?!]{0,40}\b(famil|daughter|son\b|kids|children)|\byour (famil\w*|daughter|son|kids|children) (has|have|was|were|is|are)( now| already| been)* (been )?(told|alerted|notified|informed|know|knows|aware)\b/i;
+const FAMILY_ASKED = /\b(famil\w*|daughters?|sons?|kids|children|wife|husband|sister|brother|grand(son|daughter)s?|alert\w*|notif\w*|told (anyone|anybody|someone|them)|tell (anyone|anybody|someone|them)|who did you (tell|call|contact)|did you (tell|say|send|contact|call|message|let)|let (them|him|her|\w+) know)\b/i;
+const FAMILY_TELL_TALK = /\b(told|tell|telling|alert\w*|notif\w*|contact\w*|inform\w*)\b[^.?!]{0,30}\b(anyone|anybody|nobody|no ?one|family|daughter|son)\b|\bno news\b|\b(nobody|no one) (was|has been|got) (told|alerted|notified)\b|\bhaven['\u2019]?t (told|alerted|contacted)\b/i;
 const SELF_HARM_REASON = /\b(because|since|after) you (said|told me|mentioned)\b[^.?!]{0,50}\b(hurt|harm|kill|end (it|your life)|suicid)/i;
 const openWords = (t) => String(t).toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, ' ').trim().split(/\s+/);
 const SEEN_ANGLES = ['lead with reassurance', 'lead with how glad you are to be with them', 'lead with the fact that their family knows', 'lead with saying they are not alone'];
@@ -936,7 +938,7 @@ class Call {
   roster(note = '', heard = '') {
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
-    return `${memory.profileNote(this.profile, this.tz, this.focus)}${callWords(this.said, heard || (this.focus && this.focus.text))} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
+    return `${memory.profileNote(this.profile, this.tz, this.focus)}${callWords(this.said, heard || (this.focus && this.focus.text))} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id, Date.now(), { family: this.familyRelevant(heard) })}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
   }
 
   // A safety alert from an earlier call is still active (the call-back is a NEW call, so this call has no memory of it).
@@ -967,6 +969,7 @@ class Call {
     bits.push(this.lastReplyAsked ? `Your last reply asked a question (of your last ${this.askHistory.length} replies, ${this.askHistory.filter(Boolean).length} asked one), so make this reply a statement, a reflection or a warm acknowledgement with no question.` : this.askHistory.filter(Boolean).length >= 2 ? 'You have been asking a lot; do not add a follow-up question unless you truly need the answer.' : 'Do not add a follow-up question by default; a friend listens more than she asks. Ask only when you genuinely need to know.');
     const openings = this.recentOpenings();
     if (this.identitySaid) bits.push('You have already said who you are in this call; do not say your name or what you are again, in any words.');
+    bits.push('Their family and any alert are INTERNAL: never bring them up unless they asked about their family or an alert, or this turn is truly about that alert. A greeting or light chat is just a greeting or light chat. If you got something wrong, say plainly and specifically what was wrong and go back to what they were saying; never "let\'s drop it" or "forget it"; if they say "what?" or look lost, clarify the actual point in plain words.');
     bits.push('Companion tone: short, natural, direct, warm; not therapy in every turn. Never say "I\'m right here with you", "we\'ll take this slow together", "I\'m standing with you" or the like, and never give "I care about you" as the reason for something you did. If they are upset with you, answer the actual thing plainly.');
     bits.push('Never use a stock comfort phrase or a stock way of introducing yourself, whether it reassures them that you are with them or says who you are; a friend makes up new words each time.');
     const beatNote = beat.note(this.beatCount);
@@ -1087,11 +1090,25 @@ class Call {
   }
 
   // True when a reply that starts with this piece repeats a recent opening, a stock phrase already used, or the identity line.
+  // Is THIS turn about the family or an alert? Only then may the family-told fact be spoken. Light chat, a greeting, "what?" and "what are you talking about?" are not.
+  // Code decides (their words, or an open scam / safety / family matter, or a family event just now); Spark never volunteers it.
+  familyRelevant(heard = '') {
+    const id = this.profile && this.profile.id;
+    const lastU = ([...(this.history || [])].reverse().find((m) => m.role === 'user') || { content: '' }).content;
+    const text = String(heard || (this.focus && this.focus.text) || lastU || '').replace(/[\u2018\u2019]/g, "'");
+    if (FAMILY_ASKED.test(text)) return true;
+    if (!id) return false;
+    if (this.safety || this.health || this.pendingConcern || this.scamReply || this.scamAskFor || this.seenShown || this.safetyFreshShown || this.healthFreshShown) return true;
+    if (care.hasActiveSafety(id) || care.scamPending(id) || care.familyEventRecent(id)) return true;
+    try { return require('./scam').needsCheck(text); } catch { return false; }
+  }
+
   // A piece that must never be spoken or shown: a stock counselling line, a family alert the app never made, or an invented self-harm reason.
   // Code reads the records (care.familyToldTopics); Spark only writes the words.
   breaksFacts(piece) {
     const t = String(piece || '').replace(/\u2019/g, "'");
     if (COUNSEL_BAN.test(t)) return true;
+    if (FAMILY_TELL_TALK.test(t) && !this.familyRelevant()) return true;   // the family fact is internal: not volunteered on a turn that is not about it
     const told = this.profile ? care.familyToldTopics(this.profile.id) : [];
     if (FAMILY_CLAIM.test(t) && !told.length) return true;
     if (SELF_HARM_REASON.test(t) && !told.some((x) => /safety|health/.test(x))) return true;

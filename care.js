@@ -775,6 +775,12 @@ function familyToldTopics(id, now = Date.now()) {
   for (const n of p.notifications) if (n.to === 'family' && (n.ref === 'asked' || n.ref === 'family_ask') && now - n.times.sent < DAY) out.push(n.ref === 'asked' ? 'a worry they said yes to sharing' : 'that they would like to hear from them');
   return [...new Set(out)];
 }
+// Something family-related happened in the last ms (an alert, a flag after a no, a note, a safety ticket, a seen-to-tell): the reply to that turn may speak of it.
+function familyEventRecent(id, ms = 2 * MIN, now = Date.now()) {
+  const p = get(id);
+  if (!p) return false;
+  return p.flags.some((f) => now - f.createdAt < ms) || (p.scams || []).some((x) => now - x.createdAt < ms) || p.notifications.some((n) => n.to === 'family' && n.times && now - n.times.sent < ms) || seenToTell(id);
+}
 // Facts only. No alert = say so plainly; an alert = its topic only. Never a sentence to copy, never a reason, never their words.
 function familyFacts(id, now = Date.now()) {
   const t = familyToldTopics(id, now);
@@ -784,7 +790,7 @@ function familyFacts(id, now = Date.now()) {
 
 // What the app is doing right now, as plain FACTS for Maya's notes (never a script, never read out as written). She decides the
 // wording; nothing here says an action happened unless the code did it. Topic-only for safety: no words, diagnosis or place.
-function appFacts(id, now = Date.now()) {
+function appFacts(id, now = Date.now(), { family = true } = {}) {
   const p = get(id);
   if (!p) return '';
   const name = nameOf(id), tz = p.tz;
@@ -812,7 +818,7 @@ function appFacts(id, now = Date.now()) {
   const sc = (p.scams || []).find((x) => x.status === 'active' || now - (x.resolvedAt || x.createdAt) < 24 * 60 * MIN);
   if (sc && sc.level === 'alert') f.push(`The app has told their family about a possible ${sc.type} (topic only), ${ago(sc.createdAt)}, because they said yes. That is true and on the family's dashboard: if they ask whether you told their family, say yes and name the topic, never "an earlier message". ${sc.status === 'active' ? 'Their family has not marked it seen yet.' : 'Their family has seen it.'} Nothing more is known, and it is not sent again. If they are upset about it, be factual about what was sent (only the kind of scam, no words, no photo) and that it was already sent and cannot be undone; never deny it, and never excuse it by saying you did it because you care about them.`);
   else if (sc && sc.level === 'flag') f.push(`They said no to letting their family know about a possible ${sc.type}, so nobody was told: no message, no alert (only a quiet note on the family's dashboard). If they ask, say honestly that you did not tell their family.`);
-  f.push(familyFacts(id, now));
+  if (family) f.push(familyFacts(id, now));   // internal: only on a turn that is about the family / an alert (call.js familyRelevant), never volunteered
   const pc = painCount(id, now);
   f.push(pc ? `They have mentioned pain or discomfort ${pc} time${pc > 1 ? 's' : ''} before this turn in the last 3 days (not counting what they say next).` : 'They have not mentioned pain or discomfort in the last 3 days.');
   const fl = p.flags.find((x) => x.status === 'active' && !x.safety);
@@ -1011,7 +1017,7 @@ module.exports = {
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
   addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };
