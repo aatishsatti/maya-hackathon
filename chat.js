@@ -38,6 +38,7 @@ const deps = {
   scam: (buf, mime) => (process.env.META_API_KEY ? require('./scam').assess(buf, mime) : null), // Spark vision: is this a scam? (null = no key, no check)
   scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null), // Spark text: is what they typed or said a scam? (null = no key, no check)
   official: (words, opts) => require('./official').check(words, opts), // the company they named, looked up on its official site only (official.js; typed chat only). Lookup failure is a fact, never a guess
+  web: (words, opts) => require('./web').lookup(words, opts), // general web check (web.js, Tavily; key in the server env only): for what is not on the official allow-list. A failure is a fact (cannot verify), never a guess
   speak: (text, previous) => new Promise((resolve, reject) => { // one ElevenLabs piece -> Buffer of PCM16 24 kHz
     const parts = [];
     require('./brain').streamSpeech(text, new AbortController().signal, (c) => parts.push(c), previous).then(() => resolve(Buffer.concat(parts)), reject);
@@ -300,7 +301,7 @@ async function talkCheck(profileId, words) {
 // Official source (official.js), typed chat only: on a warn / pause the company they named is looked up on its official site; if none is clear, ONE
 // reconfirm question is asked first (type the link, or send a photo) and the family question waits for their answer. Returns facts for Spark.
 const familyState = (profileId, type) => ({ told: Boolean(care.scamTold(profileId)), declined: Boolean(type && care.scamDeclined(profileId, type)), pending: Boolean(care.scamPending(profileId)) });
-const officialStep = (s, profileId, words, scam) => require('./official').step(s.rc, { words, scam, channel: 'text', run: (w, o) => deps.official(w, o), family: familyState(profileId, (scam || s.rc.scam || {}).type) });
+const officialStep = (s, profileId, words, scam) => require('./official').step(s.rc, { words, scam, channel: 'text', run: (w, o) => deps.official(w, o), web: (w, o) => deps.web(w, o), family: familyState(profileId, (scam || s.rc.scam || {}).type) });
 // After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
 const afterTalkReply = (profileId, scam, channel, off = null) => {
   if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { channel, pause: off.askFor.level === 'pause', official: off.askFor.official }); else care.scamOfficial(profileId, off.official); return; }   // the reconfirm was answered: the family question now, if it is still owed
@@ -318,7 +319,14 @@ async function sendText(profileId, text, tz) {
   let scam = null, off = null;
   if (require('./official').asking(s.rc) && !care.hasActiveSafety(profileId) && !selfHarmText(t)) { off = await officialStep(s, profileId, t, null); if (off) scam = off.scam; }
   if (!off) { scam = await talkCheck(profileId, t); if (scam && (scam.level === 'warn' || scam.level === 'pause')) off = await officialStep(s, profileId, t, scam); }
-  const r = await s.turn({ heard: t, ...talkTurn(scam, profileId, off) });
+  // Anything else that needs checking (news, a claim, a medicine): the general web check; a failed search tells her she cannot verify it.
+  const tt = talkTurn(scam, profileId, off);
+  if (!off && (!scam || scam.level === 'none') && !care.hasActiveSafety(profileId) && !s.health && !s.safety && !selfHarmText(t)) {
+    let g = null;
+    try { g = await deps.web(t, {}); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; }
+    const wn = require('./web').note(g); if (wn) tt.note = [tt.note, wn].filter(Boolean).join(' ');
+  }
+  const r = await s.turn({ heard: t, ...tt });
   afterTalkReply(profileId, scam, 'text', off);
   return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
 }
