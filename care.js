@@ -567,6 +567,8 @@ function scamPending(id) {
   if (Date.now() - p.pendingScam.at > SCAM_ASK_MS) { p.pendingScam = null; save(id); return null; }
   return p.pendingScam;
 }
+// The unseen scam alert, if their family was already told (until they see it): the one fact every reply and every new incident goes by.
+function scamTold(id) { const p = get(id); return (p && (p.scams || []).find((x) => x.level === 'alert' && x.status === 'active')) || null; }
 function scamClear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam = null; save(id); } }
 // An answer that is neither yes nor no: she may lean in once more, then it is dropped (no nagging).
 function scamUnclear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam.left -= 1; if (p.pendingScam.left <= 0) p.pendingScam = null; save(id); } }
@@ -737,7 +739,7 @@ function appFacts(id, now = Date.now()) {
   // Scam shield state, this person only: what the family was (or was not) told about, by topic. Kept for the whole conversation so she never
   // denies an alert that exists, and never claims one that was refused. The kind of scam only: no words from the message or the call.
   const sc = (p.scams || []).find((x) => x.status === 'active' || now - (x.resolvedAt || x.createdAt) < 24 * 60 * MIN);
-  if (sc && sc.level === 'alert') f.push(`The app has told their family about a possible ${sc.type} (topic only), ${ago(sc.createdAt)}, because they said yes. That is true and on the family's dashboard: if they ask whether you told their family, say yes and name the topic, never "an earlier message". ${sc.status === 'active' ? 'Their family has not marked it seen yet.' : 'Their family has seen it.'} Nothing more is known, and it is not sent again.`);
+  if (sc && sc.level === 'alert') f.push(`The app has told their family about a possible ${sc.type} (topic only), ${ago(sc.createdAt)}, because they said yes. That is true and on the family's dashboard: if they ask whether you told their family, say yes and name the topic, never "an earlier message". ${sc.status === 'active' ? 'Their family has not marked it seen yet.' : 'Their family has seen it.'} Nothing more is known, and it is not sent again. If they are upset about it, be factual about what was sent (only the kind of scam, no words, no photo) and that it was already sent and cannot be undone; never deny it, and never excuse it by saying you did it because you care about them.`);
   else if (sc && sc.level === 'flag') f.push(`They said no to letting their family know about a possible ${sc.type}, so nobody was told: no message, no alert (only a quiet note on the family's dashboard). If they ask, say honestly that you did not tell their family.`);
   const pc = painCount(id, now);
   f.push(pc ? `They have mentioned pain or discomfort ${pc} time${pc > 1 ? 's' : ''} before this turn in the last 3 days (not counting what they say next).` : 'They have not mentioned pain or discomfort in the last 3 days.');
@@ -936,7 +938,7 @@ module.exports = {
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, assess, raise, ring,
   addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

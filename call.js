@@ -231,6 +231,8 @@ function callWords(said, heard) {
   return ` WHAT THEY TOLD YOU EARLIER IN THIS CONVERSATION (their own words, oldest first, today; it is not in your saved notes yet, so it counts as something you know; a name, relationship or story that appears here is known, do not say you cannot remember it):\n${out.trim()}\n`;
 }
 const callDeps = { awaitMs: SCAM_AWAIT_MS_DEFAULT, scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null) };
+// A turn about a scam is never a health emergency by its urgency alone (a panicked "he is on the phone" is not a fall): unless their own words name an injury.
+const EMERGENCY_WORDS = /\b(i fell|i have fallen|fell down|chest pain|can'?t breathe|cannot breathe|bleeding|stroke|collapsed|heart attack|passed out|can'?t get up|cannot get up)\b/i;
 const SCAM_LATER_FRESH_MS = 30000; // a verdict that arrives after her answer shapes the NEXT answer only if that comes within this long
 const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
 
@@ -962,6 +964,13 @@ class Call {
     return this.history.filter((m) => m.role === 'assistant').map((m) => String(m.content)).slice(-5);
   }
 
+  // Is this turn about a scam (its own verdict, an open question about telling the family, or words that look like one)? Then urgency in Spark's read is the scam's.
+  inScamTurn(heard) {
+    const id = this.profile && this.profile.id;
+    if (EMERGENCY_WORDS.test(String(heard || '').replace(/[\u2018\u2019]/g, "'"))) return false;
+    return Boolean(this.scamReply || (id && care.scamPending(id)) || require('./scam').needsCheck(heard));
+  }
+
   // Scam shield on a call: what the person just said. Decides in code (the cheap word filter) whether it is worth one Spark check, and whether
   // that check must be AWAITED (the person is on the way to pay, or the caller is still on the line) or can run beside her answer and shape the
   // next one. Never while a safety matter is active, never for self-harm words, never while her family question is still open.
@@ -971,9 +980,10 @@ class Call {
     let now = null;
     const later = this.scamLater; this.scamLater = null;
     if (later && Date.now() - later.at <= SCAM_LATER_FRESH_MS) now = later.scam;
-    const out = (v) => ({ note: v ? scam.talkNote(v) : '', scam: v });
     const id = this.profile && this.profile.id;
-    if (!id || this.safety || this.health || this.pendingConcern || care.hasActiveSafety(id) || care.scamPending(id) || selfHarmText(heard)) return out(now);
+    const told = Boolean(id && care.scamTold(id));   // their family was already told (unseen alert): no new question, nothing new claimed
+    const out = (v) => ({ note: v ? scam.talkNote(v, { told }) : '', scam: v, told });
+    if (!id || this.safety || this.pendingConcern || care.hasActiveSafety(id) || care.scamPending(id) || selfHarmText(heard)) return out(now);
     const plan = scam.checkPlan(heard);
     if (!plan.check) return out(now);   // ordinary talk: synchronous, nothing awaited, no added delay
     const p = Promise.resolve().then(() => callDeps.scamText(heard)).catch((e) => { console.error('scam check failed:', e.message); return null; });
@@ -1407,7 +1417,7 @@ class Call {
       this.abort.signal.addEventListener('abort', () => spec.abort.abort(), { once: true });
       rs = spec.rs;
     } else {
-      this.scamReply = scamTurn.scam ? scamTurn.scam.level : null; this.scamAskFor = scamTurn.scam && ['warn', 'pause'].includes(scamTurn.scam.level) ? scamTurn.scam : null;
+      this.scamReply = scamTurn.scam ? scamTurn.scam.level : null; this.scamAskFor = scamTurn.scam && !scamTurn.told && ['warn', 'pause'].includes(scamTurn.scam.level) ? scamTurn.scam : null;
       this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
@@ -1433,8 +1443,9 @@ class Call {
     const scamQ = care.scamPending(id);
     if (scamQ) {
       if (this.safety || this.health) care.scamClear(id);
-      else if (CONCERN_NO.test(heard)) { care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; notes.push(`FACT: they said no to letting their family know about the possible ${scamQ.type} they told you about. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.`); }
+      else if (CONCERN_NO.test(heard) || refusedFamily(heard)) { const told = care.scamTold(id); care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; notes.push(told ? `FACT: they do not want their family told about the possible ${scamQ.type}, but the app ALREADY told their family earlier (topic only: the kind of scam, no words, no photo) and that cannot be undone. Say so plainly and briefly in fresh words: never deny it, never say nothing was sent, and do not excuse it by saying you did it because you care about them. Acknowledge what they wanted, ask nothing about telling the family again.` : `FACT: they said no to letting their family know about the possible ${scamQ.type} they told you about. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.`); }
       else if (affirmed(CONCERN_YES, heard) || affirmed(FAMILY_ASK, heard)) { const r = care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; notes.push(r && r.isNew === false ? `FACT: their family was ALREADY told about the possible ${scamQ.type} earlier, so nothing new was sent now. Say that, in one short sentence in fresh words, naming the topic and saying "your family" and never naming a particular relative. Do not say you have just sent anything. Promise nothing else.` : `FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). The kind: a possible ${scamQ.type}. Confirm that in one short sentence in fresh words, naming the topic as they would know it (not "the earlier message"), saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.`); }
+      else if (care.scamTold(id)) care.scamClear(id);   // their family is already told: the open question is dropped, never asked again
       else { care.scamUnclear(id); notes.push('FACT: you asked whether they would like their family to know about the message and they have not answered that yet. Answer what they just said; do not push, and do not ask the same question again word for word.'); }
     }
     if (care.seenToTell(id) && !care.hasActiveSafety(id)) {
@@ -1619,11 +1630,11 @@ class Call {
         if (!greeting && raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
         d.noQuestion = !greeting && this.lastReplyAsked && concern !== 'unsure'; // asking because she genuinely does not know is the one exception
         if (!greeting && concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // they already said no to telling family: no second ask, however often the pain comes back
-        if (!greeting && concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
+        if (!greeting && concern === 'urgent' && !this.health && !this.safety && !this.inScamTurn(lastUser)) this.enterHealth();
         else if (!greeting && concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
         // A scam reading is a few short sentences, not the usual two: what it seems to be, what not to do yet, and (warn / pause) the ONE question about
         // telling their family. Calm and plain: nothing bright, no exclamation. Same shape as the written chat (chat.js).
-        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }
+        if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply) || Boolean(care.scamTold(this.profile.id)); d.maxSentences = Math.max(d.maxSentences, ['warn', 'pause'].includes(this.scamReply) ? 4 : 3); }
         if (!greeting) this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern || this.scamReply));
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear', whisperPieces: d.whisperPieces };

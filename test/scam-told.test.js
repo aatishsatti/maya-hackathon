@@ -1,0 +1,116 @@
+// Scam turns and the family-told state: no health alert from a scam turn, a refusal is a no, an alert is remembered across turns and calls,
+// a repeat incident is "already told", and the apology fact is factual. Facts and principles only (no sentence for Spark to copy).
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-scamtold-'));
+process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles');
+process.env.MAYA_CARE_DIR = path.join(tmp, 'care');
+const brainPath = require.resolve('../brain');
+require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, exports: { requireRealEnv() {}, streamSpeech: async () => {}, sparkComplete: async () => '{}', sparkStream: async (_h, _r, _s, onDelta) => { const t = 'ok'; if (onDelta) onDelta(t); return t; } } };
+
+const memory = require('../memory');
+const care = require('../care');
+const chat = require('../chat');
+const scam = require('../scam');
+const { Call } = require('../call');
+const { fixedReply } = require('../reply');
+
+let n = 0;
+const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 + (k % 26)) + o; k = Math.floor(k / 26) - 1; } while (k >= 0); return o; };
+const fakeWs = { send() {}, close() {}, onmessage: null, onclose: null };
+const calls = [];
+const senior = () => { const p = memory.createProfile(`Lin${letters(n++)}`, 'female'); const c = new Call(fakeWs, 'k'); c.profile = memory.load(p.id); c.callId = 'x'; c.registered = true; calls.push(c); care.callStarted(p.id, c, null); return { id: p.id, c }; };
+const active = (id) => care.get(id).flags.filter((f) => f.status === 'active' && f.safety);
+const anyAlert = (id) => care.get(id).notifications.filter((x) => x.to === 'family' && x.kind === 'alert').length;
+const PANIC = 'There is a man on the phone saying he is from my bank, he wants me to read out the code and transfer money now, I am going to pick up';
+
+test('1 a scam turn never raises a health alert, even when the read says urgent', async () => {
+  const { id, c } = senior();
+  c.gen = 1; c.abort = new AbortController(); c.history.push({ role: 'user', content: `A: ${PANIC}` });
+  assert.equal(c.inScamTurn(PANIC), true);
+  await c.speakReply(fixedReply('[[feel: emotion=anxious intensity=5 intent=share concern=urgent]] Hang up now.'), null, 1, { record: true });
+  assert.equal(c.health, false); assert.equal(anyAlert(id), 0); assert.equal(care.scamTold(id), null, 'and no scam alert without a yes either');
+});
+
+test('1b a real injury in the same breath is still an emergency; ordinary talk is not a scam turn', async () => {
+  const { id, c } = senior();
+  assert.equal(c.inScamTurn(`${PANIC}, and I fell down just now`), false);
+  assert.equal(c.inScamTurn('I fell down the stairs'), false);
+  assert.equal(c.inScamTurn('The garden looks lovely today'), false);
+  c.gen = 1; c.abort = new AbortController(); c.history.push({ role: 'user', content: 'A: I fell down the stairs and cannot get up' });
+  await c.speakReply(fixedReply('[[feel: emotion=anxious intensity=5 intent=share concern=urgent]] I am here.'), null, 1, { record: true });
+  assert.equal(c.health, true); assert.equal(anyAlert(id), 1);
+});
+
+test('2 "I told you not to let my family know" is a no for the open scam question (not "unanswered")', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'bank impersonation scam', { channel: 'spoken', pause: true });
+  const note = c.careNotes('I told you to not let my family know');
+  assert.match(note, /NOT sending/); assert.match(note, /possible bank impersonation scam/); assert.ok(!/not answered that yet/.test(note));
+  assert.equal(care.scamPending(id), null); assert.equal(care.scamTold(id), null, 'a no sends nothing');
+});
+
+test('2b a refusal after the alert already went out says so plainly: no denial, no "because I care" excuse', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'bank impersonation scam', { channel: 'spoken' }); care.scamAnswer(id, true);
+  care.scamAsk(id, 'bank impersonation scam', { channel: 'spoken' });
+  const note = c.careNotes("I told you not to let my family know");
+  assert.match(note, /ALREADY told their family/); assert.match(note, /cannot be undone/); assert.match(note, /never deny it/); assert.match(note, /do not excuse it by saying you did it because you care/);
+});
+
+test('3 the alert stays in her facts on every later turn, across calls, until the family sees it', () => {
+  const { id } = senior();
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' }); care.scamAnswer(id, true);
+  const c2 = new Call(fakeWs, 'k2'); c2.profile = memory.load(id); c2.callId = 'y'; calls.push(c2);
+  for (const turn of ['hello again', 'what did you do', 'I told you not to']) { c2.careNotes(turn); assert.match(c2.roster(), /told their family about a possible tech support scam/); }
+  const alert = care.scamTold(id); assert.ok(alert);
+  assert.equal(care.markNotif(id, alert.notifId, 'seen'), true);
+  assert.equal(care.scamTold(id), null, 'Seen closes it');
+});
+
+test('4 a repeat incident is "already told": no question, no new alert, and no open question left behind', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' }); care.scamAnswer(id, true);
+  const v = { level: 'pause', type: 'tech support scam', signals: {}, reads: null, reading: 'x' };
+  const told = scam.talkNote(v, { told: true }); const fresh = scam.talkNote(v);
+  assert.match(told, /ALREADY told about a possible scam/); assert.match(told, /do NOT ask whether to tell them/); assert.ok(!/ask ONE short question/.test(told));
+  assert.match(fresh, /ask ONE short question/);
+  assert.match(scam.talkNote({ ...v, level: 'warn', reading: 'y' }, { told: true }), /do NOT ask whether to tell them/);
+  const t = c.scamForTurn('The man is still on the phone, asking me to read out my bank code and to transfer money right now');
+  return Promise.resolve(t).then((r) => { assert.equal(r.told, true); if (r.note) assert.match(r.note, /ALREADY told/); });
+});
+
+test('4b an open question is dropped once an alert exists (an unclear answer does not keep asking)', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' }); care.scamAnswer(id, true);
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' });
+  const note = c.careNotes('hmm, what was that about');
+  assert.ok(!/not answered that yet/.test(note)); assert.equal(care.scamPending(id), null);
+});
+
+test('4c a repeat yes says the family was already told, and a typed turn gets the same already-told note', () => {
+  const { id, c } = senior();
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' }); care.scamAnswer(id, true);
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' });
+  assert.match(c.careNotes('yes please tell my family'), /ALREADY told/);
+});
+
+test('5 the apology fact is factual: what was sent, that it cannot be undone, never denied, never excused by caring', () => {
+  const { id } = senior();
+  care.scamAsk(id, 'tech support scam', { channel: 'spoken' }); care.scamAnswer(id, true);
+  const f = care.appFacts(id);
+  assert.match(f, /only the kind of scam, no words, no photo/); assert.match(f, /cannot be undone/); assert.match(f, /never deny it/); assert.match(f, /never excuse it by saying you did it because you care/);
+  assert.ok(!/earlier message/.test(f.replace(/never "an earlier message"/, '')));
+});
+
+test('the chat borrows the same guards (health alert, already-told note)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'chat.js'), 'utf8');
+  assert.match(src, /concern === 'urgent' && !this\.health && !this\.safety && !this\.inScamTurn\(lastUser\)/);
+  assert.match(src, /care\.scamTold\(profileId\)/);
+});
+
+test.after(() => { calls.forEach((c) => c.end && c.end()); chat.endAll(); care.stop(); setTimeout(() => process.exit(), 50).unref(); });

@@ -188,7 +188,7 @@ class ChatSession {
           if (simpleAffirmation(lu) && it !== 'story' && it !== 'recall' && !this.safety && !this.health && !this.pendingConcern && !this.scamReply && !(raw && (/^(1|yes|true)$/i.test(String(raw.pain || '')) || ['unsure', 'urgent'].includes(concern)))) d.maxSentences = 1; }   // a bare yes / okay gets one short line, as in a call
         d.noQuestion = this.lastReplyAsked && concern !== 'unsure';
         if (concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // already said no to telling family: no second ask
-        if (concern === 'urgent' && !this.health && !this.safety) this.enterHealth();
+        if (concern === 'urgent' && !this.health && !this.safety && !this.inScamTurn(lastUser)) this.enterHealth();
         else if (concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one
         // A scam reading is a few short sentences, not the usual two: what it says, that it looks like a scam and what not to do yet (in her own words), and (for a
         // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
@@ -255,7 +255,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'recordName', 'who', 'dynamicLine']) {
+for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 
@@ -297,8 +297,8 @@ async function talkCheck(profileId, words) {
   try { return await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); return null; }
 }
 // After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
-const afterTalkReply = (profileId, scam, channel) => { if (scam && (scam.level === 'warn' || scam.level === 'pause')) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause' }); };
-const talkTurn = (scam) => ({ note: scam ? require('./scam').talkNote(scam) : '', scam: scam && scam.level !== 'none' ? scam.level : null });
+const afterTalkReply = (profileId, scam, channel) => { if (scam && (scam.level === 'warn' || scam.level === 'pause') && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause' }); };
+const talkTurn = (scam, profileId) => ({ note: scam ? require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)) }) : '', scam: scam && scam.level !== 'none' ? scam.level : null });
 
 async function sendText(profileId, text, tz) {
   const t = String(text || '').trim().slice(0, 2000);
@@ -307,7 +307,7 @@ async function sendText(profileId, text, tz) {
   care.touch(profileId, 'app');
   const you = s.push({ role: 'senior', kind: 'text', text: t });
   const scam = await talkCheck(profileId, t);
-  const r = await s.turn({ heard: t, ...talkTurn(scam) });
+  const r = await s.turn({ heard: t, ...talkTurn(scam, profileId) });
   afterTalkReply(profileId, scam, 'text');
   return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
 }
@@ -337,7 +337,7 @@ async function sendVoiceNote(profileId, wav, tz) {
   const mine = saveMedia(profileId, 'wav', wav);
   const you = s.push({ role: 'senior', kind: 'voice', text: words, mediaUrl: mediaUrl(profileId, mine) });
   const scam = await talkCheck(profileId, words);
-  const r = await s.turn({ heard: words, how: 'voice', ...talkTurn(scam) });
+  const r = await s.turn({ heard: words, how: 'voice', ...talkTurn(scam, profileId) });
   afterTalkReply(profileId, scam, 'spoken');
   // A live call has the voice: the note's answer is text only, so two Mayas never talk at once.
   if (callLive(profileId)) return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], voice: 'suppressed-call-live' };
@@ -382,7 +382,7 @@ async function sendImage(profileId, buf, caption, tz) {
   const note = scamNote(scam);
   const r = await s.turn({ heard: said, message, how: 'image', note, scam: scam && scam.level !== 'none' ? scam.level : null });
   // Her one question is out: from now on the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
-  if (scam && scam.level === 'warn') care.scamAsk(profileId, scam.type);
+  if (scam && scam.level === 'warn' && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type);
   const level = scam ? scam.level : 'none';
   // A warning is read aloud (a voice note) unless a call is live: then it is written, so two Mayas never talk at once.
   if (level !== 'none' && !callLive(profileId)) {
