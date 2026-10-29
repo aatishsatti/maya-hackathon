@@ -260,7 +260,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'familyRelevant', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
+for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'familyRelevant', 'limitsFacts', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 
@@ -315,7 +315,7 @@ function continuity(profileId, now = Date.now()) {
   }
   const owed = (p && p.checks || []).filter((c) => !c.delivered);
   if (owed.length) bits.push(owed.some((c) => c.status === 'done') ? 'a lookup you started has finished and its result is not yet told' : 'a lookup you started is still running');
-  return { at, topic, facts: bits.join('; ') };
+  return { at, topic, open: Boolean(type) || owed.length > 0, facts: bits.join('; ') };
 }
 const callLive = (profileId) => care.liveCalls.has(profileId);
 const thread = (profileId) => { session(profileId); return sessions.get(profileId).thread.slice(); };

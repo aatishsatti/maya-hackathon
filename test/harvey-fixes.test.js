@@ -207,4 +207,42 @@ test('leak: with a real record ("they asked to hear from them") that note may be
   assert.equal(c.breaksFacts('Yes, I sent a note saying you would like to hear from them.'), false);
 });
 
+// ---- voice limits, number, pickup, safety alert from code ----
+test('voice: on a call the limits are facts (send it in the chat), a flat "can\'t see pictures" / "can\'t look online" is rewritten, in the chat it is not a call limit', () => {
+  const id = senior(); const c = mkCall(id);
+  assert.match(c.limitsFacts('should I send you a screenshot?'), /ON A CALL she cannot look at a photo/); assert.match(c.limitsFacts(''), /send it in the chat/);
+  assert.equal(c.breaksFacts("I can't see pictures right now, so I can't check it for you."), true);
+  assert.equal(c.breaksFacts("I can't look things up online from here."), true);
+  assert.equal(c.breaksFacts("I can't search from a call yet, send it in the chat and I'll check it there."), false);
+  assert.equal(c.breaksFacts("Send the screenshot in the chat after this call and I'll check it there."), false);
+  assert.equal(c.breaksFacts("I can't look numbers up for you."), false);
+  const ch = { ...c, channel: 'chat' }; assert.doesNotMatch(Call.prototype.limitsFacts.call(ch, 'hello'), /ON A CALL/);
+});
+
+test('number: the fact says it plainly at once, and the weak "not sure what you would like me to do" is rewritten (chat and call)', async () => {
+  const id = senior(); chat.deps.scamText = verdict('none');
+  reset(`${FEEL} I'm not sure what you'd like me to do with that number.`, `${FEEL} I can't look numbers up, and a number shown can be faked.`);
+  const out = await chat.sendText(id, 'this is the number she called from 0412 345 678 can you check', null);
+  assert.match(asked[0].roster, /A PHONE NUMBER: you never look numbers up/); assert.match(out.messages[1].text, /can't look numbers up/); assert.doesNotMatch(out.messages[1].text, /not sure what/);
+});
+
+test('pickup: a plain topic is background only (not brought up), an open scam matter is mentioned lightly; both ask what they would like to talk about', async () => {
+  const a = senior(); chat.deps.scamText = verdict('none'); reset(`${FEEL} Lovely.`);
+  await chat.sendText(a, 'I am baking a lemon cake today.', null);
+  const n1 = mkCall(a).greetingNote(20); assert.match(n1, /do not bring the earlier topic up at all/); assert.match(n1, /ask what they would like to talk about/); assert.match(n1, /drop it at once and follow them/);
+  const b = senior(); chat.deps.scamText = verdict('warn'); reset(`${FEEL} Could you type that message or send me a screenshot?`);
+  await chat.sendText(b, 'A lady from a bank says I must buy gift cards today.', null);
+  const n2 = mkCall(b).greetingNote(20); assert.match(n2, /open matter/); assert.match(n2, /never insist/); assert.match(n2, /gift card scam/);
+});
+
+test('safety: "thinking of ending my life" is caught in code and creates the real alert BEFORE the reply (a dashboard record exists, so the claim is true)', async () => {
+  const { selfHarmText } = require('../emotion');
+  for (const t of ["i'm thinking of ending my life", 'I keep thinking about ending it all', 'I want to take my life']) assert.equal(selfHarmText(t), true, t);
+  assert.equal(selfHarmText('Did you say anything to my family?'), false);
+  const id = senior(); chat.deps.scamText = verdict('none'); reset(`${FEEL} I've let your family know about this safety worry. Are you safe right now?`);
+  const out = await chat.sendText(id, "okay i'm thinking of ending my life", null);
+  assert.equal(care.hasActiveSafety(id), true); assert.deepEqual(care.familyToldTopics(id), ['a safety worry']); assert.match(out.messages[1].text, /let your family know/);
+  assert.ok(care.view(id).alerts.some((f) => f.status === 'active'), 'the dashboard shows the red alert');
+});
+
 test.after(() => { made.forEach((c) => c.end()); for (const s of chat.sessions.values()) s.finish(); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });

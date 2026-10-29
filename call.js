@@ -225,11 +225,13 @@ const SAFETY_TOPICS = {
 const IDENTITY_LINE = /\b(i['’]?m|i am|my name is) maya\b/i;
 const STOCK_OPENINGS = [IDENTITY_LINE, /\bi['’]?m (right )?here with you\b/i, /\bi['’]?m right (here )?beside you\b/i, /\bi['’]?m right here\b/i];
 // Stock counselling lines are never a reply, and "I care about you" is never the reason for an alert. A family claim must match what the app really did.
-const COUNSEL_BAN = /\blet['\u2019]?s (just )?drop it\b|\bforget (about )?it\b|\bi['\u2019]?m (right )?here with you\b|\bwe['\u2019]?ll take this slow(ly)? together\b|\bi['\u2019]?m standing with you\b|\b(because|since) i care (about|for) you\b/i;
+const COUNSEL_BAN = /\bnot sure what you(?:['\u2019]d| would) like me to do\b|\blet['\u2019]?s (just )?drop it\b|\bforget (about )?it\b|\bi['\u2019]?m (right )?here with you\b|\bwe['\u2019]?ll take this slow(ly)? together\b|\bi['\u2019]?m standing with you\b|\b(because|since) i care (about|for) you\b/i;
 const FAMILY_CLAIM = /\b(i|we)(['\u2019]ve| have|['\u2019]ll| will)? (just )?(let|told|alerted|notified|informed|messaged|contacted)\b[^.?!]{0,40}\b(famil|daughter|son\b|kids|children)|\byour (famil\w*|daughter|son|kids|children) (has|have|was|were|is|are)( now| already| been)* (been )?(told|alerted|notified|informed|know|knows|aware)\b/i;
 const FAMILY_ASKED = /\b(famil\w*|daughters?|sons?|kids|children|wife|husband|sister|brother|grand(son|daughter)s?|alert\w*|notif\w*|told (anyone|anybody|someone|them)|tell (anyone|anybody|someone|them)|who did you (tell|call|contact)|did you (tell|say|send|contact|call|message|let)|let (them|him|her|\w+) know)\b/i;
 const FAMILY_TELL_TALK = /\b(told|tell|telling|alert\w*|notif\w*|contact\w*|inform\w*)\b[^.?!]{0,30}\b(anyone|anybody|nobody|no ?one|family|daughter|son)\b|\bno news\b|\b(nobody|no one) (was|has been|got) (told|alerted|notified)\b|\bhaven['\u2019]?t (told|alerted|contacted)\b/i;
 const SENT_CLAIM = /\b(went over|went through|was sent|got sent|has gone|passed (it |a note |that |this )?(along|on)|sent (them|him|her|your family|a note|it|the note)|(i|we)['\u2019]?(ve| have)? (just )?(sent|passed|forwarded)\b)|\byou(['\u2019]d| had| have)? (asked|told me|wanted|requested)\b[^.?!]{0,50}\b(hear from|famil|let them|tell|note|message)/i;
+// On a call she cannot look at a photo or search yet (the written chat does both): never said as an absolute "can't", always where it can be done.
+const CALL_LIMIT_ABSOLUTE = /\bcan(?:['\u2019]?t|not) (?:see|look at|view|open) (?:any |the |your )?(?:pictures?|photos?|images?|screenshots?|emails?)\b|\bcan(?:['\u2019]?t|not) (?:look (?:things|that|it|this) up|search|check (?:the )?(?:internet|web|online)|go online|look (?:things )?up online)\b/i;
 const SELF_HARM_REASON = /\b(because|since|after) you (said|told me|mentioned)\b[^.?!]{0,50}\b(hurt|harm|kill|end (it|your life)|suicid)/i;
 const openWords = (t) => String(t).toLowerCase().replace(/’/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, ' ').trim().split(/\s+/);
 const SEEN_ANGLES = ['lead with reassurance', 'lead with how glad you are to be with them', 'lead with the fact that their family knows', 'lead with saying they are not alone'];
@@ -939,7 +941,7 @@ class Call {
   roster(note = '', heard = '') {
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
-    return `${memory.profileNote(this.profile, this.tz, this.focus)}${callWords(this.said, heard || (this.focus && this.focus.text))} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id, Date.now(), { family: this.familyRelevant(heard) })}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
+    return `${memory.profileNote(this.profile, this.tz, this.focus)}${callWords(this.said, heard || (this.focus && this.focus.text))} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id, Date.now(), { family: this.familyRelevant(heard) })}${this.limitsFacts(heard)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
   }
 
   // A safety alert from an earlier call is still active (the call-back is a NEW call, so this call has no memory of it).
@@ -1091,6 +1093,16 @@ class Call {
   }
 
   // True when a reply that starts with this piece repeats a recent opening, a stock phrase already used, or the identity line.
+  // What she can and cannot do HERE, as facts (the wording is Spark's). A call cannot start a photo check or a web search yet; the written chat does both.
+  // A phone number is never looked up, in a call or in the chat; she says so straight away.
+  limitsFacts(heard = '') {
+    const text = String(heard || (this.focus && this.focus.text) || '');
+    const bits = [];
+    if (this.channel !== 'chat') bits.push('ON A CALL she cannot look at a photo or screenshot and cannot search the web yet; the written chat in the app can do both. If they offer a photo or screenshot, or ask her to find something out online, say so in a few words WITHOUT a flat "I can\'t": tell them to send it in the chat (after this call is fine) and she will check it there. Never say "I can\'t see pictures" or "I can\'t look things up online".');
+    if (/(?:\d[\s().-]*){7,}/.test(text) || /\b(?:phone |telephone )?number\b/i.test(text)) bits.push('A PHONE NUMBER: you never look numbers up and cannot tell if one is real (callers can fake the number shown). If they give or ask about a number, say that straight away, in a few plain words ("I can\'t look numbers up"), never "I\'m not sure what you want me to do with it".');
+    return bits.length ? ` LIMITS (facts for you, never read out as written): ${bits.join(' ')}` : '';
+  }
+
   // Is THIS turn about the family or an alert? Only then may the family-told fact be spoken. Light chat, a greeting, "what?" and "what are you talking about?" are not.
   // Code decides (their words, or an open scam / safety / family matter, or a family event just now); Spark never volunteers it.
   familyRelevant(heard = '') {
@@ -1111,6 +1123,7 @@ class Call {
     if (COUNSEL_BAN.test(t)) return true;
     if (FAMILY_TELL_TALK.test(t) && !this.familyRelevant()) return true;   // the family fact is internal: not volunteered on a turn that is not about it
     const told = this.profile ? care.familyToldTopics(this.profile.id) : [];
+    if (this.channel !== 'chat' && CALL_LIMIT_ABSOLUTE.test(t) && !/\b(chat|after|yet|later)\b/i.test(t)) return true;   // in a call: where and when she CAN, never a flat "can't"
     if (FAMILY_CLAIM.test(t) && !told.length) return true;
     if (!told.length && t.split(/(?<=[.!?])\s+/).some((x) => SENT_CLAIM.test(x) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|wasn't|yet)\b/i.test(x))) return true;   // a denial ("no note was sent") is not a claim return true;   // "I can" is an ability; a note that "went over" or an invented "you'd asked" needs a record on the dashboard
     if (SELF_HARM_REASON.test(t) && !told.some((x) => /safety|health/.test(x))) return true;
@@ -1141,7 +1154,7 @@ class Call {
     const bits = ['The call has just connected and you speak first, before they have said a word: so you have not heard anything yet. Never say or imply you heard them ("lovely to hear you", "hear your voice"); say it is nice to talk to them instead. You cannot see them either, and you know nothing about the weather or how their day is going, so say nothing about those. ' + (cont ? '' : 'One short warm greeting, then one gentle open question (how they are, how their day has been going, what they have been up to; different every time). Two short sentences in all, never more.')];
     if (cont) {
       this.greetingPlain = false;
-      bits.push(`CHAT CONTINUES ON THE PHONE (facts from the app, never read out as written): ${cont.facts}. They have just rung you, so this is the SAME conversation moving from writing to talking, not a new one. In under twenty words and at most two short sentences: pick up from that topic in your own words (say what it is about or ask the next small thing about it), the way a friend who was just texting would when the phone rings. Do NOT introduce yourself, do NOT say it is nice to be talking again, and do NOT ask what they have been up to, how their day is going or any other fresh opening question. Never add anything about the topic that the facts do not say, never say or imply you heard them, and if the facts say nobody was told, do not say anyone was.`);
+      bits.push(`CHAT CONTINUES ON THE PHONE (facts from the app, never read out as written): ${cont.facts}. They have just rung you, so this is the SAME conversation moving from writing to talking, not a new one. In under twenty words and at most two short sentences. They may have rung just to chat, so do NOT push the earlier chat on them: ${cont.open ? 'this is an open matter (they may still need help with it), so at most mention it lightly in a few words and offer, never insist' : 'do not bring the earlier topic up at all'}, and ask what they would like to talk about. Do NOT introduce yourself, do NOT say it is nice to be talking again, and do NOT ask what they have been up to. If they bring the earlier topic up themselves, pick it up from these facts; if they say they just want to chat, drop it at once and follow them. Never add anything about the topic that the facts do not say, never say or imply you heard them, and if the facts say nobody was told, do not say anyone was.`);
     } else if (this.outreach && this.outreach.safety) {
       bits.push(`You rang ${name} back because the call ended suddenly while they were very upset, and they picked up. Under fifteen words in all: relieved, worried, warm; you are glad they picked up, you were worried, and you are still here; the check on how they are is the question, add no other. Never accusing, never ask why they hung up, do not mention telling their family. Do not introduce yourself.`);
     } else if (this.outreach && this.outreach.kind === 'callback') {
