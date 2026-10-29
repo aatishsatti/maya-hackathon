@@ -141,9 +141,8 @@ body[data-call-layout='big'] .orb { touch-action: none; cursor: grab; -webkit-us
      small call, minimized or muted: small orb, Mute + Cut Call, the chat below it
    --------------------------------------------------------------------------------------------------------- */
 .chat { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; width: 100%; }
-/* Big orb: the orb, the call buttons (Mute, Cut Call, Aa) under it, a short thread, and the type row. No Voice / Photo / Call row. */
-body[data-call-layout='big'] .chat { flex: 0 1 34dvh; }
-body[data-call-layout='big'] .action-row { display: none; }
+/* Big orb: the orb and the call buttons (Mute, Cut Call, Aa) under it, nothing else: no thread, no type box. */
+body[data-call-layout='big'] .chat { display: none; }
 body[data-call-layout='big'] .expand { display: none; }
 body[data-call-layout='big'] .stage, body[data-call-layout='small'] .stage { display: flex; }
 body[data-call-layout='big'] .top-links { visibility: hidden; }

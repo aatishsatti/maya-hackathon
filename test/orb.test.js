@@ -129,3 +129,9 @@ test('widget: almost no movement is a tap (expands); more is a drag (never expan
   assert.equal(M.isTap(M.TAP_PX + 0.5), false);
   assert.equal(M.TAP_PX, 8);
 });
+
+test('big orb page: buttons only (call buttons shown, chat and expand hidden)', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+  assert.match(css, /body\[data-call-layout='big'\] \.chat \{ display: none; \}/);
+  assert.match(css, /body\[data-call-layout='big'\] \.call-controls \{ display: flex; \}/);
+});
