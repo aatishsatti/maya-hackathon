@@ -10,7 +10,8 @@
 const MAX_FETCHES = 4, TIMEOUT_MS = 6000, MAX_BYTES = 300000, MAX_HOPS = 3, TTL_MS = 6 * 60 * 60 * 1000;
 
 // Official domains: each is the company's own site (checked by hand against the company's public presence, not found by search).
-// kind: bank | pension | tech. cs: the name is an ordinary word, so match it only as written with a capital letter.
+// kind: bank | pension | tech. exact + path: a shared government domain (gov.uk) is NOT official as a whole: only gov.uk / www.gov.uk itself, and only
+// a page whose path contains "pension" (start: where the lookup begins, site: how it is named in facts). cs: the name is an ordinary word, so match it only as written with a capital letter.
 const REGISTRY = [
   { name: 'Chase', kind: 'bank', domain: 'chase.com', region: 'us', aliases: ['Chase', 'JPMorgan Chase'], cs: true },
   { name: 'Bank of America', kind: 'bank', domain: 'bankofamerica.com', region: 'us', aliases: ['Bank of America', 'BofA'] },
@@ -24,7 +25,7 @@ const REGISTRY = [
   { name: 'OCBC', kind: 'bank', domain: 'ocbc.com', region: 'sg', aliases: ['OCBC'] },
   { name: 'UOB', kind: 'bank', domain: 'uob.com.sg', region: 'sg', aliases: ['UOB'] },
   { name: 'Social Security Administration', kind: 'pension', domain: 'ssa.gov', region: 'us', aliases: ['Social Security Administration', 'SSA'] },
-  { name: 'GOV.UK State Pension', kind: 'pension', domain: 'gov.uk', region: 'uk', aliases: ['The Pension Service', 'Pension Service', 'State Pension'] },
+  { name: 'GOV.UK State Pension', kind: 'pension', domain: 'gov.uk', exact: true, path: /pension/i, start: 'https://www.gov.uk/state-pension', site: 'gov.uk/state-pension', region: 'uk', aliases: ['The Pension Service', 'Pension Service', 'State Pension'] },
   { name: 'CPF Board', kind: 'pension', domain: 'cpf.gov.sg', region: 'sg', aliases: ['CPF Board', 'CPF'], cs: true },
   { name: 'Microsoft', kind: 'tech', domain: 'microsoft.com', region: 'us', aliases: ['Microsoft', 'Windows Support'] },
   { name: 'Apple', kind: 'tech', domain: 'apple.com', region: 'us', aliases: ['Apple Support', 'Apple'], cs: true },
@@ -52,25 +53,28 @@ function companyIn(words) {
 }
 
 // Addresses in the message (links, bare web addresses, e-mail domains), lower-cased hosts only. Never kept or sent anywhere: only compared.
-function hostsIn(words) {
-  const out = new Set(), t = String(words || '');
-  for (const m of t.matchAll(/\b(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,24}\b/gi)) out.add(m[0].replace(/^https?:\/\//i, '').toLowerCase());
-  for (const m of t.matchAll(/@((?:[a-z0-9-]+\.)+[a-z]{2,24})\b/gi)) out.add(m[1].toLowerCase());
-  return [...out];
+function addressesIn(words) {
+  const out = [], t = String(words || '');
+  for (const m of t.matchAll(/\b(?:https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z]{2,24})\b(\/[^\s]*)?/gi)) out.push({ host: m[1].toLowerCase(), path: (m[2] || '/').toLowerCase() });
+  for (const m of t.matchAll(/@((?:[a-z0-9-]+\.)+[a-z]{2,24})\b/gi)) out.push({ host: m[1].toLowerCase(), path: '/' });
+  return out;
 }
+const hostsIn = (words) => [...new Set(addressesIn(words).map((a) => a.host))];
 const onDomain = (host, domain) => host === domain || host.endsWith(`.${domain}`);
+// Is this address the entry's official site? exact: only the domain itself (or www.); path: the page path must also match.
+const isOfficial = (e, host, path = '/') => (e.exact ? host === e.domain || host === `www.${e.domain}` : onDomain(host, e.domain)) && (!e.path || e.path.test(path));
 // 'mismatch': at least one address is not the official site; 'match': there are addresses and all are official; 'unknown': no address to compare.
-function callerMatch(words, domain) {
-  const hosts = hostsIn(words);
-  if (!hosts.length) return 'unknown';
-  return hosts.every((h) => onDomain(h.replace(/^www\./, ''), domain)) ? 'match' : 'mismatch';
+function callerMatch(words, entry) {
+  const e = typeof entry === 'string' ? { domain: entry } : entry, adr = addressesIn(words);
+  if (!adr.length) return 'unknown';
+  return adr.every((a) => isOfficial(e, a.host.replace(/^www\./, e.exact ? 'www.' : ''), a.path)) ? 'match' : 'mismatch';
 }
 
 // ---- bounded fetch: allowed hosts only, https only, redirects by hand, timeout, size cap ----
-async function getPage(url, allowed, f, budget) {
+async function getPage(url, allowed, f, budget, e = null) {
   let u = new URL(url);
   for (let hop = 0; hop <= MAX_HOPS; hop += 1) {
-    if (u.protocol !== 'https:' || !allowed.some((d) => onDomain(u.hostname, d))) throw new Error('host not allowed');
+    if (u.protocol !== 'https:' || !allowed.some((d) => onDomain(u.hostname, d)) || (e && !isOfficial(e, u.hostname, u.pathname))) throw new Error('host not allowed');
     if (budget.left <= 0) throw new Error('fetch budget used');
     budget.left -= 1;
     const r = await f(u.href, { redirect: 'manual', headers: { 'User-Agent': 'MayaOfficialCheck/1.0', Accept: 'text/html' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -96,11 +100,11 @@ function linkTo(html, base, re) {
 const SCAM_LINK = /\b(fraud|scams?|phishing)\b/i, CONTACT_LINK = /\bcontact\b/i;
 
 // The page about scams on a site (its home page, then one link to a fraud / scam / security page): title and summary, or null.
-async function scamPage(domain, f, budget) {
-  const home = await getPage(`https://${domain}/`, [domain], f, budget);
+async function scamPage(domain, f, budget, e = null) {
+  const home = await getPage((e && e.start) || `https://${domain}/`, [domain], f, budget, e);
   const link = linkTo(home.html, home.url, SCAM_LINK);
   let page = home, onPage = false;
-  if (link && onDomain(link.hostname, domain)) { try { page = await getPage(link.href, [domain], f, budget); onPage = true; } catch { /* keep the home page */ } }
+  if (link && onDomain(link.hostname, domain)) { try { page = await getPage(link.href, [domain], f, budget, e); onPage = true; } catch { /* keep the home page */ } }
   return { home, page, onPage, contact: Boolean(linkTo(home.html, home.url, CONTACT_LINK)) };
 }
 
@@ -109,7 +113,7 @@ async function lookup(entry, f) {
   const hit = cache.get(entry.domain);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
   const budget = { left: MAX_FETCHES };
-  const official = await scamPage(entry.domain, f, budget);   // throws if the official site cannot be reached: then there is no source
+  const official = await scamPage(entry.domain, f, budget, entry.path ? entry : null);   // throws if the official site cannot be reached: then there is no source
   const value = { warning: official.onPage ? { title: titleOf(official.page.html), summary: describe(official.page.html) } : null, contact: official.contact, authority: null };
   const auth = WARNING[entry.region];
   if (auth) { try { const a = await scamPage(auth.domain, f, budget); if (a.onPage) value.authority = { name: auth.name, title: titleOf(a.page.html), summary: describe(a.page.html) }; } catch { /* the authority is a bonus: its absence changes nothing */ } }
@@ -124,10 +128,10 @@ async function check(words, opts = {}) {
   if (!c) return null;
   if (!c.entry) return { named: true, found: false, name: null, reason: 'not-in-allow-list' };
   const e = c.entry, f = opts.fetch || globalThis.fetch;
-  const base = { named: true, name: e.name, kind: e.kind, host: e.domain };
+  const base = { named: true, name: e.name, kind: e.kind, host: e.site || e.domain };
   try {
     const v = await lookup(e, f);
-    return { ...base, found: true, caller: callerMatch(words, e.domain), warning: v.warning, contact: v.contact, authority: v.authority };
+    return { ...base, found: true, caller: callerMatch(words, e), warning: v.warning, contact: v.contact, authority: v.authority };
   } catch (err) {
     return { ...base, found: false, name: null, host: null, reason: 'lookup-failed' };   // an official name we could not confirm is not shown as found
   }

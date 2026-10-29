@@ -204,3 +204,25 @@ test('dashboard card: "Checked official source: yes (Chase)" when found; "no" an
   assert.match(els.flags.text(), /Checked official source: no/); assert.doesNotMatch(els.flags.text(), /Could not verify/);
   assert.doesNotMatch(JSON.stringify(care.view(a).scams), /https?:|example|\+?\d{3}[ -]\d{3,4}/);
 });
+
+// ---- GOV.UK State Pension: gov.uk as a whole is NOT official, only the pension pages on gov.uk itself ----
+test('gov.uk is narrowed: only gov.uk / www.gov.uk with "pension" in the path match; any other gov.uk address or subdomain is a mismatch', async () => {
+  const gov = O.REGISTRY.find((e) => e.name === 'GOV.UK State Pension');
+  assert.equal(gov.exact, true); assert.match(gov.start, /^https:\/\/www\.gov\.uk\/state-pension$/);
+  const pages = { 'https://www.gov.uk/state-pension': { html: '<title>The new State Pension - GOV.UK</title>' } };
+  const m = (adr) => O.callerMatch(`The Pension Service says I am owed money, see ${adr}`, gov);
+  assert.equal(m('https://www.gov.uk/state-pension/what-you-get'), 'match');
+  assert.equal(m('gov.uk/new-state-pension'), 'match');
+  assert.equal(m('www.gov.uk/renew-driving-licence'), 'mismatch', 'an unrelated gov.uk page is not a pension match');
+  assert.equal(m('gov.uk'), 'mismatch', 'no pension path');
+  assert.equal(m('gov.uk.pension-refund.example/state-pension'), 'mismatch');
+  assert.equal(m('tax.service.gov.uk/pension'), 'mismatch', 'a gov.uk subdomain is not the exact site');
+  assert.equal(m('https://evil.example/gov.uk/state-pension'), 'mismatch');
+  O.cache.clear(); fetched.length = 0;
+  const r = await O.check('The Pension Service rang about my state pension, link gov.uk/council-tax-refund', { fetch: web(pages) });
+  assert.equal(r.found, true); assert.equal(r.name, 'GOV.UK State Pension'); assert.equal(r.host, 'gov.uk/state-pension'); assert.equal(r.caller, 'mismatch');
+  assert.ok(fetched.every((u) => /^https:\/\/(www\.gov\.uk\/state-pension|consumer\.ftc\.gov|actionfraud\.police\.uk)/.test(u)), fetched.join(' '));
+  O.cache.clear();
+  const redirected = await O.check('The Pension Service rang me', { fetch: web({ 'https://www.gov.uk/state-pension': { status: 302, location: 'https://www.gov.uk/government/organisations/hm-revenue-customs' }, 'https://www.gov.uk/government/organisations/hm-revenue-customs': { html: '<title>HMRC</title>' } }) });
+  assert.equal(redirected.found, false, 'a redirect to a gov.uk page with no pension in the path is not an official pension source');
+});
