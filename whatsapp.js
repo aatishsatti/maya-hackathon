@@ -347,7 +347,7 @@ async function onText(l, msg) {
     await sendTextTo(l.phone, 'Okay. I will not message you here again. You can still talk to me in the Maya app.'); // the one allowed reply: confirms the opt-out
     return;
   }
-  if (require('./call').isAck(msg.text.body)) require('./care').reminderAckWhatsApp(l.profileId); // a reply to a reminder: answered (the words are judged in memory and never kept here)
+  require('./care').reminderAckWhatsApp(l.profileId, require('./call').isAck(msg.text.body)); // a reply to a reminder: answered if it reads as an acknowledgement (judged in memory, the words are never kept here)
   const r = await chat.sendText(l.profileId, msg.text.body, null, { source: 'whatsapp' });
   const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
   if (!reply || !reply.text) throw new WaError('Maya had no reply.');
@@ -366,7 +366,7 @@ async function onAudio(l, msg) {
   try { r = await chat.sendVoiceNote(l.profileId, wav, null, { source: 'whatsapp' }); }
   catch (e) { if (e.status === 422) { await sendTextTo(l.phone, 'I could not hear any words in that voice note. Could you try again, or type it for me?'); return 'unheard'; } throw e; }
   const said = r.messages.find((m) => m.role === 'senior');
-  if (said && require('./call').isAck(said.text)) require('./care').reminderAckWhatsApp(l.profileId);   // a spoken reply to a reminder: answered
+  if (said) require('./care').reminderAckWhatsApp(l.profileId, require('./call').isAck(said.text));   // a spoken reply to a reminder: answered if it reads as an acknowledgement
   const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
   if (!reply || !reply.text) throw new WaError('Maya had no reply.');
   const words = mayaWords(reply.text);

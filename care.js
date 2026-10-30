@@ -991,9 +991,14 @@ function reminderStatus(wamid, status, errors) {
 }
 
 // The person answered on WhatsApp (words judged as an acknowledgement by the caller): the oldest reminder still waiting for one is answered.
-function reminderAckWhatsApp(id) {
+function reminderAckWhatsApp(id, ack = true) {
   const p = get(id); if (!p) return false;
   const waiting = p.reminders.filter((r) => r.active && r.active.channel === 'whatsapp' && WA_OPEN.has(r.active.state)).sort((x, y) => (x.active.sentAt || 0) - (y.active.sentAt || 0));
+  // Every reply while ANY reminder is in flight (or that reads as an acknowledgement) leaves one line: did it read as an acknowledgement, how many WhatsApp reminders were waiting and in
+  // which states, how many other reminders are in flight. Names and counts only: never a word of the reply, never the reminder. It shows why a reply did or did not answer a reminder.
+  const inFlight = p.reminders.filter((r) => r.active).length;
+  if (ack || inFlight) waLog({ event: 'reply checked', ack: Boolean(ack), waiting: waiting.length, states: waiting.map((r) => r.active.state), inFlightOtherChannel: inFlight - waiting.length });
+  if (!ack) return false;
   const r = waiting[0]; if (!r) return false;
   const n = p.notifications.find((x) => x.id === r.active.notifId); if (n) advance(p, n, 'replied');
   finishOccurrence(p, r.id, 'done', { answeredBy: 'a reply on WhatsApp' });

@@ -760,6 +760,32 @@ test('Phase 2: a reply that acknowledges it answers the reminder; "not now" does
   voiceReset(); clearCalls();
 });
 
+test('Phase 2: two reminders waiting at once, delivered to the phone: one "Okay." answers the OLDEST, the next "Okay." the other, in order; statuses arriving first or after change nothing', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(PLAIN);
+  const t1 = Date.now() + 5000; care.addReminder(id, { task: 'first one', dueAt: t1, repeat: 'none' }); care.addReminder(id, { task: 'second one', dueAt: t1, repeat: 'none' });
+  care.tick(t1); await settle(); const [a, b] = care.get(id).reminders; assert.equal(a.active.state, 'wa_sent'); assert.equal(b.active.state, 'wa_sent');
+  await wa.handleWebhook(statusIn(a.active.wamid, 'delivered')); await wa.handleWebhook(statusIn(b.active.wamid, 'delivered')); clearCalls();
+  await wa.handleWebhook(incoming(phone, 'Okay.')); const states = () => care.get(id).reminders.map((r) => (r.active || r.last).state);
+  assert.deepEqual(states().sort(), ['done', 'wa_delivered'], 'one answered');
+  await wa.handleWebhook(statusIn(a.last ? a.last.wamid : a.active.wamid, 'read')); assert.deepEqual(states().sort(), ['done', 'wa_delivered'].sort().map((x) => x), 'a read status after the answer changes nothing');
+  await wa.handleWebhook(incoming(phone, 'Okay.')); assert.deepEqual(states(), ['done', 'done'], 'and the second answers the other');
+  assert.equal(care.view(id).reminders.every((r) => r.last.label === 'Done, senior replied'), true); clearCalls();
+});
+
+test('Phase 2 diagnostics: every reply while a reminder is in flight logs whether it read as an acknowledgement, how many WhatsApp reminders were waiting and in which states; names and counts only', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(PLAIN);
+  const quiet = []; const l0 = console.log; console.log = (...a) => quiet.push(a.join(' ')); try { await wa.handleWebhook(incoming(phone, 'just chatting here')); } finally { console.log = l0; }
+  assert.ok(!quiet.some((l) => l.startsWith('reminder ')), 'no reminder in flight and not an acknowledgement: nothing logged');
+  const t1 = Date.now() + 5000; care.addReminder(id, { task: 'private tulips pills', dueAt: t1, repeat: 'none' }); care.tick(t1); await settle(); await wa.handleWebhook(statusIn(rem(id).active.wamid, 'delivered')); clearCalls();
+  const logs = []; console.log = (...a) => logs.push(a.join(' '));
+  try { await wa.handleWebhook(incoming(phone, 'what is the weather like?')); await wa.handleWebhook(incoming(phone, 'Okay, thanks tulips')); } finally { console.log = l0; }
+  const lines = logs.filter((l) => l.startsWith('reminder '));
+  assert.deepEqual(lines, ['reminder {"event":"reply checked","ack":false,"waiting":1,"states":["wa_delivered"],"inFlightOtherChannel":0}', 'reminder {"event":"reply checked","ack":true,"waiting":1,"states":["wa_delivered"],"inFlightOtherChannel":0}', 'reminder {"event":"answered"}']);
+  assert.doesNotMatch(logs.join('\n'), /tulips|weather|thanks/); clearCalls();
+  const logs2 = []; console.log = (...a) => logs2.push(a.join(' ')); try { await wa.handleWebhook(incoming(phone, 'Okay.')); } finally { console.log = l0; }
+  assert.ok(logs2.includes('reminder {"event":"reply checked","ack":true,"waiting":0,"states":[],"inFlightOtherChannel":0}'), 'an acknowledgement with nothing waiting says so: ' + logs2.join(' | ')); clearCalls();
+});
+
 test('Phase 2: outside the 24 h window nothing is sent (no Meta call), it is shown as Not sent with the reason; the family is told in cautious and ultra, not in standard', async () => {
   for (const [mode, kind] of [['standard', null], ['cautious', 'gentle'], ['ultra', 'alert']]) {
     voiceReset(); const x = outside(); care.setMode(x.id, mode); const { dueAt } = addRem(x.id); care.tick(dueAt); await settle();
