@@ -173,6 +173,7 @@ async function handleWhatsapp(req, res, url) {
     if (req.method === 'GET' && !b) return sendJson(res, 200, whatsapp.view(a));
     if (req.method === 'DELETE' && !b) return sendJson(res, 200, { ok: whatsapp.unlink(a) });
     if (req.method === 'POST' && b === 'send') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, await whatsapp.sendOut(a, { kind: body.kind, text: body.text, who: 'family', useTemplate: body.useTemplate === true })); }
+    if (req.method === 'POST' && b === 'test-call') return MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeTestCall(a)); // TEMPORARY (render-test): one outbound test call, see wacall.callOut
     if (req.method === 'POST' && b === 'link') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, whatsapp.link(a, body.phone, body.optIn)); }
   } catch (e) { return sendJson(res, e.status || 500, { error: e.message, ...(e.needsTemplate ? { needsTemplate: true, windowClosed: true } : e.windowClosed ? { windowClosed: true } : {}) }); }
   return sendJson(res, 404, { error: 'Not found' });

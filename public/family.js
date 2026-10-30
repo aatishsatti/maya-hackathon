@@ -212,6 +212,8 @@
     $('waLink').hidden = Boolean(v.linked && v.optIn);
     $('waSend').hidden = !(v.linked && v.optIn);
     $('waNote').hidden = !v.linked;
+    $('waTest').hidden = !(v.linked && v.optIn && v.configured);
+    if (v.testCall && !waTesting) $('waTestLine').textContent = `Last test call: ${TEST_STATE[v.testCall.state] || v.testCall.state} (${t(v.testCall.at)}).`;
     const canFree = Boolean(v.linked && v.optIn && v.windowOpen);
     for (const b of $('waSend').querySelectorAll ? $('waSend').querySelectorAll('button[data-kind]') : []) b.disabled = !canFree;   // outside the 24 h window WhatsApp refuses free text and voice, so they cannot be pressed
     $('waInvite').hidden = !(v.linked && v.optIn && !v.windowOpen);   // the only thing that can be sent outside the window; needs no typed note
@@ -249,6 +251,27 @@
     } catch (e) { waSay(`Could not reach the server: ${e.message}. Nothing was sent.`, true); }
     finally { waBusy = false; $('waInvite').disabled = false; }
   }
+  // "Call them now (test)": the server places ONE call and says a fixed sentence; this only shows what the server says really happened, polling its label for a minute.
+  const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', ended: 'ended', failed: 'failed (see the server log)' };
+  const TEST_DONE = ['rejected', 'no answer', 'completed', 'ended', 'failed'];
+  let waTesting = false;
+  $('waTestCall').addEventListener('click', async () => {
+    if (waTesting) return;
+    waTesting = true; $('waTestCall').disabled = true; $('waTestLine').textContent = 'Placing the test call...';
+    try {
+      const r = await waCall(`/api/whatsapp/${id}/test-call`, 'POST');
+      if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; return; }
+      $('waTestLine').textContent = 'WhatsApp took the call: their phone should ring now.';
+      const mine = id;
+      for (let i = 0; i < 25 && mine === id; i++) {
+        await new Promise((res) => setTimeout(res, 3000));
+        const v = (await waCall(`/api/whatsapp/${mine}`, 'GET').catch(() => ({ j: {} }))).j;
+        if (v.testCall) $('waTestLine').textContent = `Test call: ${TEST_STATE[v.testCall.state] || v.testCall.state}.`;
+        if (v.testCall && TEST_DONE.includes(v.testCall.state)) break;
+      }
+    } catch (e) { $('waTestLine').textContent = `Could not reach the server: ${e.message}. Nothing rang.`; }
+    finally { waTesting = false; $('waTestCall').disabled = false; }
+  });
   $('waSend').addEventListener('submit', (e) => { e.preventDefault(); waSend(false); });
   $('waInvite').addEventListener('click', () => waSend(true));
 

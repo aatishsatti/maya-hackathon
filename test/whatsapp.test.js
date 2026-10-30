@@ -372,7 +372,7 @@ test('never a live call: only text, audio and template ever leave; a call promis
   shift(id, 60000); await wa.sendOut(id, { kind: 'voice', text: 'ok' });
   const o = outside(); shift(o.id, 1); await wa.sendOut(o.id, { kind: 'text', useTemplate: true });
   assert.ok(sent().length >= 3 && sent().every((b) => ['text', 'audio', 'template'].includes(b.type)));
-  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)), []);
+  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)), ['placeTestCall']); // the one test call (C1) is the only exception, and it never sends a message
   await refusal(wa.sendOut(id, { kind: 'call', text: 'x' }), /text message or a voice note/, { status: 400 });
   await refusal(wa.sendOut(id, { kind: 'text', text: 'x', who: 'stranger' }), /Bad sender/);
 });
@@ -1013,4 +1013,110 @@ test('a template send logs the phone id (last 4 only), API version, template nam
   const call = graphCalls.find((c) => c.body && c.body.type === 'template'); assert.match(call.url, /\/v\d+\.\d+\/1409237678935671\/messages$/, 'the PHONE number id, not the WABA id');
   assert.match(call.url, /\/v26\.0\//, 'default API version matches the Explorer send that worked');
   clearCalls();
+});
+
+
+// ---- C1: the first outbound test call (wacall.callOut, whatsapp.placeTestCall): connect -> SDP answer webhook -> RINGING -> ACCEPTED -> media -> fixed sentence -> terminate ----
+const { TEST_CALL_LINE } = wacall;
+const waitFor = async (fn, ms = 8000) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) throw new Error('timed out waiting'); await sleepMs(10); } };
+const OUT_ID = 'wacid.OUTBOUND1TESTCALL==';
+const outWebhook = (phone, { calls, statuses }) => ({ object: 'whatsapp_business_account', entry: [{ id: 'WABA', changes: [{ field: 'calls', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15556408264', phone_number_id: '1409237678935671' }, ...(calls ? { contacts: [{ wa_id: phone }], calls } : {}), ...(statuses ? { statuses } : {}) } }] }] });
+const outAnswer = (phone, sdp, id = OUT_ID) => outWebhook(phone, { calls: [{ id, from: '15556408264', to: phone, event: 'connect', direction: 'BUSINESS_INITIATED', timestamp: '1700000000', session: { sdp_type: 'answer', sdp } }] });
+const outStatus = (phone, status, id = OUT_ID) => outWebhook(phone, { statuses: [{ id, type: 'call', status, recipient_id: phone, timestamp: '1700000001' }] });
+const outEnd = (phone, status = 'COMPLETED', extra = {}, id = OUT_ID) => outWebhook(phone, { calls: [{ id, from: '15556408264', to: phone, event: 'terminate', direction: 'BUSINESS_INITIATED', timestamp: '1700000009', status, ...extra }] });
+// WhatsApp's side: a real peer that answers OUR offer (receives the media).
+const fakeDevice = async (offerSdp) => {
+  const peer = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] }); const got = [];
+  peer.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((r) => got.push(r)));
+  peer.addTransceiver(new MediaStreamTrack({ kind: 'audio' }), { direction: 'sendrecv' });
+  await peer.setRemoteDescription({ type: 'offer', sdp: offerSdp }); await peer.setLocalDescription(await peer.createAnswer());
+  return { peer, got, answer: peer.localDescription.sdp };
+};
+// Meta's answer to the connect POST: { calls: [{ id }] } (docs); a failure per action through callFail as everywhere else.
+const withConnectReply = async (reply, fn) => { const keep = wa.deps.fetch; wa.deps.fetch = async (url, opts = {}) => { const b = typeof opts.body === 'string' ? JSON.parse(opts.body) : null; if (b && /\/calls$/.test(url) && b.action === 'connect' && !(callFail && callFail.connect)) { graphCalls.push({ url, opts, body: b }); return { ok: true, status: 200, json: async () => reply }; } return keep(url, opts); }; try { return await fn(); } finally { wa.deps.fetch = keep; } };
+const actions = () => callPosts().map((b) => b.action);
+const outReset = () => { voiceReset(); wa.deps.testCooldownMs = 0; wa.deps.testRingCapMs = undefined; wa.deps.testTailMs = 50; callFail = null; };
+
+test('C1 the whole test call: connect with our offer, the SDP answer webhook is applied, RINGING, ACCEPTED, media up, the fixed sentence is spoken verbatim, then terminate; logs hold no SDP, number or word', async () => {
+  outReset(); const { id, phone } = linked(); let dev = null;
+  const out = await capture(async () => {
+    await withConnectReply({ messaging_product: 'whatsapp', calls: [{ id: OUT_ID }] }, async () => {
+      const placed = await wa.placeTestCall(id); assert.deepEqual(placed, { placed: true });
+      const conn = callPosts().find((b) => b.action === 'connect');
+      assert.equal(conn.to, phone); assert.equal(conn.messaging_product, 'whatsapp'); assert.equal(conn.session.sdp_type, 'offer'); assert.match(conn.session.sdp, /m=audio/); assert.match(conn.session.sdp, /opus/i); assert.equal(conn.call_id, undefined);
+      assert.deepEqual(spoken, [TEST_CALL_LINE], 'the sentence is exactly the fixed one');
+      dev = await fakeDevice(conn.session.sdp);
+      assert.equal(wa.view(id).testCall.state, 'requested');
+      assert.deepEqual(await wa.handleWebhook(outStatus(phone, 'RINGING')), ['status']); assert.equal(wa.view(id).testCall.state, 'ringing');
+      assert.deepEqual(await wa.handleWebhook(outAnswer(phone, dev.answer)), ['outbound-answer']);
+      assert.equal(actions().includes('terminate'), false, 'nothing is hung up before they answer');
+      assert.deepEqual(await wa.handleWebhook(outStatus(phone, 'ACCEPTED')), ['status']);
+      await waitFor(() => actions().includes('terminate'));
+      assert.deepEqual(actions(), ['connect', 'terminate']); assert.equal(callPosts().at(-1).call_id, OUT_ID);
+      assert.ok(dev.got.length >= 45, `the phone received the one second of speech (${dev.got.length} packets)`);
+      assert.deepEqual(await wa.handleWebhook(outEnd(phone, 'COMPLETED', { start_time: 1, end_time: 9, duration: 8 })), ['ended']);
+      await waitFor(() => wa.view(id).testCall.state === 'completed');
+    });
+  });
+  try {
+    assert.match(out, /test call [0-9a-f]{6} to number ending \d{4}: requested/); assert.match(out, /RINGING \d+ ms after the request/); assert.match(out, /answer applied/); assert.match(out, /ACCEPTED \d+ ms after the request/);
+    assert.match(out, /media up \d+ ms/); assert.match(out, /the fixed sentence was spoken/); assert.match(out, /hung up \d+ ms/); assert.match(out, /call ended: .*status COMPLETED, duration 8 s/); assert.match(out, /finished, completed/);
+    assert.ok(out.indexOf('RINGING') < out.indexOf('ACCEPTED') && out.indexOf('ACCEPTED') < out.indexOf('media up') && out.indexOf('media up') < out.indexOf('hung up'));
+    assert.doesNotMatch(out, /v=0|a=fingerprint|TEST-TOKEN|wacid|Hello, this is Maya/); assert.ok(!out.includes(phone));
+    assert.equal(sent().length, 0, 'a call sends no message');
+  } finally { await dev.peer.close(); }
+});
+
+test('C1 ring cap: nobody answers, so it is terminated at the cap, once, with no retry; RINGING alone does not stop the clock', async () => {
+  outReset(); wa.deps.testRingCapMs = 200; const { id, phone } = linked();
+  const out = await capture(async () => withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeTestCall(id); await wa.handleWebhook(outStatus(phone, 'RINGING'));
+    await waitFor(() => actions().includes('terminate')); await waitFor(() => wa.view(id).testCall.state === 'no answer');
+  }));
+  assert.deepEqual(actions(), ['connect', 'terminate']); assert.match(out, /no answer in \d+ s/); assert.match(out, /finished, no answer/);
+  await sleepMs(300); assert.deepEqual(actions(), ['connect', 'terminate'], 'one attempt, no retry');
+  await wa.handleWebhook(outEnd(phone, 'COMPLETED')); // Meta's terminate webhook for an unanswered call: COMPLETED with no duration
+});
+
+test('C1 they reject it: REJECTED is logged, nothing is terminated (Meta ends it), no media, no sentence', async () => {
+  outReset(); const { id, phone } = linked();
+  const out = await capture(async () => withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeTestCall(id); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outStatus(phone, 'REJECTED'));
+    await waitFor(() => wa.view(id).testCall.state === 'rejected'); await sleepMs(100); await wa.handleWebhook(outEnd(phone, 'COMPLETED'));
+  }));
+  assert.deepEqual(actions(), ['connect']); assert.match(out, /REJECTED \d+ ms/); assert.match(out, /finished, rejected/); assert.doesNotMatch(out, /fixed sentence was spoken/);
+});
+
+test('C1 refusals place nothing: unlinked, opted out, in an app call, a second test, the cooldown; Meta refusing the connect (138006) says so and frees the line', async () => {
+  outReset(); const err = async (p, re, status) => { await assert.rejects(p, (e) => { assert.match(e.message, re); assert.equal(e.status, status); return true; }); };
+  await err(wa.placeTestCall(senior()), /Link their WhatsApp number/, 400); assert.equal(callPosts().length, 0);
+  const o = linked(); await wa.handleWebhook(incoming(o.phone, 'STOP')); await err(wa.placeTestCall(o.id), /stopped messages/, 400); assert.equal(callPosts().length, 0);
+  const b = linked(); care.liveCalls.set(b.id, {}); try { await err(wa.placeTestCall(b.id), /in a call in the app/, 409); } finally { care.liveCalls.delete(b.id); } assert.equal(callPosts().length, 0);
+  const { id, phone } = linked(); callFail = { connect: { code: 138006, message: 'No approved call permission from the user' } };
+  await err(wa.placeTestCall(id), /WhatsApp refused it \(138006\)/, 502); assert.equal(wa.view(id).testCall.state, 'failed'); assert.deepEqual(actions(), ['connect']); callFail = null;
+  clearCalls(); await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeTestCall(id); await err(wa.placeTestCall(id), /Another call is in progress/, 409);
+    await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await waitFor(() => wa.view(id).testCall.state === 'rejected'); await sleepMs(100);
+    wa.deps.testCooldownMs = 60000; await err(wa.placeTestCall(id), /Wait a minute/, 429);
+  });
+  assert.deepEqual(actions(), ['connect'], 'only the one that was allowed reached Meta');
+});
+
+test('C1 if her voice cannot be made, nothing is placed and the phone never rings; a status or answer for a call nobody placed is ignored', async () => {
+  outReset(); const { id, phone } = linked(); speakFail = true;
+  await assert.rejects(wa.placeTestCall(id), /voice is down/); assert.equal(callPosts().length, 0); assert.equal(wa.view(id).testCall.state, 'failed');
+  voiceReset();
+  assert.deepEqual(await wa.handleWebhook(outStatus(phone, 'RINGING', 'wacid.NOBODYASKED==')), ['ignored']);
+  assert.deepEqual(await wa.handleWebhook(outAnswer(phone, 'v=0 SECRET-SDP', 'wacid.NOBODYASKED==')), ['ignored']); assert.equal(graphCalls.length, 0);
+});
+
+test('C1 a status or answer for some OTHER call id while ours is in flight is ignored; the call route is mock-safe and the panel shows the button only when linked', async () => {
+  outReset(); const { id, phone } = linked();
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeTestCall(id);
+    assert.deepEqual(await wa.handleWebhook(outStatus(phone, 'ACCEPTED', 'wacid.SOMEONEELSE==')), ['ignored']);
+    assert.notEqual(wa.view(id).testCall.state, 'answered');
+    await wa.handleWebhook(outStatus(phone, 'REJECTED')); await waitFor(() => wa.view(id).testCall.state === 'rejected'); await sleepMs(100);
+  });
+  assert.equal(wa.view(senior()).testCall, undefined);
 });

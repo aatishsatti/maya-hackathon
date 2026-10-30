@@ -59,7 +59,7 @@ const MAX_INBOUND_IMAGE = 8 * 1024 * 1024; // the same ceiling as a photo sent i
 const MAX_INBOUND_AUDIO = 2 * 1024 * 1024; // a long monologue is not worth a minute of Transcribe; ~2 MB of Opus is several minutes
 
 // Network edge, replaceable in tests.
-const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithBridge(o), newCall: (socket, apiKey) => new (require('./call').Call)(socket, apiKey), callTailMs: undefined, callCapMs: undefined };
+const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithBridge(o), newCall: (socket, apiKey) => new (require('./call').Call)(socket, apiKey), callTailMs: undefined, callCapMs: undefined, callOut: (o) => require('./wacall').callOut(o), testRingCapMs: undefined, testTailMs: undefined, testCooldownMs: undefined };
 
 const configured = () => Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID);
 
@@ -103,7 +103,7 @@ function view(profileId) {
   if (!l) return { linked: false, configured: configured() };
   const open = Boolean(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS);
   const last = (l.sent || []).slice(-1)[0] || null;
-  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null };
+  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null };
 }
 
 // ---- webhook security ----
@@ -472,20 +472,39 @@ function endReason(call) {
   return call.status === 'FAILED' ? 'the call failed (no error code given)' : 'caller hung up';
 }
 const liveEnds = new Map(); // call id -> function that tells the answerer the CALLER hung up (the terminate webhook)
+const outboundNow = { cur: null }; // the ONE outbound test call in flight: { id (null until Meta names it), sig, profileId }
+const testCalls = new Map();      // profile id -> { state, at } of the last test call (a label and a time, never a word or a number)
+let lastTestAt = 0;
 const callsSeen = []; let callBusy = false; // one answered call at a time; a Meta retry of a connect is not answered twice
 const callAction = (callId, action, session) => graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', call_id: callId, action, ...(session ? { session } : {}) });
 const sayWhy = (e) => String(e && e.message).replace(/\s+/g, ' ').slice(0, 200); // an error message only; it never holds the SDP (nothing here puts one in a message)
 // Logs the event by FIELD NAMES only (never the SDP, a number, a call id or a word). A linked, opted-in caller is answered (the Call); everyone else is refused so the phone does not ring for a minute.
+// The outbound test call this webhook item belongs to: its id once known, or the first item after the connect POST (Meta can name the call in a webhook before our POST has returned).
+function outboundOf(id) {
+  const o = outboundNow.cur; if (!o) return null;
+  if (o.id === null) { o.id = id; liveEnds.set(id, (why) => o.sig.emit('end', why)); }
+  return o.id === id ? o : null;
+}
 async function onCalls(value) {
   const out = [];
+  for (const st of value.statuses || []) {   // the lifecycle of OUR call: RINGING, ACCEPTED, REJECTED (docs: statuses[] { id, type: "call", status, recipient_id, timestamp })
+    if (!st || typeof st.id !== 'string' || st.type !== 'call') continue;
+    const o = outboundOf(st.id);
+    if (o) { o.sig.emit('status', String(st.status)); out.push('status'); } else { note(`ignored a call status (${/^[A-Z_]{1,20}$/.test(String(st.status)) ? st.status : 'unknown'}) for call ${callTag(st.id)}: no test call is waiting for it`); out.push('ignored'); }
+  }
   for (const call of value.calls || []) {
     if (!call || typeof call.id !== 'string') continue;
     const who = callerOf(value, call), tail = who ? end(who) : 'unknown', cid = callTag(call.id);
     if (call.event === 'terminate') {
       const er = Array.isArray(call.errors) && call.errors[0] ? `, error ${Number(call.errors[0].code) || 'unknown'}` : '';
+      if (call.direction === 'BUSINESS_INITIATED') outboundOf(call.id);
       const hangUp = liveEnds.get(call.id); if (hangUp) hangUp(endReason(call)); // an answered call: tell the answerer to stop listening, and why the call ended
       note(`call ended: number ending ${tail}, call ${cid}, status ${String(call.status).slice(0, 12)}, duration ${Number(call.duration) || 0} s${er}`);
       out.push('ended'); continue;
+    }
+    if (call.event === 'connect' && call.direction === 'BUSINESS_INITIATED') {   // the SDP ANSWER to our offer (session { sdp_type: "answer", sdp }; the SDP is never logged)
+      const o = outboundOf(call.id), sdp = call.session && call.session.sdp_type === 'answer' && typeof call.session.sdp === 'string' ? call.session.sdp : null;
+      if (o && sdp) { note(`outbound call ${cid}: Meta's SDP answer arrived`); o.sig.emit('answer', sdp); out.push('outbound-answer'); continue; }
     }
     if (call.event !== 'connect' || call.direction !== 'USER_INITIATED') { note(`ignored a call event (${String(call.event).slice(0, 20)}, ${String(call.direction).slice(0, 20)}) for call ${cid}`); out.push('ignored'); continue; }
     note(`call connect: ${call.direction} from number ending ${tail}, call ${cid}, fields [${Object.keys(call).sort().join(', ')}], session [${call.session && typeof call.session === 'object' ? Object.keys(call.session).sort().join(', ') : 'none'}]`);
@@ -513,6 +532,41 @@ async function onCalls(value) {
   return out;
 }
 
+// The family page's "Call them now (test)": ONE outbound call to the linked, opted-in person that says a fixed sentence and hangs up (wacall.callOut). Resolves when Meta has taken the
+// call (the phone is about to ring) with { placed: true }; the rest (ringing, answered, ended) runs on and is logged and kept as a label in view().testCall. Throws if nothing was placed.
+const TEST_COOLDOWN_MS = 60000;
+function setTest(profileId, state) { testCalls.set(profileId, { state, at: Date.now() }); }
+function placeTestCall(profileId) {
+  const l = linkOf(profileId);
+  const fail = (m, status) => Promise.reject(new WaError(m, status));
+  if (!l) return fail('Link their WhatsApp number first.', 400);
+  if (!l.optIn) return fail('They have stopped messages from Maya, so no call is placed.', 400);
+  if (!configured()) return fail('WhatsApp is not set up on this server.', 503);
+  if (callBusy || outboundNow.cur) return fail('Another call is in progress. Nothing was placed.', 409);
+  if (require('./care').liveCalls.has(profileId)) return fail('They are in a call in the app right now. Nothing was placed.', 409);
+  if (Date.now() - lastTestAt < (deps.testCooldownMs === undefined ? TEST_COOLDOWN_MS : deps.testCooldownMs)) return fail('A test call was just placed. Wait a minute before another. Nothing was placed.', 429);
+  callBusy = true; lastTestAt = Date.now();
+  const tail = end(l.phone), sig = new (require('node:events'))(), cur = { id: null, sig, profileId }; outboundNow.cur = cur;
+  let cid = 'unknown'; const log = (m) => note(`test call ${cid} to number ending ${tail}: ${m}`);
+  setTest(profileId, 'starting');
+  return new Promise((resolve, reject) => {
+    const place = async (session) => {
+      const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', to: l.phone, action: 'connect', session });
+      const id = d && ((Array.isArray(d.calls) && d.calls[0] && d.calls[0].id) || d.call_id);
+      if (typeof id === 'string' && id) { if (cur.id === null) { cur.id = id; liveEnds.set(id, (why) => sig.emit('end', why)); } cid = callTag(id); }
+      else if (cur.id) cid = callTag(cur.id);
+      setTest(profileId, 'requested'); resolve({ placed: true });
+    };
+    const terminate = async () => { if (!cur.id) throw new Error('Meta has not named the call, so it cannot be hung up by id'); await callAction(cur.id, 'terminate'); };
+    const label = { RINGING: 'ringing', ACCEPTED: 'answered', REJECTED: 'rejected' };
+    sig.on('status', (s) => { if (label[s]) setTest(profileId, label[s]); });
+    Promise.resolve().then(() => deps.callOut({ sig, place, terminate, log, speak: (t) => chat.deps.speak(t), ringCapMs: deps.testRingCapMs, tailMs: deps.testTailMs }))
+      .then((r) => { setTest(profileId, /^no answer/.test(r) ? 'no answer' : r === 'rejected' ? 'rejected' : r === 'completed' ? 'completed' : 'ended'); note(`test call ${cid} to number ending ${tail}: finished, ${r}`); })
+      .catch((e) => { setTest(profileId, 'failed'); note(`test call ${cid} to number ending ${tail}: FAILED, ${sayWhy(e)}`); reject(e instanceof WaError ? e : new WaError(sayWhy(e), 502)); })
+      .finally(() => { callBusy = false; if (cur.id) liveEnds.delete(cur.id); outboundNow.cur = null; });
+  });
+}
+
 // Called by server.js after it answered 200. Never throws; errors are logged as a message only (no words, no numbers).
 async function handleWebhook(payload) {
   const done = [];
@@ -537,4 +591,4 @@ async function handleWebhook(payload) {
   return (await Promise.all(done)).flat(); // calls answer with one result per call
 }
 
-module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

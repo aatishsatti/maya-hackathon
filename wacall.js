@@ -148,4 +148,82 @@ function pcLost(pc) {
   return { promise, cancel: () => clearInterval(iv) };
 }
 
-module.exports = { answerWithBridge, Outbound, keepSha256Only, upsample2 };
+
+// ---- the first outbound test call (business-initiated) ----
+// Docs read (developers.facebook.com/docs/whatsapp/cloud-api/calling/business-initiated-calls and .../calling/reference):
+//   POST {Phone-Number-ID}/calls { messaging_product: "whatsapp", to, action: "connect", session: { sdp_type: "offer", sdp } }   (OUR offer; the sample has a=setup:actpass, sha-256, Opus 48000/2)
+//     -> { messaging_product, calls: [{ id: "wacid..." }] }. The call needs the person's call permission (error 138006 when they have not granted it).
+//   The SDP ANSWER arrives in a webhook, field "calls": value.calls[] { id, event: "connect", direction: "BUSINESS_INITIATED", session { sdp_type: "answer", sdp } }. Applied to the peer connection.
+//   Then webhooks with value.statuses[] { id, type: "call", status: "RINGING" | "ACCEPTED" | "REJECTED", recipient_id, timestamp } (REJECTED is followed by a terminate webhook).
+//   POST action "terminate" (call_id) ends it; the docs ask for it even when the media says RTCP BYE. A terminate webhook (direction BUSINESS_INITIATED, status COMPLETED | FAILED,
+//   errors[], and start_time / end_time / duration only when they picked up; an unanswered call is COMPLETED with none) follows whoever ended it. No ring time-out is documented: it is 45 s here.
+//   No pre_accept / accept for this direction (the docs' business-initiated flow uses only connect and terminate). Media: the docs tie it to applying the answer; here it starts after ACCEPTED
+//   and the peer connection being up, so nothing is said into a ringing phone.
+const TEST_CALL_LINE = "Hello, this is Maya. This is a test call to check that I can ring you. I'll hang up now. Goodbye.";
+const RING_CAP_MS = 45000;
+const MEDIA_UP_MS = 15000;
+const STATUSES = ['RINGING', 'ACCEPTED', 'REJECTED'];
+
+// sig: an EventEmitter the webhooks feed: 'answer' (sdp text), 'status' (RINGING | ACCEPTED | REJECTED), 'end' (reason text; the terminate webhook).
+// place(session) -> posts the connect and resolves once Meta took it (throws if refused: nothing rang). terminate() -> posts the terminate for this call.
+// speak(text) -> PCM16 24 kHz. The sentence is made BEFORE anything is placed: if her voice does not work, the phone never rings. log(text): one line, no SDP, no number, no word.
+// Returns the outcome in plain words; throws if a step failed, after trying terminate. One attempt, no retry.
+async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LINE, ringCapMs = RING_CAP_MS, mediaUpMs = MEDIA_UP_MS, tailMs = TAIL_MS }) {
+  const pcm = await speak(text);
+  if (!Buffer.isBuffer(pcm) || pcm.length < 2) throw new Error('her voice could not be made, so nothing was placed');
+  const pc = new RTCPeerConnection({ codecs: { audio: [useOPUS()], video: [] }, iceServers: [] });
+  const track = new MediaStreamTrack({ kind: 'audio' });
+  const tx = pc.addTransceiver(track, { direction: 'sendrecv' });
+  let out = null, over = null, capTimer = null, t0 = Date.now(), placed = false;
+  const since = () => `${Date.now() - t0} ms`;
+  let gotAnswer, gotAccepted, resolveOutcome;
+  const answerP = new Promise((r) => { gotAnswer = r; }), acceptedP = new Promise((r) => { gotAccepted = r; });
+  const outcome = new Promise((r) => { resolveOutcome = r; });
+  outcome.then((o) => { over = o; });
+  const onAnswer = (sdp) => gotAnswer(sdp), onEnd = (why) => resolveOutcome({ kind: 'ended', reason: why || 'ended' });
+  const seen = new Set();
+  const onStatus = (s) => {
+    if (!STATUSES.includes(s)) { log('a call status this build does not know (not RINGING, ACCEPTED or REJECTED)'); return; }
+    if (seen.has(s)) return; seen.add(s);
+    log(`${s} ${since()} after the request`);
+    if (s === 'ACCEPTED') gotAccepted(true); else if (s === 'REJECTED') resolveOutcome({ kind: 'rejected', reason: 'they rejected it' });
+  };
+  sig.once('answer', onAnswer); sig.on('status', onStatus); sig.once('end', onEnd);
+  const step = (p) => { Promise.resolve(p).catch(() => {}); return Promise.race([Promise.resolve(p).then((v) => ({ ok: true, v })), outcome]); };
+  const finish = async (o) => {   // o: { kind: 'cap' | 'ended' | 'rejected', reason }
+    if (o.kind === 'cap') { await terminate(); log(`no answer in ${Math.round(ringCapMs / 1000)} s: hung up the request`); return `no answer in ${Math.round(ringCapMs / 1000)} s`; }
+    log(`the call is already over (${o.reason}); nothing more to send`); return o.kind === 'rejected' ? 'rejected' : `ended: ${o.reason}`;
+  };
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    await place({ sdp_type: 'offer', sdp: keepSha256Only(pc.localDescription.sdp) });
+    placed = true; t0 = Date.now();
+    log('requested: Meta took the call, waiting for its answer');
+    capTimer = setTimeout(() => resolveOutcome({ kind: 'cap', reason: 'ring cap' }), ringCapMs);
+    let r = await step(answerP); if (!r.ok) return await finish(r);
+    await pc.setRemoteDescription({ type: 'answer', sdp: r.v });
+    const codec = (tx.codecs || []).find((c) => /opus/i.test(c.name)) || (pc.getTransceivers()[0].codecs || [])[0];
+    if (!codec) throw new Error('the answer has no Opus audio');
+    log(`answer applied ${since()} after the request (Opus payload type ${codec.payloadType})`);
+    r = await step(acceptedP); if (!r.ok) return await finish(r);
+    clearTimeout(capTimer); capTimer = null;
+    r = await step(waitConnected(pc, mediaUpMs)); if (!r.ok) return await finish(r);
+    log(`media up ${since()} after the request`);
+    out = new Outbound(track, codec.payloadType); out.start();
+    r = await step(out.say(upsample2(pcm))); if (!r.ok) return await finish(r);
+    log('the fixed sentence was spoken');
+    await sleep(tailMs);
+    if (over) return await finish(over);
+    await terminate(); log(`hung up ${since()} after the request`);
+    return 'completed';
+  } catch (e) {
+    if (placed && !over) { try { await terminate(); } catch (e2) { log(`could NOT hang up after the failure: ${String(e2.message).slice(0, 160)}`); } }
+    throw e;
+  } finally {
+    clearTimeout(capTimer); sig.off('answer', onAnswer); sig.off('status', onStatus); sig.off('end', onEnd);
+    if (out) out.stop();
+    try { await pc.close(); } catch { /* already closed */ }
+  }
+}
+
+module.exports = { answerWithBridge, callOut, TEST_CALL_LINE, Outbound, keepSha256Only, upsample2 };
