@@ -89,6 +89,12 @@ const TIMER_MAX_SECONDS = 30 * 60;
 const NUM_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, fifteen: 15, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60 };
 const TIMER_RE = /\bremind me\b(?:\s+(?:to|about|that)\s+([^.?!]+?))?\s*\b(?:in|after)\s+(\d+(?:\.\d+)?|[a-z]+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b(?:\s+(?:to|about|that)\s+([^.?!]+))?/i;
 // { seconds, task } from "remind me in 30 seconds [to X]" / "remind me to X in 5 minutes"; null if it is not a timer request.
+// The standing fact for a pending timer (see careNotes). Seconds are rounded to what a person would say.
+function timerOpenFact(timers, now = Date.now()) {
+  const next = Math.max(0, Math.round((Math.min(...timers.map((t) => t.dueAt || now)) - now) / 1000));
+  const when = next < 90 ? `in about ${Math.max(next, 1)} second${next === 1 ? '' : 's'}` : `in about ${Math.round(next / 60)} minutes`;
+  return `FACT: a reminder timer they asked for is still running (it is due ${when}) and it ONLY works while this call stays open: when the call ends the app drops it and nothing will remind them afterwards. Do not bring this up unless they ask about hanging up, leaving or ending the call, or they say goodbye. If they do, tell them plainly in one short sentence that the reminder only works while the call stays open and they will not get it if they hang up. Never say they can hang up whenever they like without saying that, never say you will remind them later or after the call, and never say you will call, ring or message them.`;
+}
 function parseTimer(text) {
   const m = TIMER_RE.exec(String(text || ''));
   if (!m) return null;
@@ -1468,7 +1474,7 @@ class Call {
 
   setTimerFromWords(t) {
     const handle = setTimeout(() => this.fireTimer(t), t.seconds * 1000);
-    t.handle = handle;
+    t.handle = handle; t.dueAt = Date.now() + t.seconds * 1000;
     this.timers.push(t);
   }
 
@@ -1626,16 +1632,20 @@ class Call {
       notes.push('FACT: they said the thing you just reminded them of is still to do. The app will remind them again the next time they call. Take it kindly in one short sentence, no advice, and do not remind them again in this call.');
     }
     const tm = parseTimer(heard);
+    let timerSet = false;
     if (tm && this.noTimers) {
       notes.push('They asked for a timer. In this written chat you cannot set one; say kindly that you can only remind them during a voice call, and that their family can set reminders. Promise nothing else.');
     } else if (tm) {
       if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS) {
-        this.setTimerFromWords({ seconds: tm.seconds, task: tm.task });
-        notes.push(`They asked you to remind them in ${tm.seconds < 90 ? `${tm.seconds} seconds` : `${Math.round(tm.seconds / 60)} minutes`}${tm.task ? ` about "${tm.task}"` : ''}. A timer is set for it right now. Confirm in one short sentence that you will remind them then. Promise nothing else.`);
+        this.setTimerFromWords({ seconds: tm.seconds, task: tm.task }); timerSet = true;
+        notes.push(`They asked you to remind them in ${tm.seconds < 90 ? `${tm.seconds} seconds` : `${Math.round(tm.seconds / 60)} minutes`}${tm.task ? ` about "${tm.task}"` : ''}. A timer is set for it right now. Confirm in one short sentence that you will remind them then, and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
       } else {
         notes.push('They asked for a timer that is too long or unclear. Say kindly you can only remind them within about half an hour during a call, and that their family can set longer reminders. Promise nothing else.');
       }
     }
+    // A timer is running and this turn did not set it: the reminder only lives while the call is open (end() drops every pending timer), so if they ask about hanging up or say goodbye
+    // she must say so plainly and never let "hang up whenever you like" sound like the reminder will still come. True in the app and on a WhatsApp call alike.
+    if (!timerSet && this.timers && this.timers.length) notes.push(timerOpenFact(this.timers)); // chat.js borrows careNotes for the written chat: it has no timers at all
     return notes.join(' ');
   }
 
@@ -1944,4 +1954,4 @@ class Call {
   }
 }
 
-module.exports = { CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

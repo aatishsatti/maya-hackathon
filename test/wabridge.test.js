@@ -242,7 +242,7 @@ test('the call\'s latency log line shows numbers and flags only; what the person
 });
 
 // ---- the goodbye after a silence on a WhatsApp call: never a call-back promise ----
-const { CALL_PROMISE, WHATSAPP_GOODBYE_LINE } = require('../call');
+const { CALL_PROMISE, WHATSAPP_GOODBYE_LINE, timerOpenFact } = require('../call');
 const QUIET = (said) => `${SAY} ${said}`;
 function quietCall(whatsapp, userTurns = 0) {
   const sent = []; const ws = { send: (d) => sent.push(d), close() {}, onmessage: null, onclose: null, ...(whatsapp ? { noRingback: true } : {}) };
@@ -295,4 +295,54 @@ test('end to end on a WhatsApp call: a goodbye that promises a call-back is repl
     assert.equal(care.activeByProfile.get(c.id), undefined, 'and still no in-app ring-back');
   });
   assert.ok(c0);
+});
+
+// ---- a reminder timer only lives while the call is open: she must say so ----
+const dropTimers = (c) => { for (const t of c.timers) clearTimeout(t.handle); c.timers = []; };
+
+test('asking for a reminder: the note tells her to confirm AND to say they must stay on the call; the timer records when it is due', () => {
+  const c = quietCall(true); const note = c.careNotes('Can you remind me in 30 seconds to drink water?');
+  assert.match(note, /remind them in 30 seconds about "drink water"/); assert.match(note, /need to stay on the call for it, because the reminder only works while the call is open/);
+  assert.equal(c.timers.length, 1); assert.ok(Math.abs(c.timers[0].dueAt - (Date.now() + 30000)) < 1000); assert.doesNotMatch(note, /ONLY works while this call stays open/, 'the confirmation is not doubled with the standing fact'); dropTimers(c);
+});
+
+test('while a timer is pending, the next turn carries the standing fact (the same in the app and on WhatsApp); with no timer, or once it has gone, there is none', () => {
+  const wa = quietCall(true), app = quietCall(false); const facts = [];
+  for (const c of [wa, app]) {
+    c.careNotes('Please remind me in 20 minutes to take my tablets.');
+    const note = c.careNotes('Can I hang up now?'); facts.push(note);
+    assert.match(note, /FACT: a reminder timer they asked for is still running \(it is due in about \d+ minutes\)/);
+    assert.match(note, /ONLY works while this call stays open/); assert.match(note, /when the call ends the app drops it and nothing will remind them afterwards/); assert.match(note, /ask about hanging up, leaving or ending the call, or they say goodbye/);
+    assert.match(note, /Never say they can hang up whenever they like without saying that, never say you will remind them later or after the call, and never say you will call, ring or message them/);
+    dropTimers(c); assert.doesNotMatch(c.careNotes('Can I hang up now?'), /reminder timer/, 'no timer, no fact');
+  }
+  assert.equal(facts[0], facts[1], 'identical in-app and on WhatsApp');
+  const fresh = quietCall(true); assert.doesNotMatch(fresh.careNotes('Can I hang up now?'), /reminder timer/);
+});
+
+test('the written chat is unchanged (it cannot set a timer, and so has no standing fact); a timer that is too long says so', () => {
+  const c = quietCall(false); c.noTimers = true; const note = c.careNotes('Remind me in 5 minutes to call my sister.'); assert.match(note, /you cannot set one/); assert.doesNotMatch(note, /reminder timer|stay on the call/); assert.equal(c.timers.length, 0);
+  const d = quietCall(true); assert.match(d.careNotes('Remind me in 5 hours to rest.'), /too long or unclear/); assert.doesNotMatch(d.careNotes('Okay.'), /reminder timer/);
+});
+
+test('the written chat (chat.js borrows careNotes and has no timers list) still works and has no timer fact', () => {
+  const { ChatSession } = require('../chat'); assert.equal(typeof ChatSession, 'function');
+  const session = Object.create(ChatSession.prototype); Object.assign(session, { profile: memory.load(memory.createProfile(`Chat${letters(n++)}`, 'female').id), noTimers: true, userTurns: 0 });
+  assert.equal(session.timers, undefined); assert.doesNotMatch(session.careNotes('Can I hang up now?'), /reminder timer/);
+});
+
+test('timerOpenFact: seconds are rounded the way a person says them', () => {
+  const now = 1000000; assert.match(timerOpenFact([{ dueAt: now + 20000 }], now), /due in about 20 seconds/); assert.match(timerOpenFact([{ dueAt: now + 500 }], now), /due in about 1 second\)/); assert.match(timerOpenFact([{ dueAt: now + 300000 }, { dueAt: now + 900000 }], now), /due in about 5 minutes/);
+});
+
+test('on a whole WhatsApp call: Spark is told the reminder needs the call open, both when it is set and when she is asked about hanging up', async () => {
+  sparkReply = QUIET('Hello there, it is nice to talk to you.');
+  await withCall({}, async (c) => {
+    await until(() => c.ph.heard.length > 15); await sleep(900); sparkReply = QUIET('Okay, I will remind you.');
+    sparkAsked.length = 0; c.callRef.pending = [turn('Can you remind me in 20 minutes to drink water?')]; await c.callRef.respond(0);
+    assert.ok(sparkAsked.some((r) => /stay on the call for it, because the reminder only works while the call is open/.test(r)), 'told when the timer was set');
+    sparkAsked.length = 0; c.callRef.pending = [turn('Can I hang up now?')]; await c.callRef.respond(0);
+    assert.ok(sparkAsked.some((r) => /ONLY works while this call stays open/.test(r) && /nothing will remind them afterwards/.test(r)), 'told when she is asked about hanging up');
+    await hangUpPhone(c.phone, c.p); await c.running; assert.ok(c.callRef.closed); assert.ok(c.callRef.timers.every((t) => t.handle), 'the timer was set');
+  });
 });
