@@ -990,10 +990,12 @@ function reminderStatus(wamid, status, errors) {
   return false;
 }
 
-// The person answered on WhatsApp (words judged as an acknowledgement by the caller): the oldest reminder still waiting for one is answered.
+// The person answered on WhatsApp (words judged as an acknowledgement by the caller): the MOST RECENTLY SENT reminder still waiting for one is answered. A reply refers to the latest
+// message, not to one from an hour ago; older ones stay waiting, honestly, until they turn Missed. (Live: the oldest-first rule answered a stale reminder and left the new one Delivered.)
 function reminderAckWhatsApp(id, ack = true) {
   const p = get(id); if (!p) return false;
-  const waiting = p.reminders.filter((r) => r.active && r.active.channel === 'whatsapp' && WA_OPEN.has(r.active.state)).sort((x, y) => (x.active.sentAt || 0) - (y.active.sentAt || 0));
+  const waiting = p.reminders.map((r, i) => ({ r, i })).filter(({ r }) => r.active && r.active.channel === 'whatsapp' && WA_OPEN.has(r.active.state))
+    .sort((x, y) => (y.r.active.sentAt || 0) - (x.r.active.sentAt || 0) || y.i - x.i).map(({ r }) => r);   // newest first (a tie goes to the one added last)
   // Every reply while ANY reminder is in flight (or that reads as an acknowledgement) leaves one line: did it read as an acknowledgement, how many WhatsApp reminders were waiting and in
   // which states, how many other reminders are in flight. Names and counts only: never a word of the reply, never the reminder. It shows why a reply did or did not answer a reminder.
   const inFlight = p.reminders.filter((r) => r.active).length;
