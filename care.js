@@ -38,6 +38,9 @@ const cfg = {
   waNudgeMs: 10 * MIN * SCALE,      // a reminder sent on WhatsApp and not answered: ONE nudge after this
   waMissMs: 60 * MIN * SCALE,       // ...and it is marked Missed (visible, never hidden) after this
   waSendStuckMs: 2 * MIN * SCALE,   // a send that never answered in this long is shown as not sent
+  waAnsweredCtxMs: 30 * MIN * SCALE, // after a reminder was answered, Maya keeps it in mind this long ("done, carry on")
+  waThisMessageMs: 15 * 1000,       // a reply that answered a reminder less than this long ago IS the reply that answered it
+  waMissedCtxMs: 2 * 60 * MIN * SCALE, // a Missed reminder is still known to Maya (silently) this long
   doneKeepMs: 30 * 24 * 60 * MIN,   // a finished one-time reminder is deleted after 30 days (the privacy page says so)
   expireCriticalMs: 3 * 24 * 60 * MIN * SCALE, // a safety / medical ticket the family never sees closes after this (NOT confirmed safe)
   expireLightMs: 2 * 24 * 60 * MIN * SCALE,    // a Flag / gentle-note ticket the family never sees closes after this
@@ -992,10 +995,35 @@ function reminderStatus(wamid, status, errors) {
 
 // The person answered on WhatsApp (words judged as an acknowledgement by the caller): the MOST RECENTLY SENT reminder still waiting for one is answered. A reply refers to the latest
 // message, not to one from an hour ago; older ones stay waiting, honestly, until they turn Missed. (Live: the oldest-first rule answered a stale reminder and left the new one Delivered.)
-function reminderAckWhatsApp(id, ack = true) {
+// The WhatsApp reminders still waiting for an answer, NEWEST SENT first (a tie goes to the one added last): sent, not answered, and not yet past their Missed line. The one list that
+// both the acknowledgement (which reminder a reply answers) and reminderContext (what Maya is told) read, so the two can never disagree.
+function waitingWhatsApp(p, now = Date.now()) {
+  return p.reminders.map((r, i) => ({ r, i })).filter(({ r }) => r.active && r.active.channel === 'whatsapp' && WA_OPEN.has(r.active.state) && !(r.active.missAt && now >= r.active.missAt))
+    .sort((x, y) => (y.r.active.sentAt || 0) - (x.r.active.sentAt || 0) || y.i - x.i).map(({ r }) => r);
+}
+
+// What a person is dealing with on WhatsApp right now, for what Maya is told before she answers (pure: it changes nothing and logs nothing). The task is the family's own text.
+//   waiting:  the most recently sent reminder still waiting for an answer (inside its 60 minute window), how long ago, voice or text, nudged or not, how many OTHER ones wait.
+//   answered: the most recently answered reminder, if that was in the last 30 minutes; thisMessage is true when the reply being answered right now is the one that answered it.
+//   missed:   the most recent Missed reminder, if in the last 2 hours. A reminder that was never sent (Not sent) is not here: it never reached them.
+function reminderContext(id, now = Date.now()) {
+  const p = get(id);
+  const out = { waiting: null, answered: null, missed: null };
+  if (!p) return out;
+  const mins = (t) => Math.max(0, Math.round((now - (t || now)) / MIN));
+  const waiting = waitingWhatsApp(p, now);
+  if (waiting.length) { const a = waiting[0].active; out.waiting = { id: waiting[0].id, task: waiting[0].task, minutesAgo: mins(a.sentAt || a.startedAt), via: a.via === 'voice' ? 'voice' : 'text', nudged: Boolean(a.nudged), others: waiting.length - 1 }; }
+  const done = (state, windowMs) => p.reminders.filter((r) => r.last && r.last.channel === 'whatsapp' && r.last.state === state && now - r.last.at <= windowMs).sort((x, y) => y.last.at - x.last.at)[0];
+  const ans = done('done', cfg.waAnsweredCtxMs);
+  if (ans) out.answered = { id: ans.id, task: ans.task, minutesAgo: mins(ans.last.at), thisMessage: Boolean(p.lastAck && p.lastAck.rid === ans.id && now - p.lastAck.at <= cfg.waThisMessageMs) };
+  const miss = done('wa_missed', cfg.waMissedCtxMs);
+  if (miss) out.missed = { id: miss.id, task: miss.task, minutesAgo: mins(miss.last.at) };
+  return out;
+}
+
+function reminderAckWhatsApp(id, ack = true, now = Date.now()) {
   const p = get(id); if (!p) return false;
-  const waiting = p.reminders.map((r, i) => ({ r, i })).filter(({ r }) => r.active && r.active.channel === 'whatsapp' && WA_OPEN.has(r.active.state))
-    .sort((x, y) => (y.r.active.sentAt || 0) - (x.r.active.sentAt || 0) || y.i - x.i).map(({ r }) => r);   // newest first (a tie goes to the one added last)
+  const waiting = waitingWhatsApp(p, now);
   // Every reply while ANY reminder is in flight (or that reads as an acknowledgement) leaves one line: did it read as an acknowledgement, how many WhatsApp reminders were waiting and in
   // which states, how many other reminders are in flight. Names and counts only: never a word of the reply, never the reminder. It shows why a reply did or did not answer a reminder.
   const inFlight = p.reminders.filter((r) => r.active).length;
@@ -1004,6 +1032,7 @@ function reminderAckWhatsApp(id, ack = true) {
   const r = waiting[0]; if (!r) return false;
   const n = p.notifications.find((x) => x.id === r.active.notifId); if (n) advance(p, n, 'replied');
   finishOccurrence(p, r.id, 'done', { answeredBy: 'a reply on WhatsApp' });
+  p.lastAck = { rid: r.id, at: now };   // so Maya can tell that THIS message was the one that answered it (reminderContext.thisMessage)
   pushFamily('refresh', { id }); waLog({ event: 'answered' });
   return true;
 }
@@ -1190,6 +1219,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, setDelivery, flush,
+  addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };
