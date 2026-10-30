@@ -1,11 +1,18 @@
-# Render Blueprint: Maya on the FREE plan only. No secret is in this file: the keys are asked for in the Render dashboard
+# Render Blueprint: Maya on a PAID web service (plan 1c-2g: 1 CPU, 2 GB) with a persistent disk. No secret is in this file: the keys are asked for in the Render dashboard
 # (sync: false) and live only in Render's server environment, never in the browser or in git.
-# plan MUST stay "free": if it is left out, Render defaults a new web service to a paid instance.
+# Plan ids are from Render's Blueprint spec (free, 0.5c-512mb, 1c-2g ...). "plan" is spelled out so a re-sync cannot move the service to another plan.
+# The disk keeps ONLY what is under its mount path (Render: "Only filesystem changes under your disk's mount path are preserved across deploys and restarts"), so every
+# Maya data directory is pointed at /var/data below (the code already reads these four variables). A service with a disk cannot scale to more than one instance and has no
+# zero-downtime deploys: a deploy restarts the service for a moment. Disk size can be increased later, never decreased.
 services:
   - type: web
     name: maya
     runtime: node
-    plan: free
+    plan: 1c-2g
+    disk:
+      name: maya-data
+      mountPath: /var/data
+      sizeGB: 1
     branch: render-test
     autoDeploy: false
     buildCommand: npm install
@@ -16,6 +23,14 @@ services:
         value: "22"
       - key: META_MODE
         value: real
+      - key: MAYA_DATA_DIR
+        value: /var/data/profiles
+      - key: MAYA_CARE_DIR
+        value: /var/data/care
+      - key: MAYA_WA_DIR
+        value: /var/data/whatsapp
+      - key: MAYA_MEDIA_DIR
+        value: /var/data/media
       - key: META_API_KEY
         sync: false
       - key: ELEVENLABS_API_KEY

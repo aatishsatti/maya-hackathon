@@ -28,6 +28,7 @@
     <li>The profile name and the gender chosen when the family sets someone up.</li>
     <li>Their WhatsApp phone number, only if the family links it, and only after the person has agreed.</li>
     <li>The family dashboard settings: mode, reminders, and the person's time zone (not their location).</li>
+    <li>Reminders: what to remind about, when, who set it, and what happened to each one (scheduled, sent, delivered, read, answered or missed).</li>
     <li>Short notes Maya keeps for each person so she can remember them, such as names, preferences and plans. Each person has their own, kept apart from everyone else's.</li>
     <li>Alerts to the family record the topic only (for example "a possible scam" or "a fall"). The dashboard never shows the words, audio or photos.</li>
   </ul>
@@ -46,6 +47,7 @@
     <li>To talk with the person, and to remember them, per profile.</li>
     <li>To check a message or photo for signs of a scam, and to tell the person.</li>
     <li>To tell the family the topic of an alert, when it is needed or the person agrees.</li>
+    <li>To send the reminders the family or the person set, and to show the family honestly whether each one was sent, delivered, read, answered or missed.</li>
     <li>Maya never sells data.</li>
     <li>Maya never gives anyone the exact words, audio, photos or phone numbers, other than the services that make her work, listed next. The family only ever gets the alert topic.</li>
   </ul>
@@ -56,7 +58,9 @@
     <li>When a profile is deleted, everything about that person is deleted with it: their notes, dashboard data, saved voice notes and photos, and the WhatsApp link.</li>
     <li>The family can also ask for deletion by email: <a href="mailto:sattiaatish94@gmail.com">sattiaatish94@gmail.com</a>.</li>
     <li>Maya does not keep call transcripts. Spoken calls are turned into short notes, and the words are thrown away.</li>
-    <li><strong>A prototype limit, said honestly:</strong> Maya currently runs on a free hosting plan whose storage is wiped whenever the service is redeployed or restarted. All profiles and notes can disappear without warning. Do not rely on Maya to keep anything.</li>
+    <li>Reminders are deleted with the profile. A finished one-time reminder is deleted after 30 days, and a cancelled reminder is deleted at once.</li>
+    <li>Maya's server logs are meant to hold counts and times only, not what anyone said.</li>
+    <li><strong>A prototype limit, said honestly:</strong> Maya's data is kept on a persistent disk at our host, but this is still a prototype with no promise of service. Do not rely on Maya for medicine or for anything time-critical.</li>
   </ul>
 
   <h2>Meta and WhatsApp</h2>
@@ -64,6 +68,13 @@
     <li>Messages on WhatsApp travel through Meta's WhatsApp Business API. Meta's own policies apply to how WhatsApp delivers them.</li>
     <li>Maya only answers messages on WhatsApp from a number the family linked and the person agreed to. Replying STOP turns it off.</li>
     <li>Maya can answer a call from a linked number on WhatsApp, and that call audio goes to the same services as in-app calls.</li>
+  </ul>
+
+  <h2>Reminders</h2>
+  <ul>
+    <li>A reminder is sent on WhatsApp as a text or a voice note in Maya's voice. When WhatsApp's 24-hour window is closed it goes as an approved template message whose text is the reminder. The reminder text goes to Meta for that, and to ElevenLabs when it is sent as a voice note.</li>
+    <li>The family dashboard shows what happened to each reminder: scheduled, sent, delivered, read, answered or missed. A missed reminder is shown as missed, never hidden.</li>
+    <li>Maya is a companion, not medical care. She gives no doses and no medical advice. A reminder is only a reminder: it can fail or arrive late, so never rely on Maya for medicine or anything time-critical.</li>
   </ul>
 
   <h2>Contact</h2>

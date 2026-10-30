@@ -38,7 +38,7 @@ Set `META_MODE` in `.env`:
 - `META_MODE=mock` (the default): safe to try. No Meta or ElevenLabs request is ever made. Replies are canned and clearly marked as mock. Reminders and the family dashboard work; live calls and the written chat are switched off.
 - `META_MODE=real`: needs `META_API_KEY`, `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`. If a key is missing the server refuses to start. Live calls, chat, memory, trends and the scam shield are on. If Meta fails, Maya says so honestly: there is never a made-up reply.
 
-`render.yaml` is a deploy blueprint for Render's free plan; the three keys are entered in Render's dashboard, never in the repo.
+`render.yaml` is a deploy blueprint for Render's paid `1c-2g` plan with a persistent disk at `/var/data` (the four data directories are set under it); the keys are entered in Render's dashboard, never in the repo.
 
 ## Privacy and rules
 
