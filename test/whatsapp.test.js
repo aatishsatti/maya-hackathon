@@ -393,3 +393,16 @@ test('every drop leaves one plain log line with the reason, the last 4 digits on
   out = await capture(() => wa.handleWebhook(voiceIn('919876548237'))); assert.match(out, /ignored a audio from number ending 8237/);
   clearCalls();
 });
+
+test('dashboard sends are logged: the attempt, the success, every refusal and every Meta error, with the last 4 digits and the reason, never the family\'s words', async () => {
+  voiceReset(); const { id, phone } = outside(); const end4 = phone.slice(-4);
+  let out = await capture(async () => { await wa.sendOut(id, { kind: 'text', text: 'my private tulips words', useTemplate: false }).catch(() => {}); });
+  assert.match(out, new RegExp(`dashboard text send to number ending ${end4}`)); assert.match(out, /NOT sent: .*24 hours/); assert.doesNotMatch(out, /tulips|TEST-TOKEN/);
+  assert.ok(!out.includes(phone), 'only the last 4 digits');
+  out = await capture(() => wa.sendOut(id, { kind: 'text', text: 'x', useTemplate: true }));
+  assert.match(out, /invitation template requested/); assert.match(out, new RegExp(`dashboard template sent to number ending ${end4} \\(template\\)`));
+  shift(id, 60000); graphFail = { code: 131030, message: 'Recipient phone number not in allowed list' };
+  out = await capture(() => wa.sendOut(id, { kind: 'text', useTemplate: true }).catch(() => {})); assert.match(out, /NOT sent: .*131030/);
+  clearCalls();
+  out = await capture(() => wa.sendOut(senior(), { kind: 'text', text: 'x' }).catch(() => {})); assert.match(out, /a profile with no linked number NOT sent: .*no WhatsApp number linked/);
+});

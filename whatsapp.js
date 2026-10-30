@@ -193,7 +193,7 @@ function guardOut(l, now, kind, useTemplate) {
   return 'template';
 }
 
-async function sendOut(profileId, { kind = 'text', text, who = 'family', useTemplate = false } = {}) {
+async function sendOutInner(profileId, { kind = 'text', text, who = 'family', useTemplate = false } = {}) {
   if (kind !== 'text' && kind !== 'voice') throw new OutError('Choose a text message or a voice note.', 400);
   if (who !== 'family' && who !== 'maya') throw new OutError('Bad sender.', 400);
   const l = linkOf(profileId);
@@ -224,6 +224,20 @@ async function sendOut(profileId, { kind = 'text', text, who = 'family', useTemp
   }
   update(profileId, (x) => { const m = (x.sent || []).find((q) => q.at === sentAt && q.status === 'sending'); if (m) { m.id = id; m.status = 'sent'; } });
   return { sent: true, via, kind: via === 'template' ? 'template' : kind };
+}
+
+// The dashboard send, with one log line per attempt, per refusal and per Meta error: the last 4 digits and the reason, never the family's words.
+async function sendOut(profileId, opts = {}) {
+  const l = linkOf(profileId), to = l ? `number ending ${end(l.phone)}` : 'a profile with no linked number';
+  note(`dashboard ${opts.kind || 'text'} send to ${to}${opts.useTemplate ? ' (invitation template requested)' : ''}`);
+  try {
+    const r = await sendOutInner(profileId, opts);
+    note(`dashboard ${r.kind} sent to ${to} (${r.via})`);
+    return r;
+  } catch (e) {
+    note(`dashboard send to ${to} NOT sent: ${e.message}`);
+    throw e;
+  }
 }
 
 // A Meta status for something we sent (sent / delivered / read / failed). Recorded as a status word and an error code only.

@@ -210,6 +210,9 @@
     $('waLink').hidden = Boolean(v.linked && v.optIn);
     $('waSend').hidden = !(v.linked && v.optIn);
     $('waNote').hidden = !v.linked;
+    const canFree = Boolean(v.linked && v.optIn && v.windowOpen);
+    for (const b of $('waSend').querySelectorAll ? $('waSend').querySelectorAll('button[data-kind]') : []) b.disabled = !canFree;   // outside the 24 h window WhatsApp refuses free text and voice, so they cannot be pressed
+    $('waInvite').hidden = !(v.linked && v.optIn && !v.windowOpen);   // the only thing that can be sent outside the window; needs no typed note
     $('waState').textContent = !v.linked ? 'Not linked' : !v.optIn ? 'Opted out' : v.windowOpen ? 'Can message' : 'Waiting for them to write';
     $('waState').className = `pill ${v.linked && v.optIn && v.windowOpen ? 'pill-ok' : 'pill-plain'}`;
     const last = v.lastSent ? ` Last: ${v.lastSent.kind} ${t(v.lastSent.at)}, ${WA_STATUS[v.lastSent.status] || v.lastSent.status}${v.lastSent.error ? ` (code ${v.lastSent.error.code})` : ''}.` : '';
@@ -226,11 +229,23 @@
     showErr(''); $('waPhone').value = ''; $('waOpt').checked = false; loadWa();
   });
   $('waSend').addEventListener('click', (e) => { const b = e.target.closest('button[data-kind]'); if (b) waSubmitKind = b.dataset.kind; });
+  // The answer shows right here in the panel (not in the banner at the top of the page): "Sent" or the server's plain reason.
+  function waSay(msg, bad) { $('waResult').textContent = msg || ''; $('waResult').hidden = !msg; $('waResult').style.color = bad ? '#9c2f27' : ''; }
+  let waBusy = false;
   async function waSend(useTemplate) {
-    const r = await waCall(`/api/whatsapp/${id}/send`, 'POST', { kind: waSubmitKind, text: $('waText').value, useTemplate });
-    $('waInvite').hidden = !r.j.needsTemplate;
-    if (!r.ok) return showErr(r.j.error || 'Could not send.');
-    showErr(''); $('waText').value = ''; $('waInvite').hidden = true; loadWa();
+    if (waBusy) return;   // one click, one send
+    waBusy = true; $('waInvite').disabled = true;
+    const had = $('waText').value.trim();
+    waSay('Sending...');
+    try {
+      // The invitation is always a text-type template and carries no words of ours; a free send uses the button that was pressed.
+      const r = await waCall(`/api/whatsapp/${id}/send`, 'POST', useTemplate ? { kind: 'text', text: '', useTemplate: true } : { kind: waSubmitKind, text: $('waText').value, useTemplate: false });
+      if (!r.ok) { waSay(r.j.error || 'Could not send. Nothing was sent.', true); if (r.j.needsTemplate) $('waInvite').hidden = false; return; }
+      $('waText').value = '';
+      waSay(useTemplate ? `Invitation sent.${had ? ' Your own words were not sent: WhatsApp only allows the standard invitation until they write back.' : ''}` : 'Sent.');
+      loadWa();
+    } catch (e) { waSay(`Could not reach the server: ${e.message}. Nothing was sent.`, true); }
+    finally { waBusy = false; $('waInvite').disabled = false; }
   }
   $('waSend').addEventListener('submit', (e) => { e.preventDefault(); waSend(false); });
   $('waInvite').addEventListener('click', () => waSend(true));
