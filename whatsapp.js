@@ -185,11 +185,11 @@ async function uploadAudio(ogg) {
   if (!r.ok || !d || !d.id) { const er = (d && d.error) || {}; throw new WaError(`WhatsApp refused the voice note (${er.code || r.status}): ${er.message || 'no reason given'}`, 502, er.code || null); }
   return d.id;
 }
-async function sendAudioTo(to, ogg) {
-  const id = await uploadAudio(ogg);
+async function sendUploadedAudio(to, id) {
   const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'audio', audio: { id, voice: true } });
   return d && d.messages && d.messages[0] ? d.messages[0].id : null;
 }
+async function sendAudioTo(to, ogg) { return sendUploadedAudio(to, await uploadAudio(ogg)); }
 // Maya's WAV (24 kHz mono PCM16, chat.pcmToWav: a 44 byte header) -> a WhatsApp voice note. Null when it is too big for the play icon (the caller sends the words instead).
 function wavToVoiceNote(wav) {
   const ogg = oggopus.encode(wav.subarray(44), 24000);
@@ -310,12 +310,17 @@ async function sendReminder(profileId, { task, nudge = false } = {}) {
   const w = reminderWords(task, nudge);
   const care = require('./care'); let voiceFailed = false;
   if (((care.get(profileId) || {}).delivery || {}).reminders !== 'text') {
+    // Where a voice note fails is named (never why in words, never a word of the reminder): speech (the voice could not be made), encode, too_long (too big for the play icon),
+    // upload (WhatsApp refused the file) or send (WhatsApp refused the message), with WhatsApp's own error code when it gave one. Then it goes as text, and says so.
+    let stage = 'speech';
     try {
-      const pcm = await chat.deps.speak(w.spoken); const ogg = oggopus.encode(pcm, 24000);
-      if (ogg.length > oggopus.MAX_PLAY_BYTES) throw new Error('too long to play');
-      const wamid = await sendAudioTo(l.phone, ogg);
+      const pcm = await chat.deps.speak(w.spoken); stage = 'encode';
+      const ogg = oggopus.encode(pcm, 24000);
+      if (ogg.length > oggopus.MAX_PLAY_BYTES) { stage = 'too_long'; throw new Error('too long to play'); }
+      stage = 'upload'; const mediaId = await uploadAudio(ogg);
+      stage = 'send'; const wamid = await sendUploadedAudio(l.phone, mediaId);
       return wamid ? { ok: true, via: 'voice', wamid } : { ok: false, reason: 'no_id' };
-    } catch (e) { voiceFailed = true; note('a reminder voice note could not be made or sent: it goes as text instead'); } // counts only: no reason text, no words
+    } catch (e) { voiceFailed = true; console.log('reminder', JSON.stringify({ event: 'voice failed', stage, code: Number(e && e.code) || null, then: 'text' })); }
   }
   try { const wamid = await sendTextTo(l.phone, w.text); return wamid ? { ok: true, via: 'text', wamid, voiceUnavailable: voiceFailed } : { ok: false, reason: 'no_id' }; }
   catch (e) { return { ok: false, reason: 'meta_error', error: { code: e.code || null, title: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } }; }

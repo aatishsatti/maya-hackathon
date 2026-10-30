@@ -742,6 +742,29 @@ test('Phase 2: the default is a voice note in Maya\'s voice; if the voice cannot
   assert.equal(care.view(b.id).reminders[0].active.label, 'Sent as text (voice unavailable). WhatsApp accepted it.'); speakFail = false; clearCalls();
 });
 
+test('Reminder voice failures name the stage and WhatsApp\'s own code (never a reason in words, never a word of the reminder); each falls back to text and the dashboard says so', async () => {
+  const oggEncode = oggopus.encode; const keepFetch = wa.deps.fetch; const keepSpeak = chat.deps.speak;
+  const run = async (arrange, undo = () => {}) => {
+    voiceReset(); const { id } = remindProfile(); const { dueAt } = addRem(id, 'take my private tulips tablets'); arrange();
+    const logs = await captureLogs(async () => { care.tick(dueAt); await settle(); }); undo();
+    return { id, logs, vf: logs.filter((l) => l.includes('voice failed')), sent: sent() };
+  };
+  const failOn = (test, error) => { wa.deps.fetch = async (url, opts = {}) => { const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : null; if (test(url, body, opts)) return { ok: false, status: 400, json: async () => ({ error }) }; return keepFetch(url, opts); }; };
+  const back = () => { wa.deps.fetch = keepFetch; oggopus.encode = oggEncode; chat.deps.speak = keepSpeak; speakFail = false; };
+  try {
+    let r = await run(() => { speakFail = true; }, back);
+    assert.deepEqual(r.vf, ['reminder {"event":"voice failed","stage":"speech","code":null,"then":"text"}']); assert.equal(r.sent[0].type, 'text'); assert.equal(rem(r.id).active.voiceUnavailable, true); assert.match(care.view(r.id).reminders[0].active.label, /voice unavailable/);
+    r = await run(() => { oggopus.encode = () => { throw new Error('encoder'); }; }, back); assert.deepEqual(r.vf, ['reminder {"event":"voice failed","stage":"encode","code":null,"then":"text"}']);
+    r = await run(() => { chat.deps.speak = async () => tone(200); }, back); assert.deepEqual(r.vf, ['reminder {"event":"voice failed","stage":"too_long","code":null,"then":"text"}']); assert.equal(r.sent[0].type, 'text');
+    r = await run(() => failOn((url) => /\/media$/.test(url), { code: 131053, message: 'Media upload error' }), back); assert.deepEqual(r.vf, ['reminder {"event":"voice failed","stage":"upload","code":131053,"then":"text"}']); assert.equal(r.sent[0].type, 'text');
+    r = await run(() => failOn((url, body) => /\/messages$/.test(url) && body && body.type === 'audio', { code: 131047, message: 'Re-engagement message' }), back); assert.deepEqual(r.vf, ['reminder {"event":"voice failed","stage":"send","code":131047,"then":"text"}']); assert.equal(r.sent[0].type, 'text');
+    for (const x of [r]) assert.doesNotMatch(x.logs.join('\n'), /tulips|tablets|Re-engagement|encoder|Media upload/, 'codes and stages only: no reason text, no task');
+    // and when the voice works there is no such line, and the text-only setting never tries a voice at all
+    const ok = await run(() => {}); assert.deepEqual(ok.vf, []); assert.equal(ok.sent[0].type, 'audio');
+    voiceReset(); const t = remindProfile({ delivery: 'text' }); const d2 = addRem(t.id).dueAt; const l2 = await captureLogs(async () => { care.tick(d2); await settle(); }); assert.ok(!l2.some((l) => l.includes('voice failed')));
+  } finally { back(); clearCalls(); }
+});
+
 test('Phase 2: delivered and read come ONLY from WhatsApp\'s status webhooks and never go backwards; no status, no claim', async () => {
   voiceReset(); const { id } = remindProfile({ delivery: 'text' }); const { dueAt } = addRem(id); care.tick(dueAt); await settle(); const wamid = rem(id).active.wamid;
   assert.equal(stateOf(id), 'wa_sent', 'sent is as far as it goes with no status');
