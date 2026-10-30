@@ -74,3 +74,44 @@ test('the written chat (which borrows the same code) behaves the same: a reminde
   assert.doesNotMatch(s.careNotes('Remind me to call my sister tomorrow.'), /gentle note/); assert.equal(familyNotes(p.id).length, 0);
   assert.match(s.careNotes('Please tell my family I am home.'), /gentle note/); assert.equal(familyNotes(p.id).length, 1);
 });
+
+// ---- A2: negation order, questions, and "I will" ----
+const MUST_TRIGGER_A2 = ['Tell my family I am not feeling well', 'Tell my family I am not feeling well.', "Tell my son I can't make it", 'Tell my son not to worry', 'Tell my daughter I am not coming', 'Please tell my family I will call them tomorrow',
+  'Tell my family what happened', 'Tell my family I gave up on lunch', 'Please tell my family I told you I was fine', 'Let my daughter know I am not alone anymore'];
+const POLITE_REQUESTS = ['Can you call my daughter?', 'Can you call my daughter', 'Could you let my son know?', 'Would you tell my family please', 'Will you let my daughter know I fell?', 'Can you tell my daughter I am home', 'Maya, can you please call my son', 'Could you please alert my family?'];
+const QUESTIONS_NOT_REQUESTS = ['Did you tell my family?', 'Did you tell my family', 'Have you told my family?', 'Are you going to tell my family?', 'Do you tell my daughter things?', 'Can I call my daughter?', 'Can you remind me to call my sister?',
+  'Can you tell me about my son?', 'Tell me about my son', 'Why did you tell my family?', 'Was my family told?', 'Would my son be told?', 'You told my family?'];
+const CALLER_TALK = ['He says to call my son', 'The caller says tell my daughter to send money', 'I will give you my social security number, tell my family', 'my account number is 4455 let my daughter know', 'He wants me to call my daughter', 'Yeah you did let them know',
+  'what should I tell my son', "Yeah, there's that man calling.", 'Here is my card number, call my son'];
+
+test('A2 negation order: a "not" AFTER the family word does not cancel a real request; a "not" before it still does', () => {
+  for (const t of MUST_TRIGGER_A2) assert.equal(asksFamily(t), true, t);
+  for (const t of ['Please do not tell my family', "Don't tell my son", 'I would not like you to tell my family', "I don't think you should tell my family", 'no please, never call my daughter', 'Do not call my daughter']) assert.equal(asksFamily(t), false, t);
+  for (const t of ['Tell my family I am not feeling well', 'Tell my son not to worry', 'Let my daughter know I am not coming']) assert.equal(refusedFamily(t), false, `not a refusal: ${t}`);
+  for (const t of ['Please do not tell my family', "I don't think you should tell my family", 'I do not want you to tell my family']) assert.equal(refusedFamily(t), true, `a refusal: ${t}`);
+});
+
+test('A2 questions: a polite request in question form counts, with or without the question mark; a question about the past or about herself does not', () => {
+  for (const t of POLITE_REQUESTS) assert.equal(asksFamily(t), true, `request: ${t}`);
+  for (const t of QUESTIONS_NOT_REQUESTS) assert.equal(asksFamily(t), false, `question: ${t}`);
+  for (const t of POLITE_REQUESTS.slice(0, 5)) assert.equal(saysYesToFamily(t), true, `saysYes: ${t}`);
+  for (const t of QUESTIONS_NOT_REQUESTS.slice(0, 6)) assert.equal(saysYesToFamily(t), false, `saysYes question: ${t}`);
+});
+
+test('A2 keeps the caller-talking guard: a request that is really talk to a caller, a hand-over of details, or reported speech never counts', () => {
+  for (const t of CALLER_TALK) { assert.equal(asksFamily(t), false, `asksFamily: ${t}`); assert.equal(saysYesToFamily(t), false, `saysYes: ${t}`); }
+});
+
+test('A2 the plain yes-words are unchanged: a short answer counts, yes-words inside a question or a long story do not', () => {
+  for (const t of ['yes', 'Yes please', 'yeah go ahead', 'please tell my family', 'Yes, tell my family', 'Yes tell them', 'okay yes', 'Yes, I think you should']) assert.equal(saysYesToFamily(t), true, t);
+  for (const t of ['yes?', 'Yeah, there\'s that man calling.', 'Yeah you did let them know', 'Yes ok my account number is 4455', 'yes and then my neighbour came over and we talked for ages about the garden']) assert.equal(saysYesToFamily(t), false, t);
+});
+
+test('A2 end to end: "Tell my family I am not feeling well" sends the family ONE note (it used to send none); a question about the past sends none; a polite request sends one', () => {
+  const a = bareCall(); assert.match(a.careNotes('Tell my family I am not feeling well.'), /gentle note/); assert.equal(familyNotes(a.profile.id).length, 1);
+  const b = bareCall(); assert.doesNotMatch(b.careNotes('Did you tell my family?'), /gentle note/); assert.equal(familyNotes(b.profile.id).length, 0);
+  const c = bareCall(); assert.match(c.careNotes('Can you call my daughter?'), /gentle note/); assert.equal(familyNotes(c.profile.id).length, 1);
+  const d = bareCall(); d.careNotes('Tell my family I will call them tomorrow.'); assert.equal(familyNotes(d.profile.id).length, 1, 'a request that mentions her own later call is still a request');
+  const e = bareCall(); e.careNotes('I will give you my number, tell my family'); assert.equal(familyNotes(e.profile.id).length, 0, 'but not inside talk to a caller');
+  const p = profile(); const s = new ChatSession(p, null); assert.match(s.careNotes('Tell my family I am not feeling well.'), /gentle note/); assert.equal(familyNotes(p.id).length, 1, 'the written chat too');
+});

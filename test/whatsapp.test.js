@@ -703,6 +703,14 @@ test('a WhatsApp text that is a reminder or the person\'s own plan sends the fam
   clearCalls();
 });
 
+test('a WhatsApp text "Tell my family I am not feeling well" sends the family one note; "Did you tell my family?" sends none', async () => {
+  voiceReset(); const { id, phone } = linked(); reset(PLAIN);
+  const familyNotes = () => care.get(id).notifications.filter((x) => x.to === 'family' && x.ref === 'family_ask').length;
+  assert.deepEqual(await wa.handleWebhook(incoming(phone, 'Did you tell my family?')), ['text']); assert.equal(familyNotes(), 0);
+  assert.deepEqual(await wa.handleWebhook(incoming(phone, 'Tell my family I am not feeling well.')), ['text']); assert.equal(familyNotes(), 1);
+  clearCalls();
+});
+
 test('dashboard sends are logged: the attempt, the success, every refusal and every Meta error, with the last 4 digits and the reason, never the family\'s words', async () => {
   voiceReset(); const { id, phone } = outside(); const end4 = phone.slice(-4);
   let out = await capture(async () => { await wa.sendOut(id, { kind: 'text', text: 'my private tulips words', useTemplate: false }).catch(() => {}); });

@@ -158,22 +158,45 @@ function ownPlan(clause) {
   if (!pm || pm.index >= m.index) return false;
   return !/\byou\b/i.test(upTo.slice(pm.index + pm[0].length, m.index));
 }
+// A2: what makes ONE clause a request to Maya. Each check looks only where it should:
+//  * a negation counts only BEFORE the family word ("do not tell my family"); after it ("Tell my family I am not feeling well", "tell my son not to worry") it does not cancel the request;
+//  * "tell me / let me / inform me about my son" asks to be told something, not to tell the family;
+//  * a talk-to-the-caller guard ("I will give you my number", "he says to call my son", "you told them", "what should I tell") looks only at the text up to the family word, so
+//    "Please tell my family I will call them tomorrow" and "Tell my family what happened" are requests;
+//  * a question is not a request, with or without a question mark (the speech engine may drop it): "Did you tell my family?", "Are you going to tell them?"; except the polite request
+//    "Can / Could / Would / Will you (please) tell / call / let ... my family", which is one ("Can you call my daughter?").
+const TALK_IN_CLAUSE = /\b(you (did|told|have|had|already|said|let|went|sent)|let me|here (is|are)|(he|she|they|the man|the caller) (want|wants|says|said|is asking|asked|is saying)|wants me|what|how|why|who|where|when|should i)\b/i;
+const TALK_BEFORE_FAMILY = /\bi (will|am going to|gave|give|told (him|her|them))\b/i;
+const SENSITIVE_TALK = /\b(my (account|card|bank|social|security|pin|password|number|code|address)|social security|account number|password|pin)\b|\d{3,}/i;
+const OPENER = '(?:(?:and|so|well|but|okay|ok|please|maya)\\b[\\s,]*)*';
+const QUESTION_START = new RegExp(`^\\s*${OPENER}(?:did|do|does|have|has|had|are|were|was|is|can|could|would|will|shall|should|may|might)\\b`, 'i');
+const POLITE_REQUEST = new RegExp(`^\\s*${OPENER}(?:can|could|would|will)\\s+you\\b(?:\\s+please)?\\s+(?:tell|let|call|alert|notify|contact|message|text|ring|inform)\\s+(?!me\\b|us\\b)`, 'i');
+function familyClause(c) {
+  const m = FAMILY_ASK.exec(c);
+  if (!m || /^(?:tell|inform|let)\s+(?:me|us)\b/i.test(m[0]) || ownPlan(c)) return null;
+  const upTo = c.slice(0, m.index + m[0].length);
+  const polite = POLITE_REQUEST.test(c);
+  if ((!polite && TALK_IN_CLAUSE.test(upTo)) || TALK_BEFORE_FAMILY.test(upTo)) return null; // "Could you let my son know" is a polite request, not "you let them know" (past talk)
+  if (QUESTION_START.test(c) && !polite) return null;
+  return { negated: NEGATION.test(upTo) };
+}
+const clausesOf = (text) => cleanSpeech(text).split(/[,.?!;]/);
 const familyRequest = (clause) => FAMILY_ASK.test(clause) && !ownPlan(clause);
-// Like affirmed(FAMILY_ASK, text), but a clause that is the person's own plan or a reminder never counts.
-const affirmedRequest = (text) => cleanSpeech(text).split(/[,.?!;]/).some((c) => familyRequest(c) && !NEGATION.test(c));
-const asksFamily = (text) => !NOT_AN_ANSWER.test(cleanSpeech(text)) && affirmedRequest(text);
+// An explicit request to Maya to let the family know (not negated, not the person's own plan, not talk to the caller, not a question about the past).
+const explicitFamilyRequest = (text) => !SENSITIVE_TALK.test(cleanSpeech(text)) && clausesOf(text).some((c) => { const f = familyClause(c); return f && !f.negated; });
+const asksFamily = explicitFamilyRequest;
 // A yes to her question: an explicit request, or a short plain answer made of yes-words (a long sentence with one "yeah" in it is not an answer).
 const saysYesToFamily = (text) => {
   const t = cleanSpeech(text);
-  if (NOT_AN_ANSWER.test(t)) return false;
-  if (affirmedRequest(t)) return true;
+  if (explicitFamilyRequest(t)) return true;
+  if (NOT_AN_ANSWER.test(t)) return false;   // yes-words only count as a plain short answer, never inside a question or talk to a caller
   if (!affirmed(CONCERN_YES, t)) return false;
   // Only yes-words and small fillers: "yes", "yes please", "yeah go ahead". Anything else in the line (a statement about the caller, a story) is not an answer.
   const rest = t.toLowerCase().replace(CONCERN_YES_G, ' ').replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter((w) => w && !ANSWER_FILLER.has(w));
   return rest.length <= 1;
 };
 // They named their family in a clause that refuses it ("do not tell my son"): a no, whether or not a question was open.
-const refusedFamily = (text) => String(text || '').replace(/[\u2018\u2019]/g, "'").split(/[,.?!;]/).some((c) => familyRequest(c) && NEGATION.test(c)); // "I don't want to call my daughter" is her own plan, not a refusal (a refusal silences later alerts for the call)
+const refusedFamily = (text) => clausesOf(text).some((c) => { const m = FAMILY_ASK.exec(c); return Boolean(m) && familyRequest(c) && NEGATION.test(c.slice(0, m.index + m[0].length)); }); // a negation BEFORE the family word is a refusal; "I don't want to call my daughter" is her own plan, not a refusal (a refusal silences later alerts for the call)
 // Asks that need what they said earlier in THIS call (the filed memory only exists after the call ends).
 const CALL_RECALL = /\b(remember|remembered|told you|i told|already (told|said|mentioned)|forgot|forget|his name|her name|their name|what (was|is) (his|her|their)|what about my|what did i (say|tell)|do you know (him|her|them|my))\b/i;
 const MAX_SAID = 60;        // lines of this call kept for those asks
@@ -1971,4 +1994,4 @@ class Call {
   }
 }
 
-module.exports = { ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
