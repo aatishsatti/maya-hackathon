@@ -106,6 +106,12 @@ function validSignature(raw, header) {
   return crypto.timingSafeEqual(mine, Buffer.from(m[1], 'hex'));
 }
 
+// One line for EVERY webhook POST that reaches the server, before any check can drop it: size, whether Meta sent a signature, whether our secret is set, whether it matches. No body, no words, no numbers.
+function noteArrival(raw, header) {
+  const sig = /^sha256=[0-9a-f]{64}$/i.test(String(header || '')) ? 'present' : header ? 'malformed' : 'missing';
+  note(`webhook POST arrived: ${raw.length} bytes, X-Hub-Signature-256 ${sig}, WHATSAPP_APP_SECRET ${process.env.WHATSAPP_APP_SECRET ? 'set' : 'NOT SET'}, signature ${validSignature(raw, header) ? 'valid' : 'INVALID'}`);
+}
+
 // ---- Graph API calls ----
 // Which token value this process really reads, without showing it: length, sha256 prefix (compare with `printf %s "$TOKEN" | shasum -a 256`), and stray whitespace / quote / 'Bearer ' flags.
 function tokenShape() {
@@ -337,9 +343,10 @@ async function onMessage(msg) {
 // Called by server.js after it answered 200. Never throws; errors are logged as a message only (no words, no numbers).
 async function handleWebhook(payload) {
   const done = [];
-  if (!payload || payload.object !== 'whatsapp_business_account') return done;
+  if (!payload || payload.object !== 'whatsapp_business_account') { note(`ignored a webhook POST: object is not whatsapp_business_account`); return done; }
   for (const e of payload.entry || []) for (const c of e.changes || []) {
-    if (c.field !== 'messages' || !c.value) continue;
+    if (c.field !== 'messages' || !c.value) { note(`ignored a webhook change for field ${String(c.field).slice(0, 40)} (only 'messages' is read)`); continue; }
+    note(`webhook change: field messages, phone id ending ${end(c.value.metadata && c.value.metadata.phone_number_id)}, ${(c.value.messages || []).length} message(s), ${(c.value.statuses || []).length} status update(s)`);
     const pid = c.value.metadata && c.value.metadata.phone_number_id;
     if (pid && process.env.WHATSAPP_PHONE_ID && pid !== process.env.WHATSAPP_PHONE_ID) { note('ignored a webhook for a different phone number id than WHATSAPP_PHONE_ID'); continue; } // meant for another number
     for (const st of c.value.statuses || []) { try { onStatus(st); } catch (err) { console.error('whatsapp status error:', err.message); } }
@@ -351,4 +358,4 @@ async function handleWebhook(payload) {
   return Promise.all(done);
 }
 
-module.exports = { note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

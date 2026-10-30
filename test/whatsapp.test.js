@@ -394,6 +394,17 @@ test('every drop leaves one plain log line with the reason, the last 4 digits on
   clearCalls();
 });
 
+test('every webhook POST that arrives leaves one line (size, signature present / valid), and each change says its field, phone id (last 4) and counts; no words, no numbers', async () => {
+  voiceReset(); const { phone } = linked(); const raw = Buffer.from(JSON.stringify(incoming(phone, 'my private tulips words')));
+  const good = `sha256=${crypto.createHmac('sha256', 'test-app-secret').update(raw).digest('hex')}`;
+  let out = await capture(async () => wa.noteArrival(raw, good)); assert.match(out, /webhook POST arrived: \d+ bytes, X-Hub-Signature-256 present, WHATSAPP_APP_SECRET set, signature valid/);
+  out = await capture(async () => wa.noteArrival(raw, `sha256=${'0'.repeat(64)}`)); assert.match(out, /present, .* signature INVALID/);
+  out = await capture(async () => wa.noteArrival(raw, undefined)); assert.match(out, /Signature-256 missing, .* INVALID/);
+  out = await capture(() => wa.handleWebhook(incoming(phone, 'my private tulips words'))); assert.match(out, /webhook change: field messages, phone id ending 5671, 1 message\(s\), 0 status update\(s\)/);
+  out = await capture(() => wa.handleWebhook({ object: 'page', entry: [] })); assert.match(out, /object is not whatsapp_business_account/);
+  assert.doesNotMatch(out, /tulips|TEST-TOKEN/); clearCalls();
+});
+
 test('dashboard sends are logged: the attempt, the success, every refusal and every Meta error, with the last 4 digits and the reason, never the family\'s words', async () => {
   voiceReset(); const { id, phone } = outside(); const end4 = phone.slice(-4);
   let out = await capture(async () => { await wa.sendOut(id, { kind: 'text', text: 'my private tulips words', useTemplate: false }).catch(() => {}); });

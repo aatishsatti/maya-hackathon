@@ -156,10 +156,11 @@ async function handleWhatsapp(req, res, url) {
     }
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
     let raw;
-    try { raw = await readBody(req, MAX_WEBHOOK_BYTES); } catch (e) { return sendJson(res, e.status || 400, { error: 'Bad request' }); }
+    try { raw = await readBody(req, MAX_WEBHOOK_BYTES); } catch (e) { whatsapp.note('dropped a webhook POST: the body could not be read (too large or cut off)'); return sendJson(res, e.status || 400, { error: 'Bad request' }); }
+    whatsapp.noteArrival(raw, req.headers['x-hub-signature-256']);
     if (!whatsapp.validSignature(raw, req.headers['x-hub-signature-256'])) { whatsapp.note('rejected a webhook POST: the X-Hub-Signature-256 did not match (check WHATSAPP_APP_SECRET is the Meta app secret)'); return sendJson(res, 403, { error: 'Forbidden' }); }
-    if (MODE !== 'real') return sendJson(res, 503, { error: 'WhatsApp needs real mode.' });
-    let payload; try { payload = JSON.parse(raw.toString('utf8')); } catch { return sendJson(res, 400, { error: 'Bad request' }); }
+    if (MODE !== 'real') { whatsapp.note('dropped a webhook POST: the server is not in real mode'); return sendJson(res, 503, { error: 'WhatsApp needs real mode.' }); }
+    let payload; try { payload = JSON.parse(raw.toString('utf8')); } catch { whatsapp.note('dropped a webhook POST: the body is not JSON'); return sendJson(res, 400, { error: 'Bad request' }); }
     sendJson(res, 200, { ok: true }); // answer Meta first, then do the work
     whatsapp.handleWebhook(payload);
     return;
