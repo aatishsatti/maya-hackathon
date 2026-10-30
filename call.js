@@ -1337,7 +1337,7 @@ class Call {
       try { this.send({ type: 'hangup' }); } catch { /* socket gone */ }
       this.end();
       this.ws.close(1000);
-      care.silenceHangup(id, { talked });
+      if (!this.ws.noRingback) care.silenceHangup(id, { talked }); // not for a WhatsApp call (wabridge.js sets noRingback): the ring-back is an in-app ring and would only raise a false "unreachable" later
     }, wait);
   }
 

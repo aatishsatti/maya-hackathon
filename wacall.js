@@ -1,6 +1,5 @@
-// WhatsApp call answerer (whatsapp.js calls this). EARS STEP: answers one call, says ONE fixed intro sentence in Maya's real voice (the same chat.deps.speak the app
-// and the WhatsApp voice notes use), then LISTENS for a fixed time through the same Meta transcribe engine the app's calls use (waears.js) and hangs up. She cannot
-// answer yet, and the intro says so. Only counts are logged: never a word the caller said.
+// WhatsApp call answerer (whatsapp.js calls this): the signalling and the WebRTC media for ONE call. It answers a call from a linked, opted-in person and hands it to
+// the app's own Call (call.js) through wabridge.js, so Maya greets, listens, answers, and says goodbye exactly as in the app. This file never logs a word.
 // Docs read (developers.facebook.com/docs/whatsapp/cloud-api/calling/user-initiated-calls, .../calling/reference):
 //   1. The `connect` webhook carries the caller's SDP OFFER (session { sdp_type: "offer", sdp }). Meta's samples: a=ice-lite, a=setup:actpass, Opus on payload type 111,
 //      plus G722 / PCMU / PCMA / telephone-event, a=rtcp-mux. Answers in the samples: a=setup:active.
@@ -18,17 +17,14 @@
 // Library: werift 0.25.2 (MIT, pure JS, no native build) for WebRTC; opusscript (already used for voice notes) for Opus.
 const { RTCPeerConnection, MediaStreamTrack, RtpHeader, RtpPacket, useOPUS } = require('werift');
 const OpusScript = require('opusscript');
-const { Ears } = require('./waears');
+const { PhoneBridge } = require('./wabridge');
 const crypto = require('node:crypto');
 
 const RATE = 48000, FRAME = 960, FRAME_MS = 20;
 const CONNECT_TIMEOUT_MS = 20000; // well inside Meta's 30 to 60 s window to accept
-const TAIL_MS = 500;              // after the last frame, so the last word is not cut off by the hang-up
-// The fixed sentences. True today: they claim nothing Maya cannot do yet.
-const INTRO_LINE = "Hello, this is Maya. I'm only testing my ears on WhatsApp calls. Please say a few sentences now. I can hear you, but I can't answer yet. I'll hang up in thirty seconds.";
-const CANT_HEAR_LINE = "I can't hear you right now. Please try again a little later. Goodbye.";
-const LISTEN_MS = 30000;          // the intro promises thirty seconds
-const GAP_MS = 700;               // between the end of her voice and the start of listening, so her own voice (an echo on a speaker phone) is not transcribed
+const TAIL_MS = 600;              // after her last frame, so her last word is not cut off by the hang-up
+const CALL_CAP_MS = 10 * 60 * 1000; // a prototype call ends after 10 minutes (three paid services run for every minute of it)
+const GREETING_TIMEOUT_MS = 15000;  // her greeting must be ready this soon after the media connects, or the call is refused
 
 const keepSha256Only = (sdp) => sdp.split(/\r?\n/).filter((l) => !(l.startsWith('a=fingerprint:') && !l.startsWith('a=fingerprint:sha-256'))).join('\r\n');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -87,24 +83,26 @@ class Outbound {
   }
   // Queues 48 kHz PCM16 mono; resolves when its last frame has been sent (or at once if aborted() turns true).
   say(pcm48, aborted = () => false) { if (this.stopped) return Promise.reject(this.error || new Error('the outgoing stream has stopped')); return new Promise((res, rej) => { this.queue = Buffer.concat([this.queue, pcm48]); this.waiters.push({ res, rej, aborted }); }); }
+  // Drops everything queued (she was interrupted); the waiting say() calls resolve.
+  flush() { this.queue = Buffer.alloc(0); const w = this.waiters; this.waiters = []; w.forEach((x) => x.res()); }
+  // Resolves when everything queued so far has been sent.
+  drain() { return this.queue.length === 0 ? Promise.resolve() : new Promise((res) => { this.waiters.push({ res, rej: res, aborted: () => false }); }); }
   stop() { this.stopped = true; clearTimeout(this.timer); try { this.enc.delete && this.enc.delete(); } catch { /* ignore */ } }
 }
 
-// send(action, session?) posts to {phone id}/calls (whatsapp.js owns the Graph call and the token). speak(text) -> PCM16 mono 24 kHz (Maya's voice).
-// openTranscribe / apiKey: the engine the app's calls use. expected: the tester's own sentence (server setting) to score, or ''. ended: a promise that resolves when the
-// CALLER hangs up (the terminate webhook): then the call is already over on Meta's side and nothing more is sent. log(text): one plain line, no SDP, no numbers, no words.
-// Returns 'completed' when we hung up after the listening, 'caller hung up' if they did, 'cannot hear' if the engine failed (she says so, then hangs up); throws if a
-// step failed, after trying reject (before the accept) or terminate (after it): a call is never answered with silence or a fake reply.
-async function answerWithEars({ offerSdp, send, log, speak, openTranscribe, apiKey, expected = '', ended = new Promise(() => {}), text = INTRO_LINE, listenMs = LISTEN_MS, gapMs = GAP_MS, tailMs = TAIL_MS, connectTimeoutMs = CONNECT_TIMEOUT_MS }) {
-  const speech = Promise.resolve().then(() => speak(text)); speech.catch(() => {}); // started NOW, while the connection comes up; awaited just before the accept
+// send(action, session?) posts to {phone id}/calls (whatsapp.js owns the Graph call and the token). newCall(socket, apiKey) makes the app's Call (call.js).
+// speak(text) -> PCM16 24 kHz (Maya's voice), used only for the one fixed fatal line. ended: a promise that resolves, with the reason, when the CALLER's side ends the
+// call (the terminate webhook): then the call is already over on Meta's side and nothing more is sent. log(text): one plain line, no SDP, no numbers, no words.
+// Order: pre_accept; media connects; the Call starts and her greeting is made WHILE the phone is still ringing; accept (so she speaks the moment they pick up);
+// then the conversation until she says goodbye, the caller (or the phone) ends it, the media drops, or the 10-minute cap. Returns the end reason; throws if a step
+// failed, after trying reject (before the accept) or terminate (after it): a call is never answered with silence or a fake reply.
+async function answerWithBridge({ offerSdp, send, log, speak, newCall, apiKey, profileId, tz, ended = new Promise(() => {}), connectTimeoutMs = CONNECT_TIMEOUT_MS, tailMs = TAIL_MS, capMs = CALL_CAP_MS, greetingTimeoutMs = GREETING_TIMEOUT_MS }) {
   const pc = new RTCPeerConnection({ codecs: { audio: [useOPUS()], video: [] }, iceServers: [] });
   const track = new MediaStreamTrack({ kind: 'audio' });
   const tx = pc.addTransceiver(track, { direction: 'sendrecv' });
-  const ears = new Ears({ openTranscribe, apiKey, log, expected });
-  let out = null; // the outgoing stream, started right after the accept
-  pc.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((rtp) => ears.hear(rtp)));
-  let accepted = false, over = false;
-  ended.then(() => { over = true; });
+  let bridge = null, out = null, accepted = false, over = false, overReason = null;
+  pc.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((rtp) => { if (bridge) bridge.hear(rtp); })); // subscribed BEFORE the offer is applied: the track appears then
+  ended.then((r) => { over = true; overReason = r || 'caller hung up'; });
   try {
     await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
     await pc.setLocalDescription(await pc.createAnswer());
@@ -115,42 +113,32 @@ async function answerWithEars({ offerSdp, send, log, speak, openTranscribe, apiK
     log(`pre-accepted (Opus payload type ${codec.payloadType}, answer ${session.sdp.length} bytes)`);
     await waitConnected(pc, connectTimeoutMs);
     log('media connected (ICE and DTLS up)');
-    let pcm;
-    try { pcm = await speech; } catch (e) { throw new Error(`Maya's voice could not be made (${String(e.message).slice(0, 120)})`); }
-    if (!Buffer.isBuffer(pcm) || pcm.length < 2) throw new Error("Maya's voice could not be made (no audio came back)");
-    const pcm48 = upsample2(pcm);
-    log(`speech made: ${text.length} characters sent to speech, ${(pcm.length / 48000).toFixed(1)} s of audio`);
+    bridge = new PhoneBridge({ newCall, apiKey, profileId, tz, log, speak });
+    bridge.begin();
+    let tm; const timeout = new Promise((_, rej) => { tm = setTimeout(() => rej(new Error('her greeting was not ready in time')), greetingTimeoutMs); });
+    try { await Promise.race([bridge.greeting, timeout, bridge.done.then((r) => { throw new Error(`the call brain stopped before the greeting (${bridge.error || r})`); }), ended.then((r) => { throw new Error(`the call ended before it was answered (${r || 'caller hung up'})`); })]); }
+    finally { clearTimeout(tm); }
+    log(`her greeting is ready ${Date.now() - bridge.born} ms after the media connected`);
     await send('accept', session);   // the SAME sdp as the pre-accept; media only after this returned 200
     accepted = true;
-    log('accepted; speaking the intro');
     out = new Outbound(track, codec.payloadType); out.start();   // from now on a packet every 20 ms, silence when she is not speaking
-    await Promise.race([out.say(pcm48, () => over), out.failed.then((e) => { throw e; })]);
-    await sleep(over ? 0 : tailMs + gapMs);
-    let how = 'caller hung up'; if (over) how = await ended.then((r) => r || 'caller hung up');
-    if (!over) {
-      let heardOk = true;
-      try { await ears.start(); log('ears open (the transcribe engine accepted the session)'); }
-      catch (e) { heardOk = false; log(`could not listen: ${String(e.message).slice(0, 160)}`); }
-      if (heardOk) {
-        const lost = pcLost(pc); let tm; const clock = new Promise((res) => { tm = setTimeout(() => res('time is up'), listenMs); });
-        const why = await Promise.race([ended.then((r) => r || 'caller hung up'), clock, ears.closed.then(() => 'the engine closed'), lost.promise.then(() => 'the media connection dropped'), out.failed.then((e) => { throw e; })]);
-        clearTimeout(tm); lost.cancel(); ears.stop(why); how = why;
-      } else how = 'the engine closed';
-      if (how === 'the engine closed' || how === 'the media connection dropped') {   // she never pretends to listen: she says so, in her own voice, then hangs up
-        if (how === 'the engine closed') {
-          try { const sorry = upsample2(await speak(CANT_HEAR_LINE)); await out.say(sorry, () => over); await sleep(tailMs); log('said she cannot hear'); }
-          catch (e) { log(`could not say it either: ${String(e.message).slice(0, 120)}`); }
-        }
-      }
-    }
-    if (!over) { await send('terminate'); log(`hung up (${how})`); }
-    else log(`the call was already over (${how}); nothing more to send`);
-    return how === 'the engine closed' ? 'cannot hear' : over ? how : 'completed';
+    bridge.attach(out);
+    log('accepted; the conversation has started');
+    const lost = pcLost(pc); let capTimer; const cap = new Promise((res) => { capTimer = setTimeout(() => res('time cap'), capMs); });
+    const why = await Promise.race([bridge.done, ended.then((r) => r || 'caller hung up'), cap, lost.promise.then(() => 'the media connection dropped'), out.failed.then((e) => { throw e; })]);
+    clearTimeout(capTimer); lost.cancel();
+    if (!over && why === 'fatal') { await bridge.sayFatal(tailMs); }
+    else if (!over && why === 'maya hung up') { await out.drain(); await sleep(tailMs); }
+    bridge.stop(why);
+    if (over || why === overReason) log(`the call was already over (${why}); nothing more to send`);
+    else { await send('terminate'); log(`hung up (${why})`); }
+    return why;
   } catch (e) {
+    if (bridge) bridge.stop('failed');
     if (!over) { try { await send(accepted ? 'terminate' : 'reject'); } catch (e2) { log(`could NOT ${accepted ? 'terminate' : 'reject'} after the failure: ${String(e2.message).slice(0, 160)}`); } }
     throw e;
   } finally {
-    ears.stop('call over'); if (out) out.stop();
+    if (bridge) bridge.stop('call over'); if (out) out.stop();
     try { await pc.close(); } catch { /* already closed */ }
   }
 }
@@ -160,4 +148,4 @@ function pcLost(pc) {
   return { promise, cancel: () => clearInterval(iv) };
 }
 
-module.exports = { answerWithEars, Outbound, keepSha256Only, upsample2, INTRO_LINE, CANT_HEAR_LINE };
+module.exports = { answerWithBridge, Outbound, keepSha256Only, upsample2 };

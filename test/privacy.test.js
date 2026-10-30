@@ -14,7 +14,7 @@ test('privacy page covers every required topic in plain words', () => {
   for (const re of [/chat|types to Maya/i, /voice notes/i, /photos/i, /profile name/i, /WhatsApp phone number/i, /dashboard settings/i, /topic only/i, /never shows the words/i,
     /Location/, /Phone contacts/, /Live video/, /Fall detection/, /never sells data/i, /exact words, audio, photos or phone numbers/i,
     /profile is deleted/i, /ask for deletion by email/i, /wiped whenever the service is redeployed or restarted/i, /prototype limit/i,
-    /Meta's WhatsApp Business API/, /Meta's own policies/, /does not place live WhatsApp calls/i, /sattiaatish94@gmail\.com/,
+    /Meta's WhatsApp Business API/, /Meta's own policies/, /can answer a call from a linked number on WhatsApp, and that call audio goes to the same services as in-app calls/i, /sattiaatish94@gmail\.com/,
     /not medical care/i, /not a doctor/i, /no diagnosis/i, /no medicine doses/i]) assert.match(text, re, String(re));
 });
 
