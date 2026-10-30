@@ -303,7 +303,7 @@ const dropTimers = (c) => { for (const t of c.timers) clearTimeout(t.handle); c.
 test('asking for a reminder: the note tells her to confirm AND to say they must stay on the call; the timer records when it is due', () => {
   const c = quietCall(true); const note = c.careNotes('Can you remind me in 30 seconds to drink water?');
   assert.match(note, /remind them in 30 seconds about "drink water"/); assert.match(note, /need to stay on the call for it, because the reminder only works while the call is open/);
-  assert.equal(c.timers.length, 1); assert.ok(Math.abs(c.timers[0].dueAt - (Date.now() + 30000)) < 1000); assert.doesNotMatch(note, /ONLY works while this call stays open/, 'the confirmation is not doubled with the standing fact'); dropTimers(c);
+  assert.equal(c.timers.length, 1); assert.ok(Math.abs(c.timers[0].dueAt - (Date.now() + 30000)) < 1000); assert.doesNotMatch(note, /ONLY work while this call stays open/, 'the confirmation is not doubled with the standing fact'); dropTimers(c);
 });
 
 test('while a timer is pending, the next turn carries the standing fact (the same in the app and on WhatsApp); with no timer, or once it has gone, there is none', () => {
@@ -311,8 +311,8 @@ test('while a timer is pending, the next turn carries the standing fact (the sam
   for (const c of [wa, app]) {
     c.careNotes('Please remind me in 20 minutes to take my tablets.');
     const note = c.careNotes('Can I hang up now?'); facts.push(note);
-    assert.match(note, /FACT: a reminder timer they asked for is still running \(it is due in about \d+ minutes\)/);
-    assert.match(note, /ONLY works while this call stays open/); assert.match(note, /when the call ends the app drops it and nothing will remind them afterwards/); assert.match(note, /ask about hanging up, leaving or ending the call, or they say goodbye/);
+    assert.match(note, /FACT: a reminder timer is running right now, and it is the only one set: "take my tablets" \(due in about \d+ minutes\)/);
+    assert.match(note, /They ONLY work while this call stays open/); assert.match(note, /when the call ends the app drops them and nothing will remind them afterwards/); assert.match(note, /ask about hanging up, leaving or ending the call, or they say goodbye/);
     assert.match(note, /Never say they can hang up whenever they like without saying that, never say you will remind them later or after the call, and never say you will call, ring or message them/);
     dropTimers(c); assert.doesNotMatch(c.careNotes('Can I hang up now?'), /reminder timer/, 'no timer, no fact');
   }
@@ -342,12 +342,52 @@ test('on a whole WhatsApp call: Spark is told the reminder needs the call open, 
     sparkAsked.length = 0; c.callRef.pending = [turn('Can you remind me in 20 minutes to drink water?')]; await c.callRef.respond(0);
     assert.ok(sparkAsked.some((r) => /stay on the call for it, because the reminder only works while the call is open/.test(r)), 'told when the timer was set');
     sparkAsked.length = 0; c.callRef.pending = [turn('Can I hang up now?')]; await c.callRef.respond(0);
-    assert.ok(sparkAsked.some((r) => /ONLY works while this call stays open/.test(r) && /nothing will remind them afterwards/.test(r)), 'told when she is asked about hanging up');
+    assert.ok(sparkAsked.some((r) => /They ONLY work while this call stays open/.test(r) && /nothing will remind them afterwards/.test(r)), 'told when she is asked about hanging up');
     // and the log says WHICH kinds of fact each reply was given, by name only
     const facts = c.logs().split('\n').filter((l) => l.startsWith('reply facts '));
     assert.ok(facts.some((l) => l === 'reply facts {"source":"written-now","labels":["timer-set"],"turns":1}'), facts.join(' | '));
     assert.ok(facts.some((l) => l === 'reply facts {"source":"written-now","labels":["timer-open"],"turns":1}'), facts.join(' | '));
     assert.doesNotMatch(facts.join('\n'), /water|hang up|remind/i, 'names only: no word from the turns');
     await hangUpPhone(c.phone, c.p); await c.running; assert.ok(c.callRef.closed); assert.ok(c.callRef.timers.every((t) => t.handle), 'the timer was set');
+  });
+});
+
+// ---- Fix E: the standing fact LISTS the running timers, so "any reminders for me?" is answered truthfully ----
+test('Fix E: the fact names each running timer and when it is due, sorted by due time; one with no thing named is said so; a reminder already given is not listed', () => {
+  const c = quietCall(true);
+  c.careNotes('Okay can you remind me in 20 seconds that I have to call my sister?'); c.careNotes('Remind me in 5 minutes to take my tablets.'); c.careNotes('Remind me in 10 minutes.');
+  const note = c.careNotes('Any reminders for me?');
+  assert.match(note, /FACT: 3 reminder timers are running right now, and these are the only ones set: "I have to call my sister" \(due in about \d+ seconds?\); "take my tablets" \(due in about [45] minutes\); one with no thing named \(due in about 10 minutes\)\./);
+  assert.match(note, /If they ask what reminders you have, or whether anything is set, tell them exactly these in one short sentence and nothing else/);
+  assert.match(note, /A reminder you have already given aloud is finished: never list it as still to come/);
+  dropTimers(c);
+});
+
+test('Fix E: after the first reminder has fired only the second is listed (the transcript that went wrong: medicine fired, sister pending, "any reminders for me?")', () => {
+  const c = quietCall(true);
+  c.careNotes('Hey Maya, can you remind me in 30 seconds to take my medicine?'); const medicine = c.timers[0]; clearTimeout(medicine.handle); c.timers = c.timers.filter((t) => t !== medicine);   // it has fired
+  c.careNotes('Okay can you remind me in 20 seconds that I have to call my sister?');
+  const note = c.careNotes('Still here with you. Any reminders for me?');
+  assert.match(note, /FACT: a reminder timer is running right now, and it is the only one set: "I have to call my sister"/); assert.match(note, /tell them exactly this one in one short sentence/); assert.doesNotMatch(note, /medicine/);
+  dropTimers(c);
+});
+
+test('Fix E: still none when nothing is running; the hang-up rule and the never-promise rule are still in it', () => {
+  const c = quietCall(false); assert.doesNotMatch(c.careNotes('Any reminders for me?'), /reminder timer/);
+  c.careNotes('Remind me in 2 minutes to rest.'); const note = c.careNotes('Can I hang up?');
+  assert.match(note, /If they ask about hanging up, leaving or ending the call, or they say goodbye, tell them plainly in one short sentence that the reminder only works while the call stays open and they will not get it if they hang up/);
+  assert.match(note, /Never say they can hang up whenever they like without saying that, never say you will remind them later or after the call, and never say you will call, ring or message them/); dropTimers(c);
+});
+
+test('Fix E on a whole WhatsApp call: Spark is given the list for "Any reminders for me?" and for "Can I hang up?"', async () => {
+  sparkReply = QUIET('Hello there, it is nice to talk to you.');
+  await withCall({}, async (c) => {
+    await until(() => c.ph.heard.length > 15); await sleep(900); sparkReply = QUIET('Okay.');
+    c.callRef.pending = [turn('Can you remind me in 20 minutes that I have to call my sister?')]; await c.callRef.respond(0);
+    sparkAsked.length = 0; c.callRef.pending = [turn('Any reminders for me?')]; await c.callRef.respond(0);
+    assert.ok(sparkAsked.some((r) => /running right now, and it is the only one set: "I have to call my sister" \(due in about \d+ minutes\)/.test(r) && /tell them exactly this one/.test(r)), 'told what is running when asked what reminders she has');
+    sparkAsked.length = 0; c.callRef.pending = [turn('Can I hang up now?')]; await c.callRef.respond(0);
+    assert.ok(sparkAsked.some((r) => /call my sister/.test(r) && /hanging up, leaving or ending the call/.test(r)), 'and told the hang-up rule with the same list');
+    await hangUpPhone(c.phone, c.p); await c.running; assert.ok(c.callRef.closed);
   });
 });

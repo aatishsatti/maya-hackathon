@@ -22,7 +22,7 @@ const capture = (fn) => { const logs = []; const l0 = console.log; console.log =
 test('the call that went wrong: ask, ask again, ask once more with different words: ONE timer, kept, with the repeat told that it is already set', () => {
   const c = bareCall();
   const first = c.careNotes('Remind me in 30 seconds to take my medicine.'); assert.equal(c.timers.length, 1); assert.match(first, /A timer is set for it right now/); const due = c.timers[0].dueAt;
-  const middle = c.careNotes("I'll stay on the call. You remind me."); assert.equal(c.timers.length, 1, 'that is not a timer request'); assert.match(middle, /still running/);
+  const middle = c.careNotes("I'll stay on the call. You remind me."); assert.equal(c.timers.length, 1, 'that is not a timer request'); assert.match(middle, /running right now/);
   const third = c.careNotes('You just remind me in 30 seconds that I have to take it.');
   assert.equal(c.timers.length, 1, 'still ONE timer'); assert.equal(c.timers[0].dueAt, due, 'the original due time is kept'); assert.equal(c.timers[0].task, 'take my medicine', 'and the original thing to remember');
   assert.match(third, /asked again for a reminder that is already set \(it is due in about \d+ seconds?\)/); assert.match(third, /Do not set another/); assert.match(third, /stay on the call for it, because the reminder only works while the call is open/);
