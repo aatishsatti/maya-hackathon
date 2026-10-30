@@ -48,9 +48,11 @@ chat.deps.scamText = async () => ({ level: 'none', type: 'none', reading: '', si
 const graphCalls = [];
 let graphFail = null;
 const inboundMedia = new Map(); // media id -> Buffer (what WhatsApp would hold for a voice note)
+let callHook = null, callFail = null; // calls tests: a hook run on each POST to /calls, and per-action Meta failures
 wa.deps.fetch = async (url, opts = {}) => {
   const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : null;
   graphCalls.push({ url, opts, body });
+  if (body && /\/calls$/.test(url)) { if (callFail && callFail[body.action]) return { ok: false, status: 400, json: async () => ({ error: callFail[body.action] }) }; if (callHook) await callHook(body); }
   const done = (data) => ({ ok: true, status: 200, json: async () => data, arrayBuffer: async () => data });
   if (graphFail) return { ok: false, status: 400, json: async () => ({ error: graphFail }) };
   if (/^https:\/\/lookaside\.test\//.test(url)) return done(Uint8Array.from(inboundMedia.get(url.split('/').pop())).buffer);
@@ -492,58 +494,142 @@ test('photo logs: last 4 digits and a result only; never the caption, the image 
   clearCalls(); out = await capture(() => wa.handleWebhook(imageIn(phone, Buffer.from('not a picture, tulips')))); assert.match(out, /could not answer a photo from number ending/); assert.doesNotMatch(out, /tulips/);
 });
 
-// ---- calls in (refused for now) ----
+// ---- calls in: a test tone for the linked person (wacall.js), a refusal for everyone else ----
+const { RTCPeerConnection, MediaStreamTrack, useOPUS } = require('werift');
 const SDP = 'v=0 o=- 4611731400430051336 2 IN IP4 127.0.0.1 SECRET-SDP-LINES';
-const callIn = (person, { event = 'connect', direction = 'USER_INITIATED', swap = false, extra = {} } = {}) => ({ object: 'whatsapp_business_account', entry: [{ id: 'WABA', changes: [{ field: 'calls', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15556408264', phone_number_id: '1409237678935671' }, contacts: [{ profile: { name: 'x' }, wa_id: person }], calls: [{ id: `wacid.TESTCALL${mid++}ABCD`, from: swap ? '15556408264' : person, to: swap ? person : '15556408264', event, direction, timestamp: '1700000000', ...(event === 'connect' ? { session: { sdp_type: 'offer', sdp: SDP } } : {}), ...extra }] } }] }] });
-const rejects = () => graphCalls.filter((c) => /\/calls$/.test(c.url)).map((c) => c.body);
+const callIn = (person, { event = 'connect', direction = 'USER_INITIATED', swap = false, sdp = SDP, extra = {} } = {}) => ({ object: 'whatsapp_business_account', entry: [{ id: 'WABA', changes: [{ field: 'calls', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15556408264', phone_number_id: '1409237678935671' }, contacts: [{ profile: { name: 'x' }, wa_id: person }], calls: [{ id: `wacid.TESTCALL${mid++}ABCD==`, from: swap ? '15556408264' : person, to: swap ? person : '15556408264', event, direction, timestamp: '1700000000', ...(event === 'connect' ? { session: { sdp_type: 'offer', sdp } } : {}), ...extra }] } }] }] });
+const callPosts = () => graphCalls.filter((c) => /\/calls$/.test(c.url)).map((c) => c.body);
+const rejects = () => callPosts().filter((b) => b.action === 'reject');
+const callIdOf = (p) => p.entry[0].changes[0].value.calls[0].id;
+// A stand-in for the answerer, so these tests do not open a real media connection.
+const withAnswer = async (stub, fn) => { const keep = wa.deps.answerCall; wa.deps.answerCall = stub; try { return await fn(); } finally { wa.deps.answerCall = keep; } };
 
-test('a call from a linked, opted-in person is refused (action reject on the PHONE number id); Maya cannot answer yet', async () => {
-  voiceReset(); const { phone } = linked(); const p = callIn(phone);
-  assert.deepEqual(await wa.handleWebhook(p), ['rejected']);
-  const calls = graphCalls.filter((c) => /\/calls$/.test(c.url)); assert.equal(calls.length, 1);
-  assert.match(calls[0].url, /\/v\d+\.\d+\/1409237678935671\/calls$/); assert.equal(calls[0].opts.method, 'POST'); assert.equal(calls[0].opts.headers.Authorization, 'Bearer TEST-TOKEN-NOT-REAL');
-  assert.deepEqual(calls[0].body, { messaging_product: 'whatsapp', call_id: p.entry[0].changes[0].value.calls[0].id, action: 'reject' });
-  assert.equal(sent().length, 0, 'a refused call sends no message');
+test('a call from a linked, opted-in person is handed to the answerer with its offer, and logged as answered', async () => {
+  voiceReset(); const { phone } = linked(); const p = callIn(phone); const seen = [];
+  const out = await capture(() => withAnswer(async (o) => { seen.push(o); await o.send('accept', { sdp_type: 'answer', sdp: 'x' }); o.log('hello'); return 'completed'; }, async () => assert.deepEqual(await wa.handleWebhook(p), ['answered'])));
+  assert.equal(seen.length, 1); assert.equal(seen[0].offerSdp, SDP);
+  const posts = callPosts(); assert.equal(posts.length, 1); assert.match(graphCalls.find((c) => /\/calls$/.test(c.url)).url, /\/v\d+\.\d+\/1409237678935671\/calls$/);
+  assert.deepEqual(posts[0], { messaging_product: 'whatsapp', call_id: callIdOf(p), action: 'accept', session: { sdp_type: 'answer', sdp: 'x' } });
+  assert.match(out, /answered call [0-9a-f]{6} from number ending \d{4}: test tone, completed/); assert.equal(sent().length, 0, 'a call sends no message');
 });
 
-test('a call from an unlinked number, or from someone who opted out, is refused too, with the reason', async () => {
-  voiceReset(); const { phone } = linked();
-  let out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn('919876548237')), ['rejected']));
-  assert.match(out, /rejected call ending \w{4} from number ending 8237: no profile is linked/); assert.equal(rejects().length, 1);
-  await wa.handleWebhook(incoming(phone, 'STOP')); clearCalls();
-  out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone)), ['rejected']));
-  assert.match(out, /has not opted in or has stopped/); assert.equal(rejects().length, 1);
+test('a call from an unlinked number, or from someone who opted out, is refused with the reason and never reaches the answerer', async () => {
+  voiceReset(); const { phone } = linked(); let reached = 0; const stub = async () => { reached++; return 'completed'; };
+  await withAnswer(stub, async () => {
+    let out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn('919876548237')), ['rejected']));
+    assert.match(out, /rejected call [0-9a-f]{6} from number ending 8237: no profile is linked/); assert.equal(rejects().length, 1);
+    const p = callIn('919876548237'); clearCalls(); await wa.handleWebhook(p); assert.deepEqual(rejects().map((b) => b.call_id), [callIdOf(p)]);
+    await wa.handleWebhook(incoming(phone, 'STOP')); clearCalls();
+    out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone)), ['rejected']));
+    assert.match(out, /has not opted in or has stopped/); assert.equal(rejects().length, 1);
+  });
+  assert.equal(reached, 0);
 });
 
-test('the person is found whichever way from / to point (the docs\' samples disagree), and a call with no readable person is still refused', async () => {
-  voiceReset(); const { phone } = linked();
-  const swapped = callIn(phone, { swap: true }); swapped.entry[0].changes[0].value.contacts = [];
-  const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(swapped), ['rejected']));
-  assert.match(out, new RegExp(`from number ending ${phone.slice(-4)}.*linked and opted in, but Maya cannot answer calls yet`));
-  const none = callIn(phone); none.entry[0].changes[0].value.contacts = []; none.entry[0].changes[0].value.calls[0].from = none.entry[0].changes[0].value.calls[0].to = 'x';
-  clearCalls(); assert.deepEqual(await wa.handleWebhook(none), ['rejected']); assert.equal(rejects().length, 1);
+test('the person is found whichever way from / to point (the docs\' samples disagree); a call with no readable person is refused', async () => {
+  voiceReset(); const { phone } = linked(); let who = null;
+  await withAnswer(async (o) => { who = 'answered'; o.log('x'); return 'completed'; }, async () => {
+    const swapped = callIn(phone, { swap: true }); swapped.entry[0].changes[0].value.contacts = [];
+    const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(swapped), ['answered']));
+    assert.equal(who, 'answered'); assert.match(out, new RegExp(`with number ending ${phone.slice(-4)}: x`));
+    const none = callIn(phone); none.entry[0].changes[0].value.contacts = []; none.entry[0].changes[0].value.calls[0].from = none.entry[0].changes[0].value.calls[0].to = 'x';
+    clearCalls(); assert.deepEqual(await wa.handleWebhook(none), ['rejected']); assert.equal(rejects().length, 1);
+  });
 });
 
-test('call terminate is logged (status, duration, error code) and answered with nothing; other events and business-started calls are not refused', async () => {
+test('a connect without an SDP offer is refused; a Meta retry of the same connect is not answered twice; a second call while one is being answered is refused', async () => {
+  voiceReset(); const { phone } = linked(); let n = 0, release; const hold = new Promise((r) => { release = r; });
+  await withAnswer(async () => { n++; await hold; return 'completed'; }, async () => {
+    const noSdp = callIn(phone); delete noSdp.entry[0].changes[0].value.calls[0].session;
+    assert.deepEqual(await wa.handleWebhook(noSdp), ['rejected']); assert.equal(n, 0);
+    const first = callIn(phone); const running = wa.handleWebhook(first);
+    await new Promise((r) => setTimeout(r, 20)); assert.equal(n, 1);
+    clearCalls(); assert.deepEqual(await wa.handleWebhook(first), ['duplicate']); assert.equal(graphCalls.length, 0, 'a retry sends nothing');
+    const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone)), ['rejected'])); assert.match(out, /another call is being answered/); assert.equal(rejects().length, 1);
+    release(); assert.deepEqual(await running, ['answered']);
+  });
+});
+
+test('if the answerer fails the call is reported as not answered, with the error text only', async () => {
   voiceReset(); const { phone } = linked();
-  let out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone, { event: 'terminate', extra: { status: 'FAILED', duration: 0, errors: [{ code: 138021, message: 'Media receive timeout' }] } })), ['ended']));
-  assert.match(out, /call ended: number ending \d{4}, call ending \w{4}, status FAILED, duration 0 s, error 138021/); assert.equal(graphCalls.length, 0);
-  out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone, { direction: 'BUSINESS_INITIATED' })), ['ignored'])); assert.equal(graphCalls.length, 0);
+  const out = await capture(() => withAnswer(async () => { throw new Error('the media connection did not come up in 20 s'); }, async () => assert.deepEqual(await wa.handleWebhook(callIn(phone)), ['answer-failed'])));
+  assert.match(out, /could NOT answer call [0-9a-f]{6} from number ending \d{4}: the media connection did not come up/);
+  // and a real offer that is not an SDP at all makes the real answerer refuse the call
+  clearCalls(); const bad = callIn(phone, { sdp: 'this is not an sdp SECRET-SDP-LINES' });
+  const out2 = await capture(async () => assert.deepEqual(await wa.handleWebhook(bad), ['answer-failed']));
+  assert.deepEqual(rejects().map((b) => b.call_id), [callIdOf(bad)]); assert.doesNotMatch(out2, /SECRET-SDP/);
+});
+
+test('call terminate is logged (status, duration, error code) and answered with nothing; other events and business-started calls are ignored', async () => {
+  voiceReset(); const { phone } = linked();
+  let out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone, { event: 'terminate', extra: { status: 'FAILED', duration: 0, errors: [{ code: 138023, message: 'Accepted but no media' }] } })), ['ended']));
+  assert.match(out, /call ended: number ending \d{4}, call [0-9a-f]{6}, status FAILED, duration 0 s, error 138023/); assert.equal(graphCalls.length, 0);
+  await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone, { direction: 'BUSINESS_INITIATED' })), ['ignored'])); assert.equal(graphCalls.length, 0);
   assert.deepEqual(await wa.handleWebhook(callIn(phone, { event: 'ringing' })), ['ignored']);
 });
 
 test('when Meta refuses the reject, it is logged as a message and nothing crashes', async () => {
-  voiceReset(); const { phone } = linked(); graphFail = { code: 138000, message: 'Calling not enabled' };
-  const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone)), ['reject-failed']));
-  assert.match(out, /could NOT reject call ending \w{4} from number ending \d{4}: WhatsApp refused it \(138000\)/); clearCalls();
+  voiceReset(); graphFail = { code: 138000, message: 'Calling not enabled' };
+  const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn('919876548237')), ['reject-failed']));
+  assert.match(out, /could NOT reject call [0-9a-f]{6} from number ending 8237: WhatsApp refused it \(138000\)/); clearCalls();
 });
 
-test('call logs hold field names only: never the SDP, a full number, a full call id or the token', async () => {
-  voiceReset(); const { phone } = linked(); const p = callIn(phone); const id = p.entry[0].changes[0].value.calls[0].id;
-  const out = await capture(() => wa.handleWebhook(p));
-  assert.match(out, /call connect: USER_INITIATED from number ending \d{4}, call ending \w{4}, fields \[.*direction.*event.*id.*session.*\], session \[sdp, sdp_type\]/);
-  assert.doesNotMatch(out, /SECRET-SDP|v=0|TEST-TOKEN/); assert.ok(!out.includes(phone)); assert.ok(!out.includes(id));
-  assert.ok(!out.includes('15556408264'));
+test('call logs: field names and a short hash only; never the SDP, a full number, the call id or the token', async () => {
+  voiceReset(); const { phone } = linked(); const p = callIn(phone); const id = callIdOf(p);
+  const out = await capture(() => withAnswer(async (o) => { o.log('media connected'); return 'completed'; }, () => wa.handleWebhook(p)));
+  assert.match(out, /call connect: USER_INITIATED from number ending \d{4}, call [0-9a-f]{6}, fields \[.*direction.*event.*id.*session.*\], session \[sdp, sdp_type\]/);
+  assert.doesNotMatch(out, /SECRET-SDP|v=0|TEST-TOKEN|wacid/); assert.ok(!out.includes(phone)); assert.ok(!out.includes(id)); assert.ok(!out.includes('15556408264'));
+});
+
+test('an interactive message logs its type (an enum) and never the person\'s words', async () => {
+  voiceReset(); const { phone } = linked(); reset(PLAIN);
+  const m = incoming(phone, '', { type: 'interactive', text: undefined, interactive: { type: 'call_permission_reply', call_permission_reply: { response: 'accept', secret: 'tulips' } } });
+  const out = await capture(() => wa.handleWebhook(m)); assert.match(out, /received a interactive from number ending \d{4} \(interactive type call_permission_reply\)/); assert.doesNotMatch(out, /tulips/);
+  const odd = incoming(phone, '', { type: 'interactive', text: undefined, interactive: { type: 'Say tulips please!' } });
+  assert.match(await capture(() => wa.handleWebhook(odd)), /interactive type unknown/);
+  clearCalls();
+});
+
+// The real answerer against a real WebRTC peer in this process (a stand-in for WhatsApp, with an offer shaped like Meta's documented ones):
+// pre_accept -> media connects -> accept (the SAME sdp) -> a 440 Hz tone arrives, and only after the accept -> terminate.
+test('the real answerer: pre_accept, connect, accept with the same SDP, then a 440 Hz tone, then terminate; media only after the accept', async () => {
+  voiceReset(); const { phone } = linked();
+  const caller = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] });
+  const dec = new (require('opusscript'))(48000, 1, require('opusscript').Application.VOIP); const heard = []; let beforeAccept = null;
+  caller.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((rtp) => { try { heard.push(Buffer.from(dec.decode(rtp.payload))); } catch { /* ignore */ } }));
+  caller.addTransceiver(new MediaStreamTrack({ kind: 'audio' }), { direction: 'sendrecv' });
+  await caller.setLocalDescription(await caller.createOffer());
+  const offer = caller.localDescription.sdp.replace('UDP/TLS/RTP/SAVPF 111', 'UDP/TLS/RTP/SAVPF 111 9 0 8 126').replace('a=ice-options:trickle', 'a=ice-lite\r\na=ice-options:trickle')
+    .replace('a=rtpmap:111 OPUS/48000/2', 'a=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:9 G722/8000\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\na=rtpmap:126 telephone-event/8000\r\na=fmtp:126 0-16');
+  callHook = async (body) => {
+    if (body.action === 'pre_accept') await caller.setRemoteDescription({ type: 'answer', sdp: body.session.sdp });
+    if (body.action === 'accept') beforeAccept = heard.length;
+  };
+  wa.deps.callToneMs = 800; const p = callIn(phone, { sdp: offer });
+  try {
+    const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(p), ['answered']));
+    await new Promise((r) => setTimeout(r, 150));
+    const posts = callPosts(); assert.deepEqual(posts.map((b) => b.action), ['pre_accept', 'accept', 'terminate']);
+    assert.ok(posts.every((b) => b.messaging_product === 'whatsapp' && b.call_id === callIdOf(p)));
+    assert.equal(posts[0].session.sdp_type, 'answer'); assert.deepEqual(posts[1].session, posts[0].session, 'accept carries the SAME answer as pre_accept'); assert.equal(posts[2].session, undefined);
+    assert.match(posts[0].session.sdp, /a=setup:active/); assert.match(posts[0].session.sdp, /m=audio \d+ UDP\/TLS\/RTP\/SAVPF 111\b/); assert.doesNotMatch(posts[0].session.sdp, /G722|PCMU|PCMA/);
+    assert.equal(beforeAccept, 0, 'no media reached the caller before the accept was sent');
+    const pcm = Buffer.concat(heard.slice(5)); let z = 0; for (let i = 1; i < pcm.length / 2; i++) if ((pcm.readInt16LE((i - 1) * 2) < 0) !== (pcm.readInt16LE(i * 2) < 0)) z++;
+    const hz = Math.round(z / 2 / (pcm.length / 2 / 48000)); assert.ok(heard.length > 25, `about 0.8 s of packets arrived (${heard.length})`); assert.ok(Math.abs(hz - 440) < 15, `the tone is ~440 Hz (${hz})`);
+    assert.match(out, /pre-accepted/); assert.match(out, /media connected/); assert.match(out, /accepted; playing the 440 Hz test tone/); assert.match(out, /answered call [0-9a-f]{6}.*completed/);
+    assert.doesNotMatch(out, /a=fingerprint|a=ice-ufrag|v=0|TEST-TOKEN/);
+  } finally { callHook = null; wa.deps.callToneMs = undefined; await caller.close(); }
+});
+
+test('the real answerer: if Meta refuses the pre_accept the call is rejected and no media is attempted', async () => {
+  voiceReset(); const { phone } = linked();
+  const caller = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] });
+  caller.addTransceiver(new MediaStreamTrack({ kind: 'audio' }), { direction: 'sendrecv' }); await caller.setLocalDescription(await caller.createOffer());
+  callFail = { pre_accept: { code: 138007, message: 'Connect Timeout error' } }; const p = callIn(phone, { sdp: caller.localDescription.sdp });
+  try {
+    const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(p), ['answer-failed']));
+    assert.deepEqual(callPosts().map((b) => b.action), ['pre_accept', 'reject']); assert.match(out, /could NOT answer call [0-9a-f]{6} from number ending \d{4}: WhatsApp refused it \(138007\)/);
+  } finally { callFail = null; await caller.close(); }
 });
 
 test('dashboard sends are logged: the attempt, the success, every refusal and every Meta error, with the last 4 digits and the reason, never the family\'s words', async () => {
