@@ -911,6 +911,55 @@ function reminderNoAck(id, rid) {
   return true;
 }
 
+// ---- a reminder delivered by an outbound WhatsApp CALL (whatsapp.js placeReminderCall; C2) ----
+// The occurrence uses the same states and labels as the app's own ring: calling (Calling now) -> answered (Picked up; set by claim() when the Call starts) -> done (the
+// acknowledgement, call.js) | no_reply (the call ended without one) ; or unanswered (Couldn't reach: nobody picked up / they rejected it). A pretend ring (an outreach in state 'ringing',
+// no timer, nothing sent to the app) lets the Call claim it exactly as it claims an app ring, so the greeting IS the reminder and the acknowledgement rule is the one already tested.
+function reminderFor(id, { rid, task }) {
+  const p = get(id);
+  if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  let r;
+  if (rid) {
+    r = p.reminders.find((x) => x.id === rid);
+    if (!r) throw Object.assign(new Error('That reminder no longer exists.'), { status: 404 });
+  } else {
+    r = addReminder(id, { task, dueAt: Date.now(), repeat: 'none' });   // typed for this test only; it keeps its result on the dashboard
+  }
+  if (r.active) throw Object.assign(new Error('That reminder is already being delivered.'), { status: 409 });
+  return { p, r };
+}
+function reminderCallStart(id, spec) {
+  const { p, r } = reminderFor(id, spec); const now = Date.now(), dueAt = r.dueAt || now;
+  const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: 'Maya is calling with a reminder from your family.', ref: null });
+  const o = { id: uid(), profileId: id, kind: 'reminder', reminderId: r.id, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
+  n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
+  r.active = { dueAt, state: 'calling', attempts: 1, outreachId: o.id, notifId: n.id };
+  advanceDue(r, now);
+  save(id); pushFamily('refresh', { id });
+  return { rid: r.id, outreachId: o.id };
+}
+// The call is over (whatever way). Settles what is still open, once: nobody picked up -> Couldn't reach; picked up with no acknowledgement -> Hasn't replied yet. Returns the state it settled, or null.
+function reminderCallEnded(id, rid) {
+  const p = get(id); const r = p && p.reminders.find((x) => x.id === rid);
+  if (!r || !r.active) return null;
+  const a = r.active;
+  if (a.state === 'calling') {
+    const o = a.outreachId && outreaches.get(a.outreachId); if (o) closeOutreach(o, 'missed');
+    const n = p.notifications.find((x) => x.id === a.notifId); if (n) n.noReply = true;
+    finishOccurrence(p, rid, 'unanswered'); pushFamily('refresh', { id }); return 'unanswered';
+  }
+  if (a.state === 'answered') { reminderNoAck(id, rid); return 'no_reply'; }
+  return null;
+}
+// The calls are blocked (2 unanswered in a row, or the 5 a day cap): the SAME reminder goes as a WhatsApp message through the ordinary reminder path (inside the 24 h window; outside it that
+// path records Not sent, honestly). Nothing is called.
+function reminderViaMessage(id, spec) {
+  if (!reminderSender) throw Object.assign(new Error('WhatsApp is not set up on this server.'), { status: 503 });
+  const { p, r } = reminderFor(id, spec);
+  fireReminderWhatsApp(p, r, Date.now());
+  return r.id;
+}
+
 function fireReminder(p, r, now) {
   const live = liveCalls.get(p.id);
   const occ = { dueAt: r.dueAt, state: 'calling', attempts: 0, outreachId: null, notifId: null };
@@ -1231,6 +1280,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, reminderCallStart, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

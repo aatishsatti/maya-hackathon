@@ -96,6 +96,11 @@
           <p id="waResult" class="hint" role="status" aria-live="polite" hidden></p>
           <div id="waTest" hidden>
             <button id="waTestCall" class="btn" type="button">Call them now (test)</button>
+            <div class="form-row">
+              <select id="waRemPick" aria-label="A reminder you already set"><option value="">A reminder you already set...</option></select>
+              <input id="waRemText" placeholder="or type one, e.g. take your tablets" maxlength="80" aria-label="Reminder for this test call">
+              <button id="waRemCall" class="btn" type="button">Call them with this reminder (test)</button>
+            </div>
             <p class="hint" id="waTestLine" role="status" aria-live="polite">Test only: rings their WhatsApp once, Maya says one fixed sentence and hangs up. Needs their call permission.</p>
           </div>
           <p class="hint" id="waNote" hidden>Maya does not call on her own. The test button above is the only call she places. Words are never stored here.</p>

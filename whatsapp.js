@@ -59,7 +59,7 @@ const MAX_INBOUND_IMAGE = 8 * 1024 * 1024; // the same ceiling as a photo sent i
 const MAX_INBOUND_AUDIO = 2 * 1024 * 1024; // a long monologue is not worth a minute of Transcribe; ~2 MB of Opus is several minutes
 
 // Network edge, replaceable in tests.
-const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithBridge(o), newCall: (socket, apiKey) => new (require('./call').Call)(socket, apiKey), callTailMs: undefined, callCapMs: undefined, callOut: (o) => require('./wacall').callOut(o), testRingCapMs: undefined, testTailMs: undefined, testCooldownMs: undefined };
+const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithBridge(o), newCall: (socket, apiKey) => new (require('./call').Call)(socket, apiKey), callTailMs: undefined, callCapMs: undefined, callOut: (o) => require('./wacall').callOut(o), testRingCapMs: undefined, testTailMs: undefined, testCooldownMs: undefined, greetingTimeoutMs: undefined };
 
 const configured = () => Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID);
 
@@ -437,7 +437,7 @@ async function onMessage(msg) {
   if (msg.type === 'interactive' && msg.interactive && msg.interactive.type === 'call_permission_reply') { note(`ignored a call permission reply from number ending ${end(msg.from)}: a WhatsApp system message after a call, nothing is sent back and the 24 h window is not opened by it`); return 'system'; }
   if ((l.seen || []).includes(msg.id)) { note(`ignored a repeated message from number ending ${end(msg.from)} (Meta retry)`); return 'duplicate'; }
   update(l.profileId, (x) => {
-    x.lastInboundAt = Math.max(x.lastInboundAt || 0, Number(msg.timestamp) * 1000 || Date.now());
+    x.lastInboundAt = Math.max(x.lastInboundAt || 0, Number(msg.timestamp) * 1000 || Date.now()); x.callMisses = 0; // they are reachable: the unanswered-calls count starts again
     x.seen = [...(x.seen || []), msg.id].slice(-SEEN_KEEP);
   });
   note(`received a ${typeName(msg.type)} from number ending ${end(msg.from)}${msg.type === 'interactive' ? ` (interactive type ${/^[a-z_]{1,40}$/.test(String(msg.interactive && msg.interactive.type)) ? msg.interactive.type : 'unknown'})` : ''}`); // the interactive type is an enum (button_reply, call_permission_reply ...), never the person's words
@@ -517,7 +517,7 @@ async function onCalls(value) {
     if (!why && callBusy) why = 'another call is being answered';
     if (!why && require('./care').liveCalls.has(l.profileId)) why = 'that person is already in a call in the app';
     if (!why) {
-      callBusy = true;
+      callBusy = true; noteReachable(l.profileId);   // they called us: the unanswered-calls count starts again
       let hungUp; const ended = new Promise((r) => { hungUp = r; }); liveEnds.set(call.id, hungUp);
       try {
         const r = await deps.answerCall({ offerSdp: offer, speak: (t) => chat.deps.speak(t), newCall: deps.newCall, apiKey: process.env.META_API_KEY, profileId: l.profileId, tz: require('./care').get(l.profileId) ? require('./care').get(l.profileId).tz : null, ended, tailMs: deps.callTailMs, capMs: deps.callCapMs, send: (action, session) => callAction(call.id, action, session), log: (m) => note(`call ${cid} with number ending ${tail}: ${m}`) });
@@ -534,39 +534,72 @@ async function onCalls(value) {
 
 // The family page's "Call them now (test)": ONE outbound call to the linked, opted-in person that says a fixed sentence and hangs up (wacall.callOut). Resolves when Meta has taken the
 // call (the phone is about to ring) with { placed: true }; the rest (ringing, answered, ended) runs on and is logged and kept as a label in view().testCall. Throws if nothing was placed.
-const TEST_COOLDOWN_MS = 60000;
+const TEST_COOLDOWN_MS = 60000, MAX_CONNECTED_PER_DAY = 5, MAX_MISSES = 2, DAY_MS = 24 * 3600000;
 function setTest(profileId, state) { testCalls.set(profileId, { state, at: Date.now() }); }
-function placeTestCall(profileId) {
-  const l = linkOf(profileId);
+// Counters on the link record (they survive a restart), shared by every kind of call: answered calls in the last 24 h (WhatsApp allows 5 connected business-started calls a day, error 138012 when
+// it is hit) and calls in a row nobody answered or that were rejected. Any answered call, any call from them and any message from them clears the second.
+const connectedIn24h = (l) => (l.connected || []).filter((t) => Date.now() - t < DAY_MS).length;
+const noteConnected = (pid) => update(pid, (x) => { x.callMisses = 0; x.connected = [...(x.connected || []).filter((t) => Date.now() - t < DAY_MS), Date.now()]; });
+const noteMissed = (pid) => update(pid, (x) => { x.callMisses = (x.callMisses || 0) + 1; });
+const noteReachable = (pid) => { const l = linkOf(pid); if (l && l.callMisses) update(pid, (x) => { x.callMisses = 0; }); };
+const callBlock = (l) => (l.callMisses || 0) >= MAX_MISSES ? 'misses' : connectedIn24h(l) >= MAX_CONNECTED_PER_DAY ? 'cap' : null;
+
+// ONE outbound call to the linked, opted-in person. kind 'test' (C1): says a fixed sentence and hangs up (wacall.callOut). kind 'reminder' (C2): the family's reminder, delivered by the app's own Call
+// (spec { reminderId } or { task }). Resolves when Meta has taken the call (the phone is about to ring) with { placed: true }, or, when the calls are blocked (2 unanswered in a row, or 5 answered
+// today), with { placed: false, fallback: 'message' } after the same reminder went as a message; the rest (ringing, answered, ended) runs on and is logged and kept as a label. Throws if nothing was placed.
+function placeCall(profileId, kind, spec) {
+  const l = linkOf(profileId), care = require('./care');
   const fail = (m, status) => Promise.reject(new WaError(m, status));
   if (!l) return fail('Link their WhatsApp number first.', 400);
   if (!l.optIn) return fail('They have stopped messages from Maya, so no call is placed.', 400);
   if (!configured()) return fail('WhatsApp is not set up on this server.', 503);
   if (callBusy || outboundNow.cur) return fail('Another call is in progress. Nothing was placed.', 409);
-  if (require('./care').liveCalls.has(profileId)) return fail('They are in a call in the app right now. Nothing was placed.', 409);
-  if (Date.now() - lastTestAt < (deps.testCooldownMs === undefined ? TEST_COOLDOWN_MS : deps.testCooldownMs)) return fail('A test call was just placed. Wait a minute before another. Nothing was placed.', 429);
+  if (care.liveCalls.has(profileId)) return fail('They are in a call in the app right now. Nothing was placed.', 409);
+  const block = callBlock(l);
+  if (block) {
+    const why = block === 'misses' ? `The last ${MAX_MISSES} calls to them were not answered, so Maya will not call again until they answer or write.` : `The limit of ${MAX_CONNECTED_PER_DAY} answered calls in 24 hours is reached.`;
+    if (kind !== 'reminder') return fail(`${why} Nothing was placed.`, 429);
+    try { care.reminderViaMessage(profileId, spec); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
+    note(`reminder call to number ending ${end(l.phone)} not placed (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); the reminder was sent as a message instead`);
+    return Promise.resolve({ placed: false, fallback: 'message', reason: block });
+  }
+  if (Date.now() - lastTestAt < (deps.testCooldownMs === undefined ? TEST_COOLDOWN_MS : deps.testCooldownMs)) return fail('A call was just placed. Wait a minute before another. Nothing was placed.', 429);
+  let rc = null;
+  if (kind === 'reminder') { try { rc = care.reminderCallStart(profileId, spec); } catch (e) { return fail(e.message, e.status || 400); } }
   callBusy = true; lastTestAt = Date.now();
   const tail = end(l.phone), sig = new (require('node:events'))(), cur = { id: null, sig, profileId }; outboundNow.cur = cur;
-  let cid = 'unknown'; const log = (m) => note(`test call ${cid} to number ending ${tail}: ${m}`);
+  const what = kind === 'reminder' ? 'reminder call' : 'test call';
+  let cid = 'unknown'; const log = (m) => note(`${what} ${cid} to number ending ${tail}: ${m}`);
   setTest(profileId, 'starting');
+  let connected = false;
+  const settle = () => { if (!rc) return; const st = care.reminderCallEnded(profileId, rc.rid); if (st) log(`dashboard state: ${st === 'unanswered' ? "Couldn't reach" : "Hasn't replied yet"}`); };
   return new Promise((resolve, reject) => {
     const place = async (session) => {
       const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', to: l.phone, action: 'connect', session });
       const viaCalls = d && Array.isArray(d.calls) && d.calls[0] && d.calls[0].id, id = d && (viaCalls || d.call_id);
-      note(`test call to number ending ${tail}: connect response fields [${shapeOf(d)}], call id ${viaCalls ? 'from calls[0].id' : id ? 'from call_id' : 'not in the response (taken from the first webhook)'}`); // names only, never a value: shows the real shape of Meta's answer
+      note(`${what} to number ending ${tail}: connect response fields [${shapeOf(d)}], call id ${viaCalls ? 'from calls[0].id' : id ? 'from call_id' : 'not in the response (taken from the first webhook)'}`); // names only, never a value: shows the real shape of Meta's answer
       if (typeof id === 'string' && id) { if (cur.id === null) { cur.id = id; liveEnds.set(id, (why) => sig.emit('end', why)); } cid = callTag(id); }
       else if (cur.id) cid = callTag(cur.id);
       setTest(profileId, 'requested'); resolve({ placed: true });
     };
     const terminate = async () => { if (!cur.id) throw new Error('Meta has not named the call, so it cannot be hung up by id'); await callAction(cur.id, 'terminate'); };
     const label = { RINGING: 'ringing', ACCEPTED: 'answered', REJECTED: 'rejected' };
-    sig.on('status', (s) => { if (label[s]) setTest(profileId, label[s]); });
-    Promise.resolve().then(() => deps.callOut({ sig, place, terminate, log, speak: (t) => chat.deps.speak(t), ringCapMs: deps.testRingCapMs, tailMs: deps.testTailMs }))
-      .then((r) => { setTest(profileId, /^no answer/.test(r) ? 'no answer' : r === 'rejected' ? 'rejected' : r === 'completed' ? 'completed' : 'ended'); note(`test call ${cid} to number ending ${tail}: finished, ${r}`); })
-      .catch((e) => { setTest(profileId, 'failed'); note(`test call ${cid} to number ending ${tail}: FAILED, ${sayWhy(e)}`); reject(e instanceof WaError ? e : new WaError(sayWhy(e), 502)); })
+    sig.on('status', (s) => { if (label[s]) setTest(profileId, label[s]); if (s === 'ACCEPTED' && !connected) { connected = true; noteConnected(profileId); } });
+    const tzOf = () => (care.get(profileId) || {}).tz || null;
+    Promise.resolve().then(() => deps.callOut({ sig, place, terminate, log, speak: (t) => chat.deps.speak(t), ringCapMs: deps.testRingCapMs, tailMs: deps.testTailMs,
+      ...(rc ? { bridge: { newCall: deps.newCall, apiKey: process.env.META_API_KEY, profileId, tz: tzOf(), outreachId: rc.outreachId, capMs: deps.callCapMs, greetingTimeoutMs: deps.greetingTimeoutMs } } : {}) }))
+      .then((r) => {
+        const missed = /^no answer/.test(r) || r === 'rejected';
+        if (missed) noteMissed(profileId);
+        setTest(profileId, /^no answer/.test(r) ? 'no answer' : r === 'rejected' ? 'rejected' : r === 'completed' ? (rc ? 'finished' : 'completed') : 'ended');
+        settle(); note(`${what} ${cid} to number ending ${tail}: finished, ${r}`);
+      })
+      .catch((e) => { setTest(profileId, 'failed'); settle(); note(`${what} ${cid} to number ending ${tail}: FAILED, ${sayWhy(e)}`); reject(e instanceof WaError ? e : new WaError(sayWhy(e), 502)); })
       .finally(() => { callBusy = false; if (cur.id) liveEnds.delete(cur.id); outboundNow.cur = null; });
   });
 }
+const placeTestCall = (profileId) => placeCall(profileId, 'test');
+const placeReminderCall = (profileId, spec) => placeCall(profileId, 'reminder', spec);
 
 // Called by server.js after it answered 200. Never throws; errors are logged as a message only (no words, no numbers).
 async function handleWebhook(payload) {
@@ -592,4 +625,4 @@ async function handleWebhook(payload) {
   return (await Promise.all(done)).flat(); // calls answer with one result per call
 }
 
-module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

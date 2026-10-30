@@ -49,10 +49,11 @@ class PhoneBridge {
   }
 
   // The Call starts: it opens its own transcribe session, files memory as in the app, and speaks first with its own written greeting.
-  begin() {
+  // extra: for a call WE placed with a reminder, { reason: 'reminder', outreachId } so the Call claims the ring exactly as it does in the app (call.js start message).
+  begin(extra = {}) {
     care.touch(this.profileId, 'whatsapp');
     const hour = localHour(this.tz);
-    this.socket.toCall(JSON.stringify({ type: 'start', profileId: this.profileId, tz: this.tz, sampleRate: 48000, ...(Number.isInteger(hour) ? { localHour: hour } : {}) }), false);
+    this.socket.toCall(JSON.stringify({ type: 'start', profileId: this.profileId, tz: this.tz, sampleRate: 48000, ...(Number.isInteger(hour) ? { localHour: hour } : {}), ...extra }), false);
   }
 
   // The accept went through: from now on her voice is sent and the caller is heard.

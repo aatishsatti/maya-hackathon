@@ -372,7 +372,7 @@ test('never a live call: only text, audio and template ever leave; a call promis
   shift(id, 60000); await wa.sendOut(id, { kind: 'voice', text: 'ok' });
   const o = outside(); shift(o.id, 1); await wa.sendOut(o.id, { kind: 'text', useTemplate: true });
   assert.ok(sent().length >= 3 && sent().every((b) => ['text', 'audio', 'template'].includes(b.type)));
-  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)), ['placeTestCall']); // the one test call (C1) is the only exception, and it never sends a message
+  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)).sort(), ['placeReminderCall', 'placeTestCall']); // the one test call (C1) is the only exception, and it never sends a message
   await refusal(wa.sendOut(id, { kind: 'call', text: 'x' }), /text message or a voice note/, { status: 400 });
   await refusal(wa.sendOut(id, { kind: 'text', text: 'x', who: 'stranger' }), /Bad sender/);
 });
@@ -1125,7 +1125,111 @@ test('C1 the connect response logs its SHAPE (field names only, two levels) and 
   outReset(); const { id, phone } = linked();
   const shapes = [[{ messaging_product: 'whatsapp', calls: [{ id: OUT_ID, extra: 'SECRET-VALUE' }] }, /connect response fields \[calls\[extra,id\],messaging_product\], call id from calls\[0\]\.id/], [{ messaging_product: 'whatsapp', call_id: OUT_ID, success: 'SECRET-VALUE' }, /connect response fields \[call_id,messaging_product,success\], call id from call_id/], [{ messaging_product: 'whatsapp', success: true }, /connect response fields \[messaging_product,success\], call id not in the response \(taken from the first webhook\)/]];
   for (const [reply, re] of shapes) {
+    wa.link(id, phone, true); // each shape is one rejected call: a fresh link so the two-in-a-row rule does not block the next
     const out = await capture(async () => withConnectReply(reply, async () => { await wa.placeTestCall(id); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await waitFor(() => wa.view(id).testCall.state === 'rejected'); await sleepMs(100); }));
     assert.match(out, re); assert.doesNotMatch(out, /SECRET-VALUE|wacid|TEST-TOKEN/); assert.ok(!out.includes(phone));
   }
+});
+
+
+// ---- C2: a reminder delivered by an outbound call (the app's own Call claims the ring; acknowledgement judged there; counters on the link record) ----
+// The Call is a stand-in that behaves like call.js on this path: the start message carries reason 'reminder' + outreachId, claim() marks Picked up, the greeting is audio, an acknowledgement calls
+// care.reminderAck, and ending with the reminder still awaited calls care.reminderNoAck. (The real isAck rule and the real Call are covered by their own tests.)
+const starts = []; let script = 'ack';
+class FakeCall {
+  constructor(socket) { this.socket = socket; this.closed = false; this.awaitAck = null; socket.onmessage = (data, bin) => { if (!bin) { const m = JSON.parse(data.toString()); if (m.type === 'start') this.start(m); } }; }
+  async start(m) {
+    starts.push(m); this.pid = m.profileId; const info = m.reason === 'reminder' ? care.claim(m.profileId, m.outreachId) : null; if (info) this.awaitAck = info.reminderId;
+    this.socket.send(JSON.stringify({ type: 'ready' })); this.socket.send(tone(0.3));
+    await sleepMs(150);
+    if (script === 'ack') { care.reminderAck(this.pid, this.awaitAck); this.awaitAck = null; }
+    await sleepMs(50); this.socket.close(1000);
+  }
+  end() { if (this.closed) return; this.closed = true; if (this.awaitAck) care.reminderNoAck(this.pid, this.awaitAck); }
+}
+const remOf = (id) => care.get(id).reminders[0];
+const reminderReset = () => { outReset(); starts.length = 0; script = 'ack'; wa.deps.newCall = (socket) => new FakeCall(socket); wa.deps.callTailMs = 50; };
+const driveAnswered = async (phone, conn) => { const dev = await fakeDevice(conn.session.sdp); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outAnswer(phone, dev.answer)); await wa.handleWebhook(outStatus(phone, 'ACCEPTED')); return dev; };
+
+test('C2 answered and acknowledged: the Call claims the ring with the reminder, the reminder is Done, one connect and one terminate, the answered call is counted; logs hold no words', async () => {
+  reminderReset(); const { id, phone } = linked(); let dev;
+  const out = await capture(() => withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    assert.deepEqual(await wa.placeReminderCall(id, { task: 'take your tablets' }), { placed: true });
+    assert.equal(remOf(id).active.state, 'calling');
+    dev = await driveAnswered(phone, callPosts().find((b) => b.action === 'connect'));
+    await waitFor(() => actions().includes('terminate'));
+    await waitFor(() => wa.view(id).testCall.state === 'finished');
+  }));
+  try {
+    assert.equal(starts.length, 1); assert.equal(starts[0].reason, 'reminder'); assert.equal(starts[0].profileId, id); assert.match(starts[0].outreachId, /^[a-z0-9]+$/i);
+    assert.equal(remOf(id).last.state, 'done'); assert.equal(remOf(id).active, null); assert.equal(remOf(id).dueAt, null, 'a typed test reminder is not left scheduled');
+    assert.deepEqual(actions(), ['connect', 'terminate']); assert.ok(dev.got.length >= 10, 'her greeting reached the phone');
+    const l = wa.linkOf(id); assert.equal(l.callMisses, 0); assert.equal(l.connected.length, 1);
+    assert.match(out, /reminder call [0-9a-f]{6} to number ending \d{4}: requested/); assert.match(out, /picked up; the reminder call has started/); assert.match(out, /her first words are ready \d+ ms/); assert.match(out, /hung up \d+ ms.*maya hung up/);
+    assert.doesNotMatch(out, /tablets|v=0|a=fingerprint|wacid|TEST-TOKEN/); assert.ok(!out.includes(phone)); assert.equal(sent().length, 0);
+  } finally { await dev.peer.close(); }
+});
+
+test('C2 answered but not acknowledged ("not now", silence): the reminder stays unanswered, Hasn\'t replied yet, no second reminder, no retry', async () => {
+  reminderReset(); script = 'notnow'; const { id, phone } = linked(); let dev;
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeReminderCall(id, { task: 'take your tablets' });
+    dev = await driveAnswered(phone, callPosts().find((b) => b.action === 'connect')); await waitFor(() => actions().includes('terminate')); await waitFor(() => wa.view(id).testCall.state === 'finished');
+  });
+  try {
+    assert.equal(remOf(id).last.state, 'no_reply'); assert.equal(care.get(id).notifications.find((n) => n.kind === 'reminder').noReply, true);
+    await sleepMs(200); assert.deepEqual(actions(), ['connect', 'terminate'], 'one attempt, no re-remind'); assert.equal(sent().length, 0); assert.equal(wa.linkOf(id).callMisses, 0, 'they picked up: not a miss');
+  } finally { await dev.peer.close(); }
+});
+
+test('C2 nobody answers for 45 s (here 200 ms): terminate, Couldn\'t reach, one attempt; a rejected call: Couldn\'t reach, no terminate; each counts as one miss', async () => {
+  reminderReset(); wa.deps.testRingCapMs = 200; const a = linked();
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeReminderCall(a.id, { task: 'take your tablets' }); await wa.handleWebhook(outStatus(a.phone, 'RINGING'));
+    await waitFor(() => actions().includes('terminate')); await waitFor(() => remOf(a.id).last); await sleepMs(50);
+  });
+  assert.equal(remOf(a.id).last.state, 'unanswered'); assert.deepEqual(actions(), ['connect', 'terminate']); assert.equal(starts.length, 0, 'the Call never started'); assert.equal(wa.linkOf(a.id).callMisses, 1);
+  assert.equal(care.get(a.id).notifications.find((n) => n.kind === 'reminder').noReply, true); await sleepMs(300); assert.deepEqual(actions(), ['connect', 'terminate'], 'no retry');
+  reminderReset(); const b = linked();
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeReminderCall(b.id, { task: 'take your tablets' }); await wa.handleWebhook(outStatus(b.phone, 'RINGING')); await wa.handleWebhook(outStatus(b.phone, 'REJECTED'));
+    await waitFor(() => remOf(b.id).last); await sleepMs(100);
+  });
+  assert.equal(remOf(b.id).last.state, 'unanswered'); assert.deepEqual(actions(), ['connect']); assert.equal(wa.linkOf(b.id).callMisses, 1); assert.equal(starts.length, 0);
+});
+
+test('C2 two unanswered calls in a row block the third: nothing rings, the same reminder goes as a WhatsApp message; any message from them starts the count again', async () => {
+  reminderReset(); const { id, phone } = inWindow();
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    for (let i = 0; i < 2; i++) { await wa.placeReminderCall(id, { task: `walk ${i}` }); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await waitFor(() => care.get(id).reminders[i].last); await sleepMs(100); }
+  });
+  assert.equal(wa.linkOf(id).callMisses, 2); clearCalls();
+  const out = await capture(async () => assert.deepEqual(await wa.placeReminderCall(id, { task: 'take your tablets' }), { placed: false, fallback: 'message', reason: 'misses' }));
+  assert.equal(callPosts().length, 0, 'no call was placed'); await settle(); const m = sent(); assert.equal(m.length, 1); assert.ok(['audio', 'text'].includes(m[0].type)); assert.equal(m[0].to, phone);
+  assert.match(care.get(id).reminders[2].active.state, /^wa_/); assert.match(out, /not placed \(2 unanswered in a row\).*sent as a message instead/); assert.doesNotMatch(out, /tablets/);
+  await assert.rejects(wa.placeTestCall(id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /will not call again/); return true; });
+  reset(PLAIN); await wa.handleWebhook(incoming(phone, 'hello')); assert.equal(wa.linkOf(id).callMisses, 0, 'they wrote: the count starts again'); clearCalls();
+});
+
+test('C2 the 5 answered calls a day cap blocks the sixth (a reminder goes as a message, a test call is refused); unanswered calls do not count towards it; one call at a time and the cooldown still hold', async () => {
+  reminderReset(); const { id, phone } = inWindow(); const keep = wa.deps.callOut;
+  wa.deps.callOut = async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
+  try {
+    await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+      for (let i = 0; i < 5; i++) { assert.deepEqual(await wa.placeTestCall(id), { placed: true }); await sleepMs(60); }
+      assert.equal(wa.linkOf(id).connected.length, 5); clearCalls();
+      await assert.rejects(wa.placeTestCall(id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /limit of 5 answered calls in 24 hours/); return true; });
+      assert.deepEqual(await wa.placeReminderCall(id, { task: 'take your tablets' }), { placed: false, fallback: 'message', reason: 'cap' });
+      assert.equal(callPosts().length, 0); await settle(); assert.equal(sent().length, 1);
+    });
+  } finally { wa.deps.callOut = keep; }
+  // unanswered calls are not "connected": the count stays where it was
+  const b = inWindow(); wa.deps.testCooldownMs = 0;
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeTestCall(b.id); await wa.handleWebhook(outStatus(b.phone, 'REJECTED')); await waitFor(() => wa.view(b.id).testCall.state === 'rejected'); await sleepMs(100);
+    assert.equal((wa.linkOf(b.id).connected || []).length, 0); assert.equal(wa.linkOf(b.id).callMisses, 1);
+    // one call at a time, and the 60 s cooldown
+    wa.deps.testCooldownMs = 60000; clearCalls();
+    await assert.rejects(wa.placeTestCall(b.id), /Wait a minute/); assert.equal(callPosts().length, 0);
+  });
 });

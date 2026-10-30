@@ -168,13 +168,19 @@ const STATUSES = ['RINGING', 'ACCEPTED', 'REJECTED'];
 // place(session) -> posts the connect and resolves once Meta took it (throws if refused: nothing rang). terminate() -> posts the terminate for this call.
 // speak(text) -> PCM16 24 kHz. The sentence is made BEFORE anything is placed: if her voice does not work, the phone never rings. log(text): one line, no SDP, no number, no word.
 // Returns the outcome in plain words; throws if a step failed, after trying terminate. One attempt, no retry.
-async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LINE, ringCapMs = RING_CAP_MS, mediaUpMs = MEDIA_UP_MS, tailMs = TAIL_MS }) {
-  const pcm = await speak(text);
-  if (!Buffer.isBuffer(pcm) || pcm.length < 2) throw new Error('her voice could not be made, so nothing was placed');
+// bridge (C2, a reminder call): { newCall, apiKey, profileId, tz, outreachId, capMs, greetingTimeoutMs }. Instead of the fixed sentence the app's own Call (call.js) takes the call as soon as they pick up (ACCEPTED):
+// its start message carries reason 'reminder' + the outreach id, so the greeting IS the family's reminder (Spark's words, the existing guards) and the acknowledgement rule is the app's. The Call is
+// started at ACCEPTED, not while it rings, so "picked up" is never claimed for a ringing phone; the cost is her first words come about as late as the greeting takes (logged).
+async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LINE, bridge = null, ringCapMs = RING_CAP_MS, mediaUpMs = MEDIA_UP_MS, tailMs = TAIL_MS }) {
+  let pcm = null;
+  if (!bridge) {
+    pcm = await speak(text);
+    if (!Buffer.isBuffer(pcm) || pcm.length < 2) throw new Error('her voice could not be made, so nothing was placed');
+  }
   const pc = new RTCPeerConnection({ codecs: { audio: [useOPUS()], video: [] }, iceServers: [] });
   const track = new MediaStreamTrack({ kind: 'audio' });
   const tx = pc.addTransceiver(track, { direction: 'sendrecv' });
-  let out = null, over = null, capTimer = null, t0 = Date.now(), placed = false;
+  let out = null, over = null, capTimer = null, t0 = Date.now(), placed = false, br = null;
   const since = () => `${Date.now() - t0} ms`;
   let gotAnswer, gotAccepted, resolveOutcome;
   const answerP = new Promise((r) => { gotAnswer = r; }), acceptedP = new Promise((r) => { gotAccepted = r; });
@@ -194,6 +200,27 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     if (o.kind === 'cap') { await terminate(); log(`no answer in ${Math.round(ringCapMs / 1000)} s: hung up the request`); return `no answer in ${Math.round(ringCapMs / 1000)} s`; }
     log(`the call is already over (${o.reason}); nothing more to send`); return o.kind === 'rejected' ? 'rejected' : `ended: ${o.reason}`;
   };
+  // The conversation, as an answered inbound call: her greeting (the reminder) is ready, the stream starts, the Call runs until it ends, the caller leaves, the media drops or the cap.
+  const converse = async () => {
+    let tm; const timeout = new Promise((_, rej) => { tm = setTimeout(() => rej(new Error('her reminder was not ready in time')), bridge.greetingTimeoutMs || GREETING_TIMEOUT_MS); });
+    try { await Promise.race([br.greeting, timeout, br.done.then((x) => { throw new Error(`the call brain stopped before the reminder (${br.error || x})`); }), outcome.then((o) => { throw Object.assign(new Error('over'), { over: o }); })]); }
+    catch (e) { if (e.over) return await finish(e.over); throw e; }
+    finally { clearTimeout(tm); }
+    log(`her first words are ready ${Date.now() - br.born} ms after the media connected`);
+    out = new Outbound(track, codecPt); out.start(); br.attach(out);
+    log('picked up; the reminder call has started');
+    const lost = pcLost(pc); let capTimer2; const cap = new Promise((res) => { capTimer2 = setTimeout(() => res('time cap'), bridge.capMs || CALL_CAP_MS); });
+    let why;
+    try { why = await Promise.race([br.done, outcome.then((o) => ({ over: o })), cap, lost.promise.then(() => 'the media connection dropped'), out.failed.then((e) => { throw e; })]); }
+    finally { clearTimeout(capTimer2); lost.cancel(); }
+    if (why && why.over) { br.stop('they ended it'); return await finish(why.over); }
+    if (why === 'fatal') await br.sayFatal(tailMs); else if (why === 'maya hung up') { await out.drain(); await sleep(tailMs); }
+    br.stop(why);
+    if (over) return await finish(over);
+    await terminate(); log(`hung up ${since()} after the request (${why})`);
+    return 'completed';
+  };
+  let codecPt = 111;
   try {
     await pc.setLocalDescription(await pc.createOffer());
     await place({ sdp_type: 'offer', sdp: keepSha256Only(pc.localDescription.sdp) });
@@ -204,11 +231,17 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     await pc.setRemoteDescription({ type: 'answer', sdp: r.v });
     const codec = (tx.codecs || []).find((c) => /opus/i.test(c.name)) || (pc.getTransceivers()[0].codecs || [])[0];
     if (!codec) throw new Error('the answer has no Opus audio');
+    codecPt = codec.payloadType;
     log(`answer applied ${since()} after the request (Opus payload type ${codec.payloadType})`);
     r = await step(acceptedP); if (!r.ok) return await finish(r);
     clearTimeout(capTimer); capTimer = null;
+    if (bridge) {
+      br = new PhoneBridge({ newCall: bridge.newCall, apiKey: bridge.apiKey, profileId: bridge.profileId, tz: bridge.tz, log, speak });
+      br.begin({ reason: 'reminder', outreachId: bridge.outreachId });
+    }
     r = await step(waitConnected(pc, mediaUpMs)); if (!r.ok) return await finish(r);
     log(`media up ${since()} after the request`);
+    if (bridge) return await converse();
     out = new Outbound(track, codec.payloadType); out.start();
     r = await step(out.say(upsample2(pcm))); if (!r.ok) return await finish(r);
     log('the fixed sentence was spoken');
@@ -221,7 +254,7 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     throw e;
   } finally {
     clearTimeout(capTimer); sig.off('answer', onAnswer); sig.off('status', onStatus); sig.off('end', onEnd);
-    if (out) out.stop();
+    if (br) br.stop('call over'); if (out) out.stop();
     try { await pc.close(); } catch { /* already closed */ }
   }
 }

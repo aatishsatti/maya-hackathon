@@ -174,6 +174,11 @@ async function handleWhatsapp(req, res, url) {
     if (req.method === 'DELETE' && !b) return sendJson(res, 200, { ok: whatsapp.unlink(a) });
     if (req.method === 'POST' && b === 'send') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, await whatsapp.sendOut(a, { kind: body.kind, text: body.text, who: 'family', useTemplate: body.useTemplate === true })); }
     if (req.method === 'POST' && b === 'test-call') return MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeTestCall(a)); // TEMPORARY (render-test): one outbound test call, see wacall.callOut
+    if (req.method === 'POST' && b === 'reminder-call') { // TEMPORARY (render-test): C2, a reminder delivered by an outbound call
+      if (MODE !== 'real') return sendJson(res, 503, { error: 'Calls need real mode.' });
+      const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' });
+      return sendJson(res, 200, await whatsapp.placeReminderCall(a, typeof body.reminderId === 'string' && body.reminderId ? { rid: body.reminderId } : { task: body.task }));
+    }
     if (req.method === 'POST' && b === 'link') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, whatsapp.link(a, body.phone, body.optIn)); }
   } catch (e) { return sendJson(res, e.status || 500, { error: e.message, ...(e.needsTemplate ? { needsTemplate: true, windowClosed: true } : e.windowClosed ? { windowClosed: true } : {}) }); }
   return sendJson(res, 404, { error: 'Not found' });

@@ -182,6 +182,10 @@
       return c;
     });
     list($('reminders'), rem, 'No reminders yet.');
+    const pick = $('waRemPick'), keep = pick.value;   // the reminders you can choose for a test call
+    pick.textContent = ''; pick.append(Object.assign(document.createElement('option'), { value: '', textContent: 'A reminder you already set...' }));
+    for (const r of v.reminders) if (!r.active) pick.append(Object.assign(document.createElement('option'), { value: r.id, textContent: r.task }));
+    pick.value = [...pick.children].some((o) => o.value === keep) ? keep : '';
     if (v.delivery && document.activeElement !== $('deliv')) $('deliv').value = v.delivery.reminders;
     const nots = v.notifications.map((n) => {
       const c = el('div', 'item');
@@ -252,25 +256,34 @@
     finally { waBusy = false; $('waInvite').disabled = false; }
   }
   // "Call them now (test)": the server places ONE call and says a fixed sentence; this only shows what the server says really happened, polling its label for a minute.
-  const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', ended: 'ended', failed: 'failed (see the server log)' };
-  const TEST_DONE = ['rejected', 'no answer', 'completed', 'ended', 'failed'];
+  const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', finished: 'answered, the call finished and Maya hung up', ended: 'ended', failed: 'failed (see the server log)' };
+  const TEST_DONE = ['rejected', 'no answer', 'completed', 'finished', 'ended', 'failed'];
   let waTesting = false;
-  $('waTestCall').addEventListener('click', async () => {
+  async function runCall(path, body, button) {
     if (waTesting) return;
-    waTesting = true; $('waTestCall').disabled = true; $('waTestLine').textContent = 'Placing the test call...';
+    waTesting = true; $('waTestCall').disabled = true; $('waRemCall').disabled = true; $('waTestLine').textContent = 'Placing the call...';
     try {
-      const r = await waCall(`/api/whatsapp/${id}/test-call`, 'POST');
+      const r = await waCall(`/api/whatsapp/${id}/${path}`, 'POST', body);
       if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; return; }
+      if (r.j.placed === false) { $('waTestLine').textContent = 'Calls to them are paused (two in a row went unanswered, or 5 answered calls today). The reminder was sent as a WhatsApp message instead. Nothing rang.'; load(); return; }
       $('waTestLine').textContent = 'WhatsApp took the call: their phone should ring now.';
       const mine = id;
       for (let i = 0; i < 25 && mine === id; i++) {
         await new Promise((res) => setTimeout(res, 3000));
         const v = (await waCall(`/api/whatsapp/${mine}`, 'GET').catch(() => ({ j: {} }))).j;
-        if (v.testCall) $('waTestLine').textContent = `Test call: ${TEST_STATE[v.testCall.state] || v.testCall.state}.`;
+        if (v.testCall) $('waTestLine').textContent = `Call: ${TEST_STATE[v.testCall.state] || v.testCall.state}.`;
         if (v.testCall && TEST_DONE.includes(v.testCall.state)) break;
       }
+      load();
     } catch (e) { $('waTestLine').textContent = `Could not reach the server: ${e.message}. Nothing rang.`; }
-    finally { waTesting = false; $('waTestCall').disabled = false; }
+    finally { waTesting = false; $('waTestCall').disabled = false; $('waRemCall').disabled = false; }
+  }
+  $('waTestCall').addEventListener('click', () => runCall('test-call'));
+  // C2: the family's reminder, delivered by the call. A reminder you already set wins over typed text.
+  $('waRemCall').addEventListener('click', () => {
+    const rid = $('waRemPick').value, task = $('waRemText').value.trim();
+    if (!rid && !task) { $('waTestLine').textContent = 'Pick a reminder or type one first. Nothing rang.'; return; }
+    runCall('reminder-call', rid ? { reminderId: rid } : { task });
   });
   $('waSend').addEventListener('submit', (e) => { e.preventDefault(); waSend(false); });
   $('waInvite').addEventListener('click', () => waSend(true));
