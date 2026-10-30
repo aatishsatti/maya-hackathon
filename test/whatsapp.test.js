@@ -375,3 +375,21 @@ test('voice from the dashboard: a voice failure or an over-long note sends nothi
   try { await refusal(wa.sendOut(id, { kind: 'voice', text: 'hello' }), /too long for a voice note/, { status: 400 }); } finally { chat.deps.speak = keep; }
   assert.equal(graphCalls.length, 0); await wa.sendOut(id, { kind: 'text', text: 'a failed voice note did not use up the slot' });
 });
+
+// ------------------------------------------------------------------------------------------ diagnosis log lines
+const capture = async (fn) => { const logs = []; const l0 = console.log, e0 = console.error; console.log = (...a) => logs.push(a.join(' ')); console.error = (...a) => logs.push(a.join(' ')); try { await fn(); } finally { console.log = l0; console.error = e0; } return logs.join('\n'); };
+
+test('every drop leaves one plain log line with the reason, the last 4 digits only, never a word or the full number', async () => {
+  voiceReset(); reset(PLAIN);
+  let out = await capture(() => wa.handleWebhook(incoming('919876548237', 'My secret tulips sentence')));
+  assert.match(out, /ignored a text from number ending 8237: no profile is linked/); assert.doesNotMatch(out, /tulips|919876548237|9876548237/);
+  const { phone } = linked(); const p = incoming(phone, 'hello there');
+  out = await capture(() => wa.handleWebhook(p)); assert.match(out, new RegExp(`received a text from number ending ${phone.slice(-4)}`)); assert.match(out, /replied to number ending/);
+  out = await capture(() => wa.handleWebhook(p)); assert.match(out, /repeated message .* \(Meta retry\)/);
+  reset(PLAIN); await wa.handleWebhook(incoming(phone, 'STOP'));
+  out = await capture(() => wa.handleWebhook(incoming(phone, 'hello again'))); assert.match(out, /has not opted in or has stopped/);
+  const other = incoming(phone, 'x'); other.entry[0].changes[0].value.metadata.phone_number_id = '999';
+  out = await capture(() => wa.handleWebhook(other)); assert.match(out, /different phone number id than WHATSAPP_PHONE_ID/);
+  out = await capture(() => wa.handleWebhook(voiceIn('919876548237'))); assert.match(out, /ignored a audio from number ending 8237/);
+  clearCalls();
+});

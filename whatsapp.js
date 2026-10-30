@@ -256,6 +256,9 @@ function serial(key, fn) {
   queues.set(key, next);
   return next;
 }
+// One plain log line for every message that is dropped or handled, so a missing reply can be diagnosed from the Render log. Last 4 digits of the number and a reason only: never a message word.
+const end = (p) => String(p).slice(-4);
+const note = (what) => console.log(`whatsapp: ${what}`);
 const STOP = /^\s*(stop|unsubscribe|opt[- ]?out|cancel messages)\s*[.!]?\s*$/i;
 
 async function onText(l, msg) {
@@ -295,14 +298,16 @@ async function onAudio(l, msg) {
 
 async function onMessage(msg) {
   const l = findByPhone(msg.from);
-  if (!l || !l.optIn) return 'ignored'; // unknown or not opted in: no reply, so a stranger can never use Maya (or make her message them)
-  if ((l.seen || []).includes(msg.id)) return 'duplicate';
+  if (!l) { note(`ignored a ${msg.type} from number ending ${end(msg.from)}: no profile is linked to that number (it must be linked with its country code, digits only, exactly as WhatsApp shows it)`); return 'ignored'; } // unknown: no reply, so a stranger can never use Maya (or make her message them)
+  if (!l.optIn) { note(`ignored a ${msg.type} from number ending ${end(msg.from)}: that person has not opted in or has stopped messages`); return 'ignored'; }
+  if ((l.seen || []).includes(msg.id)) { note(`ignored a repeated message from number ending ${end(msg.from)} (Meta retry)`); return 'duplicate'; }
   update(l.profileId, (x) => {
     x.lastInboundAt = Math.max(x.lastInboundAt || 0, Number(msg.timestamp) * 1000 || Date.now());
     x.seen = [...(x.seen || []), msg.id].slice(-SEEN_KEEP);
   });
-  if (msg.type === 'text' && msg.text && typeof msg.text.body === 'string') { await onText(l, msg); return 'text'; }
-  if (msg.type === 'audio') return onAudio(l, msg);
+  note(`received a ${msg.type} from number ending ${end(msg.from)}`);
+  if (msg.type === 'text' && msg.text && typeof msg.text.body === 'string') { await onText(l, msg); note(`replied to number ending ${end(msg.from)}`); return 'text'; }
+  if (msg.type === 'audio') { const out = await onAudio(l, msg); note(`answered a voice note from number ending ${end(msg.from)} (${out})`); return out; }
   // Photos, documents, stickers, locations: not read here. Answered once, truthfully, never guessed at.
   await sendTextTo(l.phone, 'I can read your typed messages and listen to voice notes here. Please type it or send a voice note.');
   return 'unsupported';
@@ -315,7 +320,7 @@ async function handleWebhook(payload) {
   for (const e of payload.entry || []) for (const c of e.changes || []) {
     if (c.field !== 'messages' || !c.value) continue;
     const pid = c.value.metadata && c.value.metadata.phone_number_id;
-    if (pid && process.env.WHATSAPP_PHONE_ID && pid !== process.env.WHATSAPP_PHONE_ID) continue; // meant for another number
+    if (pid && process.env.WHATSAPP_PHONE_ID && pid !== process.env.WHATSAPP_PHONE_ID) { note('ignored a webhook for a different phone number id than WHATSAPP_PHONE_ID'); continue; } // meant for another number
     for (const st of c.value.statuses || []) { try { onStatus(st); } catch (err) { console.error('whatsapp status error:', err.message); } }
     for (const msg of c.value.messages || []) {
       if (!msg || typeof msg.from !== 'string' || typeof msg.id !== 'string') continue;
@@ -325,4 +330,4 @@ async function handleWebhook(payload) {
   return Promise.all(done);
 }
 
-module.exports = { deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
