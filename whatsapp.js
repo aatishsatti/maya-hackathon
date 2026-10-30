@@ -29,12 +29,14 @@
 //     Enabling: POST {Version}/{Phone-Number-ID}/settings { calling: { status: "ENABLED", call_icon_visibility: "DEFAULT", callback_permission_status: "ENABLED" } }.
 //     Terminate error codes (call setup, in the terminate webhook): 138019 call setup failed, 138020 relay connection failed, 138021 / 138022 media receive / transmit timeout,
 //     138023 accepted with no media; send-side: 138000 calling not enabled, 138013 / 138014 / 138015 / 138018 the number cannot take calls, 131044 no valid payment method.
-//   Calls today (wacall.js, voice-only step): a call from a linked, opted-in person is ANSWERED, Maya says one fixed sentence in her real voice, and we end the call
-//   (pre_accept, media, accept, speech, terminate); every other call is REFUSED (action "reject"). Logged by field names only, never the SDP or the words. Maya's ears are not on the call yet.
+//   Calls today (wacall.js + waears.js, ears step): a call from a linked, opted-in person is ANSWERED, Maya says one fixed intro sentence in her real voice, then LISTENS for
+//   30 s through the same Meta transcribe engine the app's calls use (counts only are logged: never a word), and we end the call (pre_accept, media, accept, speech, listening,
+//   terminate), or the caller hangs up first (the terminate webhook ends the listening); every other call is REFUSED (action "reject"). Logged by field names only, never the
+//   SDP or the words. She cannot answer yet. Optional server setting WHATSAPP_EARS_EXPECT: the tester's own sentence, scored in memory; only "matched N%" is logged.
 // Server env only (never in the repo, the page or a log): WHATSAPP_TOKEN, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN, WHATSAPP_PHONE_ID.
 // Privacy: message words are never logged and never stored here. This file keeps only: which phone belongs to which profile, whether they opted in,
 // when they last wrote (for the 24 h window) and recent message ids (so a Meta retry is not answered twice).
-// Not built in this step (by design): Maya's ears and conversation on WhatsApp calls (a call gets one fixed spoken sentence only), PSTN, closed-phone ringing, video, groups.
+// Not built in this step (by design): Maya's replies on WhatsApp calls (she answers, says one fixed sentence and listens; she cannot talk back yet), PSTN, closed-phone ringing, video, groups.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -55,7 +57,7 @@ const MAX_INBOUND_IMAGE = 8 * 1024 * 1024; // the same ceiling as a photo sent i
 const MAX_INBOUND_AUDIO = 2 * 1024 * 1024; // a long monologue is not worth a minute of Transcribe; ~2 MB of Opus is several minutes
 
 // Network edge, replaceable in tests.
-const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithVoice(o) };
+const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithEars(o), openTranscribe: (k, o) => require('./transcribe').openTranscribe(k, o), callListenMs: undefined, callGapMs: undefined, callTailMs: undefined };
 
 const configured = () => Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID);
 
@@ -378,7 +380,7 @@ async function onMessage(msg) {
   return 'unsupported';
 }
 
-// ---- calls: one spoken test sentence for the linked person, a refusal for everyone else ----
+// ---- calls: the intro and a listening test for the linked person, a refusal for everyone else ----
 // The person's number for a call: contacts[].wa_id, else whichever of from / to is not the business number (the docs' samples disagree on the direction).
 function callerOf(value, call) {
   const biz = cleanPhone(value.metadata && value.metadata.display_phone_number);
@@ -389,10 +391,11 @@ function callerOf(value, call) {
 }
 // Call ids are base64 ("wacid....==") so their last characters say nothing: a short hash tells two calls apart without showing the id.
 const callTag = (id) => crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 6);
+const liveEnds = new Map(); // call id -> function that tells the answerer the CALLER hung up (the terminate webhook)
 const callsSeen = []; let callBusy = false; // one answered call at a time; a Meta retry of a connect is not answered twice
 const callAction = (callId, action, session) => graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', call_id: callId, action, ...(session ? { session } : {}) });
 const sayWhy = (e) => String(e && e.message).replace(/\s+/g, ' ').slice(0, 200); // an error message only; it never holds the SDP (nothing here puts one in a message)
-// Logs the event by FIELD NAMES only (never the SDP, a number, a call id or a word). A linked, opted-in caller is answered with the fixed spoken sentence; everyone else is refused so the phone does not ring for a minute.
+// Logs the event by FIELD NAMES only (never the SDP, a number, a call id or a word). A linked, opted-in caller is answered (intro, then listening); everyone else is refused so the phone does not ring for a minute.
 async function onCalls(value) {
   const out = [];
   for (const call of value.calls || []) {
@@ -400,6 +403,7 @@ async function onCalls(value) {
     const who = callerOf(value, call), tail = who ? end(who) : 'unknown', cid = callTag(call.id);
     if (call.event === 'terminate') {
       const er = Array.isArray(call.errors) && call.errors[0] ? `, error ${Number(call.errors[0].code) || 'unknown'}` : '';
+      const hangUp = liveEnds.get(call.id); if (hangUp) hangUp(); // an answered call: tell the answerer to stop listening
       note(`call ended: number ending ${tail}, call ${cid}, status ${String(call.status).slice(0, 12)}, duration ${Number(call.duration) || 0} s${er}`);
       out.push('ended'); continue;
     }
@@ -414,11 +418,12 @@ async function onCalls(value) {
     if (!why && callBusy) why = 'another call is being answered';
     if (!why) {
       callBusy = true;
+      let hungUp; const ended = new Promise((r) => { hungUp = r; }); liveEnds.set(call.id, hungUp);
       try {
-        const r = await deps.answerCall({ offerSdp: offer, speak: (t) => chat.deps.speak(t), send: (action, session) => callAction(call.id, action, session), log: (m) => note(`call ${cid} with number ending ${tail}: ${m}`) });
-        note(`answered call ${cid} from number ending ${tail}: a spoken test line, ${r}`); out.push('answered');
+        const r = await deps.answerCall({ offerSdp: offer, speak: (t) => chat.deps.speak(t), openTranscribe: deps.openTranscribe, apiKey: process.env.META_API_KEY, expected: process.env.WHATSAPP_EARS_EXPECT || '', ended, listenMs: deps.callListenMs, gapMs: deps.callGapMs, tailMs: deps.callTailMs, send: (action, session) => callAction(call.id, action, session), log: (m) => note(`call ${cid} with number ending ${tail}: ${m}`) });
+        note(`answered call ${cid} from number ending ${tail}: intro and listening, ${r}`); out.push('answered');
       } catch (e) { note(`could NOT answer call ${cid} from number ending ${tail}: ${sayWhy(e)}`); out.push('answer-failed'); }
-      finally { callBusy = false; }
+      finally { callBusy = false; liveEnds.delete(call.id); }
       continue;
     }
     try { await callAction(call.id, 'reject'); note(`rejected call ${cid} from number ending ${tail}: ${why}`); out.push('rejected'); }
