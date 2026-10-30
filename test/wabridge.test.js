@@ -38,7 +38,7 @@ const chat = require('../chat');
 const wa = require('../whatsapp');
 const wacall = require('../wacall');
 const wabridge = require('../wabridge');
-const { Call } = require('../call');
+const { Call, latencyForLog } = require('../call');
 const { RTCPeerConnection, MediaStreamTrack, RtpHeader, RtpPacket, useOPUS } = require('werift');
 const OS = require('opusscript');
 
@@ -127,7 +127,7 @@ test('a whole call: the greeting is made while the phone rings and heard the mom
     const fed = Buffer.concat(engine.chunks); assert.ok(engine.chunks.every((b) => b.length % 2 === 0)); const heardByEngine = voiced(engine.chunks.slice(-60)); assert.ok(heardByEngine.length >= 20, `the caller's tone reached the engine (${heardByEngine.length} chunks)`); assert.ok(Math.abs(hzOf(heardByEngine, 24000) - 440) < 25, `the engine hears the caller at 24 kHz (${hzOf(heardByEngine, 24000)} Hz)`);
     await sleep(1500);                                   // let the greeting finish and the stream go quiet before her next reply
     const before = c.ph.heard.length; sparkReply = `${SAY} That sounds lovely. Tell me more about the tea.`;
-    step('respond'); c.callRef.pending = [turn('I had tea with my neighbour this morning')]; await c.callRef.respond(0); step('responded');
+    step('respond'); c.callRef.send({ type: 'speechEnd' }); /* the Call's own end-of-turn event, as it sends before answering */ c.callRef.pending = [turn('I had tea with my neighbour this morning')]; await c.callRef.respond(0); step('responded');
     await until(() => c.ph.heard.length > before + 20); step('reply heard'); // her reply reaches the phone
     await hangUpPhone(c.phone, c.p); step('hung up');
     await c.running; step('running done'); assert.equal(c.result[0], 'answered');
@@ -136,8 +136,8 @@ test('a whole call: the greeting is made while the phone rings and heard the mom
     const gaps = c.ph.heard.at.slice(1).map((t, i) => t - c.ph.heard.at[i]); assert.ok(Math.max(...gaps) < 200, `her stream never stops (largest gap ${Math.max(...gaps)} ms)`);
   });
   assert.match(out, /pre-accepted/); assert.match(out, /media connected/); assert.match(out, /her greeting is ready \d+ ms after the media connected/); assert.ok(out.indexOf('her greeting is ready') < out.indexOf('accepted; the conversation has started'));
-  assert.match(out, /reply 1: her first audio came \d+ ms after the last sound from you/); assert.match(out, /ears ended \(caller hung up\): \d+ packets received, \d+ put back in order, \d+ lost, \d+ late or repeated, 0 unreadable, 0 ms dropped for lag, \d+ ms kept before the engine was ready, [\d.]+ s heard, worst timer lateness \d+ ms/);
-  assert.match(out, /conversation over \(caller hung up\): \d+ turn\(s\) heard, 1 reply timed, slowest \d+ ms to first audio/); assert.match(out, /answered call [0-9a-f]{6}.*conversation, caller hung up/);
+  assert.match(out, /she spoke on her own \(the greeting, a check-in or a reminder\), not as an answer/); assert.match(out, /reply 1: first audio \d+ ms after your turn ended, \d+ ms after your last sound/); assert.match(out, /ears ended \(caller hung up\): \d+ packets received, \d+ put back in order, \d+ lost, \d+ late or repeated, 0 unreadable, 0 ms dropped for lag, \d+ ms kept before the engine was ready, [\d.]+ s heard, worst timer lateness \d+ ms/);
+  assert.match(out, /conversation over \(caller hung up\): \d+ turn\(s\) heard, \d+ answers? timed, \d+ turn\(s\) answered together with another, \d+ not answered, 1 line\(s\) she began on her own/); assert.match(out, /answered call [0-9a-f]{6}.*conversation, caller hung up/);
   assert.doesNotMatch(out, /neighbour|nice to talk|lovely|a=fingerprint|v=0|TEST-TOKEN|TEST-META-KEY/, 'no words said by either side, no SDP, no keys');
 });
 
@@ -191,4 +191,51 @@ test('a call from a person who is already in a call in the app is refused as bus
     const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(num, { sdp: 'v=0 x' })), ['rejected']));
     assert.match(out, /rejected call [0-9a-f]{6} from number ending \d{4}: that person is already in a call in the app/); assert.deepEqual(actions(), ['reject']); assert.equal(engine.opened, 0);
   } finally { care.liveCalls.delete(id); }
+});
+
+// ---- the reply timer and the turn counts, on their own (no network, no peer) ----
+function bareBridge() {
+  const logs = []; const b = new wabridge.PhoneBridge({ newCall: () => ({ closed: false, end() {} }), apiKey: 'k', profileId: 'p', tz: null, log: (m) => logs.push(m), speak: async () => Buffer.alloc(0) });
+  b.out = { say: () => Promise.resolve(), flush() {} }; b.accepted = true;
+  return { b, logs };
+}
+const frame = (peak) => { const f = Buffer.alloc(1920); for (let i = 0; i < 960; i += 2) { f.writeInt16LE(Math.round(peak * 32767), i * 2); f.writeInt16LE(Math.round(-peak * 32767), i * 2 + 2); } return f; };
+const feed = (b, peak, frames) => { for (let i = 0; i < frames; i++) b.toCall(frame(peak)); };
+const voice = () => Buffer.alloc(9600);
+
+test('reply timer: one stray loud frame does not reset "your last sound"; a sustained sound does', async () => {
+  const { b, logs } = bareBridge(); feed(b, 0.004, 50);
+  feed(b, 0.3, 10); feed(b, 0.004, 5);                                // real speech, then a quiet gap
+  await sleep(120); feed(b, 0.3, 1); feed(b, 0.004, 2);              // then ONE stray loud frame (a click or cough), then quiet
+  b.onEvent({ type: 'speechEnd' }); await sleep(150); b.onVoice(voice());
+  const m = /reply 1: first audio (\d+) ms after your turn ended, (\d+) ms after your last sound/.exec(logs.join('\n'));
+  assert.ok(m, logs.join('\n')); assert.ok(Number(m[2]) >= Number(m[1]), 'the last SOUND is at or before the end of turn');
+  assert.ok(Number(m[2]) >= 250, `"your last sound" was the speech 270 ms ago, not the stray frame (${m[2]} ms)`);
+});
+
+test('reply timer: the room\'s noise level is learned (as call.js does), so a sound only slightly above a noisy room is not "your last sound", while real speech is', () => {
+  const { b, logs } = bareBridge();
+  feed(b, 0.012, 300);                                               // a noisy room, below the 0.02 floor: learned
+  assert.ok(b.noise > 0.01 && b.noise < 0.013, `the room level was learned (${b.noise.toFixed(4)})`);
+  feed(b, 0.025, 10); assert.equal(b.lastSoundAt, 0, '0.025 is above 0.02 but not 3 x this room: not a sound');
+  feed(b, 0.4, 6); assert.ok(b.lastSoundAt > 0, 'real speech above the room counts'); const spoke = b.lastSoundAt; feed(b, 0.012, 40); assert.equal(b.lastSoundAt, spoke);
+  b.onEvent({ type: 'speechEnd' }); b.onVoice(voice()); assert.match(logs.join('\n'), /reply 1: first audio \d+ ms after your turn ended, \d+ ms after your last sound/);
+});
+
+test('reply timer: two turns answered together are said so and counted as merged; a line she begins on her own is not an answer; chunks of one reply are one reply', async () => {
+  const { b, logs } = bareBridge();
+  b.onVoice(voice()); assert.match(logs.join('\n'), /she spoke on her own/);
+  await sleep(1300); b.onEvent({ type: 'speechEnd' }); await sleep(30); b.onEvent({ type: 'speechEnd' }); await sleep(30);
+  b.onVoice(voice()); b.onVoice(voice()); b.onVoice(voice());       // one reply, three chunks
+  assert.match(logs.join('\n'), /reply 1: first audio \d+ ms after your turn ended(, \d+ ms after your last sound)?; 2 turns of yours were answered together/); assert.equal(logs.filter((l) => /^reply /.test(l)).length, 1);
+  b.onEvent({ type: 'speechEnd' }); b.stop('test');                  // a turn left unanswered when the call ends
+  assert.match(logs.join('\n'), /conversation over \(test\): 3 turn\(s\) heard, 1 answer timed, 1 turn\(s\) answered together with another, 1 not answered, 1 line\(s\) she began on her own, slowest \d+ ms after your turn ended/);
+});
+
+// ---- no words in the call logs ----
+test('the call\'s latency log line shows numbers and flags only; what the person said is logged only under TURN_DEBUG', () => {
+  const timing = { holdMs: 0, metaEndpointMs: 120, endedAt: 5, decidedAt: 1700000000000, guess: 'hit', heard: 'my private tulips sentence', predicted: 'my private tulips', ttsFirstMs: 300, speechEndToFirstAudioMs: 1800, replyReadyMs: 900, noVoice: false, note: 'a text field added later' };
+  const line = JSON.stringify(latencyForLog(timing, false)); assert.doesNotMatch(line, /tulips|heard|predicted|text field/); assert.match(line, /"speechEndToFirstAudioMs":1800/); assert.match(line, /"guess":"hit"/); assert.doesNotMatch(line, /endedAt/);
+  assert.match(JSON.stringify(latencyForLog(timing, true)), /tulips/, 'TURN_DEBUG still shows the words, for a developer at a desk');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'), /console\.log\('latency', JSON\.stringify\(latencyForLog\(timing\)\)\)/, 'the real log line goes through the filter');
 });

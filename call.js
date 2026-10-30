@@ -326,6 +326,13 @@ const WARM_URL = 'https://api.elevenlabs.io/v1/models';
 const WARM_EVERY_MS = 2500;
 const TURN_DEBUG = Boolean(process.env.MAYA_TURN_DEBUG);
 const dbg = (...a) => { if (TURN_DEBUG) console.log('turn', ...a); };
+// What the 'latency' log line may show: numbers, flags and the guess kind only. The words the person said (heard / predicted) are never logged unless TURN_DEBUG is set:
+// Render keeps logs, and a call's words are thrown away (privacy page). A whitelist, so a text field added to the timing later cannot leak.
+function latencyForLog(timing, debug = TURN_DEBUG) {
+  const t = { ...timing, endedAt: undefined };
+  if (debug) return t;
+  return Object.fromEntries(Object.entries(t).filter(([k, v]) => typeof v === 'number' || typeof v === 'boolean' || k === 'guess'));
+}
 
 // Calls that can be picked up again by a new socket (render-test, hosting): token -> Call. The token is secret and goes only to that call's browser.
 const liveCalls = new Map();
@@ -1910,7 +1917,7 @@ class Call {
       timing.excited = excited;
       timing.whisperPieces = 0; // whispers are off
       this.prevDelivery = delivery;
-      console.log('latency', JSON.stringify({ ...timing, endedAt: undefined }));
+      console.log('latency', JSON.stringify(latencyForLog(timing)));
     }
     this.send({ type: 'audioEnd', timing: timing ? { ...timing, endedAt: undefined } : null, ...(this.noVoice ? { noVoice: true, ...(this.fakeAudio ? { fakeAudio: true } : {}) } : {}) });
   }
@@ -1925,4 +1932,4 @@ class Call {
   }
 }
 
-module.exports = { saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
