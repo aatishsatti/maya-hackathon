@@ -3,6 +3,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const dataDirs = require('./datadirs').guard();   // FIRST: before memory.js (via call.js) creates its folder at import time; refuses to start with a plain message if a data folder cannot be used
 const { accept } = require('./ws');
 const { Call } = require('./call');
 const { requireRealEnv } = require('./brain');
@@ -260,12 +261,8 @@ server.on('upgrade', (req, socket) => {
 
 server.listen(PORT, () => console.log(`Maya running at http://localhost:${PORT} (mode: ${MODE})`));
 
-// Where the data lives. On Render only what is under the disk's mount path survives a deploy or a restart (render.yaml points the four directories at /var/data); a directory inside
-// the app folder is wiped every time. Said at start, so a missing disk is never a surprise. Paths are not secrets, but only the folder NAME is printed.
-const DATA_DIRS = { MAYA_DATA_DIR: ['data', 'profiles'], MAYA_CARE_DIR: ['data', 'care'], MAYA_WA_DIR: ['data', 'whatsapp'], MAYA_MEDIA_DIR: ['data', 'media'] };
-const insideApp = Object.entries(DATA_DIRS).filter(([k, d]) => { const dir = path.resolve(process.env[k] || path.join(__dirname, ...d)); return dir === __dirname || dir.startsWith(__dirname + path.sep); }).map(([k]) => k);
-if (MODE === 'real') console.log('data directories', JSON.stringify({ insideTheAppFolder: insideApp.length, of: Object.keys(DATA_DIRS).length }));
-if (MODE === 'real' && insideApp.length) console.warn(`WARNING: ${insideApp.join(', ')} point(s) inside the app folder, which is wiped on every deploy and restart. Set the MAYA_*_DIR variables to the persistent disk (render.yaml).`);
+// Where the data lives (datadirs.js checked it before anything loaded; this only says what it found). On Render only what is under the disk's mount path survives a deploy or a restart.
+dataDirs.report(MODE);
 
 // Render stops a service with SIGTERM on every deploy. Node does not run its exit handlers on SIGTERM by itself, so say "exit" explicitly: care.js saves everything it was
 // still holding (its saves are batched 300 ms) in its own exit handler, so the last moments before a deploy are not lost.

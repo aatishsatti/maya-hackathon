@@ -1,5 +1,5 @@
-// Deploys and restarts: Render stops the service with SIGTERM. What care.js was still holding (its saves are batched 300 ms) must reach the disk, and the server must say where its
-// data lives (a directory inside the app folder is wiped on every deploy). Also the dashboard route that sets how reminders reach the person on WhatsApp.
+// Deploys and restarts: Render stops the service with SIGTERM. What care.js was still holding (its saves are batched 300 ms) must reach the disk.
+// Also the dashboard route that sets how reminders reach the person on WhatsApp. (Where the data lives, and the refusal to start when a data folder cannot be used, are in datadirs.test.js.)
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -44,15 +44,4 @@ test('the dashboard route sets how reminders reach the person on WhatsApp (voice
     const bad = await post(s.port, `/api/care/${id}/delivery`, { reminders: 'carrier pigeon' }); assert.equal(bad.status, 400); assert.match((await bad.json()).error, /voice note or as text/);
     assert.equal((await fetch(`http://localhost:${s.port}/api/care/${id}/delivery`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: '{"reminders":"voice"}' })).status, 403, 'same origin only');
   } finally { s.child.kill('SIGKILL'); }
-});
-
-test('real mode says where the data lives: inside the app folder it warns (wiped on every deploy), on another path it does not', async () => {
-  const keys = { META_API_KEY: 'k', ELEVENLABS_API_KEY: 'k', ELEVENLABS_VOICE_ID: 'v' };
-  const inside = boot('real', { MAYA_DATA_DIR: '', MAYA_CARE_DIR: '', MAYA_WA_DIR: '', MAYA_MEDIA_DIR: '' }, keys);   // empty = the defaults, which are under data/ in the app folder
-  try { await up(inside.port); await sleep(200); } finally { inside.child.kill('SIGKILL'); }
-  assert.match(inside.out(), /data directories \{"insideTheAppFolder":4,"of":4\}/); assert.match(inside.out(), /WARNING: MAYA_DATA_DIR, MAYA_CARE_DIR, MAYA_WA_DIR, MAYA_MEDIA_DIR point\(s\) inside the app folder, which is wiped on every deploy and restart/);
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-disk-')); const disk = boot('real', dirsIn(tmp), keys);
-  try { await up(disk.port); await sleep(200); } finally { disk.child.kill('SIGKILL'); }
-  assert.match(disk.out(), /data directories \{"insideTheAppFolder":0,"of":4\}/); assert.doesNotMatch(disk.out(), /WARNING: MAYA_/); assert.match(disk.out(), /care loaded \{"profiles":0,"reminderSendsCutByRestart":0\}/);
-  assert.doesNotMatch(disk.out() + inside.out(), /\/var\/|\/tmp\/|\/private\//, 'no path is printed, only counts');
 });
