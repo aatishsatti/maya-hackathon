@@ -32,7 +32,7 @@ const oggopus = require('./oggopus');
 const memory = require('./memory');
 
 const DIR = () => process.env.MAYA_WA_DIR || path.join(__dirname, 'data', 'whatsapp'); // env override is for tests
-const API_VERSION = () => (/^v\d+\.\d+$/.test(process.env.WHATSAPP_API_VERSION || '') ? process.env.WHATSAPP_API_VERSION : 'v23.0');
+const API_VERSION = () => (/^v\d+\.\d+$/.test(process.env.WHATSAPP_API_VERSION || '') ? process.env.WHATSAPP_API_VERSION : 'v26.0'); // v26.0 is the version the Graph API Explorer send that worked used; WHATSAPP_API_VERSION overrides
 const GRAPH = 'https://graph.facebook.com';
 const SEEN_KEEP = 50;
 const WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -107,6 +107,12 @@ function validSignature(raw, header) {
 }
 
 // ---- Graph API calls ----
+// Which token value this process really reads, without showing it: length, sha256 prefix (compare with `printf %s "$TOKEN" | shasum -a 256`), and stray whitespace / quote / 'Bearer ' flags.
+function tokenShape() {
+  const t = process.env.WHATSAPP_TOKEN || '';
+  const odd = [t !== t.trim() && 'whitespace', /^["']|["']$/.test(t) && 'quotes', /^bearer\s/i.test(t) && 'Bearer-prefix'].filter(Boolean).join('+');
+  return `token length ${t.length}, sha256 ${crypto.createHash('sha256').update(t).digest('hex').slice(0, 8)}${odd ? ', ODD: ' + odd : ''}`;
+}
 class WaError extends Error { constructor(msg, status, code) { super(msg); this.status = status || 502; this.code = code || null; } }
 async function graph(pathPart, body) {
   if (!configured()) throw new WaError('WhatsApp is not set up on this server.', 503);
@@ -207,7 +213,7 @@ async function sendOutInner(profileId, { kind = 'text', text, who = 'family', us
   try {
     if (way === 'template') {
       const t = templateCfg() || { name: 'hello_world', lang: 'en_US' };
-      note(`template send: phone id ending ${end(process.env.WHATSAPP_PHONE_ID)}, api ${API_VERSION()}, template ${t.name}/${t.lang}`); // ids / names only: no token, no full number
+      note(`template send: phone id ending ${end(process.env.WHATSAPP_PHONE_ID)}, api ${API_VERSION()}, template ${t.name}/${t.lang}, ${tokenShape()}`); // ids / names only: no token, no full number
       const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to: l.phone, type: 'template', template: { name: t.name, language: { code: t.lang } } });
       id = d && d.messages && d.messages[0] ? d.messages[0].id : null;
     } else if (kind === 'text') {

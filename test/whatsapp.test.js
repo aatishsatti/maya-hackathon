@@ -411,7 +411,9 @@ test('a template send logs the phone id (last 4 only), API version, template nam
   voiceReset(); const { id, phone } = outside(); graphFail = { code: 10, message: '(#10) Viewer cannot access the provided Paid Message Account 1116892537450220' };
   const out = await capture(() => wa.sendOut(id, { kind: 'text', useTemplate: true }).catch(() => {}));
   assert.match(out, /template send: phone id ending 5671, api v\d+\.\d+, template hello_world\/en_US/); assert.match(out, /NOT sent: WhatsApp refused it \(10\)/);
+  assert.match(out, /token length 19, sha256 [0-9a-f]{8}(?!,? ODD)/); // shape of the token the process reads, not the token
   assert.doesNotMatch(out, /TEST-TOKEN|1409237678935671/); assert.ok(!out.includes(phone));
   const call = graphCalls.find((c) => c.body && c.body.type === 'template'); assert.match(call.url, /\/v\d+\.\d+\/1409237678935671\/messages$/, 'the PHONE number id, not the WABA id');
+  assert.match(call.url, /\/v26\.0\//, 'default API version matches the Explorer send that worked');
   clearCalls();
 });
