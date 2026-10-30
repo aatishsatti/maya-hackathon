@@ -226,7 +226,8 @@ async function sendOutInner(profileId, { kind = 'text', text, who = 'family', us
       id = await sendTextTo(l.phone, who === 'family' ? FAMILY_PREFIX + words : words);
     } else {
       let pcm;
-      try { pcm = await chat.deps.speak(who === 'family' ? FAMILY_PREFIX + words : words); } catch (e) { throw new OutError(`Maya's voice could not be made (${e.message}). Nothing was sent; you can send it as text instead.`, 502); }
+      const spoken = who === 'family' ? FAMILY_PREFIX + words : words;
+      try { pcm = await chat.deps.speak(spoken); note(`voice note made: ${spoken.length} characters sent to speech, ${(pcm.length / 48000).toFixed(1)} s of audio`); } catch (e) { throw new OutError(`Maya's voice could not be made (${e.message}). Nothing was sent; you can send it as text instead.`, 502); }
       const ogg = oggopus.encode(pcm, 24000);
       if (ogg.length > oggopus.MAX_PLAY_BYTES) throw new OutError('That is too long for a voice note. Please shorten it. Nothing was sent.', 400);
       id = await sendAudioTo(l.phone, ogg);

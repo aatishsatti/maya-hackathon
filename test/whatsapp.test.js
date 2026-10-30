@@ -296,6 +296,13 @@ test('dashboard text inside the 24 h window: one Graph text to the linked number
   assert.equal(sent().length, 1, 'a status never makes Maya reply');
 });
 
+test('a dashboard voice note logs how many characters went to speech and how many seconds of audio came back; never the words', async () => {
+  voiceReset(); const { id } = inWindow();
+  const out = await capture(() => wa.sendOut(id, { kind: 'voice', text: 'Happy birthday tulips Mum' }));
+  assert.match(out, new RegExp(`voice note made: ${(wa.FAMILY_PREFIX + 'Happy birthday tulips Mum').length} characters sent to speech, 1\\.0 s of audio`));
+  assert.doesNotMatch(out, /tulips|birthday/); clearCalls();
+});
+
 test('dashboard voice note inside the window: Maya\'s voice reads the words (announced as the family\'s), uploaded as Ogg/Opus, sent as audio voice:true', async () => {
   voiceReset(); const { id, phone } = inWindow();
   assert.deepEqual(await wa.sendOut(id, { kind: 'voice', text: 'Happy birthday Mum' }), { sent: true, via: 'free', kind: 'voice' });
