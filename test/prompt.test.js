@@ -855,7 +855,7 @@ test('TR3 hooks: a call, a call-back, an answered reminder and a missed one are 
   }
   assert.deepEqual([dayOf(id).remindersDue, dayOf(id).remindersMissed], [2, 1]);
   const src = fs.readFileSync(path.join(__dirname, '..', 'care.js'), 'utf8');
-  assert.match(src, /state === 'done'\) trendEvent[^\n]*acked: true/); assert.match(src, /state === 'no_reply' \|\| state === 'unanswered'\) trendEvent[^\n]*acked: false/);
+  assert.match(src, /state === 'done'\) trendEvent[^\n]*acked: true/); assert.match(src, /state === 'no_reply' \|\| state === 'unanswered' \|\| state === 'wa_missed' \|\| state === 'wa_failed'\) trendEvent[^\n]*acked: false/); // a WhatsApp reminder that was missed or not sent counts as not answered too
   assert.doesNotMatch(src, /'declined'\)[^\n]*trendEvent/, 'a decline is a choice, not a miss');
   slow();
 });

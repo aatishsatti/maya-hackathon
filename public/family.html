@@ -61,6 +61,11 @@
             </div>
             <button class="btn primary" type="submit">Add reminder</button>
           </form>
+          <div class="form-row">
+            <label for="deliv" class="hint">On WhatsApp, send reminders as</label>
+            <select id="deliv" aria-label="Send reminders on WhatsApp as"><option value="voice">A voice note in Maya's voice</option><option value="text">Text</option></select>
+          </div>
+          <p class="hint">A reminder goes on WhatsApp only while they have written to Maya in the last 24 hours. Every reminder shows what really happened to it: sent, delivered, read, answered, or missed. Maya is a companion, not medical care: a reminder can fail or arrive late, so never rely on it for medicine.</p>
           <div id="reminders" class="stack"></div>
         </section>
 

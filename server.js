@@ -101,6 +101,7 @@ async function handleCare(req, res, url) {
   if (!body) return sendJson(res, 400, { error: 'Bad request' });
   try {
     if (b === 'mode') return sendJson(res, 200, { mode: care.setMode(a, body.mode) });
+    if (b === 'delivery') return sendJson(res, 200, { delivery: care.setDelivery(a, body) });   // how reminders reach them on WhatsApp: a voice note in Maya's voice or text
     if (b === 'reminders' && !c) return sendJson(res, 200, { reminder: care.addReminder(a, body) });
     if (b === 'messages') return sendJson(res, 200, { notification: { id: care.sendMessage(a, body.text).id } });
     if (b === 'activity') return sendJson(res, 200, { ok: care.touch(a, 'app', Date.now(), /^[\w/+\-]{1,60}$/.test(body.tz || '') ? body.tz : null) });
@@ -258,3 +259,14 @@ server.on('upgrade', (req, socket) => {
 });
 
 server.listen(PORT, () => console.log(`Maya running at http://localhost:${PORT} (mode: ${MODE})`));
+
+// Where the data lives. On Render only what is under the disk's mount path survives a deploy or a restart (render.yaml points the four directories at /var/data); a directory inside
+// the app folder is wiped every time. Said at start, so a missing disk is never a surprise. Paths are not secrets, but only the folder NAME is printed.
+const DATA_DIRS = { MAYA_DATA_DIR: ['data', 'profiles'], MAYA_CARE_DIR: ['data', 'care'], MAYA_WA_DIR: ['data', 'whatsapp'], MAYA_MEDIA_DIR: ['data', 'media'] };
+const insideApp = Object.entries(DATA_DIRS).filter(([k, d]) => { const dir = path.resolve(process.env[k] || path.join(__dirname, ...d)); return dir === __dirname || dir.startsWith(__dirname + path.sep); }).map(([k]) => k);
+if (MODE === 'real') console.log('data directories', JSON.stringify({ insideTheAppFolder: insideApp.length, of: Object.keys(DATA_DIRS).length }));
+if (MODE === 'real' && insideApp.length) console.warn(`WARNING: ${insideApp.join(', ')} point(s) inside the app folder, which is wiped on every deploy and restart. Set the MAYA_*_DIR variables to the persistent disk (render.yaml).`);
+
+// Render stops a service with SIGTERM on every deploy. Node does not run its exit handlers on SIGTERM by itself, so say "exit" explicitly: care.js saves everything it was
+// still holding (its saves are batched 300 ms) in its own exit handler, so the last moments before a deploy are not lost.
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { console.log(`${sig}: saving and stopping`); process.exit(0); });

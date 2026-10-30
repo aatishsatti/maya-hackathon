@@ -283,8 +283,44 @@ function onStatus(st) {
     writeLinks(all);
     return true;
   }
-  return false;
+  return require('./care').reminderStatus(st.id, st.status, st.errors); // a reminder we sent: delivered / read / failed come from WhatsApp's own status, never guessed
 }
+
+// ---- Reminders (care.js asks for them; the family wrote them on the dashboard) ----
+// Delivered like any message from Maya, INSIDE the 24 h window only for now (outside it WhatsApp needs an approved template: the next phase), as a voice note in her voice
+// (the default) or as text, per person. The words are the family's own task and nothing of Maya's: no advice, no dose, no extra. Only a result WITH a WhatsApp message id is "sent".
+const REMINDER_CAP = 30;   // reminder messages per person per rolling 24 h (a loop or a flood must stop somewhere)
+const endPunct = (t) => String(t || '').trim().replace(/[\s.!?,;:]+$/, '');
+function reminderWords(task, nudge) {
+  const { isFamilyMessage, stripAddressee } = require('./call');
+  const message = isFamilyMessage(task), shown = endPunct(message ? task : stripAddressee(task));
+  const what = message ? 'message' : 'reminder';
+  if (nudge) return { text: `Just checking that you saw this ${what} from your family: ${shown}. Reply when you have seen it.`, spoken: `Just checking that you saw this ${what} from your family: ${shown}. Reply when you have seen it.` };
+  return { text: `A ${what} from your family: ${shown}. Reply when you have seen this.`, spoken: `A ${what} from your family: ${shown}. Reply when you have seen this.` };
+}
+async function sendReminder(profileId, { task, nudge = false } = {}) {
+  if (!configured()) return { ok: false, reason: 'not_configured' };
+  const l = linkOf(profileId);
+  if (!l || !l.optIn) return { ok: false, reason: 'not_linked' };
+  const now = Date.now();
+  if (!(l.lastInboundAt && now - l.lastInboundAt < WINDOW_MS)) return { ok: false, reason: 'window_closed' };
+  const today = (l.remSent || []).filter((t) => now - t < WINDOW_MS);
+  if (today.length >= REMINDER_CAP) return { ok: false, reason: 'daily_cap' };
+  update(profileId, (x) => { x.remSent = [...today, now]; });   // the slot is taken BEFORE the network call
+  const w = reminderWords(task, nudge);
+  const care = require('./care'); let voiceFailed = false;
+  if (((care.get(profileId) || {}).delivery || {}).reminders !== 'text') {
+    try {
+      const pcm = await chat.deps.speak(w.spoken); const ogg = oggopus.encode(pcm, 24000);
+      if (ogg.length > oggopus.MAX_PLAY_BYTES) throw new Error('too long to play');
+      const wamid = await sendAudioTo(l.phone, ogg);
+      return wamid ? { ok: true, via: 'voice', wamid } : { ok: false, reason: 'no_id' };
+    } catch (e) { voiceFailed = true; note('a reminder voice note could not be made or sent: it goes as text instead'); } // counts only: no reason text, no words
+  }
+  try { const wamid = await sendTextTo(l.phone, w.text); return wamid ? { ok: true, via: 'text', wamid, voiceUnavailable: voiceFailed } : { ok: false, reason: 'no_id' }; }
+  catch (e) { return { ok: false, reason: 'meta_error', error: { code: e.code || null, title: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } }; }
+}
+require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, send: sendReminder });
 
 // ---- Maya's words must be true about WhatsApp ----
 // A text door cannot ring a phone or hold a live WhatsApp call. A reply that promises one is replaced by the plain truth.
@@ -311,6 +347,7 @@ async function onText(l, msg) {
     await sendTextTo(l.phone, 'Okay. I will not message you here again. You can still talk to me in the Maya app.'); // the one allowed reply: confirms the opt-out
     return;
   }
+  if (require('./call').isAck(msg.text.body)) require('./care').reminderAckWhatsApp(l.profileId); // a reply to a reminder: answered (the words are judged in memory and never kept here)
   const r = await chat.sendText(l.profileId, msg.text.body, null, { source: 'whatsapp' });
   const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
   if (!reply || !reply.text) throw new WaError('Maya had no reply.');
@@ -328,6 +365,8 @@ async function onAudio(l, msg) {
   let r;
   try { r = await chat.sendVoiceNote(l.profileId, wav, null, { source: 'whatsapp' }); }
   catch (e) { if (e.status === 422) { await sendTextTo(l.phone, 'I could not hear any words in that voice note. Could you try again, or type it for me?'); return 'unheard'; } throw e; }
+  const said = r.messages.find((m) => m.role === 'senior');
+  if (said && require('./call').isAck(said.text)) require('./care').reminderAckWhatsApp(l.profileId);   // a spoken reply to a reminder: answered
   const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
   if (!reply || !reply.text) throw new WaError('Maya had no reply.');
   const words = mayaWords(reply.text);
@@ -468,4 +507,4 @@ async function handleWebhook(payload) {
   return (await Promise.all(done)).flat(); // calls answer with one result per call
 }
 
-module.exports = { note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

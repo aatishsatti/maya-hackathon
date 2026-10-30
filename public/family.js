@@ -147,7 +147,8 @@
   function list(node, items, empty) { node.replaceChildren(...(items.length ? items : [el('div', 'empty', empty)])); }
 
   // Reminder state -> short pill. Done and Missed are the two the family cares about; the full sentence stays below it.
-  const REM_PILL = { done: ['pill-ok', 'Done'], missed: ['pill-miss', 'Missed'], no_reply: ['pill-wait', "Hasn't replied yet"], unanswered: ['pill-miss', "Couldn't reach"], declined: ['pill-wait', 'Declined'], calling: ['pill-info', 'Calling'], answered: ['pill-info', 'Picked up'] };
+  const REM_PILL = { done: ['pill-ok', 'Answered'], missed: ['pill-miss', 'Missed'], no_reply: ['pill-wait', "Hasn't replied yet"], unanswered: ['pill-miss', "Couldn't reach"], declined: ['pill-wait', 'Declined'], calling: ['pill-info', 'Calling'], answered: ['pill-info', 'Picked up'],
+    wa_sending: ['pill-info', 'Sending'], wa_sent: ['pill-info', 'Sent'], wa_delivered: ['pill-info', 'Delivered'], wa_read: ['pill-wait', 'Read'], wa_missed: ['pill-miss', 'Missed'], wa_failed: ['pill-miss', 'Not sent'] };
   // Message status -> pill. The words are the server's own: Sent, Delivered, Seen, Played, Replied, Hasn't replied yet.
   const NOTE_PILL = (label) => (/^Replied/.test(label) ? 'pill-ok' : /^Hasn't/.test(label) ? 'pill-wait' : /^(Seen|Played)/.test(label) ? 'pill-info' : 'pill-plain');
 
@@ -181,6 +182,7 @@
       return c;
     });
     list($('reminders'), rem, 'No reminders yet.');
+    if (v.delivery && document.activeElement !== $('deliv')) $('deliv').value = v.delivery.reminders;
     const nots = v.notifications.map((n) => {
       const c = el('div', 'item');
       const head = el('div', 'item-head');
@@ -276,6 +278,7 @@
   function pick(newId) { id = newId; store.set(id); showPeople(); clearInterval(timer); load(); timer = setInterval(load, 3000); }
 
   $('who').addEventListener('change', () => pick($('who').value));
+  $('deliv').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { reminders: $('deliv').value }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('remForm').addEventListener('submit', (e) => {
     e.preventDefault();
     api(`/api/care/${id}/reminders`, 'POST', { task: $('task').value, dueAt: new Date($('at').value).getTime(), repeat: $('repeat').value })

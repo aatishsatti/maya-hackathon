@@ -46,7 +46,7 @@ chat.deps.scamText = async () => ({ level: 'none', type: 'none', reading: '', si
 
 // Graph stub: records every call, answers like Meta (media lookup, media download, upload, send).
 const graphCalls = [];
-let graphFail = null;
+let graphFail = null, outN = 0;
 const inboundMedia = new Map(); // media id -> Buffer (what WhatsApp would hold for a voice note)
 let callHook = null, callFail = null; // calls tests: a hook run on each POST to /calls, and per-action Meta failures
 wa.deps.fetch = async (url, opts = {}) => {
@@ -59,7 +59,7 @@ wa.deps.fetch = async (url, opts = {}) => {
   const m = /graph\.facebook\.com\/v[\d.]+\/(\d+|wamid[\w.]*|MEDIA[\w]*)$/.exec(url);
   if (m && !opts.method) return done({ url: `https://lookaside.test/${m[1]}`, mime_type: 'audio/ogg; codecs=opus', file_size: inboundMedia.get(m[1]).length, id: m[1] });
   if (/\/media$/.test(url)) return done({ id: `MEDIAUP${graphCalls.length}` });
-  return done({ messages: [{ id: `wamid.out${graphCalls.length}` }] });
+  return done({ messages: [{ id: `wamid.out${++outN}` }] });
 };
 const sent = () => graphCalls.filter((c) => /\/messages$/.test(c.url)).map((c) => c.body);
 const uploads = () => graphCalls.filter((c) => /\/media$/.test(c.url));
@@ -709,6 +709,128 @@ test('a WhatsApp text "Tell my family I am not feeling well" sends the family on
   assert.deepEqual(await wa.handleWebhook(incoming(phone, 'Did you tell my family?')), ['text']); assert.equal(familyNotes(), 0);
   assert.deepEqual(await wa.handleWebhook(incoming(phone, 'Tell my family I am not feeling well.')), ['text']); assert.equal(familyNotes(), 1);
   clearCalls();
+});
+
+
+// ---- Phase 2: reminders the family set are delivered on WhatsApp inside the 24 h window, with honest status, acknowledgement, a nudge and a visible Missed ----
+const MIN = 60000;
+const statusIn = (wamid, st, extra = {}) => ({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: '1409237678935671' }, statuses: [{ id: wamid, status: st, recipient_id: 'x', ...extra }] } }] }] });
+const settle = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+const remindProfile = (opts = {}) => { for (const m of memory.listProfiles()) { const q = care.get(m.id); if (q) q.reminders = []; } /* every test starts with no other reminder running */ const x = inWindow(); if (opts.mode) care.setMode(x.id, opts.mode); if (opts.tz) care.get(x.id).tz = opts.tz; if (opts.delivery) care.setDelivery(x.id, { reminders: opts.delivery }); return x; };
+const addRem = (id, task = 'take your tablets', ahead = 5000) => { const dueAt = Date.now() + ahead; const r = care.addReminder(id, { task, dueAt, repeat: 'none' }); return { r, dueAt }; };
+const rem = (id) => care.get(id).reminders[0];
+const stateOf = (id) => (rem(id).active || rem(id).last || {}).state;
+const reminderCalls = () => graphCalls.filter((c) => c.body || /\/media$/.test(c.url));
+const carePath = (id) => path.join(process.env.MAYA_CARE_DIR, `${id}.json`);
+
+test('Phase 2: a due reminder is saved as "sending" on DISK before the network call, then shown as sent only because WhatsApp gave a message id', async () => {
+  voiceReset(); const { id } = remindProfile({ delivery: 'text' }); const { dueAt } = addRem(id); let onDisk = null;
+  const keep = wa.deps.fetch; wa.deps.fetch = async (url, opts = {}) => { if (/\/messages$/.test(url) && !onDisk) { const f = JSON.parse(fs.readFileSync(carePath(id), 'utf8')).reminders[0]; onDisk = f.active && f.active.state; } return keep(url, opts); };
+  try { care.tick(dueAt); assert.equal(stateOf(id), 'wa_sending'); await settle(); } finally { wa.deps.fetch = keep; }
+  assert.equal(onDisk, 'wa_sending', 'the occurrence was on disk, as sending, when the message went out');
+  const a = rem(id).active; assert.equal(a.state, 'wa_sent'); assert.match(a.wamid, /^wamid\.out/); assert.equal(a.via, 'text'); assert.equal(a.voiceUnavailable, false);
+  const m = sent(); assert.equal(m.length, 1); assert.equal(m[0].type, 'text'); assert.equal(m[0].text.body, 'A reminder from your family: take your tablets. Reply when you have seen this.');
+  assert.match(care.view(id).reminders[0].active.label, /^Sent as text\. WhatsApp accepted it\.$/); clearCalls();
+});
+
+test('Phase 2: the default is a voice note in Maya\'s voice; if the voice cannot be made it goes as text and says so, never claiming a voice note', async () => {
+  voiceReset(); const a = remindProfile(); const { dueAt } = addRem(a.id);
+  care.tick(dueAt); await settle(); const m = sent(); assert.equal(m.length, 1); assert.equal(m[0].type, 'audio'); assert.equal(m[0].audio.voice, true);
+  assert.deepEqual(spoken, ['A reminder from your family: take your tablets. Reply when you have seen this.']); assert.equal(rem(a.id).active.via, 'voice'); assert.match(care.view(a.id).reminders[0].active.label, /^Sent as a voice note\. WhatsApp accepted it\.$/);
+  voiceReset(); speakFail = true; const b = remindProfile(); const d2 = addRem(b.id).dueAt; care.tick(d2); await settle();
+  assert.equal(sent().length, 1); assert.equal(sent()[0].type, 'text'); const x = rem(b.id).active; assert.equal(x.via, 'text'); assert.equal(x.voiceUnavailable, true);
+  assert.equal(care.view(b.id).reminders[0].active.label, 'Sent as text (voice unavailable). WhatsApp accepted it.'); speakFail = false; clearCalls();
+});
+
+test('Phase 2: delivered and read come ONLY from WhatsApp\'s status webhooks and never go backwards; no status, no claim', async () => {
+  voiceReset(); const { id } = remindProfile({ delivery: 'text' }); const { dueAt } = addRem(id); care.tick(dueAt); await settle(); const wamid = rem(id).active.wamid;
+  assert.equal(stateOf(id), 'wa_sent', 'sent is as far as it goes with no status');
+  await wa.handleWebhook(statusIn(wamid, 'delivered')); assert.equal(stateOf(id), 'wa_delivered'); assert.equal(care.view(id).reminders[0].active.label, 'Delivered to their phone, not read yet');
+  await wa.handleWebhook(statusIn(wamid, 'read')); assert.equal(stateOf(id), 'wa_read'); assert.equal(care.view(id).reminders[0].active.label, 'Read, no reply yet');
+  await wa.handleWebhook(statusIn(wamid, 'delivered')); assert.equal(stateOf(id), 'wa_read', 'a late "delivered" does not take it back from read');
+  assert.deepEqual(await wa.handleWebhook(statusIn('wamid.not-ours', 'read')), []); assert.equal(stateOf(id), 'wa_read', 'an id that is not ours changes nothing'); clearCalls();
+});
+
+test('Phase 2: a reply that acknowledges it answers the reminder; "not now" does not; a voice note reply counts too; the family sees Answered', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(PLAIN); const { dueAt } = addRem(id); care.tick(dueAt); await settle(); clearCalls();
+  await wa.handleWebhook(incoming(phone, 'Not now, later please')); assert.equal(stateOf(id), 'wa_sent', 'not an acknowledgement');
+  await wa.handleWebhook(incoming(phone, 'ok thanks, got it')); assert.equal(stateOf(id), 'done'); assert.equal(rem(id).last.answeredBy, 'a reply on WhatsApp'); assert.equal(care.view(id).reminders[0].last.label, 'Done, senior replied');
+  const v = remindProfile({ delivery: 'text' }); transcript = 'okay I have taken them'; const d2 = addRem(v.id).dueAt; care.tick(d2); await settle(); clearCalls();
+  assert.deepEqual(await wa.handleWebhook(voiceIn(v.phone)), ['voice']); assert.equal(stateOf(v.id), 'done', 'a spoken reply answers it too');
+  voiceReset(); clearCalls();
+});
+
+test('Phase 2: outside the 24 h window nothing is sent (no Meta call), it is shown as Not sent with the reason; the family is told in cautious and ultra, not in standard', async () => {
+  for (const [mode, kind] of [['standard', null], ['cautious', 'gentle'], ['ultra', 'alert']]) {
+    voiceReset(); const x = outside(); care.setMode(x.id, mode); const { dueAt } = addRem(x.id); care.tick(dueAt); await settle();
+    assert.equal(stateOf(x.id), 'wa_failed'); assert.equal(rem(x.id).last.reason, 'window_closed'); assert.equal(graphCalls.length, 0, 'no Meta call at all');
+    assert.equal(care.view(x.id).reminders[0].last.label, "Not sent: WhatsApp's 24-hour window is closed, so Maya cannot message them yet");
+    const fam = care.get(x.id).notifications.filter((n) => n.to === 'family' && n.ref === 'reminder_failed'); assert.equal(fam.length, kind ? 1 : 0); if (kind) { assert.equal(fam[0].kind, kind); assert.match(fam[0].text, /Maya could not send the reminder "take your tablets"/); }
+  }
+});
+
+test('Phase 2: a Meta refusal is shown as Not sent with its error code, never as sent; a send with no message id is not "sent" either', async () => {
+  voiceReset(); const a = remindProfile({ delivery: 'text' }); graphFail = { code: 131026, message: 'Message undeliverable' }; const d = addRem(a.id).dueAt; care.tick(d); await settle();
+  assert.equal(stateOf(a.id), 'wa_failed'); assert.equal(rem(a.id).last.error.code, 131026); assert.equal(care.view(a.id).reminders[0].last.label, 'Not sent: Message undeliverable (WhatsApp error 131026)'); clearCalls();
+  const b = remindProfile({ delivery: 'text' }); const keep = wa.deps.fetch; wa.deps.fetch = async (url, opts = {}) => (/\/messages$/.test(url) ? { ok: true, status: 200, json: async () => ({ messages: [] }) } : keep(url, opts));
+  try { const d2 = addRem(b.id).dueAt; care.tick(d2); await settle(); } finally { wa.deps.fetch = keep; }
+  assert.equal(stateOf(b.id), 'wa_failed'); assert.equal(rem(b.id).last.reason, 'no_id'); clearCalls();
+  const c = remindProfile({ delivery: 'text' }); const d3 = addRem(c.id).dueAt; care.tick(d3); await settle(); const wamid = rem(c.id).active.wamid;
+  await wa.handleWebhook(statusIn(wamid, 'failed', { errors: [{ code: 131049, title: 'Not delivered to protect the ecosystem' }] }));
+  assert.equal(stateOf(c.id), 'wa_failed'); assert.equal(rem(c.id).last.reason, 'whatsapp_failed'); assert.equal(rem(c.id).last.error.code, 131049); clearCalls();
+});
+
+test('Phase 2: one nudge after 10 minutes if not answered, then Missed after 60 minutes, visible in every mode; standard says nothing more, cautious a gentle note, ultra an alert', async () => {
+  for (const [mode, kind] of [['standard', null], ['cautious', 'gentle'], ['ultra', 'alert']]) {
+    voiceReset(); const x = remindProfile({ mode, delivery: 'text' }); const { dueAt } = addRem(x.id); care.tick(dueAt); await settle(); clearCalls();
+    care.tick(dueAt + 5 * MIN); await settle(); assert.equal(sent().length, 0, 'too early for the nudge');
+    care.tick(dueAt + 10 * MIN + 1000); await settle(); assert.equal(sent().length, 1); assert.equal(sent()[0].text.body, 'Just checking that you saw this reminder from your family: take your tablets. Reply when you have seen it.');
+    care.tick(dueAt + 20 * MIN); await settle(); assert.equal(sent().length, 1, 'only ONE nudge'); assert.equal(rem(x.id).active.nudged, true);
+    care.tick(dueAt + 61 * MIN); await settle(); assert.equal(stateOf(x.id), 'wa_missed'); assert.equal(care.view(x.id).reminders[0].last.label, 'Missed: no reply within 60 minutes'); assert.equal(rem(x.id).active, null);
+    const fam = care.get(x.id).notifications.filter((n) => n.to === 'family' && n.ref === 'reminder_missed'); assert.equal(fam.length, kind ? 1 : 0, mode); if (kind) { assert.equal(fam[0].kind, kind); assert.match(fam[0].text, /has not confirmed the reminder "take your tablets"/); }
+    care.tick(dueAt + 90 * MIN); assert.equal(care.get(x.id).notifications.filter((n) => n.ref === 'reminder_missed').length, kind ? 1 : 0, 'the family is told once'); clearCalls();
+  }
+});
+
+test('Phase 2: quiet hours (22:00-07:00, when the time zone is known): the reminder is sent at its time, but the nudge and the family note wait; with no time zone nothing is assumed', async () => {
+  voiceReset(); const x = remindProfile({ mode: 'ultra', delivery: 'text', tz: 'UTC' }); const due = Date.UTC(2026, 10, 3, 22, 50);
+  care.addReminder(x.id, { task: 'take your tablets', dueAt: Date.now() + 5000, repeat: 'none' }); care.get(x.id).reminders[0].dueAt = due;
+  care.tick(due); await settle(); assert.equal(sent().length, 1, 'the reminder itself goes at the time the family chose, even in quiet hours'); clearCalls();
+  care.tick(due + 11 * MIN); await settle(); assert.equal(sent().length, 0, 'the nudge waits for 07:00');
+  care.tick(due + 61 * MIN); await settle(); assert.equal(stateOf(x.id), 'wa_missed', 'Missed is recorded at once'); assert.equal(care.get(x.id).notifications.filter((n) => n.ref === 'reminder_missed').length, 0, 'but the family note is held');
+  assert.equal(rem(x.id).last.escalate.pending, true);
+  care.tick(Date.UTC(2026, 10, 4, 7, 1)); assert.equal(care.get(x.id).notifications.filter((n) => n.ref === 'reminder_missed' && n.kind === 'alert').length, 1, 'sent once quiet hours end'); assert.equal(rem(x.id).last.escalate.pending, false);
+  voiceReset(); const y = remindProfile({ mode: 'cautious', delivery: 'text' }); assert.equal(care.get(y.id).tz, null); const d2 = Date.UTC(2026, 10, 3, 23, 0); care.addReminder(y.id, { task: 'rest', dueAt: Date.now() + 5000, repeat: 'none' }); care.get(y.id).reminders[0].dueAt = d2;
+  care.tick(d2); await settle(); clearCalls(); care.tick(d2 + 11 * MIN); await settle(); assert.equal(sent().length, 1, 'no time zone known: no quiet hours assumed'); clearCalls();
+});
+
+test('Phase 2: never sent late (the 30 minute rule stays); a restart in the middle of sending is shown as not sent and is NEVER sent again; finished one-time reminders go after 30 days', async () => {
+  voiceReset(); const a = remindProfile({ delivery: 'text' }); const { dueAt } = addRem(a.id); care.tick(dueAt + 31 * MIN); await settle(); assert.equal(graphCalls.length, 0, 'nothing is sent 31 minutes late'); assert.equal(stateOf(a.id), 'missed');
+  voiceReset(); const b = remindProfile({ delivery: 'text' }); const d2 = addRem(b.id).dueAt; care.tick(d2); const key = rem(b.id).active.key; assert.equal(stateOf(b.id), 'wa_sending');
+  // the process "restarts" here: nothing in memory but the file on disk
+  const onDisk = JSON.parse(fs.readFileSync(carePath(b.id), 'utf8')); assert.equal(onDisk.reminders[0].active.state, 'wa_sending'); assert.equal(onDisk.reminders[0].active.key, key);
+  await settle(); clearCalls(); care.get(b.id).reminders[0].active = onDisk.reminders[0].active; care.get(b.id).reminders[0].last = null; care.get(b.id).reminders[0].active.state = 'wa_sending'; care.get(b.id).reminders[0].active.wamid = null;
+  const keepSpy = graphCalls.length; care.start(); assert.equal(stateOf(b.id), 'wa_failed'); assert.equal(rem(b.id).last.reason, 'restart'); assert.equal(graphCalls.length, keepSpy, 'recovery sends nothing'); care.tick(d2 + 5 * MIN); await settle(); assert.equal(graphCalls.length, keepSpy, 'and nothing later either');
+  assert.equal(care.view(b.id).reminders[0].last.label, 'Not sent: the server restarted while sending, so it may not have reached them');
+  const c = remindProfile({ delivery: 'text' }); addRem(c.id); care.get(c.id).reminders[0].dueAt = null; care.get(c.id).reminders[0].last = { dueAt: Date.now(), state: 'done', at: Date.now() - 31 * 24 * 60 * MIN, attempts: 1 };
+  care.addReminder(c.id, { task: 'again', dueAt: Date.now() + 99999, repeat: 'daily' }); care.tick(Date.now()); assert.deepEqual(care.get(c.id).reminders.map((r) => r.task), ['again'], 'finished one-time reminder deleted after 30 days; a repeating one kept');
+  const d = remindProfile({ delivery: 'text' }); addRem(d.id); care.get(d.id).reminders[0].dueAt = null; care.get(d.id).reminders[0].last = { dueAt: Date.now(), state: 'done', at: Date.now() - 29 * 24 * 60 * MIN, attempts: 1 }; care.tick(Date.now()); assert.equal(care.get(d.id).reminders.length, 1, 'kept at 29 days'); clearCalls();
+});
+
+test('Phase 2: a person with no WhatsApp link keeps the old in-app ring; a reminder during a live call is still spoken in the call; delivery preference is validated', async () => {
+  voiceReset(); const id = senior(); const { dueAt } = addRem(id); care.tick(dueAt); await settle(); assert.equal(stateOf(id), 'calling', 'the in-app ring, as before'); assert.equal(graphCalls.length, 0); care.decline(id, rem(id).active.outreachId);
+  const p = remindProfile(); assert.deepEqual(care.setDelivery(p.id, { reminders: 'text' }), { reminders: 'text' }); assert.equal(care.view(p.id).delivery.reminders, 'text'); assert.throws(() => care.setDelivery(p.id, { reminders: 'carrier pigeon' }), /voice note or as text/);
+  assert.equal(care.get(senior()).delivery.reminders, 'voice', 'default: a voice note');
+});
+
+test('Phase 2: reminder logs are counts and kinds only; a family message is passed on as a message; the daily cap stops a flood', async () => {
+  voiceReset(); const x = remindProfile({ delivery: 'text' }); addRem(x.id, 'take my private tulips pills'); const rr = rem(x.id);
+  const due = rr.dueAt; const logs = []; const l0 = console.log; console.log = (...a) => logs.push(a.join(' ')); try { care.tick(due); await settle(); care.tick(due + 11 * MIN); await settle(); care.tick(due + 61 * MIN); await settle(); } finally { console.log = l0; }
+  const out = logs.join('\n'); assert.match(out, /reminder \{"event":"sent","via":"text","voiceUnavailable":false\}/); assert.match(out, /reminder \{"event":"nudge sent"\}/); assert.match(out, /reminder \{"event":"missed"\}/); assert.doesNotMatch(out, /tulips|pills|TEST-TOKEN/); assert.ok(!out.includes(x.phone));
+  assert.equal(wa.reminderWords("Mum, it's your daughter - I love you!", false).text, "A message from your family: Mum, it's your daughter - I love you. Reply when you have seen this.");
+  assert.equal(wa.reminderWords('Take your meds mom', false).text, 'A reminder from your family: Take your meds. Reply when you have seen this.', 'how the family addresses her is not part of the task');
+  const y = remindProfile({ delivery: 'text' }); const all = JSON.parse(fs.readFileSync(LF(), 'utf8')); all[y.id].remSent = Array.from({ length: wa.REMINDER_CAP }, () => Date.now() - 1000); fs.writeFileSync(LF(), JSON.stringify(all));
+  clearCalls(); const d = addRem(y.id).dueAt; care.tick(d); await settle(); assert.equal(stateOf(y.id), 'wa_failed'); assert.equal(rem(y.id).last.reason, 'daily_cap'); assert.equal(graphCalls.length, 0); clearCalls();
 });
 
 test('dashboard sends are logged: the attempt, the success, every refusal and every Meta error, with the last 4 digits and the reason, never the family\'s words', async () => {

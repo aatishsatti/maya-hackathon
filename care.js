@@ -35,6 +35,10 @@ const cfg = {
   quietStart: 22, quietEnd: 7,      // local hours; asleep is not an alarm
   lineWindowMs: 3 * 24 * 60 * MIN,  // dynamic lines never repeat inside this window
   reminderLateMs: 30 * MIN,         // a reminder missed by more than this (server down) is marked Missed, never called late
+  waNudgeMs: 10 * MIN * SCALE,      // a reminder sent on WhatsApp and not answered: ONE nudge after this
+  waMissMs: 60 * MIN * SCALE,       // ...and it is marked Missed (visible, never hidden) after this
+  waSendStuckMs: 2 * MIN * SCALE,   // a send that never answered in this long is shown as not sent
+  doneKeepMs: 30 * 24 * 60 * MIN,   // a finished one-time reminder is deleted after 30 days (the privacy page says so)
   expireCriticalMs: 3 * 24 * 60 * MIN * SCALE, // a safety / medical ticket the family never sees closes after this (NOT confirmed safe)
   expireLightMs: 2 * 24 * 60 * MIN * SCALE,    // a Flag / gentle-note ticket the family never sees closes after this
   resolveWithinMs: Infinity,        // any return-and-talk resolves; see onSeniorSpoke
@@ -50,7 +54,8 @@ const MODES = {
 const cache = new Map();
 const file = (id) => path.join(DIR, `${id}.json`);
 const uid = () => crypto.randomBytes(4).toString('hex');
-const blank = (id) => ({ id, mode: 'standard', callCount: 0, tz: null, lastActivity: { maya: null, app: null, whatsapp: null }, reminders: [], flags: [], notifications: [], lines: {}, safetyHistory: [], scams: [], days: [], trend: null });   // days: 30 days of daily NUMBERS (trends.js), trend: the last judgement
+const blank = (id) => ({ id, mode: 'standard', callCount: 0, tz: null, lastActivity: { maya: null, app: null, whatsapp: null }, reminders: [], flags: [], notifications: [], lines: {}, safetyHistory: [], scams: [], days: [], trend: null, delivery: { reminders: 'voice' } });   // days: 30 days of daily NUMBERS (trends.js), trend: the last judgement
+const DELIVERY = ['voice', 'text'];
 const dirty = new Set();
 let flushTimer = null;
 
@@ -63,6 +68,12 @@ function flush() {
     catch (e) { console.error('Care save failed:', e.message); }
   }
   dirty.clear();
+}
+// Saved to disk RIGHT NOW (not in 300 ms): used before a network call, so a restart in the middle can never send the same reminder twice.
+function flushOne(id) {
+  const st = cache.get(id); if (!st) return;
+  try { fs.writeFileSync(`${file(id)}.tmp`, JSON.stringify(st, null, 2)); fs.renameSync(`${file(id)}.tmp`, file(id)); dirty.delete(id); }
+  catch (e) { console.error('Care save failed:', e.message); }
 }
 function save(id) { dirty.add(id); if (!flushTimer) { flushTimer = setTimeout(flush, 300); flushTimer.unref(); } }
 process.on('exit', flush);
@@ -77,6 +88,7 @@ function get(id) {
   if (!Array.isArray(s.days)) s.days = [];           // an older care file has no daily numbers yet
   if (!s.trend || typeof s.trend !== 'object') s.trend = null;
   if (!MODES[s.mode]) s.mode = 'standard';
+  if (!s.delivery || typeof s.delivery !== 'object' || !DELIVERY.includes(s.delivery.reminders)) s.delivery = { reminders: 'voice' }; // how a reminder reaches the person on WhatsApp: a voice note in Maya's voice (default) or text
   cache.set(id, s);
   return s;
 }
@@ -858,14 +870,15 @@ function deleteReminder(id, rid) {
 }
 function findReminder(id, rid) { const p = get(id); return p && p.reminders.find((r) => r.id === rid); }
 
-function finishOccurrence(p, rid, state) {
+function finishOccurrence(p, rid, state, extra = {}) {
   const r = p.reminders.find((x) => x.id === rid);
   if (!r) return;
   const act = r.active || { dueAt: r.dueAt, attempts: 0 };
-  r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0 };
+  const wa = act.channel === 'whatsapp' ? { channel: 'whatsapp', via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged) } : {};
+  r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...extra };
   r.active = null;
   if (state === 'done') trendEvent(p.id, { kind: 'reminder', acked: true });                          // answered
-  else if (state === 'no_reply' || state === 'unanswered') trendEvent(p.id, { kind: 'reminder', acked: false });   // missed (a decline is a choice, not counted)
+  else if (state === 'no_reply' || state === 'unanswered' || state === 'wa_missed' || state === 'wa_failed') trendEvent(p.id, { kind: 'reminder', acked: false });   // missed (a decline is a choice, not counted)
   save(p.id);
 }
 function advanceDue(r, now) {
@@ -904,6 +917,8 @@ function fireReminder(p, r, now) {
     occ.notifId = n.id; advance(p, n, 'delivered');
     r.active = occ;
     if (!live.deliverReminder(r)) { r.active = null; return false; }
+  } else if (reminderSender && reminderSender.channelFor(p.id) === 'whatsapp') {
+    return fireReminderWhatsApp(p, r, now);
   } else {
     r.active = occ;
     const o = startOutreach(p.id, { kind: 'reminder', reminderId: r.id });
@@ -915,12 +930,123 @@ function fireReminder(p, r, now) {
   return true;
 }
 
+// ---------------------------------------------------------------- reminders on WhatsApp (whatsapp.js registers the sender)
+// States of one occurrence: wa_sending -> wa_sent (WhatsApp accepted it AND gave a message id) -> wa_delivered -> wa_read (only from WhatsApp's own status
+// webhooks, never guessed) -> done (they replied) | wa_missed (no reply by waMissMs) ; or wa_failed (not sent / WhatsApp failed it). Nothing is hidden.
+let reminderSender = null;   // { channelFor(profileId) -> 'whatsapp' | null, send(profileId, { task, nudge }) -> Promise<{ ok, via, wamid, voiceUnavailable, reason, error }> }
+function setReminderSender(sender) { reminderSender = sender; }
+const WA_OPEN = new Set(['wa_sent', 'wa_delivered', 'wa_read']);
+const WA_RANK = { wa_sent: 1, wa_delivered: 2, wa_read: 3 };
+const waLog = (o) => console.log('reminder', JSON.stringify(o));   // counts and kinds only: never the task, never a number
+
+function fireReminderWhatsApp(p, r, now) {
+  const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: 'Maya sent you a reminder on WhatsApp.', ref: null });
+  const occ = { dueAt: r.dueAt, state: 'wa_sending', channel: 'whatsapp', attempts: 1, nudged: false, key: `${r.id}:${r.dueAt}`, wamid: null, via: null, notifId: n.id, startedAt: now, sentAt: null, nudgeAt: now + cfg.waNudgeMs, missAt: now + cfg.waMissMs };
+  r.active = occ;
+  advanceDue(r, now);
+  flushOne(p.id);   // on disk BEFORE the network call: a restart in the middle can never send this reminder twice
+  const id = p.id, rid = r.id, key = occ.key, task = r.task;
+  Promise.resolve().then(() => reminderSender.send(id, { task, nudge: false }))
+    .then((res) => reminderSent(id, rid, key, res), (e) => reminderSent(id, rid, key, { ok: false, reason: 'error', error: { title: String((e && e.message) || 'error').slice(0, 120) } }));
+  return true;
+}
+
+// The send came back. Only a result WITH a message id counts as sent.
+function reminderSent(id, rid, key, res) {
+  const p = get(id); const r = p && p.reminders.find((x) => x.id === rid);
+  if (!r || !r.active || r.active.key !== key || r.active.state !== 'wa_sending') return false;   // deleted, or already settled
+  const a = r.active;
+  if (res && res.ok && res.wamid) {
+    a.state = 'wa_sent'; a.wamid = res.wamid; a.via = res.via === 'voice' ? 'voice' : 'text'; a.voiceUnavailable = Boolean(res.voiceUnavailable); a.sentAt = Date.now();
+    save(id); pushFamily('refresh', { id }); waLog({ event: 'sent', via: a.via, voiceUnavailable: a.voiceUnavailable });
+    return true;
+  }
+  const reason = (res && res.reason) || 'error', error = (res && res.error) || null;
+  finishOccurrence(p, rid, 'wa_failed', { reason, error });
+  waLog({ event: 'not sent', reason, code: error && error.code ? Number(error.code) || null : null });
+  escalate(p, r, 'failed');
+  pushFamily('refresh', { id });
+  return true;
+}
+
+// WhatsApp's own status for a message we sent (webhook): delivered / read / failed. An unknown id is not ours.
+function reminderStatus(wamid, status, errors) {
+  if (!wamid) return false;
+  for (const p of cache.values()) for (const r of p.reminders) {
+    const a = r.active && r.active.wamid === wamid ? r.active : null, l = !a && r.last && r.last.wamid === wamid ? r.last : null, t = a || l;
+    if (!t) continue;
+    if (status === 'delivered' || status === 'read') {
+      t[`${status}At`] = t[`${status}At`] || Date.now();
+      const to = status === 'delivered' ? 'wa_delivered' : 'wa_read';
+      if (a && WA_RANK[to] > WA_RANK[a.state]) a.state = to;   // never goes back: read stays read
+    } else if (status === 'failed') {
+      const e = (errors || [])[0] || {}, error = { code: e.code || null, title: String(e.title || '').slice(0, 120) };
+      if (a) { finishOccurrence(p, r.id, 'wa_failed', { reason: 'whatsapp_failed', error }); waLog({ event: 'failed after sent', code: Number(error.code) || null }); escalate(p, r, 'failed'); }
+      else if (l && l.state !== 'done') { l.error = error; l.reason = l.reason || 'whatsapp_failed'; }
+    } else continue;
+    save(p.id); pushFamily('refresh', { id: p.id });
+    return true;
+  }
+  return false;
+}
+
+// The person answered on WhatsApp (words judged as an acknowledgement by the caller): the oldest reminder still waiting for one is answered.
+function reminderAckWhatsApp(id) {
+  const p = get(id); if (!p) return false;
+  const waiting = p.reminders.filter((r) => r.active && r.active.channel === 'whatsapp' && WA_OPEN.has(r.active.state)).sort((x, y) => (x.active.sentAt || 0) - (y.active.sentAt || 0));
+  const r = waiting[0]; if (!r) return false;
+  const n = p.notifications.find((x) => x.id === r.active.notifId); if (n) advance(p, n, 'replied');
+  finishOccurrence(p, r.id, 'done', { answeredBy: 'a reply on WhatsApp' });
+  pushFamily('refresh', { id }); waLog({ event: 'answered' });
+  return true;
+}
+
+// Mode decides how far a reminder that was not answered (or not sent) goes. Nothing is ever hidden: the dashboard shows Missed / Not sent in every mode.
+//   standard: nothing more.  cautious: a gentle note to the family.  ultra: an alert.  Recent activity on WhatsApp / the app means they are fine (assess: Green).
+//   Quiet hours (22:00-07:00 in their time zone, when it is known): the note waits until they end. A reminder itself is not held: the family chose its time.
+function escalate(p, r, why, now = Date.now()) {
+  if (!r.last || p.mode === 'standard') return;
+  if (assess(p, { now }).level === 'green') { r.last.escalate = { skipped: 'green' }; save(p.id); return; }
+  if (p.tz && inQuietHours(now, p.tz)) { r.last.escalate = { pending: true, why }; save(p.id); return; }
+  sendEscalation(p, r, why);
+}
+function sendEscalation(p, r, why) {
+  const kind = p.mode === 'ultra' ? 'alert' : 'gentle', name = nameOf(p.id);
+  const text = why === 'failed' ? `Maya could not send the reminder "${r.task}" to ${name}.` : `${name} has not confirmed the reminder "${r.task}" (sent ${fmtTime(r.last.sentAt || r.last.dueAt, p.tz)}).`;
+  const n = makeNotif(p, { to: 'family', kind, text, ref: `reminder_${why}` });
+  if (pushFamily('notify', { id: p.id, notifId: n.id, kind, text })) advance(p, n, 'delivered');
+  r.last.escalate = { pending: false, at: Date.now(), kind };
+  save(p.id); waLog({ event: 'family told', kind, why });
+}
+
+// Once a second (tick): the nudge, the Missed line, a stuck send, a family note that waited for quiet hours to end.
+function waTick(p, r, now) {
+  const a = r.active;
+  if (a && a.channel === 'whatsapp') {
+    const quiet = Boolean(p.tz) && inQuietHours(now, p.tz);
+    if (a.state === 'wa_sending') {
+      if (now - a.startedAt > cfg.waSendStuckMs) { finishOccurrence(p, r.id, 'wa_failed', { reason: 'no_answer', error: { title: 'WhatsApp did not answer' } }); waLog({ event: 'not sent', reason: 'no_answer' }); escalate(p, r, 'failed', now); pushFamily('refresh', { id: p.id }); }
+    } else if (WA_OPEN.has(a.state)) {
+      if (now >= a.missAt) {
+        finishOccurrence(p, r.id, 'wa_missed', {}); waLog({ event: 'missed' }); escalate(p, r, 'missed', now); pushFamily('refresh', { id: p.id });
+      } else if (!a.nudged && now >= a.nudgeAt && !quiet) {
+        a.nudged = true; a.attempts = 2; save(p.id);
+        const id = p.id, task = r.task;
+        Promise.resolve().then(() => reminderSender.send(id, { task, nudge: true })).then((res) => waLog({ event: res && res.ok && res.wamid ? 'nudge sent' : 'nudge not sent', reason: res && res.reason ? res.reason : undefined }), () => waLog({ event: 'nudge not sent', reason: 'error' }));
+      }
+    }
+  }
+  const e = r.last && r.last.escalate;
+  if (e && e.pending && !(p.tz && inQuietHours(now, p.tz))) sendEscalation(p, r, e.why);
+}
+
 let ticker = null;
 function tick(now = Date.now()) {
   for (const p of cache.values()) {
     for (const f of p.flags) if (f.status === 'active' && now - f.createdAt >= (f.safety ? cfg.expireCriticalMs : cfg.expireLightMs)) closeUnseen(p, f, now);
     for (const sc of p.scams || []) if (sc.status === 'active' && now - sc.createdAt >= cfg.expireLightMs) closeScamUnseen(p, sc, now); // scam: not an emergency, so the 2-day (light) rule
     for (const r of p.reminders) {
+      waTick(p, r, now);
       if (r.dueAt == null || r.dueAt > now || r.active) continue;
       if (now - r.dueAt > cfg.reminderLateMs) {
         r.last = { dueAt: r.dueAt, state: 'missed', at: now, attempts: 0 };
@@ -929,15 +1055,54 @@ function tick(now = Date.now()) {
       }
       fireReminder(p, r, now);
     }
+    const keep = p.reminders.filter((r) => !(r.repeat === 'none' && r.dueAt == null && !r.active && r.last && now - r.last.at > cfg.doneKeepMs));   // finished one-time reminders go after 30 days
+    if (keep.length !== p.reminders.length) { p.reminders = keep; save(p.id); }
   }
 }
 function start() {
   for (const f of fs.readdirSync(DIR)) { const m = /^([a-f0-9]{8})\.json$/.exec(f); if (m) get(m[1]); }
+  // A WhatsApp reminder that was still "sending" when the server stopped: we cannot know if it went out, so it is shown as not sent and NEVER sent again.
+  let cut = 0;
+  for (const p of cache.values()) for (const r of p.reminders) if (r.active && r.active.channel === 'whatsapp' && r.active.state === 'wa_sending') {
+    finishOccurrence(p, r.id, 'wa_failed', { reason: 'restart', error: { title: 'The server restarted while sending' } }); cut += 1;
+  }
+  console.log('care loaded', JSON.stringify({ profiles: cache.size, reminderSendsCutByRestart: cut }));
   if (!ticker) { ticker = setInterval(() => tick(), 1000); ticker.unref(); }
 }
 function stop() { clearInterval(ticker); ticker = null; }
 
 // ---------------------------------------------------------------- family-facing views and actions
+function setDelivery(id, body) {
+  const p = get(id);
+  if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  const v = body && body.reminders;
+  if (!DELIVERY.includes(v)) throw Object.assign(new Error('Reminders can go as a voice note or as text.'), { status: 400 });
+  p.delivery = { ...p.delivery, reminders: v }; save(id);
+  return p.delivery;
+}
+// One honest line for each state of a WhatsApp occurrence. The reason codes are ours, the numbers are WhatsApp's own.
+function waLabel(o) {
+  const code = o.error && o.error.code ? ` (WhatsApp error ${o.error.code})` : '';
+  switch (o.state) {
+    case 'wa_sending': return 'Sending on WhatsApp';
+    case 'wa_sent': return o.via === 'voice' ? 'Sent as a voice note. WhatsApp accepted it.' : o.voiceUnavailable ? 'Sent as text (voice unavailable). WhatsApp accepted it.' : 'Sent as text. WhatsApp accepted it.';
+    case 'wa_delivered': return 'Delivered to their phone, not read yet';
+    case 'wa_read': return 'Read, no reply yet';
+    case 'wa_missed': return `Missed: no reply within ${Math.round(cfg.waMissMs / MIN)} minutes`;
+    case 'wa_failed': return {
+      window_closed: "Not sent: WhatsApp's 24-hour window is closed, so Maya cannot message them yet",
+      restart: 'Not sent: the server restarted while sending, so it may not have reached them',
+      whatsapp_failed: `WhatsApp could not deliver it${code}`,
+      not_linked: 'Not sent: no WhatsApp number is linked, or they have stopped messages',
+      not_configured: 'Not sent: WhatsApp is not set up on the server',
+      daily_cap: 'Not sent: the daily limit of reminder messages was reached',
+      no_answer: 'Not sent: WhatsApp did not answer',
+      no_id: 'Not sent: WhatsApp gave no message id',
+    }[o.reason] || `Not sent${o.error && o.error.title ? `: ${o.error.title}` : ''}${code}`;
+    default: return null;
+  }
+}
+const occLabel = (o) => waLabel(o) || OCC_LABEL[o.state];
 const OCC_LABEL = { calling: 'Calling now', answered: 'Picked up, waiting for a reply', done: 'Done, senior replied', no_reply: "Hasn't replied yet", unanswered: "Couldn't reach senior", declined: 'Senior declined the call', missed: 'Missed: Maya could not call at that time' };
 function setMode(id, mode) {
   const p = get(id);
@@ -995,10 +1160,10 @@ function view(id) {
   const seen = lastSeen(p);
   const fl = (f) => ({ ...f, name: nameOf(id), timeline: timeline(p, f) });
   const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat,
-    active: r.active && { ...r.active, label: OCC_LABEL[r.active.state] },
-    last: r.last && { ...r.last, label: OCC_LABEL[r.last.state] } });
+    active: r.active && { ...r.active, label: occLabel(r.active) },
+    last: r.last && { ...r.last, label: occLabel(r.last) } });
   return {
-    id, name: nameOf(id), mode: p.mode, modes: MODES, appOpen: appOpen(id), inCall: liveCalls.has(id),
+    id, name: nameOf(id), mode: p.mode, modes: MODES, delivery: p.delivery, appOpen: appOpen(id), inCall: liveCalls.has(id),
     lastActivity: p.lastActivity, lastSeen: seen, lastCallAt: p.lastActivity.maya, callCount: p.callCount || 0,
     activeOutreach: activeByProfile.has(id) ? { kind: activeByProfile.get(id).kind, attempts: activeByProfile.get(id).attempts, of: cfg.maxAttempts, state: activeByProfile.get(id).state } : null,
     flags: p.flags.filter((f) => f.level === 'flag').map(fl),
@@ -1018,6 +1183,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck,
+  addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

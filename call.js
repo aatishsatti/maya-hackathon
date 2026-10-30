@@ -2020,4 +2020,4 @@ class Call {
   }
 }
 
-module.exports = { restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
