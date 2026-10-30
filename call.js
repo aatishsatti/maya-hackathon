@@ -90,10 +90,21 @@ const NUM_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six
 const TIMER_RE = /\bremind me\b(?:\s+(?:to|about|that)\s+([^.?!]+?))?\s*\b(?:in|after)\s+(\d+(?:\.\d+)?|[a-z]+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b(?:\s+(?:to|about|that)\s+([^.?!]+))?/i;
 // { seconds, task } from "remind me in 30 seconds [to X]" / "remind me to X in 5 minutes"; null if it is not a timer request.
 // The standing fact for a pending timer (see careNotes). Seconds are rounded to what a person would say.
+const dueWords = (seconds) => (seconds < 90 ? `in about ${Math.max(seconds, 1)} second${seconds === 1 ? '' : 's'}` : `in about ${Math.round(seconds / 60)} minutes`);
 function timerOpenFact(timers, now = Date.now()) {
   const next = Math.max(0, Math.round((Math.min(...timers.map((t) => t.dueAt || now)) - now) / 1000));
-  const when = next < 90 ? `in about ${Math.max(next, 1)} second${next === 1 ? '' : 's'}` : `in about ${Math.round(next / 60)} minutes`;
+  const when = dueWords(next);
   return `FACT: a reminder timer they asked for is still running (it is due ${when}) and it ONLY works while this call stays open: when the call ends the app drops it and nothing will remind them afterwards. Do not bring this up unless they ask about hanging up, leaving or ending the call, or they say goodbye. If they do, tell them plainly in one short sentence that the reminder only works while the call stays open and they will not get it if they hang up. Never say they can hang up whenever they like without saying that, never say you will remind them later or after the call, and never say you will call, ring or message them.`;
+}
+// Asking again for a reminder that is already set (same length, made a moment ago, the same thing to remember) is the SAME reminder: it is kept once, not set twice (a person who
+// says "remind me in 30 seconds to take my medicine" and then "you just remind me in 30 seconds that I have to take it" used to hear it twice, in two wordings). A different thing
+// with the same length ("take my tablets" and "call my sister", both in 5 minutes) is a different reminder and is added. Only the words in common decide: stop-words do not count.
+const RESTATE_WINDOW_MS = 120000;
+const TASK_STOP = new Set(['i', 'me', 'my', 'we', 'you', 'to', 'the', 'a', 'an', 'it', 'that', 'this', 'have', 'has', 'had', 'need', 'must', 'should', 'got', 'gotta', 'am', 'is', 'be', 'do', 'of', 'and', 'just', 'please', 'again', 'now', 'then', 'so', 'for', 'about', 'remind', 'reminder', 'in', 'on', 'at']);
+const taskWords = (t) => String(t || '').toLowerCase().replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter((w) => w && !TASK_STOP.has(w));
+function restatedTimer(timers, tm, now = Date.now()) {
+  return (timers || []).find((t) => t.seconds === tm.seconds && now - (t.createdAt || 0) <= RESTATE_WINDOW_MS
+    && (!t.task || !tm.task || taskWords(t.task).some((w) => taskWords(tm.task).includes(w)))) || null;
 }
 function parseTimer(text) {
   const m = TIMER_RE.exec(String(text || ''));
@@ -549,6 +560,7 @@ class Call {
     if (this.profile && this.awaitAck) care.reminderNoAck(this.profile.id, this.awaitAck);
     if (this.profile && this.registered) care.callEnded(this.profile.id, this, this.safety ? 'safety' : this.hungUpQuiet ? 'quiet' : 'left');
     if (this.profile && this.registered) care.safetyCut(this.profile.id, { kind: cutKind }); // an open ticket rings again whenever ANY call ends, whether or not this call had safety words
+    if (this.timers.length) console.log('timer', JSON.stringify({ event: 'dropped: the call ended before they were due', pending: this.timers.length }));
     for (const t of this.timers) clearTimeout(t.handle);
     this.saveMemory();
     clearTimeout(this.holdTimer);
@@ -1514,17 +1526,20 @@ class Call {
 
   setTimerFromWords(t) {
     const handle = setTimeout(() => this.fireTimer(t), t.seconds * 1000);
-    t.handle = handle; t.dueAt = Date.now() + t.seconds * 1000;
+    t.handle = handle; t.createdAt = Date.now(); t.dueAt = t.createdAt + t.seconds * 1000;
     this.timers.push(t);
+    console.log('timer', JSON.stringify({ event: 'set', seconds: t.seconds, hasTask: Boolean(t.task), pending: this.timers.length })); // counts only: never the words
   }
 
   async fireTimer(t) {
     this.timers = this.timers.filter((x) => x !== t);
-    if (this.closed) return;
+    if (this.closed) { console.log('timer', JSON.stringify({ event: 'not fired: call already over', seconds: t.seconds })); return; }
+    console.log('timer', JSON.stringify({ event: 'fired', seconds: t.seconds, hasTask: Boolean(t.task), lateMs: Math.max(0, Date.now() - (t.dueAt || Date.now())), pending: this.timers.length }));
     const what = t.task
       ? `The timer they asked for is up. They asked you to remind them: "${t.task}". In ONE short warm sentence say it plainly as a reminder, in your own words. Pass on only what they asked; never advise or add anything.`
       : 'The timer they asked you to set is up. In ONE short warm sentence tell them the time they asked for has come, in your own words. Add nothing else.';
     const line = await this.speakWhenFree((signal) => this.dynamicLine({ pool: 'timer', signal, what }));
+    console.log('timer', JSON.stringify({ event: line ? 'spoken' : 'not spoken (she was busy for too long or the call ended)', seconds: t.seconds }));
     if (line) care.addLine(this.profile.id, 'timer', line.said);
   }
 
@@ -1676,7 +1691,12 @@ class Call {
     if (tm && this.noTimers) {
       notes.push('They asked for a timer. In this written chat you cannot set one; say kindly that you can only remind them during a voice call, and that their family can set reminders. Promise nothing else.');
     } else if (tm) {
-      if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS) {
+      if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS && restatedTimer(this.timers, tm)) {
+        const old = restatedTimer(this.timers, tm); timerSet = true;
+        if (!old.task && tm.task) old.task = tm.task;   // the first ask had no thing to remember, the repeat has: keep it
+        console.log('timer', JSON.stringify({ event: 'already set', seconds: old.seconds, hasTask: Boolean(old.task), pending: this.timers.length })); // counts only: never the words
+        notes.push(`They asked again for a reminder that is already set (it is due ${dueWords(Math.max(0, Math.round((old.dueAt - Date.now()) / 1000)))}). Do not set another. Say in one short sentence that it is already set and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
+      } else if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS) {
         this.setTimerFromWords({ seconds: tm.seconds, task: tm.task }); timerSet = true;
         notes.push(`They asked you to remind them in ${tm.seconds < 90 ? `${tm.seconds} seconds` : `${Math.round(tm.seconds / 60)} minutes`}${tm.task ? ` about "${tm.task}"` : ''}. A timer is set for it right now. Confirm in one short sentence that you will remind them then, and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
       } else {
@@ -1994,4 +2014,4 @@ class Call {
   }
 }
 
-module.exports = { explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
