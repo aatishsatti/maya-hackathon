@@ -207,6 +207,7 @@ async function sendOutInner(profileId, { kind = 'text', text, who = 'family', us
   try {
     if (way === 'template') {
       const t = templateCfg() || { name: 'hello_world', lang: 'en_US' };
+      note(`template send: phone id ending ${end(process.env.WHATSAPP_PHONE_ID)}, api ${API_VERSION()}, template ${t.name}/${t.lang}`); // ids / names only: no token, no full number
       const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to: l.phone, type: 'template', template: { name: t.name, language: { code: t.lang } } });
       id = d && d.messages && d.messages[0] ? d.messages[0].id : null;
     } else if (kind === 'text') {

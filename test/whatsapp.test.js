@@ -406,3 +406,12 @@ test('dashboard sends are logged: the attempt, the success, every refusal and ev
   clearCalls();
   out = await capture(() => wa.sendOut(senior(), { kind: 'text', text: 'x' }).catch(() => {})); assert.match(out, /a profile with no linked number NOT sent: .*no WhatsApp number linked/);
 });
+
+test('a template send logs the phone id (last 4 only), API version, template name and language, and the Meta error code; never the token or a full number', async () => {
+  voiceReset(); const { id, phone } = outside(); graphFail = { code: 10, message: '(#10) Viewer cannot access the provided Paid Message Account 1116892537450220' };
+  const out = await capture(() => wa.sendOut(id, { kind: 'text', useTemplate: true }).catch(() => {}));
+  assert.match(out, /template send: phone id ending 5671, api v\d+\.\d+, template hello_world\/en_US/); assert.match(out, /NOT sent: WhatsApp refused it \(10\)/);
+  assert.doesNotMatch(out, /TEST-TOKEN|1409237678935671/); assert.ok(!out.includes(phone));
+  const call = graphCalls.find((c) => c.body && c.body.type === 'template'); assert.match(call.url, /\/v\d+\.\d+\/1409237678935671\/messages$/, 'the PHONE number id, not the WABA id');
+  clearCalls();
+});
