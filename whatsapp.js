@@ -20,10 +20,20 @@
 //     Template name and language are WHATSAPP_TEMPLATE_NAME / WHATSAPP_TEMPLATE_LANG in the server env (a template with variables is not supported here).
 //   Status webhook: value.statuses[] { id (the wamid we sent), status: sent | delivered | read | failed, recipient_id, errors?: [{ code, title }] }.
 //   The Graph API version is not named on the pages read: WHATSAPP_API_VERSION in the server env, default below, change it there if Meta retires it.
+//   Calls (Calling API, user-initiated; docs read: developers.facebook.com/docs/whatsapp/cloud-api/calling and .../calling/user-initiated-calls):
+//     Webhook change field "calls"; value.calls[] { id ("wacid..."), event: "connect" | "terminate", direction: "USER_INITIATED", from, to, timestamp,
+//     session { sdp_type, sdp } (connect only, NEVER logged), and on terminate: status "COMPLETED" | "FAILED", start_time, end_time, duration (seconds), errors[] { code, message } }.
+//     The docs' own samples disagree on whether `from` or `to` is the person, so the person is read from value.contacts[].wa_id, else whichever of from / to is not the business number.
+//     Answer / refuse: POST {Version}/{Phone-Number-ID}/calls { messaging_product: "whatsapp", call_id, action } with action one of connect | pre_accept | accept | reject | terminate
+//     (accept / pre_accept also carry session { sdp_type, sdp } with the answer SDP) -> { messaging_product, success: true }. The business has about 30 to 60 seconds to answer.
+//     Enabling: POST {Version}/{Phone-Number-ID}/settings { calling: { status: "ENABLED", call_icon_visibility: "DEFAULT", callback_permission_status: "ENABLED" } }.
+//     Terminate error codes (call setup, in the terminate webhook): 138019 call setup failed, 138020 relay connection failed, 138021 / 138022 media receive / transmit timeout,
+//     138023 accepted with no media; send-side: 138000 calling not enabled, 138013 / 138014 / 138015 / 138018 the number cannot take calls, 131044 no valid payment method.
+//   Calls today: every call is REFUSED (action "reject") and logged by field names only; Maya cannot answer yet (that needs a WebRTC peer, not built).
 // Server env only (never in the repo, the page or a log): WHATSAPP_TOKEN, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN, WHATSAPP_PHONE_ID.
 // Privacy: message words are never logged and never stored here. This file keeps only: which phone belongs to which profile, whether they opted in,
 // when they last wrote (for the 24 h window) and recent message ids (so a Meta retry is not answered twice).
-// Not built in this step (by design): live WhatsApp calls, PSTN, closed-phone ringing, video, groups.
+// Not built in this step (by design): answering WhatsApp calls (they are only refused), PSTN, closed-phone ringing, video, groups.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -367,12 +377,50 @@ async function onMessage(msg) {
   return 'unsupported';
 }
 
+// ---- calls: refused for now ----
+// The person's number for a call: contacts[].wa_id, else whichever of from / to is not the business number (the docs' samples disagree on the direction).
+function callerOf(value, call) {
+  const biz = cleanPhone(value.metadata && value.metadata.display_phone_number);
+  const c = (value.contacts || []).find((x) => x && typeof x.wa_id === 'string');
+  if (c) return cleanPhone(c.wa_id);
+  for (const k of [call.from, call.to]) { const d = cleanPhone(k); if (d && d !== biz) return d; }
+  return null;
+}
+// Logs the event by FIELD NAMES only (never the SDP, a number, a call id or a word), then refuses the call so the phone does not ring for a minute.
+async function onCalls(value) {
+  const out = [];
+  for (const call of value.calls || []) {
+    if (!call || typeof call.id !== 'string') continue;
+    const who = callerOf(value, call), tail = who ? end(who) : 'unknown', cid = end(call.id);
+    if (call.event === 'terminate') {
+      const er = Array.isArray(call.errors) && call.errors[0] ? `, error ${Number(call.errors[0].code) || 'unknown'}` : '';
+      note(`call ended: number ending ${tail}, call ending ${cid}, status ${String(call.status).slice(0, 12)}, duration ${Number(call.duration) || 0} s${er}`);
+      out.push('ended'); continue;
+    }
+    if (call.event !== 'connect' || call.direction !== 'USER_INITIATED') { note(`ignored a call event (${String(call.event).slice(0, 20)}, ${String(call.direction).slice(0, 20)}) for call ending ${cid}`); out.push('ignored'); continue; }
+    const l = who ? findByPhone(who) : null;
+    const why = !l ? 'no profile is linked to that number' : !l.optIn ? 'that person has not opted in or has stopped messages' : 'linked and opted in, but Maya cannot answer calls yet';
+    note(`call connect: ${call.direction} from number ending ${tail}, call ending ${cid}, fields [${Object.keys(call).sort().join(', ')}], session [${call.session && typeof call.session === 'object' ? Object.keys(call.session).sort().join(', ') : 'none'}]`);
+    try {
+      await graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', call_id: call.id, action: 'reject' });
+      note(`rejected call ending ${cid} from number ending ${tail}: ${why}`); out.push('rejected');
+    } catch (e) { note(`could NOT reject call ending ${cid} from number ending ${tail}: ${e.message}`); out.push('reject-failed'); }
+  }
+  return out;
+}
+
 // Called by server.js after it answered 200. Never throws; errors are logged as a message only (no words, no numbers).
 async function handleWebhook(payload) {
   const done = [];
   if (!payload || payload.object !== 'whatsapp_business_account') { note(`ignored a webhook POST: object is not whatsapp_business_account`); return done; }
   for (const e of payload.entry || []) for (const c of e.changes || []) {
-    if (c.field !== 'messages' || !c.value) { note(`ignored a webhook change for field ${String(c.field).slice(0, 40)} (only 'messages' is read)`); continue; }
+    if (c.field === 'calls' && c.value) {
+      const cp = c.value.metadata && c.value.metadata.phone_number_id;
+      if (cp && process.env.WHATSAPP_PHONE_ID && cp !== process.env.WHATSAPP_PHONE_ID) { note('ignored a calls webhook for a different phone number id than WHATSAPP_PHONE_ID'); continue; }
+      done.push(onCalls(c.value).catch((err) => { console.error('whatsapp calls error:', err.message); return 'error'; }));
+      continue;
+    }
+    if (c.field !== 'messages' || !c.value) { note(`ignored a webhook change for field ${String(c.field).slice(0, 40)} (only 'messages' and 'calls' are read)`); continue; }
     note(`webhook change: field messages, phone id ending ${end(c.value.metadata && c.value.metadata.phone_number_id)}, ${(c.value.messages || []).length} message(s), ${(c.value.statuses || []).length} status update(s)`);
     const pid = c.value.metadata && c.value.metadata.phone_number_id;
     if (pid && process.env.WHATSAPP_PHONE_ID && pid !== process.env.WHATSAPP_PHONE_ID) { note('ignored a webhook for a different phone number id than WHATSAPP_PHONE_ID'); continue; } // meant for another number
@@ -382,7 +430,7 @@ async function handleWebhook(payload) {
       done.push(serial(msg.from, () => onMessage(msg)).catch((err) => { console.error('whatsapp error:', err.message); return 'error'; }));
     }
   }
-  return Promise.all(done);
+  return (await Promise.all(done)).flat(); // calls answer with one result per call
 }
 
 module.exports = { note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
