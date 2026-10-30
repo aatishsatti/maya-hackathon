@@ -765,6 +765,26 @@ test('Reminder voice failures name the stage and WhatsApp\'s own code (never a r
   } finally { back(); clearCalls(); }
 });
 
+test('An incoming message of a type Maya does not handle logs its SHAPE (field names, never a value), so the first tap on a template quick-reply button shows its real structure', async () => {
+  voiceReset(); const { id, phone } = linked(); reset(PLAIN);
+  const btn = incoming(phone, '', { type: 'button', text: undefined, button: { payload: 'SECRET-PAYLOAD-VALUE', text: 'Got it tulips' }, context: { from: '15556408264', id: 'wamid.CONTEXT-ID-1' } });
+  let logs = await captureLogs(async () => assert.deepEqual(await wa.handleWebhook(btn), ['unsupported']));
+  const line = logs.find((l) => l.includes('unhandled incoming message'));
+  assert.equal(line, `whatsapp: unhandled incoming message from number ending ${phone.slice(-4)}: type button, fields [button{payload,text},context{from,id},from,id,timestamp,type]`);
+  assert.doesNotMatch(logs.join('\n'), /SECRET-PAYLOAD|tulips|CONTEXT-ID|15556408264/, 'names only: no value, no id, no number'); assert.ok(!logs.join('\n').includes(phone));
+  assert.deepEqual(sent().map((m) => m.text.body), ['I can read your typed messages and listen to voice notes here. Please type it or send a voice note.'], 'what the person gets is unchanged');
+  // other unhandled types too, and odd or deep structures are bounded and sanitised
+  clearCalls(); logs = await captureLogs(async () => { await wa.handleWebhook(incoming(phone, '', { type: 'sticker', text: undefined, sticker: { id: 'x', mime_type: 'image/webp' } })); });
+  assert.ok(logs.some((l) => /type sticker, fields \[from,id,sticker\{id,mime_type\},timestamp,type\]$/.test(l)), logs.join(' | '));
+  clearCalls(); const odd = incoming(phone, '', { type: 'Weird Type!', text: undefined, 'bad key!': 1, nested: { a: { b: { c: { d: 1 } } } }, list: [{ k1: 1, k2: 2 }, { other: 1 }] });
+  logs = await captureLogs(async () => { await wa.handleWebhook(odd); });
+  assert.ok(logs.some((l) => /type unknown, fields \[from,id,list\[k1,k2\],nested\{a\{b\}\},timestamp,type\]$/.test(l)), logs.join(' | '));
+  assert.doesNotMatch(logs.join('\n'), /bad key|Weird|other/, 'an odd type name and odd keys never reach the log');
+  // the types Maya DOES handle do not write this line
+  clearCalls(); reset(PLAIN); logs = await captureLogs(async () => { await wa.handleWebhook(incoming(phone, 'hello there')); });
+  assert.ok(!logs.some((l) => l.includes('unhandled incoming message'))); clearCalls();
+});
+
 test('Phase 2: delivered and read come ONLY from WhatsApp\'s status webhooks and never go backwards; no status, no claim', async () => {
   voiceReset(); const { id } = remindProfile({ delivery: 'text' }); const { dueAt } = addRem(id); care.tick(dueAt); await settle(); const wamid = rem(id).active.wamid;
   assert.equal(stateOf(id), 'wa_sent', 'sent is as far as it goes with no status');

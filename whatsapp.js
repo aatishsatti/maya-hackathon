@@ -421,20 +421,32 @@ async function onImage(l, msg) {
   return 'image';
 }
 
+// The shape of a message object: its field names, two levels deep, sorted, e.g. button{payload,text},context{from,id},from,id,timestamp,type. Names only: a value never appears.
+const safeKey = (k) => /^[A-Za-z0-9_]{1,40}$/.test(k);
+const typeName = (t) => (/^[a-z_]{1,30}$/.test(String(t)) ? String(t) : 'unknown');   // a message type is a short lower-case name; anything else is not printed
+function shapeOf(o, depth = 2) {
+  if (Array.isArray(o)) return o.length && depth > 0 ? `[${shapeOf(o[0], depth - 1)}]` : '[]';
+  if (!o || typeof o !== 'object') return '';
+  return Object.keys(o).filter((k) => safeKey(k) && o[k] !== undefined).sort().slice(0, 30).map((k) => { const v = o[k], inner = depth > 0 && v && typeof v === 'object' ? shapeOf(v, depth - 1) : ''; return !inner ? k : Array.isArray(v) ? `${k}${inner}` : `${k}{${inner}}`; }).join(',');
+}
+
 async function onMessage(msg) {
   const l = findByPhone(msg.from);
-  if (!l) { note(`ignored a ${msg.type} from number ending ${end(msg.from)}: no profile is linked to that number (it must be linked with its country code, digits only, exactly as WhatsApp shows it)`); return 'ignored'; } // unknown: no reply, so a stranger can never use Maya (or make her message them)
-  if (!l.optIn) { note(`ignored a ${msg.type} from number ending ${end(msg.from)}: that person has not opted in or has stopped messages`); return 'ignored'; }
+  if (!l) { note(`ignored a ${typeName(msg.type)} from number ending ${end(msg.from)}: no profile is linked to that number (it must be linked with its country code, digits only, exactly as WhatsApp shows it)`); return 'ignored'; } // unknown: no reply, so a stranger can never use Maya (or make her message them)
+  if (!l.optIn) { note(`ignored a ${typeName(msg.type)} from number ending ${end(msg.from)}: that person has not opted in or has stopped messages`); return 'ignored'; }
   if (msg.type === 'interactive' && msg.interactive && msg.interactive.type === 'call_permission_reply') { note(`ignored a call permission reply from number ending ${end(msg.from)}: a WhatsApp system message after a call, nothing is sent back and the 24 h window is not opened by it`); return 'system'; }
   if ((l.seen || []).includes(msg.id)) { note(`ignored a repeated message from number ending ${end(msg.from)} (Meta retry)`); return 'duplicate'; }
   update(l.profileId, (x) => {
     x.lastInboundAt = Math.max(x.lastInboundAt || 0, Number(msg.timestamp) * 1000 || Date.now());
     x.seen = [...(x.seen || []), msg.id].slice(-SEEN_KEEP);
   });
-  note(`received a ${msg.type} from number ending ${end(msg.from)}${msg.type === 'interactive' ? ` (interactive type ${/^[a-z_]{1,40}$/.test(String(msg.interactive && msg.interactive.type)) ? msg.interactive.type : 'unknown'})` : ''}`); // the interactive type is an enum (button_reply, call_permission_reply ...), never the person's words
+  note(`received a ${typeName(msg.type)} from number ending ${end(msg.from)}${msg.type === 'interactive' ? ` (interactive type ${/^[a-z_]{1,40}$/.test(String(msg.interactive && msg.interactive.type)) ? msg.interactive.type : 'unknown'})` : ''}`); // the interactive type is an enum (button_reply, call_permission_reply ...), never the person's words
   if (msg.type === 'text' && msg.text && typeof msg.text.body === 'string') { await onText(l, msg); note(`replied to number ending ${end(msg.from)}`); return 'text'; }
   if (msg.type === 'audio') { const out = await onAudio(l, msg); note(`answered a voice note from number ending ${end(msg.from)} (${out})`); return out; }
   if (msg.type === 'image') return onImage(l, msg);
+  // Documents, stickers, locations and anything else not read here. The log says what SHAPE it had (field names only, never a value), so a type nobody has seen yet (for example the tap
+  // on a template's quick-reply button) shows its real structure the first time it arrives, and it is built from that, not guessed.
+  note(`unhandled incoming message from number ending ${end(msg.from)}: type ${typeName(msg.type)}, fields [${shapeOf(msg)}]`);
   // Documents, stickers, locations: not read here. Answered once, truthfully, never guessed at.
   await sendTextTo(l.phone, 'I can read your typed messages and listen to voice notes here. Please type it or send a voice note.');
   return 'unsupported';
