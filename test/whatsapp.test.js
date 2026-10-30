@@ -412,6 +412,86 @@ test('every webhook POST that arrives leaves one line (size, signature present /
   assert.doesNotMatch(out, /tulips|TEST-TOKEN/); clearCalls();
 });
 
+// ---- photos in (onImage) ----
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16]), Buffer.from('JFIF'), Buffer.alloc(200, 7)]);
+const imageIn = (from, bytes = JPEG, caption, type = 'image') => {
+  const id = `MEDIAIN${mediaN++}`; if (bytes) inboundMedia.set(id, bytes);
+  return incoming(from, '', { type, text: undefined, [type]: { id, mime_type: 'image/jpeg', ...(caption ? { caption } : {}) } });
+};
+const seenPhotos = []; const noScam = async () => ({ level: 'none', type: 'none', reading: '', signals: sig(), reads: rd(), count: 0 });
+chat.deps.describe = async (buf) => { seenPhotos.push(buf); return 'A cup of tea on a table next to two biscuits.'; };
+chat.deps.scam = noScam;
+const DECLINE = 'I can read your typed messages and listen to voice notes here. Please type it or send a voice note.';
+
+test('photo in: the bytes and caption reach chat.sendImage, Maya\'s reply goes back as ONE text message, and the photo is in the family thread', async () => {
+  voiceReset(); seenPhotos.length = 0; const { id, phone } = linked(); reset(PLAIN);
+  assert.deepEqual(await wa.handleWebhook(imageIn(phone, JPEG, 'my afternoon tea')), ['image']);
+  assert.equal(seenPhotos.length, 1); assert.ok(seenPhotos[0].equals(JPEG));
+  assert.match(asked[0].history.at(-1).content, /photo shows: A cup of tea.*my afternoon tea/);
+  const out = sent(); assert.equal(out.length, 1); assert.equal(out[0].type, 'text'); assert.equal(out[0].to, phone); assert.match(out[0].text.body, /That sounds nice/);
+  assert.ok(chat.thread(id).some((m) => m.role === 'senior' && m.kind === 'image' && m.text === 'my afternoon tea'));
+  assert.ok(care.get(id).lastActivity.whatsapp);
+});
+
+test('photo in with no caption works', async () => {
+  voiceReset(); seenPhotos.length = 0; const { id, phone } = linked(); reset(PLAIN);
+  assert.deepEqual(await wa.handleWebhook(imageIn(phone)), ['image']);
+  assert.equal(sent().length, 1); assert.ok(chat.thread(id).some((m) => m.kind === 'image' && m.text === ''));
+});
+
+test('photo from an unlinked number, an opted-out number, or a Meta retry is never downloaded or answered twice', async () => {
+  voiceReset(); seenPhotos.length = 0; const { phone } = linked(); reset(PLAIN);
+  assert.deepEqual(await wa.handleWebhook(imageIn('919876548237')), ['ignored']);
+  const p = imageIn(phone); assert.deepEqual(await wa.handleWebhook(p), ['image']); clearCalls();
+  assert.deepEqual(await wa.handleWebhook(p), ['duplicate']); assert.equal(graphCalls.length, 0, 'a retry does not download or send anything');
+  await wa.handleWebhook(incoming(phone, 'STOP')); clearCalls(); seenPhotos.length = 0;
+  assert.deepEqual(await wa.handleWebhook(imageIn(phone)), ['ignored']); assert.equal(graphCalls.length, 0); assert.equal(seenPhotos.length, 0);
+});
+
+test('photo the scam check marks as a warning gets the same handling as in the app (warning words, never a fake verdict)', async () => {
+  voiceReset(); const { id, phone } = linked(); reset(WARN);
+  chat.deps.scam = async () => ({ level: 'warn', type: 'impersonation scam', reading: 'A text pretending to be the bank asks for a code.', signals: sig('impersonation', 'payment'), reads: rd(), count: 2 });
+  try { assert.deepEqual(await wa.handleWebhook(imageIn(phone, JPEG, 'is this ok')), ['image']); } finally { chat.deps.scam = noScam; }
+  const out = sent(); assert.equal(out.length, 1); assert.equal(out[0].type, 'text'); assert.match(out[0].text.body, /scam/i);
+  assert.match(asked[0].roster, /scam|warn/i); assert.ok(chat.thread(id).some((m) => m.role === 'maya' && /scam/i.test(m.text)));
+});
+
+test('sticker, document and location still get the existing decline, word for word, and are never downloaded', async () => {
+  voiceReset(); const { phone } = linked();
+  for (const type of ['sticker', 'document']) {
+    clearCalls(); assert.deepEqual(await wa.handleWebhook(imageIn(phone, JPEG, undefined, type)), ['unsupported']);
+    assert.deepEqual(sent().map((m) => m.text.body), [DECLINE]); assert.equal(graphCalls.filter((c) => !/\/messages$/.test(c.url)).length, 0);
+  }
+  clearCalls(); assert.deepEqual(await wa.handleWebhook(incoming(phone, '', { type: 'location', text: undefined, location: { latitude: 1, longitude: 2 } })), ['unsupported']);
+  assert.deepEqual(sent().map((m) => m.text.body), [DECLINE]);
+});
+
+test('photo failures are answered in plain words: too big and download failure -> could not see; not an image -> could not read; vision error -> could not see; nothing crashes', async () => {
+  voiceReset(); seenPhotos.length = 0; const { phone } = linked(); reset(PLAIN);
+  const SEE = 'I could not see that photo. Could you send it again?', READ = 'I could not read that file as a photo. Please send it again.';
+  const words = () => sent().map((m) => m.text.body);
+  assert.deepEqual(await wa.handleWebhook(imageIn(phone, Buffer.concat([JPEG, Buffer.alloc(8 * 1024 * 1024)]))), ['unseen']); assert.deepEqual(words(), [SEE]); assert.equal(seenPhotos.length, 0, 'too big never reaches sendImage');
+  clearCalls(); assert.deepEqual(await wa.handleWebhook(imageIn(phone, null)), ['unseen']); assert.deepEqual(words(), [SEE]);
+  clearCalls(); assert.deepEqual(await wa.handleWebhook(imageIn(phone, Buffer.from('this is plain text, not a picture at all'))), ['unreadable']); assert.deepEqual(words(), [READ]);
+  clearCalls(); const keep = chat.deps.describe; chat.deps.describe = async () => { throw new Error('Meta vision failed (HTTP 400)'); };
+  try { assert.deepEqual(await wa.handleWebhook(imageIn(phone)), ['unseen']); } finally { chat.deps.describe = keep; }
+  assert.deepEqual(words(), [SEE]);
+});
+
+test('a voice note over 2 MB keeps the old limit and the old wording', async () => {
+  voiceReset(); const { phone } = linked(); reset(PLAIN);
+  assert.deepEqual(await wa.handleWebhook(voiceIn(phone, 'audio/ogg; codecs=opus', Buffer.alloc(2 * 1024 * 1024 + 1))), ['unreadable']);
+  assert.deepEqual(sent().map((m) => m.text.body), ['I could not hear that voice note. Could you send it again, or type it for me?']);
+});
+
+test('photo logs: last 4 digits and a result only; never the caption, the image or the full number', async () => {
+  voiceReset(); const { phone } = linked(); reset(PLAIN);
+  let out = await capture(() => wa.handleWebhook(imageIn(phone, JPEG, 'my private tulips caption')));
+  assert.match(out, new RegExp(`received a image from number ending ${phone.slice(-4)}`)); assert.match(out, /answered a photo from number ending/);
+  assert.doesNotMatch(out, /tulips|TEST-TOKEN/); assert.ok(!out.includes(phone));
+  clearCalls(); out = await capture(() => wa.handleWebhook(imageIn(phone, Buffer.from('not a picture, tulips')))); assert.match(out, /could not answer a photo from number ending/); assert.doesNotMatch(out, /tulips/);
+});
+
 test('dashboard sends are logged: the attempt, the success, every refusal and every Meta error, with the last 4 digits and the reason, never the family\'s words', async () => {
   voiceReset(); const { id, phone } = outside(); const end4 = phone.slice(-4);
   let out = await capture(async () => { await wa.sendOut(id, { kind: 'text', text: 'my private tulips words', useTemplate: false }).catch(() => {}); });

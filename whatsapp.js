@@ -40,6 +40,7 @@ const OUT_MIN_GAP_MS = 10 * 1000;      // never two sends within 10 s
 const OUT_MAX_PER_DAY = 10;            // free-form + template, rolling 24 h, per person: a family cannot flood one phone
 const OUT_MAX_TEMPLATES_PER_DAY = 2;   // an invitation to reply is not repeated
 const OUT_KEEP = 30;
+const MAX_INBOUND_IMAGE = 8 * 1024 * 1024; // the same ceiling as a photo sent in the app (server.js MAX_IMAGE_BYTES); WhatsApp itself stops at 5 MB
 const MAX_INBOUND_AUDIO = 2 * 1024 * 1024; // a long monologue is not worth a minute of Transcribe; ~2 MB of Opus is several minutes
 
 // Network edge, replaceable in tests.
@@ -149,13 +150,13 @@ async function graphGet(url, binary) {
   if (!r.ok) { let er = {}; try { er = (await r.json()).error || {}; } catch { /* not json */ } throw new WaError(`WhatsApp refused it (${er.code || r.status}): ${er.message || 'no reason given'}`, 502, er.code || null); }
   return binary ? Buffer.from(await r.arrayBuffer()) : r.json();
 }
-async function downloadMedia(id) {
+async function downloadMedia(id, { max = MAX_INBOUND_AUDIO, tooBig = 'That voice note is too long.' } = {}) {
   if (!/^[\w-]{1,100}$/.test(String(id))) throw new WaError('Bad media id.', 400);
   const meta = await graphGet(`${GRAPH}/${API_VERSION()}/${id}`);
   if (!meta || typeof meta.url !== 'string' || !/^https:\/\//.test(meta.url)) throw new WaError('WhatsApp gave no download link.');
-  if (Number(meta.file_size) > MAX_INBOUND_AUDIO) throw new WaError('That voice note is too long.', 413);
+  if (Number(meta.file_size) > max) throw new WaError(tooBig, 413);
   const buf = await graphGet(meta.url, true);
-  if (buf.length > MAX_INBOUND_AUDIO) throw new WaError('That voice note is too long.', 413);
+  if (buf.length > max) throw new WaError(tooBig, 413);
   return buf;
 }
 async function uploadAudio(ogg) {
@@ -324,6 +325,30 @@ async function onAudio(l, msg) {
   return 'voice';
 }
 
+// A photo in -> the same chat.sendImage the app uses (vision description + scam check + official-source look-up + family flow) -> Maya's words back as text.
+// Every failure is answered in plain words: a photo is never met with silence, and nothing is guessed about what it showed.
+const PHOTO_NOT_SEEN = 'I could not see that photo. Could you send it again?';
+const PHOTO_NOT_READ = 'I could not read that file as a photo. Please send it again.';
+async function onImage(l, msg) {
+  const im = msg.image || {};
+  let buf;
+  try { if (typeof im.id !== 'string') throw new WaError('The photo had no media id.'); buf = await downloadMedia(im.id, { max: MAX_INBOUND_IMAGE, tooBig: 'That photo is too big.' }); }
+  catch (e) { note(`could not download a photo from number ending ${end(msg.from)}: ${e.message}`); await sendTextTo(l.phone, PHOTO_NOT_SEEN); return 'unseen'; }
+  require('./care').touch(l.profileId, 'whatsapp'); // chat.sendImage records the 'app' door; this is the WhatsApp door (text and voice do it through opts.source)
+  let r;
+  try { r = await chat.sendImage(l.profileId, buf, typeof im.caption === 'string' ? im.caption : '', null); }
+  catch (e) {
+    note(`could not answer a photo from number ending ${end(msg.from)}: ${e.message}`); // the error text only: no caption, no image
+    await sendTextTo(l.phone, e.status === 415 ? PHOTO_NOT_READ : PHOTO_NOT_SEEN);
+    return e.status === 415 ? 'unreadable' : 'unseen';
+  }
+  const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
+  if (!reply || !reply.text) throw new WaError('Maya had no reply.');
+  await sendTextTo(l.phone, mayaWords(reply.text));
+  note(`answered a photo from number ending ${end(msg.from)}`);
+  return 'image';
+}
+
 async function onMessage(msg) {
   const l = findByPhone(msg.from);
   if (!l) { note(`ignored a ${msg.type} from number ending ${end(msg.from)}: no profile is linked to that number (it must be linked with its country code, digits only, exactly as WhatsApp shows it)`); return 'ignored'; } // unknown: no reply, so a stranger can never use Maya (or make her message them)
@@ -336,7 +361,8 @@ async function onMessage(msg) {
   note(`received a ${msg.type} from number ending ${end(msg.from)}`);
   if (msg.type === 'text' && msg.text && typeof msg.text.body === 'string') { await onText(l, msg); note(`replied to number ending ${end(msg.from)}`); return 'text'; }
   if (msg.type === 'audio') { const out = await onAudio(l, msg); note(`answered a voice note from number ending ${end(msg.from)} (${out})`); return out; }
-  // Photos, documents, stickers, locations: not read here. Answered once, truthfully, never guessed at.
+  if (msg.type === 'image') return onImage(l, msg);
+  // Documents, stickers, locations: not read here. Answered once, truthfully, never guessed at.
   await sendTextTo(l.phone, 'I can read your typed messages and listen to voice notes here. Please type it or send a voice note.');
   return 'unsupported';
 }
