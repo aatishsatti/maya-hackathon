@@ -693,6 +693,16 @@ test('the real answerer: if Meta refuses the pre_accept the call is rejected and
   } finally { callFail = null; await caller.close(); }
 });
 
+test('a WhatsApp text that is a reminder or the person\'s own plan sends the family nothing; a real request sends one note', async () => {
+  voiceReset(); const { id, phone } = linked(); reset(PLAIN);
+  const familyNotes = () => care.get(id).notifications.filter((x) => x.to === 'family' && x.ref === 'family_ask').length;
+  for (const t of ['Can you remind me in 30 seconds that I have to call my sister.', 'I need to call my daughter later', 'Remind me to ring my son tonight']) { assert.deepEqual(await wa.handleWebhook(incoming(phone, t)), ['text']); }
+  assert.equal(familyNotes(), 0, 'no family note from a reminder or a plan');
+  assert.deepEqual(await wa.handleWebhook(incoming(phone, 'Please let my daughter know I am home.')), ['text']); assert.equal(familyNotes(), 1);
+  assert.deepEqual(await wa.handleWebhook(incoming(phone, 'And tell my son too, please.')), ['text']); assert.equal(familyNotes(), 1, 'once');
+  clearCalls();
+});
+
 test('dashboard sends are logged: the attempt, the success, every refusal and every Meta error, with the last 4 digits and the reason, never the family\'s words', async () => {
   voiceReset(); const { id, phone } = outside(); const end4 = phone.slice(-4);
   let out = await capture(async () => { await wa.sendOut(id, { kind: 'text', text: 'my private tulips words', useTemplate: false }).catch(() => {}); });

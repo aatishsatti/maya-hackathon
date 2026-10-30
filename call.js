@@ -144,19 +144,36 @@ const CONCERN_YES_G = new RegExp(CONCERN_YES.source, 'gi');
 const ANSWER_FILLER = new Set(['ok', 'okay', 'sure', 'right', 'thanks', 'thank', 'you', 'maya', 'dear', 'now', 'so', 'then', 'and', 'do', 'it', 'that', 'them', 'please', 'yes', 'yeah', 'yep', 'oh', 'well', 'um', 'uh', 'to', 'i', 'would', 'like', 'me', 'for', 'think', 'should']);
 const cleanSpeech = (text) => String(text || '').replace(/[\u2018\u2019]/g, "'");
 // A request to tell their family, addressed to Maya (not negated, not talk to someone else).
-const asksFamily = (text) => !NOT_AN_ANSWER.test(cleanSpeech(text)) && affirmed(FAMILY_ASK, text);
+// The person's OWN plan or a reminder is not a request to Maya: "remind me to call my sister", "I have to call my daughter", "I want to ring my brother" (the app used to read these as
+// "let my family know" and sent them a note). Only the text from the start of the clause up to and including the family word is looked at, so "Please tell my family I will call them
+// tomorrow" stays a request; "I want YOU to tell my family" stays a request ("you" sits between "I want" and "to"); "I have to ask you to tell my family" is a request to her.
+const REMIND_WORD = /\bremind(?:s|er|ers)?\b/i;
+const OWN_PLAN_PHRASE = /\b(?:i|we)\b.{0,12}?(?:\b(?:have to|need to|got to|gotta|want to|wanna|ought to|should|must|will|going to|plan to|would like to|forgot to|supposed to|meant to|trying to|about to)\b|'ll\b|'d like to\b)/i;
+function ownPlan(clause) {
+  const m = FAMILY_ASK.exec(clause);
+  if (!m) return false;
+  const upTo = clause.slice(0, m.index + m[0].length);
+  if (REMIND_WORD.test(upTo)) return true;
+  const pm = OWN_PLAN_PHRASE.exec(upTo);
+  if (!pm || pm.index >= m.index) return false;
+  return !/\byou\b/i.test(upTo.slice(pm.index + pm[0].length, m.index));
+}
+const familyRequest = (clause) => FAMILY_ASK.test(clause) && !ownPlan(clause);
+// Like affirmed(FAMILY_ASK, text), but a clause that is the person's own plan or a reminder never counts.
+const affirmedRequest = (text) => cleanSpeech(text).split(/[,.?!;]/).some((c) => familyRequest(c) && !NEGATION.test(c));
+const asksFamily = (text) => !NOT_AN_ANSWER.test(cleanSpeech(text)) && affirmedRequest(text);
 // A yes to her question: an explicit request, or a short plain answer made of yes-words (a long sentence with one "yeah" in it is not an answer).
 const saysYesToFamily = (text) => {
   const t = cleanSpeech(text);
   if (NOT_AN_ANSWER.test(t)) return false;
-  if (affirmed(FAMILY_ASK, t)) return true;
+  if (affirmedRequest(t)) return true;
   if (!affirmed(CONCERN_YES, t)) return false;
   // Only yes-words and small fillers: "yes", "yes please", "yeah go ahead". Anything else in the line (a statement about the caller, a story) is not an answer.
   const rest = t.toLowerCase().replace(CONCERN_YES_G, ' ').replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter((w) => w && !ANSWER_FILLER.has(w));
   return rest.length <= 1;
 };
 // They named their family in a clause that refuses it ("do not tell my son"): a no, whether or not a question was open.
-const refusedFamily = (text) => String(text || '').replace(/[\u2018\u2019]/g, "'").split(/[,.?!;]/).some((c) => FAMILY_ASK.test(c) && NEGATION.test(c));
+const refusedFamily = (text) => String(text || '').replace(/[\u2018\u2019]/g, "'").split(/[,.?!;]/).some((c) => familyRequest(c) && NEGATION.test(c)); // "I don't want to call my daughter" is her own plan, not a refusal (a refusal silences later alerts for the call)
 // Asks that need what they said earlier in THIS call (the filed memory only exists after the call ends).
 const CALL_RECALL = /\b(remember|remembered|told you|i told|already (told|said|mentioned)|forgot|forget|his name|her name|their name|what (was|is) (his|her|their)|what about my|what did i (say|tell)|do you know (him|her|them|my))\b/i;
 const MAX_SAID = 60;        // lines of this call kept for those asks
@@ -1954,4 +1971,4 @@ class Call {
   }
 }
 
-module.exports = { timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
