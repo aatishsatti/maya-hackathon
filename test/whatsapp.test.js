@@ -494,7 +494,7 @@ test('photo logs: last 4 digits and a result only; never the caption, the image 
   clearCalls(); out = await capture(() => wa.handleWebhook(imageIn(phone, Buffer.from('not a picture, tulips')))); assert.match(out, /could not answer a photo from number ending/); assert.doesNotMatch(out, /tulips/);
 });
 
-// ---- calls in: a test tone for the linked person (wacall.js), a refusal for everyone else ----
+// ---- calls in: one spoken test sentence for the linked person (wacall.js), a refusal for everyone else ----
 const { RTCPeerConnection, MediaStreamTrack, useOPUS } = require('werift');
 const SDP = 'v=0 o=- 4611731400430051336 2 IN IP4 127.0.0.1 SECRET-SDP-LINES';
 const callIn = (person, { event = 'connect', direction = 'USER_INITIATED', swap = false, sdp = SDP, extra = {} } = {}) => ({ object: 'whatsapp_business_account', entry: [{ id: 'WABA', changes: [{ field: 'calls', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15556408264', phone_number_id: '1409237678935671' }, contacts: [{ profile: { name: 'x' }, wa_id: person }], calls: [{ id: `wacid.TESTCALL${mid++}ABCD==`, from: swap ? '15556408264' : person, to: swap ? person : '15556408264', event, direction, timestamp: '1700000000', ...(event === 'connect' ? { session: { sdp_type: 'offer', sdp } } : {}), ...extra }] } }] }] });
@@ -510,7 +510,7 @@ test('a call from a linked, opted-in person is handed to the answerer with its o
   assert.equal(seen.length, 1); assert.equal(seen[0].offerSdp, SDP);
   const posts = callPosts(); assert.equal(posts.length, 1); assert.match(graphCalls.find((c) => /\/calls$/.test(c.url)).url, /\/v\d+\.\d+\/1409237678935671\/calls$/);
   assert.deepEqual(posts[0], { messaging_product: 'whatsapp', call_id: callIdOf(p), action: 'accept', session: { sdp_type: 'answer', sdp: 'x' } });
-  assert.match(out, /answered call [0-9a-f]{6} from number ending \d{4}: test tone, completed/); assert.equal(sent().length, 0, 'a call sends no message');
+  assert.match(out, /answered call [0-9a-f]{6} from number ending \d{4}: a spoken test line, completed/); assert.equal(sent().length, 0, 'a call sends no message');
 });
 
 test('a call from an unlinked number, or from someone who opted out, is refused with the reason and never reaches the answerer', async () => {
@@ -590,35 +590,74 @@ test('an interactive message logs its type (an enum) and never the person\'s wor
   clearCalls();
 });
 
-// The real answerer against a real WebRTC peer in this process (a stand-in for WhatsApp, with an offer shaped like Meta's documented ones):
-// pre_accept -> media connects -> accept (the SAME sdp) -> a 440 Hz tone arrives, and only after the accept -> terminate.
-test('the real answerer: pre_accept, connect, accept with the same SDP, then a 440 Hz tone, then terminate; media only after the accept', async () => {
-  voiceReset(); const { phone } = linked();
+// The real answerer against a real WebRTC peer in this process (a stand-in for WhatsApp, with an offer shaped like Meta's documented ones).
+const wacall = require('../wacall');
+async function metaLikeCaller() {
   const caller = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] });
-  const dec = new (require('opusscript'))(48000, 1, require('opusscript').Application.VOIP); const heard = []; let beforeAccept = null;
+  const OS = require('opusscript'), dec = new OS(48000, 1, OS.Application.VOIP); const heard = [];
   caller.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((rtp) => { try { heard.push(Buffer.from(dec.decode(rtp.payload))); } catch { /* ignore */ } }));
   caller.addTransceiver(new MediaStreamTrack({ kind: 'audio' }), { direction: 'sendrecv' });
   await caller.setLocalDescription(await caller.createOffer());
   const offer = caller.localDescription.sdp.replace('UDP/TLS/RTP/SAVPF 111', 'UDP/TLS/RTP/SAVPF 111 9 0 8 126').replace('a=ice-options:trickle', 'a=ice-lite\r\na=ice-options:trickle')
     .replace('a=rtpmap:111 OPUS/48000/2', 'a=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:9 G722/8000\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\na=rtpmap:126 telephone-event/8000\r\na=fmtp:126 0-16');
+  return { caller, offer, heard };
+}
+const hzOf = (bufs) => { const pcm = Buffer.concat(bufs); let z = 0; for (let i = 1; i < pcm.length / 2; i++) if ((pcm.readInt16LE((i - 1) * 2) < 0) !== (pcm.readInt16LE(i * 2) < 0)) z++; return Math.round(z / 2 / (pcm.length / 2 / 48000)); };
+
+test('the sentence is the approved one, word for word', () => {
+  assert.equal(wacall.TEST_LINE, "Hello, this is Maya. This is only a test of my voice on WhatsApp calls. I can't talk with you yet, so I'll hang up now. Goodbye.");
+});
+
+test('upsample2 turns 24 kHz PCM into 48 kHz: each sample, then the average with the next', () => {
+  const inp = Buffer.alloc(6); [0, 100, 200].forEach((v, i) => inp.writeInt16LE(v, i * 2));
+  const out = wacall.upsample2(inp); assert.equal(out.length, 12); assert.deepEqual([0, 1, 2, 3, 4, 5].map((i) => out.readInt16LE(i * 2)), [0, 50, 100, 150, 200, 200]);
+});
+
+test('the real answerer: speech is asked for BEFORE the pre_accept, then pre_accept, connect, accept with the same SDP, Maya\'s voice (24 kHz doubled to 48 kHz), then terminate; media only after the accept', async () => {
+  voiceReset(); const { phone } = linked(); const { caller, offer, heard } = await metaLikeCaller(); const order = []; let beforeAccept = null;
+  const keepSpeak = chat.deps.speak; chat.deps.speak = async (t) => { order.push('speak'); return keepSpeak(t); }; // 1 s of 300 Hz at 24 kHz
   callHook = async (body) => {
+    order.push(body.action);
     if (body.action === 'pre_accept') await caller.setRemoteDescription({ type: 'answer', sdp: body.session.sdp });
     if (body.action === 'accept') beforeAccept = heard.length;
   };
-  wa.deps.callToneMs = 800; const p = callIn(phone, { sdp: offer });
+  const p = callIn(phone, { sdp: offer });
   try {
     const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(p), ['answered']));
     await new Promise((r) => setTimeout(r, 150));
+    assert.deepEqual(order, ['speak', 'pre_accept', 'accept', 'terminate'], 'speech is started before the pre_accept, so it is ready when the call connects');
+    assert.deepEqual(spoken, [wacall.TEST_LINE]);
     const posts = callPosts(); assert.deepEqual(posts.map((b) => b.action), ['pre_accept', 'accept', 'terminate']);
     assert.ok(posts.every((b) => b.messaging_product === 'whatsapp' && b.call_id === callIdOf(p)));
     assert.equal(posts[0].session.sdp_type, 'answer'); assert.deepEqual(posts[1].session, posts[0].session, 'accept carries the SAME answer as pre_accept'); assert.equal(posts[2].session, undefined);
     assert.match(posts[0].session.sdp, /a=setup:active/); assert.match(posts[0].session.sdp, /m=audio \d+ UDP\/TLS\/RTP\/SAVPF 111\b/); assert.doesNotMatch(posts[0].session.sdp, /G722|PCMU|PCMA/);
     assert.equal(beforeAccept, 0, 'no media reached the caller before the accept was sent');
-    const pcm = Buffer.concat(heard.slice(5)); let z = 0; for (let i = 1; i < pcm.length / 2; i++) if ((pcm.readInt16LE((i - 1) * 2) < 0) !== (pcm.readInt16LE(i * 2) < 0)) z++;
-    const hz = Math.round(z / 2 / (pcm.length / 2 / 48000)); assert.ok(heard.length > 25, `about 0.8 s of packets arrived (${heard.length})`); assert.ok(Math.abs(hz - 440) < 15, `the tone is ~440 Hz (${hz})`);
-    assert.match(out, /pre-accepted/); assert.match(out, /media connected/); assert.match(out, /accepted; playing the 440 Hz test tone/); assert.match(out, /answered call [0-9a-f]{6}.*completed/);
-    assert.doesNotMatch(out, /a=fingerprint|a=ice-ufrag|v=0|TEST-TOKEN/);
-  } finally { callHook = null; wa.deps.callToneMs = undefined; await caller.close(); }
+    const hz = hzOf(heard.slice(5)); assert.ok(heard.length >= 48 && heard.length <= 56, `about 1 s of 20 ms packets arrived (${heard.length})`); assert.ok(Math.abs(hz - 300) < 12, `the 24 kHz tone keeps its pitch after doubling to 48 kHz (${hz} Hz)`);
+    assert.match(out, /pre-accepted/); assert.match(out, /media connected/); assert.match(out, new RegExp(`speech made: ${wacall.TEST_LINE.length} characters sent to speech, 1\\.0 s of audio`));
+    assert.ok(out.indexOf('speech made') < out.indexOf('accepted; speaking'), 'the speech line comes before the accept'); assert.match(out, /answered call [0-9a-f]{6}.*completed/);
+    assert.doesNotMatch(out, /a=fingerprint|a=ice-ufrag|v=0|TEST-TOKEN|Hello, this is Maya|hang up now/, 'no SDP and none of the words said');
+  } finally { callHook = null; chat.deps.speak = keepSpeak; await caller.close(); }
+});
+
+test('the real answerer: if Maya\'s voice cannot be made before the accept, the call is rejected and no media is sent', async () => {
+  voiceReset(); const { phone } = linked(); const { caller, offer, heard } = await metaLikeCaller(); speakFail = true;
+  callHook = async (body) => { if (body.action === 'pre_accept') await caller.setRemoteDescription({ type: 'answer', sdp: body.session.sdp }); };
+  try {
+    const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone, { sdp: offer })), ['answer-failed']));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.deepEqual(callPosts().map((b) => b.action), ['pre_accept', 'reject']); assert.equal(heard.length, 0, 'not a single media packet');
+    assert.match(out, /could NOT answer call [0-9a-f]{6} from number ending \d{4}: Maya's voice could not be made \(voice is down\)/); assert.doesNotMatch(out, /accepted; speaking/);
+  } finally { callHook = null; speakFail = false; await caller.close(); }
+});
+
+test('the real answerer: if sending the speech fails after the accept, the call is terminated, not left open', async () => {
+  voiceReset(); const { phone } = linked(); const { caller, offer } = await metaLikeCaller(); const OS = require('opusscript'), keep = OS.prototype.encode; let frames = 0;
+  OS.prototype.encode = function (...a) { if (++frames === 3) throw new Error('encoder broke'); return keep.apply(this, a); };
+  callHook = async (body) => { if (body.action === 'pre_accept') await caller.setRemoteDescription({ type: 'answer', sdp: body.session.sdp }); };
+  try {
+    const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(callIn(phone, { sdp: offer })), ['answer-failed']));
+    assert.deepEqual(callPosts().map((b) => b.action), ['pre_accept', 'accept', 'terminate']); assert.match(out, /could NOT answer call [0-9a-f]{6}.*encoder broke/);
+  } finally { OS.prototype.encode = keep; callHook = null; await caller.close(); }
 });
 
 test('the real answerer: if Meta refuses the pre_accept the call is rejected and no media is attempted', async () => {

@@ -29,12 +29,12 @@
 //     Enabling: POST {Version}/{Phone-Number-ID}/settings { calling: { status: "ENABLED", call_icon_visibility: "DEFAULT", callback_permission_status: "ENABLED" } }.
 //     Terminate error codes (call setup, in the terminate webhook): 138019 call setup failed, 138020 relay connection failed, 138021 / 138022 media receive / transmit timeout,
 //     138023 accepted with no media; send-side: 138000 calling not enabled, 138013 / 138014 / 138015 / 138018 the number cannot take calls, 131044 no valid payment method.
-//   Calls today (wacall.js, first live media test): a call from a linked, opted-in person is ANSWERED with a fixed test tone and then ended by us (pre_accept, accept, media, terminate);
-//   every other call is REFUSED (action "reject"). Logged by field names only, never the SDP. Maya's voice and ears are not on the call yet.
+//   Calls today (wacall.js, voice-only step): a call from a linked, opted-in person is ANSWERED, Maya says one fixed sentence in her real voice, and we end the call
+//   (pre_accept, media, accept, speech, terminate); every other call is REFUSED (action "reject"). Logged by field names only, never the SDP or the words. Maya's ears are not on the call yet.
 // Server env only (never in the repo, the page or a log): WHATSAPP_TOKEN, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN, WHATSAPP_PHONE_ID.
 // Privacy: message words are never logged and never stored here. This file keeps only: which phone belongs to which profile, whether they opted in,
 // when they last wrote (for the 24 h window) and recent message ids (so a Meta retry is not answered twice).
-// Not built in this step (by design): Maya's voice on WhatsApp calls (a call gets a test tone only), PSTN, closed-phone ringing, video, groups.
+// Not built in this step (by design): Maya's ears and conversation on WhatsApp calls (a call gets one fixed spoken sentence only), PSTN, closed-phone ringing, video, groups.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -55,7 +55,7 @@ const MAX_INBOUND_IMAGE = 8 * 1024 * 1024; // the same ceiling as a photo sent i
 const MAX_INBOUND_AUDIO = 2 * 1024 * 1024; // a long monologue is not worth a minute of Transcribe; ~2 MB of Opus is several minutes
 
 // Network edge, replaceable in tests.
-const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithTone(o), callToneMs: undefined };
+const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithVoice(o) };
 
 const configured = () => Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID);
 
@@ -378,7 +378,7 @@ async function onMessage(msg) {
   return 'unsupported';
 }
 
-// ---- calls: a test tone for the linked person, a refusal for everyone else ----
+// ---- calls: one spoken test sentence for the linked person, a refusal for everyone else ----
 // The person's number for a call: contacts[].wa_id, else whichever of from / to is not the business number (the docs' samples disagree on the direction).
 function callerOf(value, call) {
   const biz = cleanPhone(value.metadata && value.metadata.display_phone_number);
@@ -392,7 +392,7 @@ const callTag = (id) => crypto.createHash('sha256').update(String(id)).digest('h
 const callsSeen = []; let callBusy = false; // one answered call at a time; a Meta retry of a connect is not answered twice
 const callAction = (callId, action, session) => graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', call_id: callId, action, ...(session ? { session } : {}) });
 const sayWhy = (e) => String(e && e.message).replace(/\s+/g, ' ').slice(0, 200); // an error message only; it never holds the SDP (nothing here puts one in a message)
-// Logs the event by FIELD NAMES only (never the SDP, a number, a call id or a word). A linked, opted-in caller is answered with the test tone; everyone else is refused so the phone does not ring for a minute.
+// Logs the event by FIELD NAMES only (never the SDP, a number, a call id or a word). A linked, opted-in caller is answered with the fixed spoken sentence; everyone else is refused so the phone does not ring for a minute.
 async function onCalls(value) {
   const out = [];
   for (const call of value.calls || []) {
@@ -415,8 +415,8 @@ async function onCalls(value) {
     if (!why) {
       callBusy = true;
       try {
-        const r = await deps.answerCall({ offerSdp: offer, toneMs: deps.callToneMs, send: (action, session) => callAction(call.id, action, session), log: (m) => note(`call ${cid} with number ending ${tail}: ${m}`) });
-        note(`answered call ${cid} from number ending ${tail}: test tone, ${r}`); out.push('answered');
+        const r = await deps.answerCall({ offerSdp: offer, speak: (t) => chat.deps.speak(t), send: (action, session) => callAction(call.id, action, session), log: (m) => note(`call ${cid} with number ending ${tail}: ${m}`) });
+        note(`answered call ${cid} from number ending ${tail}: a spoken test line, ${r}`); out.push('answered');
       } catch (e) { note(`could NOT answer call ${cid} from number ending ${tail}: ${sayWhy(e)}`); out.push('answer-failed'); }
       finally { callBusy = false; }
       continue;
