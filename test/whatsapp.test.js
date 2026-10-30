@@ -1120,3 +1120,12 @@ test('C1 a status or answer for some OTHER call id while ours is in flight is ig
   });
   assert.equal(wa.view(senior()).testCall, undefined);
 });
+
+test('C1 the connect response logs its SHAPE (field names only, two levels) and which key held the call id; no value, id or number ever appears', async () => {
+  outReset(); const { id, phone } = linked();
+  const shapes = [[{ messaging_product: 'whatsapp', calls: [{ id: OUT_ID, extra: 'SECRET-VALUE' }] }, /connect response fields \[calls\[extra,id\],messaging_product\], call id from calls\[0\]\.id/], [{ messaging_product: 'whatsapp', call_id: OUT_ID, success: 'SECRET-VALUE' }, /connect response fields \[call_id,messaging_product,success\], call id from call_id/], [{ messaging_product: 'whatsapp', success: true }, /connect response fields \[messaging_product,success\], call id not in the response \(taken from the first webhook\)/]];
+  for (const [reply, re] of shapes) {
+    const out = await capture(async () => withConnectReply(reply, async () => { await wa.placeTestCall(id); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await waitFor(() => wa.view(id).testCall.state === 'rejected'); await sleepMs(100); }));
+    assert.match(out, re); assert.doesNotMatch(out, /SECRET-VALUE|wacid|TEST-TOKEN/); assert.ok(!out.includes(phone));
+  }
+});

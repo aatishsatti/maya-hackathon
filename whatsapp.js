@@ -552,7 +552,8 @@ function placeTestCall(profileId) {
   return new Promise((resolve, reject) => {
     const place = async (session) => {
       const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', to: l.phone, action: 'connect', session });
-      const id = d && ((Array.isArray(d.calls) && d.calls[0] && d.calls[0].id) || d.call_id);
+      const viaCalls = d && Array.isArray(d.calls) && d.calls[0] && d.calls[0].id, id = d && (viaCalls || d.call_id);
+      note(`test call to number ending ${tail}: connect response fields [${shapeOf(d)}], call id ${viaCalls ? 'from calls[0].id' : id ? 'from call_id' : 'not in the response (taken from the first webhook)'}`); // names only, never a value: shows the real shape of Meta's answer
       if (typeof id === 'string' && id) { if (cur.id === null) { cur.id = id; liveEnds.set(id, (why) => sig.emit('end', why)); } cid = callTag(id); }
       else if (cur.id) cid = callTag(cur.id);
       setTest(profileId, 'requested'); resolve({ placed: true });
