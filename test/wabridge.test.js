@@ -19,13 +19,14 @@ process.env.META_API_KEY = 'TEST-META-KEY';
 
 // The brain: Spark replies from a queue (or fails), ElevenLabs returns a 300 Hz tone as PCM16 24 kHz.
 const SAY = '[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0]]';
+const sparkAsked = [], ttsTexts = [];
 let sparkReply = `${SAY} Hello there, it is nice to talk to you. How has your day been so far?`, sparkFails = false;
 const TTS_S = 0.5;
 const brainPath = require.resolve('../brain');
 require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, exports: {
   requireRealEnv() {}, sparkComplete: async () => '{}', describeImage: async () => 'unused',
-  sparkStream: async (_h, _r, _s, onDelta) => { if (sparkFails) throw new Error('Meta Spark failed (HTTP 500)'); if (onDelta) onDelta(sparkReply); return sparkReply; },
-  streamSpeech: async (_text, _signal, onChunk) => { const N = 24000 * TTS_S, b = Buffer.alloc(N * 2); for (let i = 0; i < N; i++) b.writeInt16LE(Math.round(9000 * Math.sin(2 * Math.PI * 300 * i / 24000)), i * 2); onChunk(b); },
+  sparkStream: async (_h, roster, _s, onDelta) => { sparkAsked.push(roster); if (sparkFails) throw new Error('Meta Spark failed (HTTP 500)'); const r = typeof sparkReply === 'function' ? sparkReply() : sparkReply; if (onDelta) onDelta(r); return r; },
+  streamSpeech: async (text, _signal, onChunk) => { ttsTexts.push(text); const N = 24000 * TTS_S, b = Buffer.alloc(N * 2); for (let i = 0; i < N; i++) b.writeInt16LE(Math.round(9000 * Math.sin(2 * Math.PI * 300 * i / 24000)), i * 2); onChunk(b); },
 } };
 // The ears engine (Meta transcribe): records what the Call feeds it and lets the test see it. Patched BEFORE call.js loads (it takes openTranscribe when it loads).
 const T = require('../transcribe');
@@ -238,4 +239,60 @@ test('the call\'s latency log line shows numbers and flags only; what the person
   const line = JSON.stringify(latencyForLog(timing, false)); assert.doesNotMatch(line, /tulips|heard|predicted|text field/); assert.match(line, /"speechEndToFirstAudioMs":1800/); assert.match(line, /"guess":"hit"/); assert.doesNotMatch(line, /endedAt/);
   assert.match(JSON.stringify(latencyForLog(timing, true)), /tulips/, 'TURN_DEBUG still shows the words, for a developer at a desk');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'), /console\.log\('latency', JSON\.stringify\(latencyForLog\(timing\)\)\)/, 'the real log line goes through the filter');
+});
+
+// ---- the goodbye after a silence on a WhatsApp call: never a call-back promise ----
+const { CALL_PROMISE, WHATSAPP_GOODBYE_LINE } = require('../call');
+const QUIET = (said) => `${SAY} ${said}`;
+function quietCall(whatsapp, userTurns = 0) {
+  const sent = []; const ws = { send: (d) => sent.push(d), close() {}, onmessage: null, onclose: null, ...(whatsapp ? { noRingback: true } : {}) };
+  const c = new Call(ws, 'k'); clearInterval(c.endTimer); /* a bare Call has no endpoint ticker to run */ c.profile = memory.load(memory.createProfile(`Quiet${letters(n++)}`, 'female').id); c.userTurns = userTurns; c.gen = 1; c.abort = new AbortController();
+  return c;
+}
+
+test('call-promise detector: catches "ring you right back", "call you", "talk in a moment" and friends; lets "you are welcome to call me again" and the fixed line through', () => {
+  for (const t of ["I'll hang up for now and ring you right back to check. Talk in a moment.", 'I will call you back soon.', 'Talk in a moment.', "I'm going to call you in a minute.", "I'll be right back.", 'Let me give you a call later.', "I'll ring you shortly.", 'Calling you back now.'])
+    assert.ok(CALL_PROMISE.test(t), `should be caught: ${t}`);
+  for (const t of [WHATSAPP_GOODBYE_LINE, "You're welcome to call me again whenever you like. Goodbye.", 'Take care, and call me any time.', "I'm here whenever you want to talk. Goodbye for now.", 'Talk soon, take care.', 'Please call again whenever you like.', 'It is okay, take your time.'])
+    assert.ok(!CALL_PROMISE.test(t), `should be let through: ${t}`);
+  assert.equal(WHATSAPP_GOODBYE_LINE, "I'm going to hang up for now. You're welcome to call me again whenever you like. Goodbye.", 'the approved fallback, word for word');
+});
+
+test('WhatsApp goodbye prompts: no call-back promise asked for, "mistake or pocket dial" dropped for a caller who said nothing; the in-app prompts are unchanged', async () => {
+  sparkReply = QUIET('Take care for now.');
+  for (const [talked, mustHave, mustNotAsk] of [[1, /welcome to call you again whenever they like.*never say you will call, ring or call them back/s, /will call right back in a moment to check/], [0, /cannot hear anything.*never say you will call, ring or call them back.*do not say it was a mistake or a pocket dial/s, /say it seems the call was a mistake or a pocket dial/]]) {
+    sparkAsked.length = 0; await quietCall(true, talked).quietLine(2, new AbortController().signal);
+    assert.match(sparkAsked[0], mustHave); assert.doesNotMatch(sparkAsked[0], mustNotAsk);
+    sparkAsked.length = 0; await quietCall(false, talked).quietLine(2, new AbortController().signal);
+    assert.match(sparkAsked[0], talked ? /will call right back in a moment to check they are alright/ : /it seems the call was a mistake or a pocket dial, so you are hanging up for now and will call right back/);
+  }
+});
+
+test('a WhatsApp goodbye that promises a call-back is rejected and rewritten (up to 4 attempts); if every attempt promises one, the fixed line is used', async () => {
+  let k = 0; sparkReply = () => QUIET(k++ < 2 ? "I'll hang up now and ring you right back. Talk in a moment." : 'I will hang up for now. Take good care of yourself.');
+  sparkAsked.length = 0; let line = await quietCall(true).quietLine(2, new AbortController().signal);
+  assert.ok(!CALL_PROMISE.test(line.said), line.said); assert.ok(sparkAsked.length >= 3, 'it asked again after each rejected attempt'); assert.ok(!line.fixed);
+  assert.match(sparkAsked[1], /do not say you will call, ring or call them back/);
+  sparkReply = QUIET("I'll ring you right back in a moment to check on you."); sparkAsked.length = 0;
+  line = await quietCall(true).quietLine(2, new AbortController().signal); assert.equal(line.said, WHATSAPP_GOODBYE_LINE); assert.equal(line.fixed, true); assert.equal(sparkAsked.length, 4, 'four attempts, then the fixed line');
+  assert.ok(/^\[\[feel: .*intent=farewell/.test(line.full));
+});
+
+test('in an in-app call the goodbye is unchanged: a call-back line is accepted as it always was', async () => {
+  sparkReply = QUIET("I'll hang up for now and ring you right back to check. Talk in a moment."); sparkAsked.length = 0;
+  const line = await quietCall(false).quietLine(2, new AbortController().signal); assert.match(line.said, /ring you right back/); assert.ok(!line.fixed); assert.equal(sparkAsked.length, 1);
+});
+
+test('end to end on a WhatsApp call: a goodbye that promises a call-back is replaced by the fixed line, spoken whole, then we hang up', async () => {
+  sparkReply = QUIET('Hello there, it is nice to talk to you.'); let c0;
+  await withCall({}, async (c) => {
+    await until(() => c.ph.heard.length > 15); await sleep(900); c0 = c;
+    sparkReply = QUIET("I'll hang up for now and ring you right back to check. Talk in a moment."); ttsTexts.length = 0;
+    c.callRef.silenceStage = 2; await c.callRef.fireSilence();
+    await c.running; assert.equal(c.result[0], 'answered');
+    assert.deepEqual(actions(), ['pre_accept', 'accept', 'terminate']); assert.match(c.logs(), /hung up \(maya hung up\)/);
+    const said = ttsTexts.join(' '); assert.match(said, /hang up for now/); assert.match(said, /welcome to call me again whenever you like/); assert.match(said, /Goodbye/); assert.doesNotMatch(said, /ring you|right back|in a moment/, 'no promise reaches her voice');
+    assert.equal(care.activeByProfile.get(c.id), undefined, 'and still no in-app ring-back');
+  });
+  assert.ok(c0);
 });

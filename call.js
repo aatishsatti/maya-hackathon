@@ -72,6 +72,12 @@ function looksComplete(text) {
 // after 10 s, then 8 s later says goodbye and hangs up. Index = how many steps have already been taken.
 const SILENCE_FIRST_MIN_MS = 20000, SILENCE_FIRST_MAX_MS = 30000;
 const SILENCE_WAIT_MS = [null, 10000, 8000]; // null = this call's own random first wait
+// A WhatsApp call (wabridge.js sets ws.noRingback): Maya does NOT call people back (she cannot place WhatsApp calls and the in-app ring-back is off), so her goodbye after
+// a silence must never promise one. The prompt says so, a check rejects a line that still does (dynamicLine rewrites it, up to 4 attempts), and if every attempt still
+// promises one this fixed line is used instead (approved wording).
+const CALL_PROMISE = /\b(?:ring|call|phone|dial)(?:ing)?\s+you\b|\bgive you a (?:call|ring|buzz)\b|\b(?:ring|call)(?:ing)?\s+(?:right\s+)?back\b|\b(?:i(?:'| wi)ll|i will|i'm going to|i am going to|gonna)\s+(?:just\s+)?(?:call|ring|phone)\b|\b(?:talk|speak|chat)(?:ing)?\s+(?:to you |with you )?(?:again |soon )?(?:in|after) (?:a |just a )?(?:moment|bit|minute|second|little|while)\b|\bbe right back\b|\bright back\b/i;
+const WHATSAPP_GOODBYE_LINE = "I'm going to hang up for now. You're welcome to call me again whenever you like. Goodbye.";
+const WHATSAPP_GOODBYE_FULL = `[[feel: emotion=neutral intensity=1 intent=farewell concern=none pain=0]] ${WHATSAPP_GOODBYE_LINE}`;
 const firstSilenceWait = () => SILENCE_FIRST_MIN_MS + Math.floor(Math.random() * (SILENCE_FIRST_MAX_MS - SILENCE_FIRST_MIN_MS + 1));
 // A greeting shortens ("Hi Mike") once a known profile has had this many calls; first calls keep the warm greeting.
 const SHORT_GREETING_AFTER_CALLS = 1;
@@ -1288,11 +1294,17 @@ class Call {
       wait: waitingAck ? `You gave them a reminder (about "${this.awaitTask}") and are still waiting to hear they got it. In one short, warm sentence say you are still here and will wait a moment for them. Your own words.` : worried
         ? 'The person is still silent, and they told you something heavy a moment ago. In one short, warm sentence say you are staying right here with them and will not go anywhere. Choose your own words.'
         : 'The person is still silent. In one short, warm sentence say you are still here and will wait quietly for them to speak. Choose your own words.',
-      hangup: this.userTurns > 0
+      hangup: this.ws.noRingback
+        ? (this.userTurns > 0
+          ? 'The person has gone quiet and has not answered. In one short, kind sentence say you are going to hang up for now and that they are welcome to call you again whenever they like, with a gentle goodbye. You do NOT call people back: never say you will call, ring or call them back, or that you will talk again in a moment. Choose your own words.'
+          : 'The person has said nothing at all. In one short, kind sentence say you cannot hear anything, so you are hanging up for now, and that they are welcome to call you again whenever they like, with a gentle goodbye. You do NOT call people back: never say you will call, ring or call them back, or that you will talk again in a moment, and do not say it was a mistake or a pocket dial. Choose your own words.')
+        : this.userTurns > 0
         ? 'The person has gone quiet and has not answered. In one short, kind sentence say you are going to hang up for now and will call right back in a moment to check they are alright, with a gentle goodbye-for-now. Choose your own words.'
         : 'The person has said nothing at all. In one short, kind sentence say it seems the call was a mistake or a pocket dial, so you are hanging up for now and will call right back in a moment to check, with a gentle goodbye-for-now. Choose your own words.',
     }[kind];
-    const line = await this.dynamicLine({ pool: 'quiet', signal, what: `${what} Do not ask their name. This is not a greeting: do not start with Hello, Hi or Good morning/evening.` });
+    const noCall = this.ws.noRingback ? (said) => (CALL_PROMISE.test(said) ? 'You do not call people back and cannot ring them: do not say you will call, ring or call them back, or talk again in a moment. They can call you.' : null) : null;
+    let line = await this.dynamicLine({ pool: 'quiet', signal, what: `${what} Do not ask their name. This is not a greeting: do not start with Hello, Hi or Good morning/evening.`, check: noCall });
+    if (noCall && noCall(line.said)) line = { full: WHATSAPP_GOODBYE_FULL, said: WHATSAPP_GOODBYE_LINE, fixed: true }; // every attempt still promised a call-back: the fixed line, never the promise
     return { ...line, kind };
   }
 
@@ -1328,7 +1340,7 @@ class Call {
       this.suddenReported = true;
       if (!this.safety) care.suddenSilence(this.profile.id, { worry: true }); // a safety alert is already up
     }
-    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, hangup: line.kind === 'hangup' && !worriedEnd, stripGreeting: true });
+    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, hangup: line.kind === 'hangup' && !worriedEnd, stripGreeting: true, maxSentences: line.fixed ? 3 : 1 }); // the fixed goodbye has three sentences and is spoken whole
   }
 
   // After the goodbye has actually been played, end the call: the browser stops the mic and audio. Then Maya rings back
@@ -1932,4 +1944,4 @@ class Call {
   }
 }
 
-module.exports = { latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
