@@ -97,6 +97,24 @@ function timerOpenFact(timers, now = Date.now()) {
   const many = timers.length > 1;
   return `FACT: ${many ? `${timers.length} reminder timers are` : 'a reminder timer is'} running right now, and ${many ? 'these are the only ones' : 'it is the only one'} set: ${list}. They ONLY work while this call stays open: when the call ends the app drops them and nothing will remind them afterwards. If they ask what reminders you have, or whether anything is set, tell them exactly ${many ? 'these' : 'this one'} in one short sentence and nothing else. If they ask about hanging up, leaving or ending the call, or they say goodbye, tell them plainly in one short sentence that the reminder only works while the call stays open and they will not get it if they hang up. Otherwise do not bring it up. A reminder you have already given aloud is finished: never list it as still to come. Never say they can hang up whenever they like without saying that, never say you will remind them later or after the call, and never say you will call, ring or message them.`;
 }
+// The facts Maya is told when a person writes on WhatsApp while a reminder from their family is in flight (step 2 of the reminder replies; care.reminderContext decides which).
+// Code owns the state (Answered is marked by the acknowledgement, never by Spark); these facts only tell her what happened so her reply is ABOUT it and not a stock line.
+const agoWords = (m) => (m < 1 ? 'less than a minute ago' : m === 1 ? '1 minute ago' : `${m} minutes ago`);
+const quoteTask = (t) => `"${String(t || '').replace(/["\u201c\u201d]/g, "'").replace(/\s+/g, ' ').trim().slice(0, 80)}"`;
+function reminderFacts(ctx) {
+  if (!ctx) return null;
+  const pick = ctx.answered && ctx.answered.thisMessage ? ['reminder-answered-now', ctx.answered] : ctx.waiting ? ['reminder-waiting', ctx.waiting] : ctx.answered ? ['reminder-answered-earlier', ctx.answered] : ctx.missed ? ['reminder-missed', ctx.missed] : null;
+  if (!pick) return null;
+  const [label, r] = pick, msg = isFamilyMessage(r.task);
+  const what = msg ? `a message from their family: ${quoteTask(r.task)}` : `a reminder from their family: ${quoteTask(stripAddressee(r.task))}`;
+  const only = 'Use only the family\'s own words; add no advice, no dose, no reason and no medicine of your own. Answer in the language they used.';
+  const never = 'Never say it is done unless they said they did it ("okay" or "I saw it" means they saw it or agreed, not that it is done); never invent that they took, did or finished anything.';
+  if (label === 'reminder-answered-now') return { label, text: `FACT: ${agoWords(r.sentMinutesAgo)} you sent them ${what}, and THIS message from them answers it: it is marked answered. Reply to what they actually said in a few words, using only what they said (for example that they will do it, or that they saw it). ${never} If they sound annoyed or push back, take it lightly and kindly: do not argue, do not explain, do not repeat the task, do not remind them again and do not ask about it again. ${only}` };
+  if (label === 'reminder-waiting') return { label, text: `FACT: ${agoWords(r.minutesAgo)} you sent them ${what}${r.via === 'voice' ? ' as a voice note' : ''}${r.nudged ? ' and checked once more' : ''}. They have not confirmed it yet${r.others ? ` (${r.others} older ${r.others === 1 ? 'one is' : 'ones are'} also still waiting; this is about the newest)` : ''}. Their message may be a reply to it, so answer that first, then carry on the chat. If they agree, say what they said they will do; if they ask what it was, tell them the family's words exactly; if they say not now or later, keep it light, do not push and do NOT promise to remind them again (you cannot yet); if they sound annoyed, take it lightly, do not argue and do not repeat the task; if they are talking about something else, just talk and do not bring the reminder up. ${never} ${only}` };
+  if (label === 'reminder-answered-earlier') return { label, text: `FACT: ${agoWords(r.sentMinutesAgo)} you sent them ${what} and they answered it${r.minutesAgo > r.sentMinutesAgo ? '' : ` ${agoWords(r.minutesAgo)}`}. That is finished: do not mention it, repeat it or ask about it again unless they bring it up. Carry on with whatever they say now, keeping it in mind. ${never} ${only}` };
+  return { label, text: `FACT: ${agoWords(r.minutesAgo)} a reminder from their family went to them and they did not answer it. Do not mention it unless they do: no guilt, no pushing, no checking up. If they raise it, say only what the family's words were: ${quoteTask(msg ? r.task : stripAddressee(r.task))}. ${only}` };
+}
+
 // Asking again for a reminder that is already set (same length, made a moment ago, the same thing to remember) is the SAME reminder: it is kept once, not set twice (a person who
 // says "remind me in 30 seconds to take my medicine" and then "you just remind me in 30 seconds that I have to take it" used to hear it twice, in two wordings). A different thing
 // with the same length ("take my tablets" and "call my sister", both in 5 minutes) is a different reminder and is added. Only the words in common decide: stop-words do not count.
@@ -1712,6 +1730,9 @@ class Call {
     // A timer is running and this turn did not set it: the reminder only lives while the call is open (end() drops every pending timer), so if they ask about hanging up or say goodbye
     // she must say so plainly and never let "hang up whenever you like" sound like the reminder will still come. True in the app and on a WhatsApp call alike.
     if (!timerSet && this.timers && this.timers.length) note('timer-open', timerOpenFact(this.timers)); // chat.js borrows careNotes for the written chat: it has no timers at all
+    // A reply on WhatsApp while a reminder from the family is in flight (or was just answered): she is told, so her reply is about it. Not on a call (a call speaks its reminders itself),
+    // and not for the same person typing in the app (care.turnChannel is 'whatsapp' only inside whatsapp.js's chat call).
+    if (this.channel === 'chat' && care.turnChannel(id) === 'whatsapp') { const rf = reminderFacts(care.reminderContext(id)); if (rf) note(rf.label, rf.text); }
     return notes.join(' ');
   }
 
@@ -2020,4 +2041,4 @@ class Call {
   }
 }
 
-module.exports = { isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

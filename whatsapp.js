@@ -348,10 +348,19 @@ async function onText(l, msg) {
     return;
   }
   require('./care').reminderAckWhatsApp(l.profileId, require('./call').isAck(msg.text.body)); // a reply to a reminder: answered if it reads as an acknowledgement (judged in memory, the words are never kept here)
-  const r = await chat.sendText(l.profileId, msg.text.body, null, { source: 'whatsapp' });
+  const care = require('./care');
+  let r;
+  try { r = await care.withTurnChannel(l.profileId, 'whatsapp', () => chat.sendText(l.profileId, msg.text.body, null, { source: 'whatsapp' })); } // the reply knows about a reminder in flight (call.js reminderFacts)
+  finally { care.consumeAck(l.profileId); }   // this message is over: the next one is not "the one that answered it"
+  logReplyFacts(l.profileId);
   const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
   if (!reply || !reply.text) throw new WaError('Maya had no reply.');
   await sendTextTo(l.phone, mayaWords(reply.text));
+}
+// Which KINDS of fact Maya was given for a WhatsApp reply, by name only (call.js sets chat.sessions.get(id).factLabels): never a fact, never a word.
+function logReplyFacts(profileId) {
+  const s = chat.sessions.get(profileId), labels = (s && s.factLabels) || [];
+  if (labels.length) console.log('reply facts', JSON.stringify({ source: 'whatsapp', labels, turns: 1 }));
 }
 
 // A voice note in -> Transcribe -> the same Maya (chat.sendVoiceNote: same scam rules, memory, family flow) -> a voice note out, same voice and tones as the app.
@@ -363,10 +372,10 @@ async function onAudio(l, msg) {
   try { wav = chat.pcmToWav(await oggopus.decode(await downloadMedia(a.id), 24000)); }
   catch (e) { console.error('whatsapp voice note unreadable:', e.message); await sendTextTo(l.phone, 'I could not hear that voice note. Could you send it again, or type it for me?'); return 'unreadable'; }
   let r;
-  try { r = await chat.sendVoiceNote(l.profileId, wav, null, { source: 'whatsapp' }); }
+  try { r = await require('./care').withTurnChannel(l.profileId, 'whatsapp', () => chat.sendVoiceNote(l.profileId, wav, null, { source: 'whatsapp' })); logReplyFacts(l.profileId); }
   catch (e) { if (e.status === 422) { await sendTextTo(l.phone, 'I could not hear any words in that voice note. Could you try again, or type it for me?'); return 'unheard'; } throw e; }
   const said = r.messages.find((m) => m.role === 'senior');
-  if (said) require('./care').reminderAckWhatsApp(l.profileId, require('./call').isAck(said.text));   // a spoken reply to a reminder: answered if it reads as an acknowledgement
+  if (said) { require('./care').reminderAckWhatsApp(l.profileId, require('./call').isAck(said.text)); require('./care').consumeAck(l.profileId); }   // a spoken reply to a reminder: answered if it reads as an acknowledgement (the reply was already written, so nothing is left to be "this message")
   const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
   if (!reply || !reply.text) throw new WaError('Maya had no reply.');
   const words = mayaWords(reply.text);

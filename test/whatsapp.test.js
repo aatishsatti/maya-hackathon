@@ -786,6 +786,80 @@ test('Phase 2: with one reminder waiting, a reply answers it (the clean case fro
   assert.ok(logs.includes('reminder {"event":"reply checked","ack":true,"waiting":1,"states":["wa_delivered"],"inFlightOtherChannel":0}')); assert.ok(logs.includes('reminder {"event":"answered"}')); assert.equal(stateOf(id), 'done'); clearCalls();
 });
 
+// ---- Reminder replies, step 2: when the person writes while a reminder is in flight, Maya is told about it, so her reply is about it ----
+const { reminderFacts } = require('../call');
+const sendReminderTo = async (id, task, ago = 0) => { const due = Date.now() + 5000; care.addReminder(id, { task, dueAt: due, repeat: 'none' }); const r = care.get(id).reminders.at(-1); care.tick(due); await settle(); const a = r.active; a.sentAt -= ago * MIN; await wa.handleWebhook(statusIn(a.wamid, 'delivered')); return r; };
+const rosterWith = (re) => asked.map((a) => a.roster).filter((r) => re.test(r)).at(-1);
+const captureLogs = async (fn) => { const logs = []; const l0 = console.log; console.log = (...a) => logs.push(a.join(' ')); try { await fn(); } finally { console.log = l0; } return logs; };
+
+test('Reminder replies: the dad example. "Okay I\'ll take it. Stop haggling with me" answers the reminder, and Maya is told it did, that he sounds annoyed, not to argue, nag or say it is done; the log names the fact, never a word', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(PLAIN); const r = await sendReminderTo(id, 'Meds dad, remember?', 3); clearCalls(); asked.length = 0;
+  const logs = await captureLogs(() => wa.handleWebhook(incoming(phone, "Okay I'll take it. Stop haggling with me")));
+  assert.equal((r.active || r.last).state, 'done', 'the acknowledgement marked it answered (code, not Spark)');
+  const ro = rosterWith(/THIS message from them answers it/); assert.ok(ro, 'Spark was told');
+  assert.match(ro, /FACT: 3 minutes ago you sent them a reminder from their family: "Meds dad, remember\?", and THIS message from them answers it: it is marked answered\./);
+  assert.match(ro, /using only what they said \(for example that they will do it, or that they saw it\)/); assert.match(ro, /Never say it is done unless they said they did it/); assert.match(ro, /If they sound annoyed or push back, take it lightly and kindly: do not argue, do not explain, do not repeat the task, do not remind them again and do not ask about it again\./);
+  assert.match(ro, /add no advice, no dose, no reason and no medicine of your own\. Answer in the language they used\./);
+  assert.ok(logs.includes('reply facts {"source":"whatsapp","labels":["reminder-answered-now"],"turns":1}'), logs.join(' | ')); assert.doesNotMatch(logs.join('\n'), /haggling|Meds|take it|remember/i, 'labels only, never a word');
+  // then he talks about something else: the reminder is finished business and stays in mind for 30 minutes, not repeated
+  asked.length = 0; const l2 = await captureLogs(() => wa.handleWebhook(incoming(phone, 'How is the weather today?')));
+  const ro2 = rosterWith(/they answered it[^.]*\. That is finished/); assert.ok(ro2, 'a message right after the one that answered it is NOT "the one that answered it"'); assert.match(ro2, /FACT: 3 minutes ago you sent them a reminder from their family: "Meds dad, remember\?" and they answered it less than a minute ago\. That is finished: do not mention it, repeat it or ask about it again unless they bring it up\. Carry on with whatever they say now, keeping it in mind\./);
+  assert.ok(l2.includes('reply facts {"source":"whatsapp","labels":["reminder-answered-earlier"],"turns":1}'));
+  r.last.at -= 31 * MIN; asked.length = 0; const l3 = await captureLogs(() => wa.handleWebhook(incoming(phone, 'And tomorrow?')));
+  assert.ok(!rosterWith(/from their family/), 'after 30 minutes it is just history'); assert.ok(!l3.some((l) => l.startsWith('reply facts')), 'and no fact is logged'); clearCalls();
+});
+
+test('Reminder replies: while it is waiting, a message that is not an acknowledgement is told it may be a reply to it; "later" must not become a promise to remind again; it stays waiting', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(PLAIN); const r = await sendReminderTo(id, 'go for a walk', 12); clearCalls(); asked.length = 0;
+  const logs = await captureLogs(() => wa.handleWebhook(incoming(phone, 'What was that about?')));
+  const ro = rosterWith(/Their message may be a reply to it/); assert.ok(ro);
+  assert.match(ro, /FACT: 12 minutes ago you sent them a reminder from their family: "go for a walk"\. They have not confirmed it yet\./); assert.match(ro, /if they ask what it was, tell them the family's words exactly/);
+  assert.match(ro, /if they say not now or later, keep it light, do not push and do NOT promise to remind them again \(you cannot yet\)/); assert.match(ro, /if they are talking about something else, just talk and do not bring the reminder up/);
+  assert.equal(r.active.state, 'wa_delivered', 'not an acknowledgement: still waiting'); assert.ok(logs.includes('reply facts {"source":"whatsapp","labels":["reminder-waiting"],"turns":1}'));
+  await wa.handleWebhook(incoming(phone, 'later please')); assert.equal(r.active.state, 'wa_delivered', '"later" does not answer it and stays waiting'); clearCalls();
+});
+
+test('Reminder replies: several waiting: the fact is about the newest, the same one the acknowledgement answers; a voice note reply gets the same treatment', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(PLAIN);
+  const a = await sendReminderTo(id, 'oldest thing', 40), b = await sendReminderTo(id, 'middle thing', 20), c = await sendReminderTo(id, 'newest thing', 2); clearCalls(); asked.length = 0;
+  await wa.handleWebhook(incoming(phone, 'hm, what?')); const ro = rosterWith(/older ones are also still waiting/); assert.ok(ro);
+  assert.match(ro, /"newest thing"\. They have not confirmed it yet \(2 older ones are also still waiting; this is about the newest\)/); assert.doesNotMatch(ro, /oldest thing|middle thing/, 'only the newest is named');
+  // A voice note is transcribed INSIDE the chat turn, so the reply is written before the acknowledgement can be judged: Maya is told it may be a reply to the newest one (waiting), and
+  // right after the reply the same newest one is marked answered. (Telling her "marked answered" first would need a one-line hook in chat.js: not done.)
+  asked.length = 0; transcript = 'okay thanks'; const vl = await captureLogs(async () => assert.deepEqual(await wa.handleWebhook(voiceIn(phone)), ['voice']));
+  assert.deepEqual([a, b, c].map((r) => (r.active || r.last).state), ['wa_delivered', 'wa_delivered', 'done'], 'the voice note answered the SAME newest one');
+  assert.match(rosterWith(/Their message may be a reply to it/), /"newest thing"\. They have not confirmed it yet/); assert.ok(vl.includes('reply facts {"source":"whatsapp","labels":["reminder-waiting"],"turns":1}'), vl.join(' | ')); voiceReset(); clearCalls();
+});
+
+test('Reminder replies: a Missed reminder is known silently for 2 hours; a message from the family is passed on as a message, never as "take your meds"; a Not sent reminder is not mentioned at all', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(PLAIN); const r = await sendReminderTo(id, 'rest a little', 0); const due = r.active.sentAt - 1000;
+  care.tick(due + 61 * MIN); await settle(); assert.equal(r.last.state, 'wa_missed'); clearCalls(); asked.length = 0;
+  const logs = await captureLogs(() => wa.handleWebhook(incoming(phone, 'Hello Maya')));
+  const ro = rosterWith(/did not answer it\. Do not mention it unless they do/); assert.ok(ro); assert.match(ro, /no guilt, no pushing, no checking up\. If they raise it, say only what the family's words were: "rest a little"\./);
+  assert.ok(logs.includes('reply facts {"source":"whatsapp","labels":["reminder-missed"],"turns":1}'));
+  r.last.at -= 3 * 60 * MIN; asked.length = 0; await wa.handleWebhook(incoming(phone, 'Anything new?')); assert.ok(!rosterWith(/from their family/), 'after 2 hours it is forgotten');
+  const m = remindProfile({ delivery: 'text' }); await sendReminderTo(m.id, "Mum, it's your daughter - I love you!", 1); asked.length = 0; await wa.handleWebhook(incoming(m.phone, 'who is this?'));
+  const rm = rosterWith(/Their message may be a reply to it/); assert.match(rm, /1 minute ago you sent them a message from their family: "Mum, it's your daughter - I love you!"/); assert.doesNotMatch(rm, /reminder from their family/);
+  const f = outside(); care.setMode(f.id, 'standard'); const due2 = Date.now() + 5000; care.addReminder(f.id, { task: 'never sent', dueAt: due2, repeat: 'none' }); care.tick(due2); await settle(); asked.length = 0; await wa.handleWebhook(incoming(f.phone, 'hello')); assert.ok(!rosterWith(/never sent/), 'Not sent: it never reached them, so Maya says nothing about it'); clearCalls();
+});
+
+test('Reminder replies: only a reply that really came through WhatsApp is told (not the same person typing in the app, not a call), and the door is closed again afterwards', async () => {
+  voiceReset(); const { id } = remindProfile({ delivery: 'text' }); reset(PLAIN); await sendReminderTo(id, 'take your tablets', 5); clearCalls(); asked.length = 0;
+  await chat.sendText(id, 'What was that about?', null, { source: 'app' }); assert.ok(!rosterWith(/from their family/), 'typed in the app: no reminder fact'); assert.deepEqual((chat.sessions.get(id) || {}).factLabels, []);
+  assert.equal(care.turnChannel(id), null, 'the door is closed');
+  const { Call } = require('../call'); const call = new Call({ send() {}, close() {}, onmessage: null, onclose: null }, 'k'); clearInterval(call.endTimer); call.profile = memory.load(id);
+  const note = await care.withTurnChannel(id, 'whatsapp', async () => call.careNotes('What was that about?')); assert.doesNotMatch(note, /from their family/, 'a call speaks its reminders itself'); assert.equal(care.turnChannel(id), null);
+  await assert.rejects(care.withTurnChannel(id, 'whatsapp', async () => { throw new Error('boom'); }), /boom/); assert.equal(care.turnChannel(id), null, 'closed even when the turn fails'); clearCalls();
+});
+
+test('Reminder replies: safety words still reach her first when a reminder is in flight; and the four labels are plain names in the source', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(PLAIN); await sendReminderTo(id, 'take your tablets', 5); clearCalls();
+  await wa.handleWebhook(incoming(phone, 'I want to end my life')); const labels = chat.sessions.get(id).factLabels; assert.equal(labels[0], 'safety', 'the safety fact comes first'); assert.ok(labels.includes('reminder-waiting'), labels.join(','));
+  const src = fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'); for (const l of ['reminder-answered-now', 'reminder-waiting', 'reminder-answered-earlier', 'reminder-missed']) assert.match(src, new RegExp(`'${l}'`), l);
+  assert.equal(reminderFacts(null), null); assert.equal(reminderFacts({ waiting: null, answered: null, missed: null }), null);
+  assert.equal(reminderFacts({ waiting: { task: 'x', minutesAgo: 0, via: 'voice', nudged: true, others: 0 }, answered: null, missed: null }).text.startsWith('FACT: less than a minute ago you sent them a reminder from their family: "x" as a voice note and checked once more.'), true); clearCalls();
+});
+
 test('Phase 2: outside the 24 h window nothing is sent (no Meta call), it is shown as Not sent with the reason; the family is told in cautious and ultra, not in standard', async () => {
   for (const [mode, kind] of [['standard', null], ['cautious', 'gentle'], ['ultra', 'alert']]) {
     voiceReset(); const x = outside(); care.setMode(x.id, mode); const { dueAt } = addRem(x.id); care.tick(dueAt); await settle();

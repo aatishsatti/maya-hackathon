@@ -1004,7 +1004,7 @@ function waitingWhatsApp(p, now = Date.now()) {
 
 // What a person is dealing with on WhatsApp right now, for what Maya is told before she answers (pure: it changes nothing and logs nothing). The task is the family's own text.
 //   waiting:  the most recently sent reminder still waiting for an answer (inside its 60 minute window), how long ago, voice or text, nudged or not, how many OTHER ones wait.
-//   answered: the most recently answered reminder, if that was in the last 30 minutes; thisMessage is true when the reply being answered right now is the one that answered it.
+//   answered: the most recently answered reminder, if that was in the last 30 minutes (minutesAgo since it was answered, sentMinutesAgo since it was sent); thisMessage is true when the reply being answered right now is the one that answered it.
 //   missed:   the most recent Missed reminder, if in the last 2 hours. A reminder that was never sent (Not sent) is not here: it never reached them.
 function reminderContext(id, now = Date.now()) {
   const p = get(id);
@@ -1015,11 +1015,23 @@ function reminderContext(id, now = Date.now()) {
   if (waiting.length) { const a = waiting[0].active; out.waiting = { id: waiting[0].id, task: waiting[0].task, minutesAgo: mins(a.sentAt || a.startedAt), via: a.via === 'voice' ? 'voice' : 'text', nudged: Boolean(a.nudged), others: waiting.length - 1 }; }
   const done = (state, windowMs) => p.reminders.filter((r) => r.last && r.last.channel === 'whatsapp' && r.last.state === state && now - r.last.at <= windowMs).sort((x, y) => y.last.at - x.last.at)[0];
   const ans = done('done', cfg.waAnsweredCtxMs);
-  if (ans) out.answered = { id: ans.id, task: ans.task, minutesAgo: mins(ans.last.at), thisMessage: Boolean(p.lastAck && p.lastAck.rid === ans.id && now - p.lastAck.at <= cfg.waThisMessageMs) };
+  if (ans) out.answered = { id: ans.id, task: ans.task, minutesAgo: mins(ans.last.at), sentMinutesAgo: mins(ans.last.sentAt || ans.last.dueAt), thisMessage: Boolean(p.lastAck && p.lastAck.fresh && p.lastAck.rid === ans.id && now - p.lastAck.at <= cfg.waThisMessageMs) };
   const miss = done('wa_missed', cfg.waMissedCtxMs);
   if (miss) out.missed = { id: miss.id, task: miss.task, minutesAgo: mins(miss.last.at) };
   return out;
 }
+
+// Which door the chat turn being answered right now came through. The written chat is ONE session per person, shared by the app and WhatsApp, and chat.js does not say which; whatsapp.js
+// wraps its chat call in this, so the facts about a WhatsApp reminder reach Maya only for a reply that really came through WhatsApp (never for the same person typing in the app).
+const turnChannels = new Map();
+async function withTurnChannel(id, channel, fn) {
+  turnChannels.set(id, channel);
+  try { return await fn(); } finally { if (turnChannels.get(id) === channel) turnChannels.delete(id); }
+}
+const turnChannel = (id) => turnChannels.get(id) || null;
+
+// The turn that the acknowledgement belonged to is over (whatsapp.js calls this when its chat turn ends, success or not): the NEXT message is no longer "the one that answered it".
+function consumeAck(id) { const p = get(id); if (p && p.lastAck) p.lastAck.fresh = false; }
 
 function reminderAckWhatsApp(id, ack = true, now = Date.now()) {
   const p = get(id); if (!p) return false;
@@ -1032,7 +1044,7 @@ function reminderAckWhatsApp(id, ack = true, now = Date.now()) {
   const r = waiting[0]; if (!r) return false;
   const n = p.notifications.find((x) => x.id === r.active.notifId); if (n) advance(p, n, 'replied');
   finishOccurrence(p, r.id, 'done', { answeredBy: 'a reply on WhatsApp' });
-  p.lastAck = { rid: r.id, at: now };   // so Maya can tell that THIS message was the one that answered it (reminderContext.thisMessage)
+  p.lastAck = { rid: r.id, at: now, fresh: true };   // so Maya can tell that THIS message was the one that answered it (reminderContext.thisMessage); consumeAck closes it once that turn is over
   pushFamily('refresh', { id }); waLog({ event: 'answered' });
   return true;
 }
@@ -1219,6 +1231,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, setDelivery, flush,
+  addReminder, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

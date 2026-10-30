@@ -66,6 +66,7 @@ test('answered: the most recent one answered in the last 30 minutes; older, or a
   const now = profile(); const m = remind(now, 'just now', 'wa_delivered', 4); care.get(now).lastAck = null;
   assert.equal(care.reminderAckWhatsApp(now, true, NOW), true); assert.equal(care.reminderContext(now, NOW).answered.thisMessage, true, 'the reply that answered it');
   assert.equal(care.reminderContext(now, NOW + 16 * 1000).answered.thisMessage, false, '16 seconds later it is just something that was answered earlier'); assert.equal(m.last.state, 'done');
+  care.consumeAck(now); assert.equal(care.reminderContext(now, NOW).answered.thisMessage, false, 'once that message\'s turn is over, the next message is not the one that answered it, even a second later');
 });
 
 test('missed: the most recent Missed one in the last 2 hours, silently known; older is not', () => {
