@@ -372,10 +372,14 @@ async function onAudio(l, msg) {
   try { wav = chat.pcmToWav(await oggopus.decode(await downloadMedia(a.id), 24000)); }
   catch (e) { console.error('whatsapp voice note unreadable:', e.message); await sendTextTo(l.phone, 'I could not hear that voice note. Could you send it again, or type it for me?'); return 'unreadable'; }
   let r;
-  try { r = await require('./care').withTurnChannel(l.profileId, 'whatsapp', () => chat.sendVoiceNote(l.profileId, wav, null, { source: 'whatsapp' })); logReplyFacts(l.profileId); }
+  const care = require('./care');
+  try {
+    // The words are judged the moment they are transcribed and BEFORE the reply is written (chat.js onWords), exactly like typed text: a spoken "okay" answers the reminder and Maya is told so.
+    r = await care.withTurnChannel(l.profileId, 'whatsapp', () => chat.sendVoiceNote(l.profileId, wav, null, { source: 'whatsapp', onWords: (words) => care.reminderAckWhatsApp(l.profileId, require('./call').isAck(words)) }));
+    logReplyFacts(l.profileId);
+  }
   catch (e) { if (e.status === 422) { await sendTextTo(l.phone, 'I could not hear any words in that voice note. Could you try again, or type it for me?'); return 'unheard'; } throw e; }
-  const said = r.messages.find((m) => m.role === 'senior');
-  if (said) { require('./care').reminderAckWhatsApp(l.profileId, require('./call').isAck(said.text)); require('./care').consumeAck(l.profileId); }   // a spoken reply to a reminder: answered if it reads as an acknowledgement (the reply was already written, so nothing is left to be "this message")
+  finally { care.consumeAck(l.profileId); }   // this note is over: the next message is not "the one that answered it"
   const reply = [...r.messages].reverse().find((m) => m.role === 'maya');
   if (!reply || !reply.text) throw new WaError('Maya had no reply.');
   const words = mayaWords(reply.text);

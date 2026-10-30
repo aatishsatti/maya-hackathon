@@ -824,11 +824,14 @@ test('Reminder replies: several waiting: the fact is about the newest, the same 
   const a = await sendReminderTo(id, 'oldest thing', 40), b = await sendReminderTo(id, 'middle thing', 20), c = await sendReminderTo(id, 'newest thing', 2); clearCalls(); asked.length = 0;
   await wa.handleWebhook(incoming(phone, 'hm, what?')); const ro = rosterWith(/older ones are also still waiting/); assert.ok(ro);
   assert.match(ro, /"newest thing"\. They have not confirmed it yet \(2 older ones are also still waiting; this is about the newest\)/); assert.doesNotMatch(ro, /oldest thing|middle thing/, 'only the newest is named');
-  // A voice note is transcribed INSIDE the chat turn, so the reply is written before the acknowledgement can be judged: Maya is told it may be a reply to the newest one (waiting), and
-  // right after the reply the same newest one is marked answered. (Telling her "marked answered" first would need a one-line hook in chat.js: not done.)
+  // A voice note is transcribed inside the chat turn; chat.js hands the words to whatsapp.js (onWords) BEFORE the reply is written, so a spoken "okay" is marked answered first and Maya is told so.
   asked.length = 0; transcript = 'okay thanks'; const vl = await captureLogs(async () => assert.deepEqual(await wa.handleWebhook(voiceIn(phone)), ['voice']));
   assert.deepEqual([a, b, c].map((r) => (r.active || r.last).state), ['wa_delivered', 'wa_delivered', 'done'], 'the voice note answered the SAME newest one');
-  assert.match(rosterWith(/Their message may be a reply to it/), /"newest thing"\. They have not confirmed it yet/); assert.ok(vl.includes('reply facts {"source":"whatsapp","labels":["reminder-waiting"],"turns":1}'), vl.join(' | ')); voiceReset(); clearCalls();
+  assert.match(rosterWith(/THIS message from them answers it/), /"newest thing"/); assert.ok(vl.includes('reply facts {"source":"whatsapp","labels":["reminder-answered-now"],"turns":1}'), vl.join(' | '));
+  // and a spoken reply that is not an acknowledgement is still just "waiting"; the note right after the one that answered is not "the one that answered it"
+  asked.length = 0; transcript = 'what was that about?'; const wl = await captureLogs(async () => { await wa.handleWebhook(voiceIn(phone)); });
+  assert.match(rosterWith(/Their message may be a reply to it/), /"middle thing"\. They have not confirmed it yet \(1 older one is also still waiting/); assert.ok(wl.includes('reply facts {"source":"whatsapp","labels":["reminder-waiting"],"turns":1}'));
+  voiceReset(); clearCalls();
 });
 
 test('Reminder replies: a Missed reminder is known silently for 2 hours; a message from the family is passed on as a message, never as "take your meds"; a Not sent reminder is not mentioned at all', async () => {
@@ -858,6 +861,18 @@ test('Reminder replies: safety words still reach her first when a reminder is in
   const src = fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'); for (const l of ['reminder-answered-now', 'reminder-waiting', 'reminder-answered-earlier', 'reminder-missed']) assert.match(src, new RegExp(`'${l}'`), l);
   assert.equal(reminderFacts(null), null); assert.equal(reminderFacts({ waiting: null, answered: null, missed: null }), null);
   assert.equal(reminderFacts({ waiting: { task: 'x', minutesAgo: 0, via: 'voice', nudged: true, others: 0 }, answered: null, missed: null }).text.startsWith('FACT: less than a minute ago you sent them a reminder from their family: "x" as a voice note and checked once more.'), true); clearCalls();
+});
+
+test('chat.js onWords hook: called once with the transcript BEFORE Maya\'s reply is written, not called when nothing was heard, and a failing callback never breaks the chat', async () => {
+  voiceReset(); const x = linked(); reset(PLAIN); const order = []; const wav = chat.pcmToWav(tone(1));
+  const keepT = chat.deps.transcribe; chat.deps.transcribe = async () => 'okay I will'; const before = asked.length;
+  const r = await chat.sendVoiceNote(x.id, wav, null, { source: 'whatsapp', onWords: (w) => order.push(['words', w, asked.length]) });
+  assert.deepEqual(order, [['words', 'okay I will', before]], 'called once, and no Spark call had been made yet'); assert.ok(r.messages.find((m) => m.role === 'maya'));
+  const logs = []; const e0 = console.error; console.error = (...a) => logs.push(a.join(' '));
+  try { const r2 = await chat.sendVoiceNote(x.id, wav, null, { onWords: () => { throw new Error('callback exploded'); } }); assert.ok(r2.messages.find((m) => m.role === 'maya'), 'the chat still answered'); } finally { console.error = e0; }
+  assert.ok(logs.some((l) => /voice note callback failed: callback exploded/.test(l)));
+  chat.deps.transcribe = async () => ''; let called = 0; await assert.rejects(chat.sendVoiceNote(x.id, wav, null, { onWords: () => { called += 1; } }), (e) => e.status === 422); assert.equal(called, 0, 'nothing heard: not called');
+  chat.deps.transcribe = keepT; voiceReset(); clearCalls();
 });
 
 test('Phase 2: outside the 24 h window nothing is sent (no Meta call), it is shown as Not sent with the reason; the family is told in cautious and ultra, not in standard', async () => {

@@ -388,6 +388,9 @@ async function sendVoiceNote(profileId, wav, tz, opts = {}) {
   let words;
   try { words = await deps.transcribe(wav); } catch (e) { throw new ChatError(e.message); }
   if (!words) throw new ChatError('I could not hear any words in that voice note. Please try recording it again.', 422);
+  // The words are known but no reply is written yet: the caller (whatsapp.js) may act on them first, so Maya's reply already knows what they did (a spoken "okay" to a reminder is marked answered
+  // BEFORE the reply, exactly as for typed text). A failing callback never breaks the chat.
+  if (typeof opts.onWords === 'function') { try { opts.onWords(words); } catch (e) { console.error('voice note callback failed:', e.message); } }
   const mine = saveMedia(profileId, 'wav', wav);
   const you = s.push({ role: 'senior', kind: 'voice', text: words, mediaUrl: mediaUrl(profileId, mine) });
   const scam = await talkCheck(profileId, words);
