@@ -35,7 +35,8 @@ class PhoneSocket {
 
 class PhoneBridge {
   // newCall(socket, apiKey) -> a Call (call.js). speak(text) -> PCM16 24 kHz (Maya's voice), for the one fixed fatal line.
-  constructor({ newCall, apiKey, profileId, tz, log, speak }) {
+  // outbound: a call WE placed (call.js ends it itself after a goodbye; an answered inbound call is ended by the person, as before).
+  constructor({ newCall, apiKey, profileId, tz, log, speak, outbound = false }) {
     this.log = log; this.speak = speak; this.profileId = profileId; this.tz = tz || null;
     this.out = null; this.held = []; this.accepted = false; this.callReady = false; this.error = null; this.finished = false;
     this.speechEnds = 0; this.replies = 0; this.lastChunkAt = 0; this.born = Date.now(); this.maxTtv = 0;
@@ -45,6 +46,7 @@ class PhoneBridge {
     this.done = new Promise((res) => { this.finish = (r) => { if (!this.finished) { this.finished = true; res(r); } }; }); // 'maya hung up' | 'fatal'
     this.mic = new Mic({ sink: (frame) => this.toCall(frame), log });
     this.socket = new PhoneSocket({ onEvent: (m) => this.onEvent(m), onVoice: (b) => this.onVoice(b), onClose: (code) => this.finish(code === 1000 ? 'maya hung up' : 'fatal') });
+    this.socket.outbound = outbound;
     this.call = newCall(this.socket, apiKey);
   }
 

@@ -78,6 +78,16 @@ const SILENCE_WAIT_MS = [null, 10000, 8000]; // null = this call's own random fi
 const CALL_PROMISE = /\b(?:ring|call|phone|dial)(?:ing)?\s+you\b|\bgive you a (?:call|ring|buzz)\b|\b(?:ring|call)(?:ing)?\s+(?:right\s+)?back\b|\b(?:i(?:'| wi)ll|i will|i'm going to|i am going to|gonna)\s+(?:just\s+)?(?:call|ring|phone)\b|\b(?:talk|speak|chat)(?:ing)?\s+(?:to you |with you )?(?:again |soon )?(?:in|after) (?:a |just a )?(?:moment|bit|minute|second|little|while)\b|\bbe right back\b|\bright back\b/i;
 const WHATSAPP_GOODBYE_LINE = "I'm going to hang up for now. You're welcome to call me again whenever you like. Goodbye.";
 const WHATSAPP_GOODBYE_FULL = `[[feel: emotion=neutral intensity=1 intent=farewell concern=none pain=0]] ${WHATSAPP_GOODBYE_LINE}`;
+// A call Maya PLACED on WhatsApp (wabridge sets ws.outbound): the person has no app button to end it, so the end is Maya's, in code. After an acknowledged reminder she asks the fixed
+// question; "no / that's all" ends the call with the fixed goodbye; any real answer or question carries on as an ordinary conversation (never cut off while they talk); silence after the
+// question ends it after CLOSE_WAIT_MS; a goodbye said later ends it too. The words are spoken in full, THEN hangUp() closes the socket and the call is terminated (wacall).
+const BYE_ASKED = 'Do you have any questions?', BYE_NOMORE = "Okay that's all. Bye-bye.", BYE_TIMEOUT = "Okay, I'll let you go then. Bye-bye.", BYE_SAID = 'Okay, goodbye. Take care.';
+const CLOSE_WAIT_MS = 8000;
+const plainWords = (t) => String(t || '').toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+const NO_MORE = /^(no|nope|nah|no thanks|no thank you|nothing|nothing else|nothing more|that'?s all|that is all|that'?s it|i'?m fine|i am fine|all good|i'?m good|not really|no questions|none|i don'?t have any|no i don'?t|no i'?m fine)( thanks| thank you| dear| maya)?$/;
+const BYE_WORDS = /\b(good ?bye|bye( bye)?|good ?night|see you|talk (to you )?later|take care|i have to go|i must go|got to go|gotta go)\b/;
+const saysBye = (t) => { const w = plainWords(t); return w.split(' ').length <= 8 && BYE_WORDS.test(w); };
+const outboundEnd = (heard, asked) => saysBye(heard) ? 'bye' : asked && NO_MORE.test(plainWords(heard)) ? 'nomore' : null;   // what their words say about ending a call Maya placed
 const firstSilenceWait = () => SILENCE_FIRST_MIN_MS + Math.floor(Math.random() * (SILENCE_FIRST_MAX_MS - SILENCE_FIRST_MIN_MS + 1));
 // A greeting shortens ("Hi Mike") once a known profile has had this many calls; first calls keep the warm greeting.
 const SHORT_GREETING_AFTER_CALLS = 1;
@@ -466,6 +476,8 @@ class Call {
     this.userTurns = 0;          // turns the person has actually spoken this call (talked-then-quiet vs never answered)
     this.outreach = null;        // { kind:'callback'|'reminder', reminderId } when Maya rang them and they accepted
     this.awaitAck = null;        // reminder id spoken and not yet acknowledged
+    this.closing = null;         // 'asked': the fixed "any questions?" was spoken on a call Maya placed and the answer decides whether she hangs up
+    this.askQuestion = false; this.closeTimer = null;
     this.askWhat = false;        // a flag/alert just resolved: the next reply warmly asks what happened
     this.timers = [];            // in-call timers the person asked for
     this.suddenReported = false;
@@ -1308,7 +1320,28 @@ class Call {
   // profile heard in the last 3 days. The next line is written ahead during the countdown so it is ready on time.
   // Any real words from the person cancel it and reset the steps. After something worrying was said she never
   // hangs up: the call stays open and the family is told through care.js (sudden silence).
+  // A fixed line on a call Maya placed (the question, the goodbyes): spoken whole; bye = hang up after it; onDone replaces the usual silence timer.
+  async sayFixed(text, { bye = false, onDone = null } = {}) {
+    if (this.closed) return;
+    this.cancelSilence();
+    const myGen = ++this.gen; if (this.abort) this.abort.abort(); this.abort = new AbortController(); this.responding = true;
+    this.history.push({ role: 'assistant', content: text }); this.mirror('maya', text);
+    console.log('outbound line', JSON.stringify({ kind: bye ? 'goodbye' : 'question' }));   // a label only
+    await this.speakReply(fixedReply(`[[feel: emotion=neutral intensity=1 intent=${bye ? 'farewell' : 'ask'} concern=none pain=0]] ${text}`), null, myGen, { greeting: true, stripGreeting: true, maxSentences: 3, bye, onDone });
+  }
+  async askAnyQuestions() { if (this.closed) return; this.closing = 'asked'; await this.sayFixed(BYE_ASKED, { onDone: () => this.armClose() }); }
+  armClose() {
+    clearTimeout(this.closeTimer);
+    this.closeTimer = setTimeout(() => this.fireClose(), Math.max(0, this.playUntil - Date.now()) + CLOSE_WAIT_MS);
+  }
+  fireClose() {
+    if (this.closed || this.closing !== 'asked') return;
+    if (this.responding || this.isSpeaking() || this.pending.length || (this.curTurn && this.curTurn.partial)) { this.closeTimer = setTimeout(() => this.fireClose(), 1000); return; }   // still talking: not silence
+    this.closing = null; this.sayFixed(BYE_TIMEOUT, { bye: true });
+  }
+
   cancelSilence() {
+    clearTimeout(this.closeTimer);
     clearTimeout(this.silenceTimer);
     if (this.quietPrefetch) { this.quietPrefetch.abort.abort(); this.quietPrefetch = null; }
   }
@@ -1422,18 +1455,18 @@ class Call {
 
   // After the goodbye has actually been played, end the call: the browser stops the mic and audio. Then Maya rings back
   // in 5 s (care.js), in-app only.
-  hangUp() {
+  hangUp({ quiet = true } = {}) {
     const wait = Math.max(0, this.playUntil - Date.now()) + 600;
     setTimeout(() => {
       if (this.closed) return;
-      console.log('hangup: silence');
-      this.hungUpQuiet = true;
+      console.log(quiet ? 'hangup: silence' : 'hangup: goodbye');
+      if (quiet) this.hungUpQuiet = true;   // a goodbye is a normal end, not a silence (the next greeting and the ring-back read this)
       const id = this.profile.id;
       const talked = this.userTurns > 0;
       try { this.send({ type: 'hangup' }); } catch { /* socket gone */ }
       this.end();
       this.ws.close(1000);
-      if (!this.ws.noRingback) care.silenceHangup(id, { talked }); // not for a WhatsApp call (wabridge.js sets noRingback): the ring-back is an in-app ring and would only raise a false "unreachable" later
+      if (quiet && !this.ws.noRingback) care.silenceHangup(id, { talked }); // not for a WhatsApp call (wabridge.js sets noRingback): the ring-back is an in-app ring and would only raise a false "unreachable" later
     }, wait);
   }
 
@@ -1610,6 +1643,9 @@ class Call {
       ...((pre || spec) ? { heard: turns.map((t) => t.text).join(' '), predicted: pre ? pre.sample : turns.map((t) => t.text).join(' ') } : {}),
     };
 
+    // A call Maya placed: the person's own words decide whether it ends (their goodbye, or "no, that's all" after her question). Never when a safety, health or other fact is in play: then she answers as usual.
+    const endNow = outboundEnd(turns.map((t) => t.text).join(' '), this.closing === 'asked'); this.closing = null; clearTimeout(this.closeTimer);
+    if (this.ws.outbound && !extra && !this.safety && !this.health && endNow) return this.sayFixed(endNow === 'nomore' ? BYE_NOMORE : BYE_SAID, { bye: true });
     if (this.abort) this.abort.abort(); // never two replies at once
     this.lastAnswered = { key: this.textKey(turns), at: Date.now() };
     const myGen = ++this.gen;
@@ -1633,7 +1669,7 @@ class Call {
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
     this.scamOwed = scamTurn && scamTurn.scam && scamTurn.scam.level !== 'none' ? scamTurn.scam : null;
-    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent }); }
+    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent, onDone: this.askQuestion ? () => { this.askQuestion = false; this.askAnyQuestions(); } : null }); }
     finally {
       this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null; this.officialNow = null;
       if (this.scamOwed) { this.scamLater = { scam: this.scamOwed, at: Date.now() }; this.scamOwed = null; }   // cut off before it was heard: the next reply carries the warning again
@@ -1698,7 +1734,8 @@ class Call {
     if (this.awaitAck && isAck(heard)) {
       care.reminderAck(id, this.awaitAck);
       this.awaitAck = null;
-      note('reminder-acknowledged', 'They acknowledged the reminder you just gave. Reply very briefly and warmly. Do not repeat the reminder and do not add any advice about it.');
+      if (this.ws.outbound) { this.askQuestion = true; note('reminder-acknowledged-placed-call', 'They acknowledged the reminder you just gave. Reply in a few words only: a short warm thank-you. Do not repeat the reminder, give no advice, and do NOT ask a question or say goodbye: the app asks its own question right after you.'); }
+      else note('reminder-acknowledged', 'They acknowledged the reminder you just gave. Reply very briefly and warmly. Do not repeat the reminder and do not add any advice about it.');
     }
     // "Remind me next time I call to ...": not a timer. Code files a next-call reminder now (recall.js, memory.js); Spark is told as a fact. Said again as
     // "not done yet / still to do" about a reminder shown in THIS call, it comes due again next call.
@@ -1814,7 +1851,7 @@ class Call {
   // Streams Spark's text into the voice sentence by sentence. Each sentence is sent to the voice
   // as soon as it is complete (requests run side by side, audio goes out in order), so speech
   // starts while Spark is still writing. Plain text, with an excited opening phrase for happy news.
-  async speakReply(rs, timing, myGen, { record = false, greeting = false, hangup = false, stripGreeting = false, holdBack = false, maxSentences = 1, bright = false, lead: leadIn = null } = {}) {
+  async speakReply(rs, timing, myGen, { record = false, greeting = false, hangup = false, bye = false, onDone = null, stripGreeting = false, holdBack = false, maxSentences = 1, bright = false, lead: leadIn = null } = {}) {
     const signal = this.abort.signal;
     this.sayingText = '';
     this.playUntil = leadIn ? leadIn.endsAt : 0;   // a lead-in line may still be playing
@@ -2020,7 +2057,8 @@ class Call {
       if (this.safety && /\bsafe\b/i.test(all) && isQuestion(all)) care.safeAsked(this.profile.id);
       if (this.safety && isQuestion(all)) this.noteSafetyAsked(all);
     }
-    if (hangup) this.hangUp(); else this.armSilence();
+    const farewell = Boolean(this.ws.outbound && feel && feel.intent === 'farewell' && !this.safety && !this.health);   // a goodbye she says is followed by the hang-up, in code
+    if (hangup) this.hangUp(); else if (bye || farewell) this.hangUp({ quiet: false }); else if (onDone) setImmediate(onDone); else this.armSilence();
     if (timing) {
       timing.feel = feel;
       timing.excited = excited;
@@ -2041,4 +2079,4 @@ class Call {
   }
 }
 
-module.exports = { reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { outboundEnd, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

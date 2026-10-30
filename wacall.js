@@ -237,7 +237,7 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     r = await step(acceptedP); if (!r.ok) return await finish(r);
     clearTimeout(capTimer); capTimer = null;
     if (bridge) {
-      br = new PhoneBridge({ newCall: bridge.newCall, apiKey: bridge.apiKey, profileId: bridge.profileId, tz: bridge.tz, log, speak });
+      br = new PhoneBridge({ newCall: bridge.newCall, apiKey: bridge.apiKey, profileId: bridge.profileId, tz: bridge.tz, log, speak, outbound: true });
       br.begin({ reason: 'reminder', outreachId: bridge.outreachId });
     }
     r = await step(waitConnected(pc, mediaUpMs)); if (!r.ok) return await finish(r);

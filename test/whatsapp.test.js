@@ -1248,3 +1248,49 @@ test('C2 THE EARS: what the person says on the phone reaches the Call (it went n
   });
   try { assert.ok(heardFrames >= 15, `the Call received the caller's VOICE (${heardFrames} loud frames)`); } finally { await dev.peer.close(); enc.delete && enc.delete(); }
 });
+
+// ---- C2 fix 2: a call Maya placed ends in CODE after her goodbye (the person has no app button), and never while they are talking ----
+const callMod = require('../call');
+const outCall = (id, outbound = true) => { const rec = { sent: [], closed: [] }; const ws = { send: (d) => rec.sent.push(typeof d === 'string' ? JSON.parse(d) : d), close: (c) => rec.closed.push(c), onmessage: null, onclose: null, outbound, noRingback: true }; const call = new callMod.Call(ws, 'k'); clearInterval(call.endTimer); call.profile = memory.load(id); return { call, rec }; };
+
+test('C2 end of a call Maya placed: "no / that\'s all" after her question, or any short goodbye, ends it; a real answer, a question or a thank-you does not', () => {
+  const E = callMod.outboundEnd;
+  for (const t of ['No.', 'No thanks', 'No, thank you.', 'Nothing', "That's all", 'Nope', "I'm fine", 'Not really, thank you', 'No questions']) assert.equal(E(t, true), 'nomore', t);
+  for (const t of ['No.', 'Nothing', "That's all"]) assert.equal(E(t, false), null, `${t} without her question does not end the call`);
+  for (const t of ['Bye', 'Goodbye Maya', 'Good night', 'Okay, bye bye', 'Thank you, goodbye', 'Talk to you later', 'Take care']) { assert.equal(E(t, false), 'bye', t); assert.equal(E(t, true), 'bye', t); }
+  for (const t of ['Yes, one thing', 'Who wrote that message?', 'No, wait, I wanted to ask about my daughter', 'Thank you', 'Okay', "Goodbye is a word I don't like to hear when you have so much to tell me about the garden"]) assert.equal(E(t, true), null, t);
+});
+
+test('C2 an acknowledged reminder on a call Maya placed makes her ask the fixed question next (and say none herself); in the app or on an inbound call nothing changes', async () => {
+  voiceReset(); const { id } = linked(); const a = outCall(id), b = outCall(id, false);
+  a.call.awaitAck = 'rid1'; const noteA = a.call.careNotes('Okay, I will take them now.');
+  assert.equal(a.call.askQuestion, true); assert.match(noteA, /do NOT ask a question or say goodbye/);
+  b.call.awaitAck = 'rid1'; const noteB = b.call.careNotes('Okay, I will take them now.');
+  assert.equal(b.call.askQuestion, false); assert.doesNotMatch(noteB, /do NOT ask a question/); assert.match(noteB, /Reply very briefly and warmly/);
+  assert.equal(callMod.BYE_ASKED, 'Do you have any questions?'); assert.equal(callMod.BYE_NOMORE, "Okay that's all. Bye-bye."); assert.equal(callMod.BYE_TIMEOUT, "Okay, I'll let you go then. Bye-bye.");
+});
+
+test('C2 hangUp after a goodbye closes the socket with 1000 (the bridge then terminates the call) and is NOT a silence hang-up; the silence hang-up is unchanged', async () => {
+  voiceReset(); const { id } = linked(); const a = outCall(id);
+  const quietBefore = care.get(id).lastCall; a.call.hangUp({ quiet: false }); await sleepMs(750);
+  assert.deepEqual(a.rec.closed, [1000]); assert.ok(a.rec.sent.some((m) => m.type === 'hangup')); assert.equal(a.call.closed, true); assert.notEqual(a.call.hungUpQuiet, true, 'a goodbye is a normal end');
+  assert.notEqual((care.get(id).lastCall || {}).how, 'quiet', 'the next greeting does not think the line went quiet');
+  const b = outCall(id); b.call.hangUp(); await sleepMs(750); assert.equal(b.call.hungUpQuiet, true); assert.deepEqual(b.rec.closed, [1000]);
+});
+
+test('C2 a goodbye turn on a call Maya placed is answered by the fixed goodbye and the hang-up, in code; a normal turn and a turn on an app call are not', async () => {
+  voiceReset(); const { id } = linked(); const said = [];
+  const run = async (outbound, text, asked) => { const { call } = outCall(id, outbound); call.sayFixed = async (t, o) => { said.push([t, o.bye]); }; call.closing = asked ? 'asked' : null; call.pending = [{ text, partial: '', completedAt: Date.now(), endedAt: Date.now() }]; call.attribute = (t) => [{ label: 'A', text: t.text }]; call.respond = callMod.Call.prototype.respond; try { await Promise.race([call.respond(0), sleepMs(300)]); } catch { /* the rest of a normal reply needs Spark: not under test */ } return call; };
+  await run(true, 'No thanks', true); await run(true, 'Okay, goodbye then', false);
+  assert.deepEqual(said, [[callMod.BYE_NOMORE, true], [callMod.BYE_SAID, true]]);
+  said.length = 0; await run(false, 'No thanks', true); await run(true, 'Who wrote me that message?', true); assert.deepEqual(said, [], 'an app call is never hung up on, and a question carries on');
+});
+
+test('C2 after the reminder she asks the fixed question, then waits; silence ends it with the fixed line, but never while they are talking', async () => {
+  voiceReset(); const { id } = linked(); const { call } = outCall(id); const said = [];
+  call.sayFixed = async (t, o) => { said.push([t, o.bye === true, typeof o.onDone === 'function']); };
+  await call.askAnyQuestions(); assert.equal(call.closing, 'asked'); assert.deepEqual(said, [[callMod.BYE_ASKED, false, true]]);
+  said.length = 0; call.pending = [{ text: 'well' }]; call.fireClose(); assert.deepEqual(said, [], 'they are talking: not silence'); clearTimeout(call.closeTimer);
+  call.pending = []; call.fireClose(); assert.deepEqual(said, [[callMod.BYE_TIMEOUT, true, false]]); assert.equal(call.closing, null);
+  said.length = 0; call.closing = null; call.fireClose(); assert.deepEqual(said, [], 'nothing was asked, nothing ends');
+});
