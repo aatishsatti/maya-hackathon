@@ -221,6 +221,7 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     return 'completed';
   };
   let codecPt = 111;
+  pc.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((rtp) => { if (br) br.hear(rtp); })); // THE EARS: the caller's audio goes to the Call (the answerer does the same; C2 forgot it, so she heard silence). Subscribed BEFORE the answer is applied: the track appears then
   try {
     await pc.setLocalDescription(await pc.createOffer());
     await place({ sdp_type: 'offer', sdp: keepSha256Only(pc.localDescription.sdp) });

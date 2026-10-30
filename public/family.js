@@ -182,10 +182,7 @@
       return c;
     });
     list($('reminders'), rem, 'No reminders yet.');
-    const pick = $('waRemPick'), keep = pick.value;   // the reminders you can choose for a test call
-    pick.textContent = ''; pick.append(Object.assign(document.createElement('option'), { value: '', textContent: 'A reminder you already set...' }));
-    for (const r of v.reminders) if (!r.active) pick.append(Object.assign(document.createElement('option'), { value: r.id, textContent: r.task }));
-    pick.value = [...pick.children].some((o) => o.value === keep) ? keep : '';
+    fillRemPick(v.reminders);
     if (v.delivery && document.activeElement !== $('deliv')) $('deliv').value = v.delivery.reminders;
     const nots = v.notifications.map((n) => {
       const c = el('div', 'item');
@@ -259,6 +256,22 @@
   const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', finished: 'answered, the call finished and Maya hung up', ended: 'ended', failed: 'failed (see the server log)' };
   const TEST_DONE = ['rejected', 'no answer', 'completed', 'finished', 'ended', 'failed'];
   let waTesting = false;
+  // The reminders you can choose for a test call. The list is only rebuilt when it really changed and never while the menu is open or has focus (a rebuild closed the menu and moved the choice).
+  let remKey = '';
+  function fillRemPick(reminders) {
+    const pick = $('waRemPick'), items = (reminders || []).filter((r) => !r.active), key = items.map((r) => `${r.id}:${r.task}`).join('|');
+    if (key === remKey || document.activeElement === pick) return;
+    remKey = key; const keep = pick.value;
+    pick.textContent = ''; pick.append(Object.assign(document.createElement('option'), { value: '', textContent: 'No saved reminder: use what I type' }));
+    for (const r of items) pick.append(Object.assign(document.createElement('option'), { value: r.id, textContent: r.task }));
+    pick.value = items.some((r) => r.id === keep) ? keep : '';
+    remSource();
+  }
+  // Which one the call will use, said plainly: a saved reminder you picked wins over typed text, and "Clear choice" (or the first menu entry) takes you back.
+  function remSource() {
+    const pick = $('waRemPick'), typed = $('waRemText').value.trim(), opt = [...pick.children].find((o) => o.value && o.value === pick.value);
+    $('waRemSource').textContent = opt ? `The call will use the saved reminder "${opt.textContent}".${typed ? ' What you typed is ignored while a saved reminder is chosen.' : ''}` : typed ? 'The call will use what you typed.' : 'Pick a saved reminder or type one.';
+  }
   async function runCall(path, body, button) {
     if (waTesting) return;
     waTesting = true; $('waTestCall').disabled = true; $('waRemCall').disabled = true; $('waTestLine').textContent = 'Placing the call...';
@@ -280,6 +293,8 @@
   }
   $('waTestCall').addEventListener('click', () => runCall('test-call'));
   // C2: the family's reminder, delivered by the call. A reminder you already set wins over typed text.
+  $('waRemPick').addEventListener('change', remSource); $('waRemText').addEventListener('input', remSource);
+  $('waRemClear').addEventListener('click', () => { $('waRemPick').value = ''; $('waRemText').value = ''; remSource(); });
   $('waRemCall').addEventListener('click', () => {
     const rid = $('waRemPick').value, task = $('waRemText').value.trim();
     if (!rid && !task) { $('waTestLine').textContent = 'Pick a reminder or type one first. Nothing rang.'; return; }

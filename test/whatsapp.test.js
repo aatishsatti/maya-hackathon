@@ -1028,9 +1028,9 @@ const outEnd = (phone, status = 'COMPLETED', extra = {}, id = OUT_ID) => outWebh
 const fakeDevice = async (offerSdp) => {
   const peer = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] }); const got = [];
   peer.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((r) => got.push(r)));
-  peer.addTransceiver(new MediaStreamTrack({ kind: 'audio' }), { direction: 'sendrecv' });
+  const track = new MediaStreamTrack({ kind: 'audio' }); peer.addTransceiver(track, { direction: 'sendrecv' });
   await peer.setRemoteDescription({ type: 'offer', sdp: offerSdp }); await peer.setLocalDescription(await peer.createAnswer());
-  return { peer, got, answer: peer.localDescription.sdp };
+  return { peer, got, track, pt: Number((/a=rtpmap:(\d+) opus/i.exec(offerSdp) || [])[1] || 111), answer: peer.localDescription.sdp };
 };
 // Meta's answer to the connect POST: { calls: [{ id }] } (docs); a failure per action through callFail as everywhere else.
 const withConnectReply = async (reply, fn) => { const keep = wa.deps.fetch; wa.deps.fetch = async (url, opts = {}) => { const b = typeof opts.body === 'string' ? JSON.parse(opts.body) : null; if (b && /\/calls$/.test(url) && b.action === 'connect' && !(callFail && callFail.connect)) { graphCalls.push({ url, opts, body: b }); return { ok: true, status: 200, json: async () => reply }; } return keep(url, opts); }; try { return await fn(); } finally { wa.deps.fetch = keep; } };
@@ -1135,20 +1135,21 @@ test('C1 the connect response logs its SHAPE (field names only, two levels) and 
 // ---- C2: a reminder delivered by an outbound call (the app's own Call claims the ring; acknowledgement judged there; counters on the link record) ----
 // The Call is a stand-in that behaves like call.js on this path: the start message carries reason 'reminder' + outreachId, claim() marks Picked up, the greeting is audio, an acknowledgement calls
 // care.reminderAck, and ending with the reminder still awaited calls care.reminderNoAck. (The real isAck rule and the real Call are covered by their own tests.)
-const starts = []; let script = 'ack';
+const starts = []; let script = 'ack', heardFrames = 0;
+// heardFrames counts only frames that carry a voice: the ears also send silence on their own clock, so counting every frame would pass with no ears at all.
 class FakeCall {
-  constructor(socket) { this.socket = socket; this.closed = false; this.awaitAck = null; socket.onmessage = (data, bin) => { if (!bin) { const m = JSON.parse(data.toString()); if (m.type === 'start') this.start(m); } }; }
+  constructor(socket) { this.socket = socket; this.closed = false; this.awaitAck = null; socket.onmessage = (data, bin) => { if (bin) { const f = new Float32Array(data.buffer, data.byteOffset, data.length >> 2); let pk = 0; for (const v of f) pk = Math.max(pk, Math.abs(v)); if (pk > 0.05) heardFrames++; } if (!bin) { const m = JSON.parse(data.toString()); if (m.type === 'start') this.start(m); } }; }
   async start(m) {
     starts.push(m); this.pid = m.profileId; const info = m.reason === 'reminder' ? care.claim(m.profileId, m.outreachId) : null; if (info) this.awaitAck = info.reminderId;
     this.socket.send(JSON.stringify({ type: 'ready' })); this.socket.send(tone(0.3));
-    await sleepMs(150);
+    await sleepMs(script === 'listen' ? 2500 : 150);
     if (script === 'ack') { care.reminderAck(this.pid, this.awaitAck); this.awaitAck = null; }
     await sleepMs(50); this.socket.close(1000);
   }
   end() { if (this.closed) return; this.closed = true; if (this.awaitAck) care.reminderNoAck(this.pid, this.awaitAck); }
 }
 const remOf = (id) => care.get(id).reminders[0];
-const reminderReset = () => { outReset(); starts.length = 0; script = 'ack'; wa.deps.newCall = (socket) => new FakeCall(socket); wa.deps.callTailMs = 50; };
+const reminderReset = () => { outReset(); starts.length = 0; script = 'ack'; heardFrames = 0; wa.deps.newCall = (socket) => new FakeCall(socket); wa.deps.callTailMs = 50; };
 const driveAnswered = async (phone, conn) => { const dev = await fakeDevice(conn.session.sdp); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outAnswer(phone, dev.answer)); await wa.handleWebhook(outStatus(phone, 'ACCEPTED')); return dev; };
 
 test('C2 answered and acknowledged: the Call claims the ring with the reminder, the reminder is Done, one connect and one terminate, the answered call is counted; logs hold no words', async () => {
@@ -1232,4 +1233,18 @@ test('C2 the 5 answered calls a day cap blocks the sixth (a reminder goes as a m
     wa.deps.testCooldownMs = 60000; clearCalls();
     await assert.rejects(wa.placeTestCall(b.id), /Wait a minute/); assert.equal(callPosts().length, 0);
   });
+});
+
+test('C2 THE EARS: what the person says on the phone reaches the Call (it went nowhere in the first live test, so Maya heard silence and hung up)', async () => {
+  reminderReset(); script = 'listen'; const { id, phone } = linked(); let dev; const enc = new OS(48000, 1, OS.Application.VOIP);
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeReminderCall(id, { task: 'take your tablets' });
+    dev = await driveAnswered(phone, callPosts().find((b) => b.action === 'connect'));
+    await waitFor(() => starts.length === 1);
+    const speak = Buffer.alloc(960 * 2); for (let i = 0; i < 960; i++) speak.writeInt16LE(Math.round(9000 * Math.sin(2 * Math.PI * 300 * i / 48000)), i * 2);
+    let seq = 100, ts = 5000; const t0 = Date.now();   // the person talks for about a second, one 20 ms packet at a time
+    while (Date.now() - t0 < 1300) { dev.track.writeRtp(new RtpPacket(new RtpHeader({ payloadType: dev.pt, sequenceNumber: seq++, timestamp: ts, ssrc: 4242, marker: seq === 101 }), Buffer.from(enc.encode(speak, 960)))); ts += 960; await sleepMs(20); }
+    await waitFor(() => actions().includes('terminate')); await waitFor(() => wa.view(id).testCall.state === 'finished');
+  });
+  try { assert.ok(heardFrames >= 15, `the Call received the caller's VOICE (${heardFrames} loud frames)`); } finally { await dev.peer.close(); enc.delete && enc.delete(); }
 });
