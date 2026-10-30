@@ -343,6 +343,11 @@ test('on a whole WhatsApp call: Spark is told the reminder needs the call open, 
     assert.ok(sparkAsked.some((r) => /stay on the call for it, because the reminder only works while the call is open/.test(r)), 'told when the timer was set');
     sparkAsked.length = 0; c.callRef.pending = [turn('Can I hang up now?')]; await c.callRef.respond(0);
     assert.ok(sparkAsked.some((r) => /ONLY works while this call stays open/.test(r) && /nothing will remind them afterwards/.test(r)), 'told when she is asked about hanging up');
+    // and the log says WHICH kinds of fact each reply was given, by name only
+    const facts = c.logs().split('\n').filter((l) => l.startsWith('reply facts '));
+    assert.ok(facts.some((l) => l === 'reply facts {"source":"written-now","labels":["timer-set"],"turns":1}'), facts.join(' | '));
+    assert.ok(facts.some((l) => l === 'reply facts {"source":"written-now","labels":["timer-open"],"turns":1}'), facts.join(' | '));
+    assert.doesNotMatch(facts.join('\n'), /water|hang up|remind/i, 'names only: no word from the turns');
     await hangUpPhone(c.phone, c.p); await c.running; assert.ok(c.callRef.closed); assert.ok(c.callRef.timers.every((t) => t.handle), 'the timer was set');
   });
 });

@@ -1599,6 +1599,9 @@ class Call {
     this.send({ type: 'thinking' });
     const holdBack = turns.some((t) => t.synthetic);
     const clip = this.pickLead(turns, extra, spec, holdBack);
+    // Which KINDS of fact Spark was given for this reply, by name only (never the facts, never a word): a reply that goes against its facts, or that was written from a guess and never saw them,
+    // can be told apart from one that did not get them. source: prethink / guess-hit = written before the turn was known (it carries no facts), written-now = written for this turn.
+    console.log('reply facts', JSON.stringify({ source: pre ? 'prethink' : spec ? 'guess-hit' : 'written-now', labels: [...(this.factLabels || []), ...(scamTurn.note ? [scamTurn.scam ? `scam-${scamTurn.scam.level}` : 'scam-or-lookup-note'] : []), ...(clip ? ['lead-in'] : [])], turns: turns.length }));
     const leadSent = clip ? this.playLead(clip, holdBack, timing) : null;
     const leadNote = clip ? ` You have just said "${clip.text}" aloud as your very first words, so begin your reply directly with what you want to say: no second acknowledgement, no "I see" or "Mm-hm", and never repeat or echo those words.` : '';
     let rs;
@@ -1624,6 +1627,8 @@ class Call {
     const id = this.profile.id;
     this.userTurns += 1;
     const notes = [];
+    this.factLabels = [];  // which kinds of fact this turn gave Spark (names only, for the 'reply facts' log line)
+    const note = (label, text) => { notes.push(text); this.factLabels.push(label); };
     if (selfHarmText(heard)) this.enterSafety();
     // Scam shield: Maya asked whether to let their family know about a message that looked like a scam (scam.js, care.js). Their answer
     // decides it: yes -> an alert (the kind of scam only), no -> a dashboard Flag only and she never asks again. A safety or health
@@ -1632,80 +1637,80 @@ class Call {
     const scamQ = care.scamPending(id);
     if (scamQ) {
       if (this.safety || this.health) care.scamClear(id);
-      else if (CONCERN_NO.test(heard) || refusedFamily(heard)) { const told = care.scamTold(id); care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; notes.push(told ? `FACT: they do not want their family told about the possible ${scamQ.type}, but the app ALREADY told their family earlier (topic only: the kind of scam, no words, no photo) and that cannot be undone. Say so plainly and briefly in fresh words: never deny it, never say nothing was sent, and do not excuse it by saying you did it because you care about them. Acknowledge what they wanted, ask nothing about telling the family again.` : `FACT: they said no to letting their family know about the possible ${scamQ.type} they told you about. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.`); }
-      else if (saysYesToFamily(heard)) { const r = care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; notes.push(r && r.isNew === false ? `FACT: their family was ALREADY told about the possible ${scamQ.type} earlier, so nothing new was sent now. Say that, in one short sentence in fresh words, naming the topic and saying "your family" and never naming a particular relative. Do not say you have just sent anything. Promise nothing else.` : `FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). The kind: a possible ${scamQ.type}. Confirm that in one short sentence in fresh words, naming the topic as they would know it (not "the earlier message"), saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.`); }
+      else if (CONCERN_NO.test(heard) || refusedFamily(heard)) { const told = care.scamTold(id); care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; note('scam-no-to-family', told ? `FACT: they do not want their family told about the possible ${scamQ.type}, but the app ALREADY told their family earlier (topic only: the kind of scam, no words, no photo) and that cannot be undone. Say so plainly and briefly in fresh words: never deny it, never say nothing was sent, and do not excuse it by saying you did it because you care about them. Acknowledge what they wanted, ask nothing about telling the family again.` : `FACT: they said no to letting their family know about the possible ${scamQ.type} they told you about. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.`); }
+      else if (saysYesToFamily(heard)) { const r = care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; note('scam-yes-to-family', r && r.isNew === false ? `FACT: their family was ALREADY told about the possible ${scamQ.type} earlier, so nothing new was sent now. Say that, in one short sentence in fresh words, naming the topic and saying "your family" and never naming a particular relative. Do not say you have just sent anything. Promise nothing else.` : `FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). The kind: a possible ${scamQ.type}. Confirm that in one short sentence in fresh words, naming the topic as they would know it (not "the earlier message"), saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.`); }
       else if (care.scamTold(id)) care.scamClear(id);   // their family is already told: the open question is dropped, never asked again
-      else { care.scamUnclear(id); notes.push('FACT: you asked whether they would like their family to know about the message and they have not answered that yet. Answer what they just said; do not push, and do not ask the same question again word for word.'); }
+      else { care.scamUnclear(id); note('scam-family-unanswered', 'FACT: you asked whether they would like their family to know about the message and they have not answered that yet. Answer what they just said; do not push, and do not ask the same question again word for word.'); }
     }
     if (care.seenToTell(id) && !care.hasActiveSafety(id)) {
       this.seenShown = true;
-      notes.push('FACT: their family has seen the alert about them and knows (nothing more is known: not what they will do or when). They have not been told yet. In THIS reply tell them calmly, in your own words, that their family knows and is aware, and that you are still with them. Topic only: no page, button, app or technical word, nothing about what was said, no promise of a call or a time. Never deny that an alert was made.');
+      note('family-seen', 'FACT: their family has seen the alert about them and knows (nothing more is known: not what they will do or when). They have not been told yet. In THIS reply tell them calmly, in your own words, that their family knows and is aware, and that you are still with them. Topic only: no page, button, app or technical word, nothing about what was said, no promise of a call or a time. Never deny that an alert was made.');
     }
-    if (this.health) notes.push(this.healthNote());
-    if (this.familyDeclined && !this.health && !this.safety) notes.push('FACT: earlier in this call they told you no to letting their family know. Take them at their word for the rest of the call: do not ask again whether to tell their family, and no alert will be made unless something truly urgent happens. You still listen and care about how they are.');
+    if (this.health) note('health', this.healthNote());
+    if (this.familyDeclined && !this.health && !this.safety) note('family-declined', 'FACT: earlier in this call they told you no to letting their family know. Take them at their word for the rest of the call: do not ask again whether to tell their family, and no alert will be made unless something truly urgent happens. You still listen and care about how they are.');
     if (this.pendingConcern && this.inScamTurn(heard)) this.pendingConcern = null;   // a scam conversation is not the older "is something wrong?" question: its words never count as that yes
-    if (this.safety) notes.push(this.safetyNote());
+    if (this.safety) note('safety', this.safetyNote());
     else if (this.pendingConcern && !this.health) {
       // Maya was unsure and asked. Decide from the answer: yes -> alert; no -> nothing; neither -> she may lean in once more.
-      if (CONCERN_NO.test(heard) || refusedFamily(heard)) { this.pendingConcern = null; this.familyDeclined = true; notes.push('FACT: they said it is fine or normal. No alert was made and none will be. Take them at their word, carry on warmly, and do not ask about it again.'); }
-      else if (saysYesToFamily(heard)) { this.pendingConcern = null; this.familyAsked = true; care.concernAlert(id); notes.push('FACT: they said yes, so the app has now sent their family an alert (topic only) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.'); }
-      else { this.pendingConcern.left -= 1; if (this.pendingConcern.left <= 0) this.pendingConcern = null; notes.push('FACT: you asked whether to let their family know and they have not answered that yet. Respond to what they said; if it is still unclear, you may ask once more, gently. Do not alert on a guess.'); }
+      if (CONCERN_NO.test(heard) || refusedFamily(heard)) { this.pendingConcern = null; this.familyDeclined = true; note('concern-no', 'FACT: they said it is fine or normal. No alert was made and none will be. Take them at their word, carry on warmly, and do not ask about it again.'); }
+      else if (saysYesToFamily(heard)) { this.pendingConcern = null; this.familyAsked = true; care.concernAlert(id); note('concern-yes-alert', 'FACT: they said yes, so the app has now sent their family an alert (topic only) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.'); }
+      else { this.pendingConcern.left -= 1; if (this.pendingConcern.left <= 0) this.pendingConcern = null; note('concern-unanswered', 'FACT: you asked whether to let their family know and they have not answered that yet. Respond to what they said; if it is still unclear, you may ask once more, gently. Do not alert on a guess.'); }
     } else if (refusedFamily(heard)) {
       this.familyDeclined = true;   // a refusal with no question open is still a refusal, kept for the call (nothing is sent)
     } else if (asksFamily(heard) && !this.familyAsked && !scamHandled) {
       this.familyAsked = true;
       care.familyAsk(id);
-      notes.push('FACT: they asked you to let their family know, and the app has sent their family a gentle note (not an alert) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.');
+      note('family-ask', 'FACT: they asked you to let their family know, and the app has sent their family a gentle note (not an alert) asking them to get in touch. Confirm that in one fresh sentence. Promise nothing else; never mention emergency numbers.');
     }
     if (this.reminderFacts && this.reminderFacts.turns > 0) {
       this.reminderFacts.turns -= 1;
-      notes.push(`REMINDER FACTS: the family wrote exactly "${this.reminderFacts.task}" and that is ALL you know about it. Never name, guess or hint at which medicine it is, what it is for, a dose, or any health condition unless those words are in what they wrote; never take it from your notes, memory or earlier reminders. If they ask which one, what for or how much, answer honestly in fresh words: their family only wrote "${this.reminderFacts.task}" and did not say which, so they should please check with their family or their medicine box, because you do not want to guess. Do not advise.`);
+      note('family-written-reminder', `REMINDER FACTS: the family wrote exactly "${this.reminderFacts.task}" and that is ALL you know about it. Never name, guess or hint at which medicine it is, what it is for, a dose, or any health condition unless those words are in what they wrote; never take it from your notes, memory or earlier reminders. If they ask which one, what for or how much, answer honestly in fresh words: their family only wrote "${this.reminderFacts.task}" and did not say which, so they should please check with their family or their medicine box, because you do not want to guess. Do not advise.`);
     }
     if (this.reminderPending) {
       const r = this.reminderPending;
       this.reminderPending = null;
-      if (this.awaitAck && !isAck(heard)) notes.push(`You were in the middle of giving them a reminder when they spoke over you: "${r.said}". It is still owed. If they asked a question, answer it in one short sentence first. Then, in this same reply, give the reminder again plainly and with confidence, as the reminder itself (the same meaning, short, worded a little differently is fine). If they ask what you said or what that was, they mean the reminder: tell them. You know exactly what it is: never say "I think", never hedge, never ask them to check anything.`);
+      if (this.awaitAck && !isAck(heard)) note('reminder-interrupted', `You were in the middle of giving them a reminder when they spoke over you: "${r.said}". It is still owed. If they asked a question, answer it in one short sentence first. Then, in this same reply, give the reminder again plainly and with confidence, as the reminder itself (the same meaning, short, worded a little differently is fine). If they ask what you said or what that was, they mean the reminder: tell them. You know exactly what it is: never say "I think", never hedge, never ask them to check anything.`);
     }
     if (care.onSeniorSpoke(id).resolved) this.askWhat = true;
     if (this.askWhat) {
       this.askWhat = false;
-      notes.push('Earlier the line went quiet, you could not reach them, and you were worried. Now, after answering what they just said, warmly ask what happened, saying you were worried, in your own fresh words. Gentle and relieved, never accusing or scolding; one short question; do not repeat it later.');
+      note('worried-after-quiet', 'Earlier the line went quiet, you could not reach them, and you were worried. Now, after answering what they just said, warmly ask what happened, saying you were worried, in your own fresh words. Gentle and relieved, never accusing or scolding; one short question; do not repeat it later.');
     }
     if (this.awaitAck && isAck(heard)) {
       care.reminderAck(id, this.awaitAck);
       this.awaitAck = null;
-      notes.push('They acknowledged the reminder you just gave. Reply very briefly and warmly. Do not repeat the reminder and do not add any advice about it.');
+      note('reminder-acknowledged', 'They acknowledged the reminder you just gave. Reply very briefly and warmly. Do not repeat the reminder and do not add any advice about it.');
     }
     // "Remind me next time I call to ...": not a timer. Code files a next-call reminder now (recall.js, memory.js); Spark is told as a fact. Said again as
     // "not done yet / still to do" about a reminder shown in THIS call, it comes due again next call.
     const nextTask = parseTimer(heard) ? '' : recall.parseNextCallReminder(heard);
     if (nextTask) {
       const r = memory.addReminder(id, nextTask, this.callId);
-      if (r.status === 'added' || r.status === 'duplicate') notes.push('FACT: they asked you to remind them, the next time they talk with you, of something they told you. The app keeps it and will bring it to you at the start of their next call. In one short sentence, in fresh words, confirm you will remind them then. Do not say you cannot do it, do not set a time, promise nothing else, and add no advice.');
-      else notes.push('FACT: they asked you to remind them next time, but the app is already holding several reminders for them and could not keep another. Say so kindly in one sentence and promise nothing; their family can also set reminders.');
+      if (r.status === 'added' || r.status === 'duplicate') note('next-call-reminder-added', 'FACT: they asked you to remind them, the next time they talk with you, of something they told you. The app keeps it and will bring it to you at the start of their next call. In one short sentence, in fresh words, confirm you will remind them then. Do not say you cannot do it, do not set a time, promise nothing else, and add no advice.');
+      else note('next-call-reminder-full', 'FACT: they asked you to remind them next time, but the app is already holding several reminders for them and could not keep another. Say so kindly in one sentence and promise nothing; their family can also set reminders.');
     } else if (recall.STILL_TO_DO.test(heard) && memory.reopenReminders(id, this.callId)) {
-      notes.push('FACT: they said the thing you just reminded them of is still to do. The app will remind them again the next time they call. Take it kindly in one short sentence, no advice, and do not remind them again in this call.');
+      note('reminder-still-to-do', 'FACT: they said the thing you just reminded them of is still to do. The app will remind them again the next time they call. Take it kindly in one short sentence, no advice, and do not remind them again in this call.');
     }
     const tm = parseTimer(heard);
     let timerSet = false;
     if (tm && this.noTimers) {
-      notes.push('They asked for a timer. In this written chat you cannot set one; say kindly that you can only remind them during a voice call, and that their family can set reminders. Promise nothing else.');
+      note('timer-unavailable-in-chat', 'They asked for a timer. In this written chat you cannot set one; say kindly that you can only remind them during a voice call, and that their family can set reminders. Promise nothing else.');
     } else if (tm) {
       if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS && restatedTimer(this.timers, tm)) {
         const old = restatedTimer(this.timers, tm); timerSet = true;
         if (!old.task && tm.task) old.task = tm.task;   // the first ask had no thing to remember, the repeat has: keep it
         console.log('timer', JSON.stringify({ event: 'already set', seconds: old.seconds, hasTask: Boolean(old.task), pending: this.timers.length })); // counts only: never the words
-        notes.push(`They asked again for a reminder that is already set (it is due ${dueWords(Math.max(0, Math.round((old.dueAt - Date.now()) / 1000)))}). Do not set another. Say in one short sentence that it is already set and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
+        note('timer-already-set', `They asked again for a reminder that is already set (it is due ${dueWords(Math.max(0, Math.round((old.dueAt - Date.now()) / 1000)))}). Do not set another. Say in one short sentence that it is already set and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
       } else if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS) {
         this.setTimerFromWords({ seconds: tm.seconds, task: tm.task }); timerSet = true;
-        notes.push(`They asked you to remind them in ${tm.seconds < 90 ? `${tm.seconds} seconds` : `${Math.round(tm.seconds / 60)} minutes`}${tm.task ? ` about "${tm.task}"` : ''}. A timer is set for it right now. Confirm in one short sentence that you will remind them then, and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
+        note('timer-set', `They asked you to remind them in ${tm.seconds < 90 ? `${tm.seconds} seconds` : `${Math.round(tm.seconds / 60)} minutes`}${tm.task ? ` about "${tm.task}"` : ''}. A timer is set for it right now. Confirm in one short sentence that you will remind them then, and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
       } else {
-        notes.push('They asked for a timer that is too long or unclear. Say kindly you can only remind them within about half an hour during a call, and that their family can set longer reminders. Promise nothing else.');
+        note('timer-too-long', 'They asked for a timer that is too long or unclear. Say kindly you can only remind them within about half an hour during a call, and that their family can set longer reminders. Promise nothing else.');
       }
     }
     // A timer is running and this turn did not set it: the reminder only lives while the call is open (end() drops every pending timer), so if they ask about hanging up or say goodbye
     // she must say so plainly and never let "hang up whenever you like" sound like the reminder will still come. True in the app and on a WhatsApp call alike.
-    if (!timerSet && this.timers && this.timers.length) notes.push(timerOpenFact(this.timers)); // chat.js borrows careNotes for the written chat: it has no timers at all
+    if (!timerSet && this.timers && this.timers.length) note('timer-open', timerOpenFact(this.timers)); // chat.js borrows careNotes for the written chat: it has no timers at all
     return notes.join(' ');
   }
 
