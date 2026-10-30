@@ -583,8 +583,8 @@ test('call logs: field names and a short hash only; never the SDP, a full number
 
 test('an interactive message logs its type (an enum) and never the person\'s words', async () => {
   voiceReset(); const { phone } = linked(); reset(PLAIN);
-  const m = incoming(phone, '', { type: 'interactive', text: undefined, interactive: { type: 'call_permission_reply', call_permission_reply: { response: 'accept', secret: 'tulips' } } });
-  const out = await capture(() => wa.handleWebhook(m)); assert.match(out, /received a interactive from number ending \d{4} \(interactive type call_permission_reply\)/); assert.doesNotMatch(out, /tulips/);
+  const m = incoming(phone, '', { type: 'interactive', text: undefined, interactive: { type: 'button_reply', button_reply: { id: 'x', title: 'tulips' } } });
+  const out = await capture(() => wa.handleWebhook(m)); assert.match(out, /received a interactive from number ending \d{4} \(interactive type button_reply\)/); assert.doesNotMatch(out, /tulips/);
   const odd = incoming(phone, '', { type: 'interactive', text: undefined, interactive: { type: 'Say tulips please!' } });
   assert.match(await capture(() => wa.handleWebhook(odd)), /interactive type unknown/);
   clearCalls();
@@ -593,9 +593,9 @@ test('an interactive message logs its type (an enum) and never the person\'s wor
 // The real answerer against a real WebRTC peer in this process (a stand-in for WhatsApp, with an offer shaped like Meta's documented ones) and a stand-in for the Meta engine.
 const wacall = require('../wacall'), waears = require('../waears'), OS = require('opusscript');
 async function metaLikeCaller() {
-  const dec = new OS(48000, 1, OS.Application.VOIP); const heard = [];
+  const dec = new OS(48000, 1, OS.Application.VOIP); const heard = []; heard.at = [];
   const caller = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] });
-  caller.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((rtp) => { try { heard.push(Buffer.from(dec.decode(rtp.payload))); } catch { /* ignore */ } }));
+  caller.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((rtp) => { try { heard.push(Buffer.from(dec.decode(rtp.payload))); heard.at.push(Date.now()); } catch { /* ignore */ } }));
   const track = new MediaStreamTrack({ kind: 'audio' });
   caller.addTransceiver(track, { direction: 'sendrecv' });
   await caller.setLocalDescription(await caller.createOffer());
@@ -654,7 +654,11 @@ test('the real answerer: speech first, pre_accept, connect, speech made, accept 
     assert.equal(posts[0].session.sdp_type, 'answer'); assert.deepEqual(posts[1].session, posts[0].session, 'accept carries the SAME answer as pre_accept'); assert.equal(posts[2].session, undefined);
     assert.match(posts[0].session.sdp, /a=setup:active/); assert.match(posts[0].session.sdp, /m=audio \d+ UDP\/TLS\/RTP\/SAVPF 111\b/); assert.doesNotMatch(posts[0].session.sdp, /G722|PCMU|PCMA/);
     assert.equal(beforeAccept, 0, 'no media reached the caller before the accept was sent');
-    assert.ok(Math.abs(hzOf(heard.slice(5)) - 300) < 15, 'the caller heard the intro voice at the right pitch');
+    assert.ok(Math.abs(hzOf(heard.slice(5, 15)) - 300) < 25, 'the caller heard the intro voice at the right pitch');
+    // media never stops: from the first packet to the last, no gap bigger than 150 ms, and a packet about every 20 ms while she only listens (silence frames)
+    const gaps = heard.at.slice(1).map((t, i) => t - heard.at[i]); assert.ok(Math.max(...gaps) < 150, `no gap in the outgoing media (largest ${Math.max(...gaps)} ms)`);
+    const span = heard.at[heard.at.length - 1] - heard.at[0]; assert.ok(heard.length >= (span / 20) * 0.85, `about one packet per 20 ms over ${span} ms (${heard.length})`);
+    assert.ok(heard.slice(-25).every((b) => { let peak = 0; for (let i = 0; i < b.length; i += 2) peak = Math.max(peak, Math.abs(b.readInt16LE(i))); return peak < 200; }), 'while she only listens, what goes out is silence');
     // the ears
     assert.equal(engine.opened, 1); assert.ok(engine.closed, 'the engine was closed when listening ended');
     const fed = Buffer.concat(engine.chunks); assert.ok(engine.chunks.every((c) => c.length >= 900 && c.length <= 1000), 'one 20 ms frame (480 samples at 24 kHz) per tick');
@@ -662,7 +666,7 @@ test('the real answerer: speech first, pre_accept, connect, speech made, accept 
     const voiced = engine.chunks.slice(10).filter((c) => c.some((x) => x !== 0)); assert.ok(voiced.length >= 25, `most ticks carried the caller's audio (${voiced.length})`);
     assert.ok(Math.abs(hzOf(voiced, 24000) - 440) < 20, 'the engine got what the caller said (a 440 Hz tone) at 24 kHz');
     assert.match(out, new RegExp(`speech made: ${wacall.INTRO_LINE.length} characters sent to speech, 0\\.4 s of audio`)); assert.ok(out.indexOf('speech made') < out.indexOf('accepted; speaking the intro'));
-    assert.match(out, /ears open/); assert.match(out, /listening ended \(time is up\): \d+ packets received, 0 lost, \d+ late or repeated, 0 unreadable, \d+ ms dropped for lag, 1\.\d s fed to the engine, worst timer lateness \d+ ms, 0 turn\(s\), 0 word\(s\)/);
+    assert.match(out, /ears open/); assert.match(out, /listening ended \(time is up\): \d+ packets received, 0 lost, \d+ late or repeated, 0 unreadable, 0 ms dropped for lag, \d+ ms kept while the engine opened, 1\.\d s fed to the engine, worst timer lateness \d+ ms, 0 turn\(s\), 0 word\(s\)/);
     assert.match(out, /hung up \(time is up\)/); assert.match(out, /answered call [0-9a-f]{6}.*completed/);
     assert.doesNotMatch(out, /a=fingerprint|a=ice-ufrag|v=0|TEST-TOKEN|Hello, this is Maya|hang up in thirty/, 'no SDP and none of the words said');
   });
@@ -689,7 +693,7 @@ test('the caller hangs up while she listens: the terminate webhook stops the lis
     await new Promise((r) => setTimeout(r, 1400)); assert.equal(engine.opened, 1);
     await wa.handleWebhook(callIn(phone, { event: 'terminate', extra: { id: callIdOf(p), status: 'COMPLETED', duration: 2 } }));
     const out = await running; assert.deepEqual(order, ['pre_accept', 'accept'], 'no terminate from us: the call was already over');
-    assert.match(out, /listening ended \(caller hung up\)/); assert.match(out, /the caller hung up; nothing more to send/); assert.ok(engine.closed);
+    assert.match(out, /listening ended \(caller hung up\)/); assert.match(out, /the call was already over \(caller hung up\); nothing more to send/); assert.ok(engine.closed);
   });
 });
 
@@ -731,6 +735,50 @@ test('the real answerer: if sending the intro fails after the accept, the call i
   });
 });
 
+test('the phone ending the call because it got no media is reported as that (error 138021), not as a hang-up', async () => {
+  await withCall({ listenMs: 20000 }, async ({ phone, p, order }) => {
+    const running = capture(async () => assert.deepEqual(await wa.handleWebhook(p), ['answered']));
+    await new Promise((r) => setTimeout(r, 1400));
+    await wa.handleWebhook(callIn(phone, { event: 'terminate', extra: { id: callIdOf(p), status: 'FAILED', duration: 42, errors: [{ code: 138021, message: 'Media receive timeout' }] } }));
+    const out = await running; assert.match(out, /call ended: .*status FAILED, duration 42 s, error 138021/);
+    assert.match(out, /listening ended \(the phone ended the call \(error 138021: media receive timeout\)\)/); assert.match(out, /the call was already over \(the phone ended the call \(error 138021/); assert.doesNotMatch(out, /caller hung up/);
+    assert.deepEqual(order, ['pre_accept', 'accept']);
+  });
+});
+
+test('a call_permission_reply (WhatsApp\'s own message after a call) is ignored: nothing is sent back and the 24 h window is not opened', async () => {
+  voiceReset(); const { id, phone } = outside(); clearCalls(); reset(PLAIN);
+  const before = wa.linkOf(id).lastInboundAt;
+  const m = incoming(phone, '', { type: 'interactive', text: undefined, interactive: { type: 'call_permission_reply', call_permission_reply: { response: 'accept', secret: 'tulips' } } });
+  const out = await capture(async () => assert.deepEqual(await wa.handleWebhook(m), ['system']));
+  assert.match(out, /ignored a call permission reply from number ending \d{4}: a WhatsApp system message/); assert.equal(sent().length, 0, 'no decline text is sent'); assert.equal(wa.linkOf(id).lastInboundAt, before, 'the 24 h window was not opened by it'); assert.doesNotMatch(out, /tulips/);
+  // other interactive replies keep their old behaviour (the one decline)
+  assert.deepEqual(await wa.handleWebhook(incoming(phone, '', { type: 'interactive', text: undefined, interactive: { type: 'button_reply', button_reply: { id: 'a', title: 'b' } } })), ['unsupported']); assert.equal(sent().length, 1);
+  clearCalls();
+});
+
+// ---- the outgoing stream (wacall.Outbound): a packet every 20 ms, silence when she is not speaking ----
+const fakeTrack = () => { const t = { pkts: [], at: [] }; t.writeRtp = (p) => { t.pkts.push(p); t.at.push(Date.now()); }; return t; };
+test('outbound: one packet per 20 ms, silence when she says nothing, her voice when she does, one running sequence and timestamp', async () => {
+  const track = fakeTrack(), out = new wacall.Outbound(track, 111); out.start();
+  await new Promise((r) => setTimeout(r, 300)); const silentN = track.pkts.length; assert.ok(silentN >= 12 && silentN <= 17, `a packet every 20 ms of silence (${silentN})`);
+  const voice = Buffer.alloc(48000 * 2 * 0.2); for (let i = 0; i < voice.length / 2; i++) voice.writeInt16LE(Math.round(9000 * Math.sin(2 * Math.PI * 440 * i / 48000)), i * 2);
+  await out.say(voice); await new Promise((r) => setTimeout(r, 100)); out.stop();
+  const dec = new OS(48000, 1, OS.Application.VOIP); const peak = (p) => { const b = Buffer.from(dec.decode(p.payload)); let m = 0; for (let i = 0; i < b.length; i += 2) m = Math.max(m, Math.abs(b.readInt16LE(i))); return m; };
+  assert.ok(track.pkts.slice(0, silentN).every((p) => peak(p) < 100), 'silence out before she speaks'); assert.ok(track.pkts.slice(silentN, silentN + 8).some((p) => peak(p) > 2000), 'her voice goes out after');
+  const seqs = track.pkts.map((p) => p.header.sequenceNumber), tss = track.pkts.map((p) => p.header.timestamp);
+  assert.ok(seqs.every((x, i) => i === 0 || x === ((seqs[i - 1] + 1) & 0xffff)), 'sequence numbers run on'); assert.ok(tss.every((x, i) => i === 0 || ((x - tss[i - 1]) >>> 0) === 960), 'timestamps advance 960 per packet');
+  assert.ok(track.at.slice(1).every((t, i) => t - track.at[i] < 80), 'no gap in the stream');
+});
+
+test('outbound: an aborted speech is dropped from the queue (she was stopped), and a failed frame fails the stream, not silently', async () => {
+  const track = fakeTrack(), out = new wacall.Outbound(track, 111); out.start(); let stop = false;
+  const long = Buffer.alloc(48000 * 2 * 5); const said = out.say(long, () => stop); setTimeout(() => { stop = true; }, 100);
+  await said; assert.ok(track.pkts.length < 25, `the 5 s speech was cut short (${track.pkts.length} packets)`); out.stop();
+  const keep = OS.prototype.encode; let n = 0; OS.prototype.encode = function (...a) { if (++n === 4) throw new Error('encoder broke'); return keep.apply(this, a); };
+  try { const t2 = fakeTrack(), o2 = new wacall.Outbound(t2, 111); o2.start(); const e = await o2.failed; assert.match(e.message, /encoder broke/); await assert.rejects(o2.say(Buffer.alloc(1920)), /encoder broke/); o2.stop(); } finally { OS.prototype.encode = keep; }
+});
+
 // ---- the ears on their own (waears.js): packets in, 20 ms real-time frames out ----
 const opusPackets = (n, { skip = [], hz = 440 } = {}) => { const enc = new OS(48000, 1, OS.Application.VOIP); const out = []; for (let i = 0; i < n; i++) { const b = Buffer.alloc(1920); for (let k = 0; k < 960; k++) b.writeInt16LE(Math.round(9000 * Math.sin(2 * Math.PI * hz * (i * 960 + k) / 48000)), k * 2); const payload = Buffer.from(enc.encode(b, 960)); if (!skip.includes(i)) out.push({ header: { sequenceNumber: (65530 + i) & 0xffff, timestamp: (4294967000 + i * 960) >>> 0 }, payload }); } return out; };
 const earsWith = (opts = {}) => { const logs = []; const e = fakeEngine(opts.engine); const ears = new waears.Ears({ openTranscribe: e.open, apiKey: 'KEY', log: (m) => logs.push(m), expected: opts.expected }); return { ears, e, logs }; };
@@ -755,8 +803,24 @@ test('ears: a lost packet is silence in its place (found from the RTP timestamp)
   const pk = opusPackets(9, { skip: [5, 6] }); for (const x of pk) ears.hear(x);
   assert.equal(ears.lost, 2); assert.equal(ears.fifo.length, 9 * 1920, 'the two lost 20 ms frames are silence, so the audio keeps its length');
   ears.hear(pk[3]); ears.hear(pk[pk.length - 1]); assert.equal(ears.late, 2); assert.equal(ears.fifo.length, 9 * 1920);
-  const big = earsWith(); big.ears.started = true; big.ears.dec = new OS(48000, 1, OS.Application.VOIP); for (const x of opusPackets(40)) big.ears.hear(x);
+  const big = earsWith(); big.ears.started = true; big.ears.maxQueue = 20 * 1920; /* the steady-state cap, once the engine is ready */ big.ears.dec = new OS(48000, 1, OS.Application.VOIP); for (const x of opusPackets(40)) big.ears.hear(x);
   assert.ok(big.ears.fifo.length <= 20 * 1920 && big.ears.overflow > 0, 'at most 400 ms is kept'); ears.stop('x'); big.ears.stop('x');
+});
+
+test('ears: what is said while the engine is still opening is kept (up to 2.5 s) and sent at once when it is ready: nothing dropped', async () => {
+  const logs = []; const e = fakeEngine(); const open = e.open; let ready; e.open = (key, h) => { const r = open(key, { ...h, onReady: (x) => { ready = () => h.onReady(x); } }); return r; };
+  const ears = new waears.Ears({ openTranscribe: e.open, apiKey: 'K', log: (m) => logs.push(m) }); const starting = ears.start();
+  for (const pk of opusPackets(50)) { ears.hear(pk); await new Promise((r) => setTimeout(r, 20)); }   // 1 s of speech arrives before the engine is ready
+  assert.equal(e.chunks.length, 0, 'nothing is sent before the engine is ready'); assert.equal(ears.overflow, 0, 'and nothing is thrown away');
+  ready(); await starting; assert.ok(e.chunks.length >= 48, `the 1 s backlog went in at once (${e.chunks.length} frames)`);
+  const voiced = e.chunks.filter((c) => c.some((x) => x !== 0)); assert.ok(Math.abs(hzOf(voiced, 24000) - 440) < 15, 'and it is the real audio');
+  for (const pk of opusPackets(10)) { ears.hear(pk); await new Promise((r) => setTimeout(r, 20)); }
+  const s = ears.stop('test'); assert.equal(s.overflowMs, 0); assert.ok(s.backlogMs >= 900 && s.backlogMs <= 1100, `about 1 s was kept while opening (${s.backlogMs} ms)`);
+});
+
+test('ears: a backlog over 2.5 s while the engine opens drops only the oldest', async () => {
+  const e = fakeEngine(); const ears = new waears.Ears({ openTranscribe: (k, h) => ({ sendPcm() {}, close() {} }), apiKey: 'K', log: () => {} }); ears.started = true; ears.dec = new OS(48000, 1, OS.Application.VOIP);
+  for (const pk of opusPackets(160)) ears.hear(pk); assert.ok(ears.fifo.length <= 125 * 1920 && ears.overflow > 0); ears.stop('x');
 });
 
 test('ears: overlapPercent scores the expected words that were heard; a number only', () => {

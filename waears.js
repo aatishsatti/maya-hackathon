@@ -11,6 +11,8 @@ const { Resampler } = require('./transcribe');
 
 const FRAME_SAMPLES = 960, FRAME_BYTES = FRAME_SAMPLES * 2, FRAME_MS = 20;
 const MAX_QUEUE_BYTES = 20 * FRAME_BYTES;       // 400 ms of decoded audio; a longer backlog drops the oldest (the call must stay live, not lag)
+const STARTUP_QUEUE_BYTES = 125 * FRAME_BYTES;  // 2.5 s while the engine is still opening: what the caller says right after the intro is kept, then sent at once
+//   (the engine takes audio up to about 5 s ahead of real time, so a 2.5 s backlog is inside its limit)
 const MAX_GAP_SAMPLES = 2 * 48000;              // a timestamp gap longer than 2 s is not filled
 const MAX_CATCHUP = 50;
 
@@ -28,7 +30,7 @@ class Ears {
   constructor({ openTranscribe, apiKey, log, expected = '' }) {
     this.openTranscribe = openTranscribe; this.apiKey = apiKey; this.log = log;
     this.expected = words(expected); this.heard = [];
-    this.fifo = Buffer.alloc(0); this.resampler = new Resampler(48000); this.dec = null;
+    this.fifo = Buffer.alloc(0); this.resampler = new Resampler(48000); this.dec = null; this.maxQueue = STARTUP_QUEUE_BYTES; this.backlogMs = 0;
     this.started = false; this.stopped = false; this.timer = null; this.asr = null;
     this.lastSeq = null; this.lastTs = 0; this.lastLen = FRAME_SAMPLES;
     this.received = 0; this.lost = 0; this.late = 0; this.bad = 0; this.overflow = 0; this.frames = 0; this.maxLateMs = 0;
@@ -72,11 +74,15 @@ class Ears {
   }
   queue(buf) {
     this.fifo = Buffer.concat([this.fifo, buf]);
-    if (this.fifo.length > MAX_QUEUE_BYTES) { this.overflow += this.fifo.length - MAX_QUEUE_BYTES; this.fifo = this.fifo.subarray(this.fifo.length - MAX_QUEUE_BYTES); }
+    if (this.fifo.length > this.maxQueue) { this.overflow += this.fifo.length - this.maxQueue; this.fifo = this.fifo.subarray(this.fifo.length - this.maxQueue); }
   }
 
   beginClock() {
-    this.next = Date.now();
+    // The engine is ready: send what was kept while it opened, at once (it is already past, so it goes straight in), then keep to real time with the small lag cap.
+    this.backlogMs = Math.floor(this.fifo.length / FRAME_BYTES) * FRAME_MS;
+    while (this.fifo.length >= FRAME_BYTES) this.emit();
+    this.maxQueue = MAX_QUEUE_BYTES;
+    this.next = Date.now() + FRAME_MS;
     const loop = () => {
       if (this.stopped) return;
       const now = Date.now(); let n = 0;
@@ -115,8 +121,8 @@ class Ears {
     if (!this.started) return null; // never listened: nothing to summarise
     try { this.asr && this.asr.close(); } catch { /* already closed */ }
     try { this.dec && this.dec.delete && this.dec.delete(); } catch { /* ignore */ }
-    const s = { why, packets: this.received, lost: this.lost, late: this.late, bad: this.bad, overflowMs: Math.round(this.overflow / 96), fedSeconds: +(this.frames * FRAME_MS / 1000).toFixed(1), maxLateMs: this.maxLateMs, turns: this.turns, words: this.totalWords };
-    this.log(`listening ended (${why}): ${s.packets} packets received, ${s.lost} lost, ${s.late} late or repeated, ${s.bad} unreadable, ${s.overflowMs} ms dropped for lag, ${s.fedSeconds} s fed to the engine, worst timer lateness ${s.maxLateMs} ms, ${s.turns} turn(s), ${s.words} word(s)`);
+    const s = { why, packets: this.received, lost: this.lost, late: this.late, bad: this.bad, overflowMs: Math.round(this.overflow / 96), backlogMs: this.backlogMs, fedSeconds: +(this.frames * FRAME_MS / 1000).toFixed(1), maxLateMs: this.maxLateMs, turns: this.turns, words: this.totalWords };
+    this.log(`listening ended (${why}): ${s.packets} packets received, ${s.lost} lost, ${s.late} late or repeated, ${s.bad} unreadable, ${s.overflowMs} ms dropped for lag, ${s.backlogMs} ms kept while the engine opened, ${s.fedSeconds} s fed to the engine, worst timer lateness ${s.maxLateMs} ms, ${s.turns} turn(s), ${s.words} word(s)`);
     if (this.expected.length) { s.match = overlapPercent(this.expected, this.heard); this.log(`matched ${s.match}% of the expected words`); }
     this.heard = []; // nothing of what was said is kept
     return s;

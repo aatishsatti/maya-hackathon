@@ -14,6 +14,7 @@
 //      connection failed, 138021 / 138022 media receive / transmit timeout, 138023 accepted with no media signals.
 //   Opus, 48 kHz, 20 ms frames (960 samples). Speech arrives as PCM16 mono 24 kHz and is doubled to 48 kHz (linear) before encoding. WhatsApp only takes SHA-256 DTLS fingerprints (the pipecat reference client strips the others), so only sha-256 lines are kept.
 //   No STUN / TURN is documented. Meta's side is ICE-lite, so this side makes the outbound checks; no STUN server is asked (iceServers: []).
+//   Media must never stop: the phone ends a call that gets no media for about 30 s (138021, status FAILED), so after the accept a packet goes out every 20 ms, silence when she is not speaking.
 // Library: werift 0.25.2 (MIT, pure JS, no native build) for WebRTC; opusscript (already used for voice notes) for Opus.
 const { RTCPeerConnection, MediaStreamTrack, RtpHeader, RtpPacket, useOPUS } = require('werift');
 const OpusScript = require('opusscript');
@@ -53,21 +54,40 @@ function upsample2(pcm) {
   return out;
 }
 
-// 48 kHz PCM16 mono -> one Opus packet per 20 ms on the payload type the offer chose (the last frame padded with silence). Resolves when it has all been sent.
-async function playPcm(track, payloadType, pcm48, aborted = () => false) {
-  const enc = new OpusScript(RATE, 1, OpusScript.Application.VOIP);
-  const ssrc = crypto.randomBytes(4).readUInt32BE(0);
-  let seq = crypto.randomBytes(2).readUInt16BE(0), ts = crypto.randomBytes(4).readUInt32BE(0);
-  const frames = Math.ceil(pcm48.length / (FRAME * 2)), start = Date.now();
-  try {
-    for (let f = 0; f < frames && !aborted(); f++) {
-      const chunk = Buffer.alloc(FRAME * 2); pcm48.copy(chunk, 0, f * FRAME * 2, Math.min(pcm48.length, (f + 1) * FRAME * 2));
-      track.writeRtp(new RtpPacket(new RtpHeader({ payloadType, sequenceNumber: seq, timestamp: ts, ssrc, marker: f === 0 }), Buffer.from(enc.encode(chunk, FRAME))));
-      seq = (seq + 1) & 0xffff; ts = (ts + FRAME) >>> 0;
-      const wait = start + (f + 1) * FRAME_MS - Date.now();   // keep to the clock, not to setInterval drift
-      if (wait > 0) await sleep(wait);
-    }
-  } finally { enc.delete && enc.delete(); }
+// The outgoing media, ONE continuous stream from the accept to the hang-up: a 20 ms wall clock sends exactly one Opus packet per tick, her voice (48 kHz PCM16 mono
+// queued with say()) when she has some, otherwise a frame of SILENCE. Never stopping the stream matters: the phone ends a call that receives no media for about 30 s
+// (error 138021 "Media receive timeout", status FAILED) and she is silent whenever she is only listening. One RTP sequence / timestamp counter across speech and silence.
+class Outbound {
+  constructor(track, payloadType) {
+    this.track = track; this.pt = payloadType; this.enc = new OpusScript(RATE, 1, OpusScript.Application.VOIP);
+    this.ssrc = crypto.randomBytes(4).readUInt32BE(0); this.seq = crypto.randomBytes(2).readUInt16BE(0); this.ts = crypto.randomBytes(4).readUInt32BE(0);
+    this.queue = Buffer.alloc(0); this.waiters = []; this.timer = null; this.stopped = false; this.first = true; this.sent = 0; this.silent = 0;
+    this.failed = new Promise((res) => { this.signalFailed = res; }); // resolves with the Error if a frame cannot be made or sent
+  }
+  start() {
+    this.next = Date.now();
+    const loop = () => {
+      if (this.stopped) return;
+      const now = Date.now(); let n = 0;
+      while (this.next <= now && n++ < 50 && !this.stopped) { this.tick(); this.next += FRAME_MS; }   // late: send the frames that were due, in order
+      if (this.next <= now) this.next = now + FRAME_MS;
+      this.timer = setTimeout(loop, Math.max(1, this.next - Date.now()));
+    };
+    loop();
+  }
+  tick() {
+    try {
+      for (const w of this.waiters) if (w.aborted()) { this.queue = Buffer.alloc(0); break; }  // she was stopped: her queued words are dropped
+      const voice = this.queue.length > 0, chunk = Buffer.alloc(FRAME * 2);
+      if (voice) { this.queue.copy(chunk, 0, 0, Math.min(this.queue.length, FRAME * 2)); this.queue = this.queue.subarray(Math.min(this.queue.length, FRAME * 2)); }
+      this.track.writeRtp(new RtpPacket(new RtpHeader({ payloadType: this.pt, sequenceNumber: this.seq, timestamp: this.ts, ssrc: this.ssrc, marker: this.first }), Buffer.from(this.enc.encode(chunk, FRAME))));
+      this.first = false; this.seq = (this.seq + 1) & 0xffff; this.ts = (this.ts + FRAME) >>> 0; this.sent++; if (!voice) this.silent++;
+      if (this.queue.length === 0 && this.waiters.length) { const w = this.waiters; this.waiters = []; w.forEach((x) => x.res()); }
+    } catch (e) { this.error = e; this.stopped = true; clearTimeout(this.timer); this.waiters.forEach((x) => x.rej(e)); this.waiters = []; this.signalFailed(e); }
+  }
+  // Queues 48 kHz PCM16 mono; resolves when its last frame has been sent (or at once if aborted() turns true).
+  say(pcm48, aborted = () => false) { if (this.stopped) return Promise.reject(this.error || new Error('the outgoing stream has stopped')); return new Promise((res, rej) => { this.queue = Buffer.concat([this.queue, pcm48]); this.waiters.push({ res, rej, aborted }); }); }
+  stop() { this.stopped = true; clearTimeout(this.timer); try { this.enc.delete && this.enc.delete(); } catch { /* ignore */ } }
 }
 
 // send(action, session?) posts to {phone id}/calls (whatsapp.js owns the Graph call and the token). speak(text) -> PCM16 mono 24 kHz (Maya's voice).
@@ -81,6 +101,7 @@ async function answerWithEars({ offerSdp, send, log, speak, openTranscribe, apiK
   const track = new MediaStreamTrack({ kind: 'audio' });
   const tx = pc.addTransceiver(track, { direction: 'sendrecv' });
   const ears = new Ears({ openTranscribe, apiKey, log, expected });
+  let out = null; // the outgoing stream, started right after the accept
   pc.onTrack.subscribe((t) => t.onReceiveRtp.subscribe((rtp) => ears.hear(rtp)));
   let accepted = false, over = false;
   ended.then(() => { over = true; });
@@ -102,33 +123,34 @@ async function answerWithEars({ offerSdp, send, log, speak, openTranscribe, apiK
     await send('accept', session);   // the SAME sdp as the pre-accept; media only after this returned 200
     accepted = true;
     log('accepted; speaking the intro');
-    await playPcm(track, codec.payloadType, pcm48, () => over);
+    out = new Outbound(track, codec.payloadType); out.start();   // from now on a packet every 20 ms, silence when she is not speaking
+    await Promise.race([out.say(pcm48, () => over), out.failed.then((e) => { throw e; })]);
     await sleep(over ? 0 : tailMs + gapMs);
-    let how = 'caller hung up';
+    let how = 'caller hung up'; if (over) how = await ended.then((r) => r || 'caller hung up');
     if (!over) {
       let heardOk = true;
       try { await ears.start(); log('ears open (the transcribe engine accepted the session)'); }
       catch (e) { heardOk = false; log(`could not listen: ${String(e.message).slice(0, 160)}`); }
       if (heardOk) {
         const lost = pcLost(pc); let tm; const clock = new Promise((res) => { tm = setTimeout(() => res('time is up'), listenMs); });
-        const why = await Promise.race([ended.then(() => 'caller hung up'), clock, ears.closed.then(() => 'the engine closed'), lost.promise.then(() => 'the media connection dropped')]);
+        const why = await Promise.race([ended.then((r) => r || 'caller hung up'), clock, ears.closed.then(() => 'the engine closed'), lost.promise.then(() => 'the media connection dropped'), out.failed.then((e) => { throw e; })]);
         clearTimeout(tm); lost.cancel(); ears.stop(why); how = why;
       } else how = 'the engine closed';
       if (how === 'the engine closed' || how === 'the media connection dropped') {   // she never pretends to listen: she says so, in her own voice, then hangs up
         if (how === 'the engine closed') {
-          try { const sorry = upsample2(await speak(CANT_HEAR_LINE)); await playPcm(track, codec.payloadType, sorry, () => over); await sleep(tailMs); log('said she cannot hear'); }
+          try { const sorry = upsample2(await speak(CANT_HEAR_LINE)); await out.say(sorry, () => over); await sleep(tailMs); log('said she cannot hear'); }
           catch (e) { log(`could not say it either: ${String(e.message).slice(0, 120)}`); }
         }
       }
     }
-    if (!over && how !== 'caller hung up') { await send('terminate'); log(`hung up (${how})`); }
-    else log('the caller hung up; nothing more to send');
-    return how === 'the engine closed' ? 'cannot hear' : over || how === 'caller hung up' ? 'caller hung up' : 'completed';
+    if (!over) { await send('terminate'); log(`hung up (${how})`); }
+    else log(`the call was already over (${how}); nothing more to send`);
+    return how === 'the engine closed' ? 'cannot hear' : over ? how : 'completed';
   } catch (e) {
     if (!over) { try { await send(accepted ? 'terminate' : 'reject'); } catch (e2) { log(`could NOT ${accepted ? 'terminate' : 'reject'} after the failure: ${String(e2.message).slice(0, 160)}`); } }
     throw e;
   } finally {
-    ears.stop('call over');
+    ears.stop('call over'); if (out) out.stop();
     try { await pc.close(); } catch { /* already closed */ }
   }
 }
@@ -138,4 +160,4 @@ function pcLost(pc) {
   return { promise, cancel: () => clearInterval(iv) };
 }
 
-module.exports = { answerWithEars, keepSha256Only, upsample2, INTRO_LINE, CANT_HEAR_LINE };
+module.exports = { answerWithEars, Outbound, keepSha256Only, upsample2, INTRO_LINE, CANT_HEAR_LINE };

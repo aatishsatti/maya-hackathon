@@ -366,6 +366,7 @@ async function onMessage(msg) {
   const l = findByPhone(msg.from);
   if (!l) { note(`ignored a ${msg.type} from number ending ${end(msg.from)}: no profile is linked to that number (it must be linked with its country code, digits only, exactly as WhatsApp shows it)`); return 'ignored'; } // unknown: no reply, so a stranger can never use Maya (or make her message them)
   if (!l.optIn) { note(`ignored a ${msg.type} from number ending ${end(msg.from)}: that person has not opted in or has stopped messages`); return 'ignored'; }
+  if (msg.type === 'interactive' && msg.interactive && msg.interactive.type === 'call_permission_reply') { note(`ignored a call permission reply from number ending ${end(msg.from)}: a WhatsApp system message after a call, nothing is sent back and the 24 h window is not opened by it`); return 'system'; }
   if ((l.seen || []).includes(msg.id)) { note(`ignored a repeated message from number ending ${end(msg.from)} (Meta retry)`); return 'duplicate'; }
   update(l.profileId, (x) => {
     x.lastInboundAt = Math.max(x.lastInboundAt || 0, Number(msg.timestamp) * 1000 || Date.now());
@@ -391,6 +392,14 @@ function callerOf(value, call) {
 }
 // Call ids are base64 ("wacid....==") so their last characters say nothing: a short hash tells two calls apart without showing the id.
 const callTag = (id) => crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 6);
+// Why a call ended, from its terminate webhook (docs: status COMPLETED | FAILED; errors[].code; the troubleshooting page names 138019 call setup failed, 138020 relay connection
+// failed, 138021 media receive timeout (the phone got no media for a long time), 138022 media transmit timeout, 138023 accepted with no media signals).
+const CALL_ERRORS = { 138019: 'call setup failed', 138020: 'relay connection failed', 138021: 'media receive timeout', 138022: 'media transmit timeout', 138023: 'accepted with no media signals' };
+function endReason(call) {
+  const code = Array.isArray(call.errors) && call.errors[0] ? Number(call.errors[0].code) : 0;
+  if (code) return `the phone ended the call (error ${code}${CALL_ERRORS[code] ? `: ${CALL_ERRORS[code]}` : ''})`;
+  return call.status === 'FAILED' ? 'the call failed (no error code given)' : 'caller hung up';
+}
 const liveEnds = new Map(); // call id -> function that tells the answerer the CALLER hung up (the terminate webhook)
 const callsSeen = []; let callBusy = false; // one answered call at a time; a Meta retry of a connect is not answered twice
 const callAction = (callId, action, session) => graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', call_id: callId, action, ...(session ? { session } : {}) });
@@ -403,7 +412,7 @@ async function onCalls(value) {
     const who = callerOf(value, call), tail = who ? end(who) : 'unknown', cid = callTag(call.id);
     if (call.event === 'terminate') {
       const er = Array.isArray(call.errors) && call.errors[0] ? `, error ${Number(call.errors[0].code) || 'unknown'}` : '';
-      const hangUp = liveEnds.get(call.id); if (hangUp) hangUp(); // an answered call: tell the answerer to stop listening
+      const hangUp = liveEnds.get(call.id); if (hangUp) hangUp(endReason(call)); // an answered call: tell the answerer to stop listening, and why the call ended
       note(`call ended: number ending ${tail}, call ${cid}, status ${String(call.status).slice(0, 12)}, duration ${Number(call.duration) || 0} s${er}`);
       out.push('ended'); continue;
     }
