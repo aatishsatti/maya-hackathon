@@ -147,6 +147,52 @@
   function list(node, items, empty) { node.replaceChildren(...(items.length ? items : [el('div', 'empty', empty)])); }
 
   // Reminder state -> short pill. Done and Missed are the two the family cares about; the full sentence stays below it.
+  // ---- Activity: counts, a paged list grouped by day, filtered by type. Everything shown comes from the server's activity list (the family's own reminder words, never the person's). ----
+  const ACT_TYPE = { reminder: 'Reminder', welfare: 'Welfare check', message: 'Message' };
+  const ACT_CHAN = { call: 'Call', text: 'Text', voice: 'Voice note' };
+  const ACT_PILL = { scheduled: 'pill-plain', sent: 'pill-info', delivered: 'pill-info', read: 'pill-info', answered: 'pill-ok', noreply: 'pill-wait', unreached: 'pill-miss', missed: 'pill-miss', paused: 'pill-wait', failed: 'pill-miss' };
+  const ACT_ICON = { reminder: '\u25F7', welfare: '\u2661', message: '\u2709' };   // plain type glyphs in a circle: a clock, a heart, an envelope (no pictures, no markup insertion)
+  const ACT_FILTERS = [['all', 'All'], ['reminder', 'Reminders'], ['welfare', 'Welfare'], ['message', 'Messages']];
+  const ACT_CARDS = [['sent', 'Sent'], ['delivered', 'Delivered'], ['read', 'Read'], ['answered', 'Answered'], ['missed', 'Missed']];
+  const ACT_PAGE = 8;
+  const act = { entries: [], summary: null, filter: 'all', page: 0 };
+  const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  function dayGroup(at, now = new Date()) { const s = dayStart(now), day = 86400000; return at >= s + day ? 'Upcoming' : at >= s ? 'Today' : at >= s - day ? 'Yesterday' : 'Earlier'; }
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const clockOf = (e, group) => (group === 'Earlier' || group === 'Upcoming' ? new Date(e.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : clock(e.at));
+  function actRow(e, group) {
+    const row = el('div', 'act-row'), icon = el('span', 'act-icon', ACT_ICON[e.type] || '');
+    const main = el('div', 'act-main'), pills = el('div', 'act-pills');
+    pills.append(el('span', 'pill pill-plain', ACT_CHAN[e.channel] || e.channel), el('span', `pill ${ACT_PILL[e.status] || 'pill-plain'}`, e.label));
+    main.append(el('div', 'act-title', e.words || ACT_TYPE[e.type] || 'Activity'), pills);
+    if (e.words) main.children[0].title = ACT_TYPE[e.type] || '';
+    if (e.note) main.append(el('div', 'act-note', e.note));
+    row.append(icon, main, el('div', 'act-time', clockOf(e, group)));
+    return row;
+  }
+  function renderActivity(a) {
+    if (a) { act.entries = a.entries || []; act.summary = a.summary || null; }
+    $('actSummary').replaceChildren(...ACT_CARDS.map(([k, label]) => { const c = el('div', 'act-card'); c.append(el('b', '', String(act.summary ? act.summary[k] || 0 : 0)), el('span', '', label)); return c; }));
+    $('actFilters').replaceChildren(...ACT_FILTERS.map(([k, label]) => { const b = el('button', `chip${act.filter === k ? ' on' : ''}`, label); b.type = 'button'; b.setAttribute && b.setAttribute('aria-pressed', String(act.filter === k)); b.addEventListener('click', () => { act.filter = k; act.page = 0; renderActivity(); }); return b; }));
+    const rows = act.entries.filter((e) => act.filter === 'all' || e.type === act.filter), pages = Math.max(1, Math.ceil(rows.length / ACT_PAGE));
+    act.page = Math.min(act.page, pages - 1);
+    const out = []; let last = null;
+    for (const e of rows.slice(act.page * ACT_PAGE, act.page * ACT_PAGE + ACT_PAGE)) { const g = dayGroup(e.at); if (g !== last) { out.push(el('div', 'act-day', g)); last = g; } out.push(actRow(e, g)); }
+    list($('actList'), out, act.filter === 'all' ? 'Nothing yet. Reminders, check-ins and messages show here.' : 'Nothing of this kind yet.');
+    $('actPager').hidden = pages <= 1; $('actPage').textContent = `Page ${act.page + 1} of ${pages}`; $('actNewer').disabled = act.page === 0; $('actOlder').disabled = act.page >= pages - 1;
+  }
+  $('actNewer').addEventListener('click', () => { act.page = Math.max(0, act.page - 1); renderActivity(); });
+  $('actOlder').addEventListener('click', () => { act.page += 1; renderActivity(); });
+  // The one delivery picker: Call / Text / Voice note. clearable: tapping the chosen one again clears it (a reminder with no choice keeps the old default).
+  function seg(node) {
+    const btns = node.querySelectorAll ? [...(node.querySelectorAll('button') || [])] : [];
+    const cur = () => btns.find((b) => b.getAttribute('aria-checked') === 'true');
+    const set = (v) => { for (const b of btns) b.setAttribute('aria-checked', String(b.dataset.v === v)); };
+    node.addEventListener('click', (e) => { const b = e.target && e.target.closest ? e.target.closest('button') : null; if (!b) return; if (cur() === b && node.dataset.clearable) set(null); else set(b.dataset.v); });
+    return { get: () => (cur() ? cur().dataset.v : null), set };
+  }
+  const deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia'));
+
   const REM_PILL = { done: ['pill-ok', 'Answered'], missed: ['pill-miss', 'Missed'], no_reply: ['pill-wait', "Hasn't replied yet"], unanswered: ['pill-miss', "Couldn't reach"], declined: ['pill-wait', 'Declined'], calling: ['pill-info', 'Calling'], answered: ['pill-info', 'Picked up'],
     wa_sending: ['pill-info', 'Sending'], wa_sent: ['pill-info', 'Sent'], wa_delivered: ['pill-info', 'Delivered'], wa_read: ['pill-wait', 'Read'], wa_missed: ['pill-miss', 'Missed'], wa_failed: ['pill-miss', 'Not sent'] };
   // Message status -> pill. The words are the server's own: Sent, Delivered, Seen, Played, Replied, Hasn't replied yet.
@@ -173,6 +219,7 @@
       const c = el('div', 'item');
       const cur = r.active || r.last;
       const head = el('div', 'item-head'); head.append(el('span', 'grow', r.task));
+      if (r.deliver) head.append(el('span', 'pill pill-plain', ACT_CHAN[r.deliver] || r.deliver));   // this reminder's own pick
       const tag = cur && REM_PILL[cur.state];
       if (tag) head.append(el('span', `pill ${tag[0]}`, tag[1]));
       const del = el('button', 'btn small danger', 'Delete'); del.addEventListener('click', () => api(`/api/care/${id}/reminders/${r.id}`, 'DELETE').then(load).catch((e) => showErr(e.message))); head.append(del);
@@ -210,6 +257,7 @@
     let v;
     try { v = (await waCall(`/api/whatsapp/${mine}`, 'GET')).j; } catch { return; }
     if (mine !== id) return;
+    renderActivity(v.activity);
     $('waLink').hidden = Boolean(v.linked && v.optIn);
     $('waSend').hidden = !(v.linked && v.optIn);
     $('waNote').hidden = !v.linked;
@@ -218,7 +266,7 @@
     $('waCap').textContent = capText(v.calls);
     if (v.testCall && !waTesting) $('waTestLine').textContent = `Last test call: ${TEST_STATE[v.testCall.state] || v.testCall.state} (${t(v.testCall.at)}).`;
     const canFree = Boolean(v.linked && v.optIn && v.windowOpen);
-    for (const b of $('waSend').querySelectorAll ? $('waSend').querySelectorAll('button[data-kind]') : []) b.disabled = !canFree;   // outside the 24 h window WhatsApp refuses free text and voice, so they cannot be pressed
+    for (const b of $('waSend').querySelectorAll ? $('waSend').querySelectorAll('button[data-kind]') : []) b.disabled = b.dataset && b.dataset.kind === 'call' ? false : !canFree;   // a call is not a free-text send: the window does not decide it (the call limits do)   // outside the 24 h window WhatsApp refuses free text and voice, so they cannot be pressed
     $('waInvite').hidden = !(v.linked && v.optIn && !v.windowOpen);   // the only thing that can be sent outside the window; needs no typed note
     $('waState').textContent = !v.linked ? 'Not linked' : !v.optIn ? 'Opted out' : v.windowOpen ? 'Can message' : 'Waiting for them to write';
     $('waState').className = `pill ${v.linked && v.optIn && v.windowOpen ? 'pill-ok' : 'pill-plain'}`;
@@ -249,7 +297,7 @@
       const r = await waCall(`/api/whatsapp/${id}/send`, 'POST', useTemplate ? { kind: 'text', text: '', useTemplate: true } : { kind: waSubmitKind, text: $('waText').value, useTemplate: false });
       if (!r.ok) { waSay(r.j.error || 'Could not send. Nothing was sent.', true); if (r.j.needsTemplate) $('waInvite').hidden = false; return; }
       $('waText').value = '';
-      waSay(useTemplate ? `Invitation sent.${had ? ' Your own words were not sent: WhatsApp only allows the standard invitation until they write back.' : ''}` : 'Sent.');
+      waSay(useTemplate ? `Invitation sent.${had ? ' Your own words were not sent: WhatsApp only allows the standard invitation until they write back.' : ''}` : waSubmitKind === 'call' ? (r.j.placed === false ? `Nothing rang. ${capText(r.j.calls)} It was sent as a text instead.` : 'WhatsApp took the call: their phone should ring now.') : 'Sent.');
       loadWa();
     } catch (e) { waSay(`Could not reach the server: ${e.message}. Nothing was sent.`, true); }
     finally { waBusy = false; $('waInvite').disabled = false; }
@@ -287,6 +335,7 @@
     try {
       const r = await waCall(`/api/whatsapp/${id}/${path}`, 'POST', body);
       if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; return; }
+      if (r.j.sent) { $('waTestLine').textContent = `Sent as a ${r.j.via === 'voice' ? 'voice note' : 'text'}. No call was placed.`; load(); return; }
       if (r.j.placed === false) { $('waTestLine').textContent = `Nothing rang. ${capText(r.j.calls)} A WhatsApp message was sent instead.`; load(); return; }
       $('waTestLine').textContent = 'WhatsApp took the call: their phone should ring now.';
       const mine = id;
@@ -301,7 +350,7 @@
     finally { waTesting = false; for (const b of ['waTestCall', 'waRemCall', 'waWelfareCall']) $(b).disabled = false; }
   }
   $('waTestCall').addEventListener('click', () => runCall('test-call'));
-  $('waWelfareCall').addEventListener('click', () => runCall('welfare-call'));   // Step 1: a welfare check call, no reminder
+  $('waWelfareCall').addEventListener('click', () => runCall('welfare-call', { via: welfareSeg.get() || 'call' }));   // Step 1: a welfare check call, no reminder
   // C2: the family's reminder, delivered by the call. A reminder you already set wins over typed text.
   $('waRemPick').addEventListener('change', remSource); $('waRemText').addEventListener('input', remSource);
   $('waRemClear').addEventListener('click', () => { $('waRemPick').value = ''; $('waRemText').value = ''; remSource(); });
@@ -342,8 +391,8 @@
   $('deliv').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { reminders: $('deliv').value }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('remForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    api(`/api/care/${id}/reminders`, 'POST', { task: $('task').value, dueAt: new Date($('at').value).getTime(), repeat: $('repeat').value })
-      .then(() => { $('task').value = ''; showErr(''); load(); }).catch((x) => showErr(x.message));
+    api(`/api/care/${id}/reminders`, 'POST', { task: $('task').value, dueAt: new Date($('at').value).getTime(), repeat: $('repeat').value, ...(deliverSeg.get() ? { deliver: deliverSeg.get() } : {}) })
+      .then(() => { $('task').value = ''; deliverSeg.set(null); showErr(''); load(); }).catch((x) => showErr(x.message));
   });
   $('msgForm').addEventListener('submit', (e) => {
     e.preventDefault();

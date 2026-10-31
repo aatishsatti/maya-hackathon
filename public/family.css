@@ -161,3 +161,31 @@ select:focus-visible, input:focus-visible, .btn:focus-visible, .mode:focus-withi
 .wa-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
 .wa-actions .btn { flex: 1 1 160px; min-height: 48px; white-space: normal; }
 .wa-source { margin-top: 8px; font-weight: 600; }
+
+/* Activity: summary cards, filters, a paged list grouped by day; and the one delivery picker (Call / Text / Voice note) used for reminders, check-ins and messages */
+.act-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
+.act-card { background: #fafafa; border: 1px solid var(--line); border-radius: 12px; padding: 12px 8px; text-align: center; }
+.act-card b { display: block; font-size: 30px; line-height: 1.1; font-weight: 700; }
+.act-card span { display: block; margin-top: 4px; font-size: 13px; color: var(--soft); }
+.act-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.act-filters .chip { min-height: 44px; }
+.act-day { margin: 16px 0 6px; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--soft); }
+.act-list { display: flex; flex-direction: column; }
+.act-row { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.act-icon { flex: 0 0 40px; height: 40px; border-radius: 50%; background: #f2f2f2; display: flex; align-items: center; justify-content: center; color: #333; }
+.act-icon { font-size: 20px; line-height: 1; font-variant-emoji: text; }
+.act-main { flex: 1 1 auto; min-width: 0; }
+.act-title { font-weight: 600; overflow-wrap: anywhere; }
+.act-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.act-note { margin-top: 4px; font-size: 13px; color: var(--soft); }
+.act-time { flex: 0 0 auto; font-size: 13px; color: var(--soft); text-align: right; white-space: nowrap; }
+.act-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.act-pager .btn { min-height: 48px; min-width: 96px; }
+.log > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; color: var(--soft); }
+.seg { display: flex; gap: 0; margin: 4px 0 8px; border: 1.5px solid #d9d9d9; border-radius: 12px; overflow: hidden; background: #fff; }
+.seg button { flex: 1 1 0; font: inherit; font-size: 15px; font-weight: 600; min-height: 48px; padding: 8px 10px; border: 0; border-right: 1px solid #d9d9d9; background: #fff; color: var(--ink); cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-checked="true"] { background: var(--accent); color: #fff; }
+.seg button:focus-visible { outline: 3px solid #1a1a1a; outline-offset: -3px; }
+@media (max-width: 600px) { .act-cards { grid-template-columns: repeat(3, 1fr); } .act-card b { font-size: 26px; } .act-row { align-items: flex-start; } }
+.act-filters .chip.on { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }

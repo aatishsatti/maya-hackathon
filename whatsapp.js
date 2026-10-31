@@ -100,10 +100,10 @@ function update(profileId, fn) { const all = readLinks(); if (!all[profileId]) r
 // What the dashboard may know: the state, never a message word.
 function view(profileId) {
   const l = linkOf(profileId);
-  if (!l) return { linked: false, configured: configured() };
+  if (!l) return { linked: false, configured: configured(), activity: activityOf(profileId) };
   const open = Boolean(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS);
   const last = (l.sent || []).slice(-1)[0] || null;
-  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null, calls: { ...capInfo(l), blocked: callBlock(l) } };
+  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null, calls: { ...capInfo(l), blocked: callBlock(l) }, activity: activityOf(profileId) };
 }
 
 // ---- webhook security ----
@@ -298,7 +298,7 @@ function reminderWords(task, nudge) {
   if (nudge) return { text: `Just checking that you saw this ${what} from your family: ${shown}. Reply when you have seen it.`, spoken: `Just checking that you saw this ${what} from your family: ${shown}. Reply when you have seen it.` };
   return { text: `A ${what} from your family: ${shown}. Reply when you have seen this.`, spoken: `A ${what} from your family: ${shown}. Reply when you have seen this.` };
 }
-async function sendReminder(profileId, { task, nudge = false } = {}) {
+async function sendReminder(profileId, { task, nudge = false, deliver = null } = {}) {
   if (!configured()) return { ok: false, reason: 'not_configured' };
   const l = linkOf(profileId);
   if (!l || !l.optIn) return { ok: false, reason: 'not_linked' };
@@ -309,7 +309,8 @@ async function sendReminder(profileId, { task, nudge = false } = {}) {
   update(profileId, (x) => { x.remSent = [...today, now]; });   // the slot is taken BEFORE the network call
   const w = reminderWords(task, nudge);
   const care = require('./care'); let voiceFailed = false;
-  if (((care.get(profileId) || {}).delivery || {}).reminders !== 'text') {
+  const pref = deliver === 'text' || deliver === 'voice' ? deliver : (((care.get(profileId) || {}).delivery || {}).reminders === 'text' ? 'text' : 'voice');   // this reminder's own pick wins over the person-wide switch
+  if (pref !== 'text') {
     // Where a voice note fails is named (never why in words, never a word of the reminder): speech (the voice could not be made), encode, too_long (too big for the play icon),
     // upload (WhatsApp refused the file) or send (WhatsApp refused the message), with WhatsApp's own error code when it gave one. Then it goes as text, and says so.
     let stage = 'speech';
@@ -325,7 +326,7 @@ async function sendReminder(profileId, { task, nudge = false } = {}) {
   try { const wamid = await sendTextTo(l.phone, w.text); return wamid ? { ok: true, via: 'text', wamid, voiceUnavailable: voiceFailed } : { ok: false, reason: 'no_id' }; }
   catch (e) { return { ok: false, reason: 'meta_error', error: { code: e.code || null, title: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } }; }
 }
-require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, send: sendReminder });
+require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, send: sendReminder, placeCall: (profileId, rid, dueAt) => placeCall(profileId, 'reminder', { rid, dueAt }) });
 
 // ---- Maya's words must be true about WhatsApp ----
 // A text door cannot ring a phone or hold a live WhatsApp call. A reply that promises one is replaced by the plain truth.
@@ -534,6 +535,46 @@ async function onCalls(value) {
 
 // The family page's "Call them now (test)": ONE outbound call to the linked, opted-in person that says a fixed sentence and hangs up (wacall.callOut). Resolves when Meta has taken the
 // call (the phone is about to ring) with { placed: true }; the rest (ringing, answered, ended) runs on and is logged and kept as a label in view().testCall. Throws if nothing was placed.
+// ---- the activity list the family page shows: every delivery, any channel, from the records that already exist (no new stored entry). Type = Reminder / Welfare check / Message; channel = Call /
+// Text / Voice note; status = Scheduled / Sent / Delivered / Read / Answered / Hasn't replied yet / Couldn't reach / Missed / Paused (and Not sent). The words shown are only what the family wrote
+// (a reminder or message they typed); the person's own words are never kept here. ----
+const OCC = { calling: ['sent', 'Calling now', 1], answered: ['delivered', 'Picked up', 2], done: ['answered', 'Answered', 4], no_reply: ['noreply', "Hasn't replied yet", 2], unanswered: ['unreached', "Couldn't reach", 0], declined: ['noreply', 'Declined', 2], missed: ['missed', 'Missed', 0],
+  wa_sending: ['sent', 'Sending', 1], wa_sent: ['sent', 'Sent', 1], wa_delivered: ['delivered', 'Delivered', 2], wa_read: ['read', 'Read', 3], wa_missed: ['missed', 'Missed', 2], wa_failed: ['failed', 'Not sent', 0] };   // [status, label, rank]: rank 1 left Maya, 2 arrived / picked up, 3 read, 4 answered
+const OUTMSG = { sending: ['sent', 'Sending', 1], sent: ['sent', 'Sent', 1], delivered: ['delivered', 'Delivered', 2], read: ['read', 'Read', 3], failed: ['failed', 'Not sent', 0] };
+const NOTE_LABEL = { Sent: ['sent', 'Sent', 1], Delivered: ['delivered', 'Delivered', 2], Seen: ['read', 'Read', 3], Played: ['read', 'Read', 3], Replied: ['answered', 'Answered', 4], "Hasn't replied yet": ['noreply', "Hasn't replied yet", 2], 'Seen · Not replied yet': ['noreply', "Hasn't replied yet", 3],
+  'Calling now': ['sent', 'Calling now', 1], 'Picked up, waiting for a reply': ['delivered', 'Picked up', 2], "Couldn't reach senior": ['unreached', "Couldn't reach", 0], Paused: ['paused', 'Paused', 0] };
+const ACTIVITY_DAYS = 30, ACTIVITY_MAX = 300;
+function activityOf(profileId) {
+  const care = require('./care'), p = care.get(profileId), l = linkOf(profileId), now = Date.now(), out = [];
+  if (!p) return { entries: [], summary: { sent: 0, delivered: 0, read: 0, answered: 0, missed: 0 } };
+  const waOn = Boolean(l && l.optIn && configured()), pref = (p.delivery && p.delivery.reminders) === 'text' ? 'text' : 'voice';
+  const push = (e) => { if (e.at && (e.status === 'scheduled' || now - e.at < ACTIVITY_DAYS * 86400000)) out.push(e); };
+  for (const r of p.reminders || []) {
+    const type = r.msg ? 'message' : 'reminder', planned = r.deliver || (waOn ? pref : 'call');
+    if (r.dueAt && !r.active) push({ id: `r:${r.id}:s`, type, channel: planned, status: 'scheduled', label: 'Scheduled', rank: 0, at: r.dueAt, words: r.task });
+    for (const [k, x] of [['a', r.active], ['l', r.last]]) {
+      if (!x) continue;
+      const [status0, label0, rank0] = OCC[x.state] || ['sent', String(x.state), 1];
+      const paused = x.pausedBy && x.state === 'wa_failed';
+      const channel = x.channel === 'whatsapp' ? (x.via === 'voice' ? 'voice' : x.via === 'text' ? 'text' : planned === 'voice' ? 'voice' : 'text') : (r.deliver === 'text' || r.deliver === 'voice') && x.state === 'wa_failed' && !x.pausedBy ? r.deliver : 'call';
+      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.task, ...(x.pausedBy && !paused ? { note: 'Calls were paused, so it went as a message.' } : {}) });
+    }
+  }
+  for (const n of p.notifications || []) {
+    if (n.to !== 'senior') continue;
+    const lab = care.statusLabel(n), [status, label, rank] = NOTE_LABEL[lab] || ['sent', lab, 1];
+    if (n.kind === 'welfare') push({ id: `n:${n.id}`, type: 'welfare', channel: 'call', status: n.paused ? 'paused' : status, label: n.paused ? 'Paused' : label, rank: n.paused ? 0 : rank, at: n.times && n.times.sent, words: null });
+    else if (n.kind === 'family_message') push({ id: `n:${n.id}`, type: 'message', channel: 'text', status, label, rank, at: n.times && n.times.sent, words: n.text });
+  }
+  for (const m of (l && l.sent) || []) {
+    const [status, label, rank] = OUTMSG[m.status] || ['sent', String(m.status), 1];
+    push({ id: `m:${m.at}`, type: m.who === 'maya' ? 'welfare' : 'message', channel: m.kind === 'voice' ? 'voice' : 'text', status, label, rank, at: m.at, words: null });
+  }
+  out.sort((a, b) => b.at - a.at);
+  const entries = out.slice(0, ACTIVITY_MAX), done = entries.filter((e) => e.status !== 'scheduled');
+  return { entries, summary: { sent: done.filter((e) => e.rank >= 1).length, delivered: done.filter((e) => e.rank >= 2).length, read: done.filter((e) => e.rank >= 3).length, answered: done.filter((e) => e.status === 'answered').length, missed: done.filter((e) => e.status === 'missed' || e.status === 'unreached').length } };
+}
+
 const TEST_COOLDOWN_MS = 60000, MAX_CONNECTED_PER_DAY = 5, MAX_MISSES = 2, DAY_MS = 24 * 3600000;
 function setTest(profileId, state) { testCalls.set(profileId, { state, at: Date.now() }); }
 // Counters on the link record (they survive a restart), shared by every kind of call: answered calls in the last 24 h (WhatsApp allows 5 connected business-started calls a day, error 138012 when
@@ -561,11 +602,14 @@ function placeCall(profileId, kind, spec) {
   if (block) {
     const why = block === 'misses' ? `The last ${MAX_MISSES} calls to them were not answered, so Maya will not call again until they answer or write.` : `The limit of ${MAX_CONNECTED_PER_DAY} answered calls in 24 hours is reached.`;
     if (kind === 'welfare') {   // the same limit, a fixed true text instead of a call (only inside the 24 h window, where free text is allowed)
-      if (!(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) return fail(`${why} A text needs them to have written in the last 24 hours, and they have not. Nothing was sent.`, 429);
-      return sendTextTo(l.phone, WELFARE_TEXT).then(() => { note(`welfare check to number ending ${end(l.phone)} not called (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); a fixed text was sent instead`); return { placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } }; }, (e) => fail(`${why} The text could not be sent either: ${e.message}`, e.status || 502));
+      if (!(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) { care.welfarePaused(profileId, block); return fail(`${why} A text needs them to have written in the last 24 hours, and they have not. Nothing was sent.`, 429); }
+      return sendOut(profileId, { kind: 'text', text: WELFARE_TEXT, who: 'maya' }).then(() => { note(`welfare check to number ending ${end(l.phone)} not called (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); a fixed text was sent instead`); return { placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } }; }, (e) => fail(`${why} The text could not be sent either: ${e.message}`, e.status || 502));
     }
     if (kind !== 'reminder') return fail(`${why} Nothing was placed.`, 429);
-    try { care.reminderViaMessage(profileId, spec); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
+    if (spec && spec.message) {   // a family MESSAGE chosen as a call: the same words as a text, inside the window
+      return sendOut(profileId, { kind: 'text', text: spec.task, who: 'family' }).then(() => { note(`message call to number ending ${end(l.phone)} not placed (${block}); the message was sent as a text instead`); return { placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } }; }, (e) => fail(`${why} The message could not be sent as a text either: ${e.message}`, e.status || 502));
+    }
+    try { care.reminderViaMessage(profileId, { ...spec, pausedBy: block }); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
     note(`reminder call to number ending ${end(l.phone)} not placed (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); the reminder was sent as a message instead`);
     return Promise.resolve({ placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } });
   }
@@ -612,6 +656,20 @@ function placeCall(profileId, kind, spec) {
 const placeTestCall = (profileId) => placeCall(profileId, 'test');
 const placeReminderCall = (profileId, spec) => placeCall(profileId, 'reminder', spec);
 const placeWelfareCall = (profileId) => placeCall(profileId, 'welfare');
+// The welfare check by the picker: Call (the call flow with every limit), Text or Voice note (the same fixed words, from Maya, inside the 24 h window only: sendOut enforces it and says why).
+async function placeWelfare(profileId, via = 'call') {
+  if (via === 'call') return placeWelfareCall(profileId);
+  if (via !== 'text' && via !== 'voice') throw new WaError('Choose a call, a text or a voice note.', 400);
+  const r = await sendOut(profileId, { kind: via, text: WELFARE_TEXT, who: 'maya' });
+  return { placed: false, sent: true, via: r.kind };
+}
+// A family message chosen as a CALL: Maya rings and says it as the family's message (a one-off typed record that is shown under Messages). Up to 80 characters, the reminder limit.
+function placeMessageCall(profileId, text) {
+  const words = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  if (!words) return Promise.reject(new WaError('Please type a message first.', 400));
+  if (words.length > 80) return Promise.reject(new WaError('A message by call can be up to 80 characters. Shorten it or send it as text. Nothing was placed.', 400));
+  return placeCall(profileId, 'reminder', { task: words, message: true });
+}
 const WELFARE_TEXT = 'This is Maya. Your family asked me to check in on you. How are you today?';   // fixed and true for a dashboard-triggered check; used only when calls are paused
 
 // Called by server.js after it answered 200. Never throws; errors are logged as a message only (no words, no numbers).
@@ -638,4 +696,4 @@ async function handleWebhook(payload) {
   return (await Promise.all(done)).flat(); // calls answer with one result per call
 }
 
-module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, placeWelfareCall, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, placeWelfareCall, placeWelfare, placeMessageCall, activityOf, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

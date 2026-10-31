@@ -372,7 +372,7 @@ test('never a live call: only text, audio and template ever leave; a call promis
   shift(id, 60000); await wa.sendOut(id, { kind: 'voice', text: 'ok' });
   const o = outside(); shift(o.id, 1); await wa.sendOut(o.id, { kind: 'text', useTemplate: true });
   assert.ok(sent().length >= 3 && sent().every((b) => ['text', 'audio', 'template'].includes(b.type)));
-  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)).sort(), ['placeReminderCall', 'placeTestCall', 'placeWelfareCall']); // the one test call (C1) is the only exception, and it never sends a message
+  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)).sort(), ['placeMessageCall', 'placeReminderCall', 'placeTestCall', 'placeWelfareCall']); // the one test call (C1) is the only exception, and it never sends a message
   await refusal(wa.sendOut(id, { kind: 'call', text: 'x' }), /text message or a voice note/, { status: 400 });
   await refusal(wa.sendOut(id, { kind: 'text', text: 'x', who: 'stranger' }), /Bad sender/);
 });
@@ -1410,5 +1410,120 @@ test('Step 1 welfare: the Call gets the welfare-check fact (a welfare check, how
   const note = call.greetingNote(14);
   assert.match(note, /welfare check/); assert.match(note, /see how they are/); assert.match(note, /Their family asked you to call and check in on them/); assert.match(note, /Invent nothing: no condition, no news, no weather, no time of day/); assert.match(note, /No medicine, no dose, no advice/);
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waWelfareCall"[^>]*>Check in with them now \(test\)</); assert.match(html, /<h3 class="wa-sub">Check in with them \(test\)<\/h3>/);
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /b === 'welfare-call'\) return MODE !== 'real'/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /b === 'welfare-call'\) \{/);
+});
+
+// ---- the dashboard: activity counts, grouping, filter, paging; the one delivery picker for reminders, check-ins and messages; paused fallback; no words ----
+const seedActivity = () => {
+  voiceReset(); const { id, phone } = inWindow(); const q = care.get(id), now = Date.now(), h = 3600000;
+  const mk = (task, last) => { const r = care.addReminder(id, { task, dueAt: now + 60000, repeat: 'none' }); r.dueAt = null; r.last = { dueAt: now, attempts: 1, ...last }; return r; };
+  mk('Read one', { state: 'wa_read', channel: 'whatsapp', via: 'voice', sentAt: now - 1 * h, at: now - 1 * h });
+  mk('Answered one', { state: 'done', channel: 'whatsapp', via: 'text', sentAt: now - 2 * h, at: now - 2 * h });
+  mk('Missed one', { state: 'wa_missed', channel: 'whatsapp', via: 'voice', sentAt: now - 3 * h, at: now - 3 * h });
+  mk('Called one', { state: 'unanswered', at: now - 4 * h });
+  mk('Old one', { state: 'wa_delivered', channel: 'whatsapp', via: 'text', sentAt: now - 40 * h, at: now - 40 * h });
+  const sched = care.addReminder(id, { task: 'Later one', dueAt: now + 5 * h, repeat: 'none', deliver: 'call' });
+  return { id, phone, q, sched };
+};
+
+test('activity: every delivery from the existing records, with type, channel, status and the summary counts; scheduled ones are listed but not counted; only the family\'s own words appear', async () => {
+  const { id, phone } = seedActivity(); reset(PLAIN);
+  await wa.sendOut(id, { kind: 'text', text: 'checking in', who: 'maya' }); const wid = wa.linkOf(id).sent.at(-1).id; wa.onStatus({ id: wid, status: 'read' });     // a welfare text, read
+  shift(id, 60000); await wa.sendOut(id, { kind: 'voice', text: 'hello from me', who: 'family' }); wa.onStatus({ id: wa.linkOf(id).sent.at(-1).id, status: 'delivered' });   // a message, delivered
+  care.welfarePaused(id, 'cap');                                                                                                                         // a check-in asked for while paused, nothing sent
+  const a = wa.activityOf(id), by = (w) => a.entries.find((e) => e.words === w), kinds = (t) => a.entries.filter((e) => e.type === t);
+  assert.deepEqual([by('Read one').channel, by('Read one').status, by('Read one').label], ['voice', 'read', 'Read']); assert.deepEqual([by('Answered one').channel, by('Answered one').status], ['text', 'answered']);
+  assert.deepEqual([by('Missed one').status, by('Called one').channel, by('Called one').status, by('Called one').label], ['missed', 'call', 'unreached', "Couldn't reach"]);
+  assert.deepEqual([by('Later one').status, by('Later one').channel, by('Later one').label], ['scheduled', 'call', 'Scheduled']);
+  const w = kinds('welfare'); assert.deepEqual(w.map((e) => [e.channel, e.status]).sort(), [['call', 'paused'], ['text', 'read']]); const m = kinds('message'); assert.deepEqual(m.map((e) => [e.channel, e.status]), [['voice', 'delivered']]);
+  assert.ok(a.entries.some((e) => e.words === 'Old one'), 'a 40 hour old one is still inside the 30 days');
+  // counts: sent = left Maya (read, answered, missed, old delivered, welfare text, message) = 6; delivered = rank 2+ (all of those but none is below) = 6; read = rank 3+ = read one + welfare text + the answered one (answering implies reading) = 3; answered = 1; missed = missed one + couldn't reach = 2
+  assert.deepEqual(a.summary, { sent: 6, delivered: 6, read: 3, answered: 1, missed: 2 });
+  assert.ok(a.entries.every((e, i) => i === 0 || a.entries[i - 1].at >= e.at), 'newest first');
+  const json = JSON.stringify(a); assert.doesNotMatch(json, /checking in|hello from me/, 'the words of a message or a check-in are never stored or shown'); assert.equal(wa.view(id).activity.entries.length, a.entries.length);
+  assert.deepEqual(wa.view(senior()).activity, { entries: [], summary: { sent: 0, delivered: 0, read: 0, answered: 0, missed: 0 } }); clearCalls();
+});
+
+// The real page script in a fake browser, fed an activity list: groups by day, filters by type, pages without endless scrolling.
+const vm = require('node:vm');
+const actPage = (activity) => {
+  class E { constructor(t) { this.tag = t; this.children = []; this.textContent = ''; this.hidden = false; this.disabled = false; this.value = ''; this.className = ''; this.handlers = {}; this.style = {}; this.dataset = {}; this.title = ''; }
+    append(...k) { this.children.push(...k); } replaceChildren(...k) { this.children = k; } addEventListener(e, f) { this.handlers[e] = f; } setAttribute() {} focus() {} text() { return [this.textContent, ...this.children.map((c) => (c.text ? c.text() : String(c)))].join(' '); } }
+  const els = {}; const document = { getElementById: (i) => (els[i] = els[i] || new E('x')), createElement: (t) => new E(t) };
+  const view = { linked: true, configured: true, optIn: true, windowOpen: true, phoneEnd: '8237', activity, calls: { answeredToday: 0, maxPerDay: 5, maxMisses: 2, misses: 0, blocked: null, clearsAt: null } };
+  const sandbox = { document, window: {}, localStorage: { getItem: () => 'abcdef12', setItem() {} }, Date, JSON, Promise, console, Intl, EventSource: class { addEventListener() {} }, setInterval: () => 1, clearInterval() {},
+    fetch: async (url) => (url === '/api/profiles' ? { ok: true, status: 200, json: async () => ({ profiles: [{ id: 'abcdef12', name: 'Rosa' }] }) } : { ok: true, status: 200, json: async () => view }) };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'), sandbox); return els;
+};
+test('activity page: summary cards, day groups (Today / Yesterday / Earlier), filter by type, paged; each row has an icon, a channel pill, a status pill and a time; no endless scroll', async () => {
+  const now = Date.now(), H = 3600000, day = (n, hh = 12) => { const d = new Date(); d.setHours(hh, 30, 0, 0); return d.getTime() - n * 86400000; };
+  const entries = [{ id: 'a', type: 'reminder', channel: 'voice', status: 'read', label: 'Read', at: day(0), words: 'Take your tablets' }, { id: 'b', type: 'welfare', channel: 'call', status: 'answered', label: 'Answered', at: day(0, 9), words: null },
+    { id: 'c', type: 'message', channel: 'text', status: 'delivered', label: 'Delivered', at: day(1), words: null }, { id: 'd', type: 'reminder', channel: 'call', status: 'unreached', label: "Couldn't reach", at: day(3), words: 'Walk' },
+    ...Array.from({ length: 12 }, (_, i) => ({ id: `x${i}`, type: 'reminder', channel: 'text', status: 'sent', label: 'Sent', at: day(5 + i), words: `Old ${i}` }))];
+  const els = actPage({ entries, summary: { sent: 15, delivered: 4, read: 1, answered: 1, missed: 1 } }); await new Promise((r) => setTimeout(r, 30));
+  const cards = els.actSummary.children.map((c) => c.text().replace(/\s+/g, ' ').trim()); assert.deepEqual(cards, ['15 Sent', '4 Delivered', '1 Read', '1 Answered', '1 Missed']);
+  const list = () => els.actList.children.map((c) => c.text().replace(/\s+/g, ' ').trim());
+  const first = list(); assert.equal(first[0], 'Today'); assert.match(first[1], /Take your tablets.*Voice note.*Read/); assert.match(first[2], /Welfare check.*Call.*Answered/); assert.ok(first.includes('Yesterday')); assert.ok(first.includes('Earlier'));
+  assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 8, 'eight rows a page'); assert.equal(els.actPager.hidden, false); assert.match(els.actPage.textContent, /Page 1 of 2/); assert.equal(els.actNewer.disabled, true);
+  els.actOlder.handlers.click(); assert.match(els.actPage.textContent, /Page 2 of 2/); assert.equal(els.actOlder.disabled, true); assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 8, 'the other eight');
+  const welfare = els.actFilters.children.find((b) => b.textContent === 'Welfare'); welfare.handlers.click();
+  assert.deepEqual(list().map((t) => t.replace(/\s+/g, ' ')).filter((t) => /Welfare check/.test(t)).length, 1); assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 1); assert.equal(els.actPager.hidden, true);
+  const msg = els.actFilters.children.find((b) => b.textContent === 'Messages'); msg.handlers.click(); assert.match(list().join('|'), /Message.*Text.*Delivered/);
+  els.actFilters.children.find((b) => b.textContent === 'Reminders').handlers.click(); assert.ok(list().every((t) => !/Welfare check|Message/.test(t)));
+  assert.equal(els.actFilters.children.length, 4); assert.ok(els.actFilters.children.some((b) => /chip on/.test(b.className)));
+});
+
+test('picker: a reminder\'s own Call / Text / Voice note beats the person-wide switch; no pick keeps the old default; a bad pick is refused', async () => {
+  voiceReset(); const t = remindProfile({ delivery: 'voice' });
+  const r1 = addRem(t.id, 'pick text', 3000).r; r1.deliver = 'text'; care.tick(Date.now() + 5000); await settle(); const m1 = sent(); assert.equal(m1.length, 1); assert.equal(m1[0].type, 'text', 'text pick beats the voice default');
+  clearCalls(); const v = remindProfile({ delivery: 'text' }); const r2 = addRem(v.id, 'pick voice', 3000).r; r2.deliver = 'voice'; care.tick(Date.now() + 5000); await settle(); assert.equal(sent()[0].type, 'audio', 'voice pick beats the text default');
+  clearCalls(); const d = remindProfile({ delivery: 'text' }); addRem(d.id, 'no pick', 3000); care.tick(Date.now() + 5000); await settle(); assert.equal(sent()[0].type, 'text', 'no pick: the old default');
+  assert.throws(() => care.addReminder(d.id, { task: 'x', dueAt: Date.now() + 9000, repeat: 'none', deliver: 'fax' }), /call, text or voice/); assert.equal(care.addReminder(d.id, { task: 'ok', dueAt: Date.now() + 9000, repeat: 'none', deliver: 'call' }).deliver, 'call');
+  assert.equal(care.view(d.id).reminders.find((r) => r.task === 'ok').deliver, 'call', 'the page can show the pick'); clearCalls();
+});
+
+test('picker: a reminder set to CALL places the call when due (same call, same limits); if it cannot be placed it says Not sent and never claims a call', async () => {
+  reminderReset(); const { id, phone } = inWindow(); const r = addRem(id, 'by call', 3000).r; r.deliver = 'call';
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    care.tick(Date.now() + 5000); await waitFor(() => callPosts().some((b) => b.action === 'connect')); assert.equal(callPosts().find((b) => b.action === 'connect').to, phone);
+    await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await waitFor(() => rem(id).last); await sleepMs(100);
+  });
+  assert.equal(sent().length, 0); assert.equal(rem(id).last.state, 'unanswered'); assert.equal(rem(id).dueAt, null); assert.equal(wa.activityOf(id).entries.find((e) => e.words === 'by call').channel, 'call');
+  // it cannot be placed (Meta refuses): Not sent, no call claimed
+  clearCalls(); callFail = { connect: { code: 138006, message: 'No approved call permission' } }; const b = inWindow(); const rb = addRem(b.id, 'refused call', 3000).r; rb.deliver = 'call'; wa.deps.testCooldownMs = 0;
+  care.tick(Date.now() + 5000); await waitFor(() => care.get(b.id).reminders[0].last); callFail = null; const last = care.get(b.id).reminders[0].last;
+  assert.equal(last.state, 'wa_failed'); assert.equal(last.reason, 'call_not_placed'); const e = wa.activityOf(b.id).entries.find((x) => x.words === 'refused call'); assert.deepEqual([e.status, e.label, e.channel], ['failed', 'Not sent', 'call']);
+  assert.equal(sent().length, 0); clearCalls();
+});
+
+test('picker: a call chosen while calls are PAUSED is not placed: inside the window it goes as a message and says so; outside the window nothing goes and the entry says Paused; a call is never claimed in the list', async () => {
+  reminderReset(); const keep = wa.deps.callOut;
+  const fill = async (pid) => { wa.deps.callOut = async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; }; try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 5; i++) { await wa.placeTestCall(pid); await sleepMs(60); } }); } finally { wa.deps.callOut = keep; } clearCalls(); };
+  const w = inWindow(); await fill(w.id); const rw = addRem(w.id, 'paused in window', 3000).r; rw.deliver = 'call'; care.tick(Date.now() + 5000); await settle();
+  assert.equal(callPosts().length, 0, 'no call'); assert.equal(sent().length, 1); const ew = wa.activityOf(w.id).entries.find((e) => e.words === 'paused in window'); assert.ok(['text', 'voice'].includes(ew.channel), 'it went as a message, so it is not shown as a call'); assert.match(ew.note, /Calls were paused, so it went as a message/); assert.ok(['sent', 'delivered', 'read'].includes(ew.status));
+  clearCalls(); const o = outside(); await fill(o.id); const ro = addRem(o.id, 'paused outside', 3000).r; ro.deliver = 'call'; care.tick(Date.now() + 5000); await settle();
+  assert.equal(callPosts().length + sent().length, 0, 'nothing rang and nothing was sent'); const eo = wa.activityOf(o.id).entries.find((e) => e.words === 'paused outside'); assert.deepEqual([eo.status, eo.label], ['paused', 'Paused']);
+  const wp = care.get(o.id).notifications.length; await assert.rejects(wa.placeWelfare(o.id, 'call'), (e) => { assert.equal(e.status, 429); return true; }); assert.ok(care.get(o.id).notifications.length > wp, 'a Paused welfare entry is recorded'); assert.ok(wa.activityOf(o.id).entries.some((e) => e.type === 'welfare' && e.status === 'paused'));
+});
+
+test('picker: the welfare check as Call, Text or Voice note; the message as Call, Text or Voice note (a call is the same flow with the same limits; text and voice send the same words as before)', async () => {
+  reminderReset(); const { id, phone } = inWindow(); wa.deps.testCooldownMs = 0;
+  assert.deepEqual(await wa.placeWelfare(id, 'text'), { placed: false, sent: true, via: 'text' }); const t1 = sent()[0]; assert.equal(t1.type, 'text'); assert.equal(t1.text.body, 'This is Maya. Your family asked me to check in on you. How are you today?', 'from Maya, no family prefix');
+  shift(id, 60000); assert.deepEqual(await wa.placeWelfare(id, 'voice'), { placed: false, sent: true, via: 'voice' }); assert.equal(sent()[1].type, 'audio'); assert.ok(spoken.includes('This is Maya. Your family asked me to check in on you. How are you today?'));
+  assert.equal(wa.activityOf(id).entries.filter((e) => e.type === 'welfare').map((e) => e.channel).sort().join(), 'text,voice'); await assert.rejects(wa.placeWelfare(id, 'fax'), /Choose a call, a text or a voice note/);
+  const o = outside(); await assert.rejects(wa.placeWelfare(o.id, 'text'), (e) => { assert.match(e.message, /24 hours|template|written/i); return true; });   // outside the window nothing is sent, with the reason
+  clearCalls(); const long = 'x'.repeat(81); await assert.rejects(wa.placeMessageCall(id, long), /up to 80 characters/); await assert.rejects(wa.placeMessageCall(id, '   '), /type a message/); assert.equal(callPosts().length, 0);
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    assert.deepEqual(await wa.placeMessageCall(id, 'Dinner is at six'), { placed: true }); const rr = care.get(id).reminders.find((r) => r.msg); assert.equal(rr.task, 'Dinner is at six');
+    assert.equal(wa.activityOf(id).entries.find((e) => e.words === 'Dinner is at six').type, 'message'); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await sleepMs(150);
+  });
+  assert.equal(wa.activityOf(id).entries.find((e) => e.words === 'Dinner is at six').channel, 'call'); clearCalls();
+});
+
+test('dashboard: no senior words in the list or the logs; the page file has the picker, the headings and the activity section', async () => {
+  const r = await runWelfare('spoke'); let json;
+  try { json = JSON.stringify(wa.activityOf(r.id)); assert.doesNotMatch(json + r.out, /Okay thanks|tablets|v=0|wacid/); assert.equal(wa.activityOf(r.id).entries.find((e) => e.type === 'welfare').words, null); assert.equal(wa.activityOf(r.id).entries.find((e) => e.type === 'welfare').label, 'Answered'); } finally { await r.dev.peer.close(); }
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
+  for (const id of ['actSummary', 'actFilters', 'actList', 'actPager', 'deliverPick', 'waWelfareVia']) assert.match(html, new RegExp(`id="${id}"`), id);
+  assert.match(html, /<h2>Activity<\/h2>/); assert.match(html, /data-kind="call">Call and say it</); assert.match(html, /<details class="log">/); for (const v of ['call', 'text', 'voice']) assert.match(html, new RegExp(`id="deliverPick"[\\s\\S]*?data-v="${v}"`));
 });

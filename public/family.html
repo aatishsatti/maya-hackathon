@@ -59,6 +59,13 @@
               <input id="at" type="datetime-local" required aria-label="When">
               <select id="repeat" aria-label="Repeat"><option value="none">Once</option><option value="daily">Every day</option><option value="weekly">Every week</option></select>
             </div>
+            <label class="wa-label" id="deliverLabel">Deliver this reminder as</label>
+            <div id="deliverPick" class="seg" role="radiogroup" aria-labelledby="deliverLabel" data-clearable="1">
+              <button type="button" role="radio" aria-checked="false" data-v="call">Call</button>
+              <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
+              <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
+            </div>
+            <p class="hint" id="deliverHint">Not chosen: Maya uses the setting below (a voice note or text). Tap a choice again to clear it.</p>
             <button class="btn primary" type="submit">Add reminder</button>
           </form>
           <div class="form-row">
@@ -91,6 +98,7 @@
             <div class="form-row">
               <button class="btn primary" type="submit" data-kind="text">Send as text</button>
               <button class="btn" type="submit" data-kind="voice">Send as voice note</button>
+              <button class="btn" type="submit" data-kind="call">Call and say it</button>
             </div>
             <button id="waInvite" class="btn primary" type="button" hidden>Send a standard invitation to reply</button>
           </form>
@@ -110,7 +118,12 @@
             <p class="hint" id="waCap" role="status" aria-live="polite"></p>
             <p class="hint" id="waTestLine" role="status" aria-live="polite"></p>
             <h3 class="wa-sub">Check in with them (test)</h3>
-            <p class="hint">Rings their WhatsApp once. Maya says it is a welfare check, asks how they are and talks with them. No reminder is used. Needs their call permission.</p>
+            <p class="hint">Maya says it is a welfare check and asks how they are. As a call she then talks with them (needs their call permission); as a text or a voice note she sends the same short words, only while they have written in the last 24 hours. No reminder is used.</p>
+            <div id="waWelfareVia" class="seg" role="radiogroup" aria-label="Check in by">
+              <button type="button" role="radio" aria-checked="true" data-v="call">Call</button>
+              <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
+              <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
+            </div>
             <div class="wa-actions"><button id="waWelfareCall" class="btn primary" type="button">Check in with them now (test)</button></div>
             <h3 class="wa-sub">Ring test with one fixed sentence</h3>
             <p class="hint">Rings once, Maya says one fixed sentence and hangs up. No reminder is used.</p>
@@ -119,10 +132,24 @@
           <p class="hint" id="waNote" hidden>Maya does not call on her own. The test button above is the only call she places. Words are never stored here.</p>
         </section>
 
-        <section>
-          <div class="sec-head"><h2>Notifications</h2></div>
-          <div id="notifs" class="stack"></div>
+        <section class="panel" id="activityPanel">
+          <div class="sec-head"><h2>Activity</h2><span class="sec-sub">Reminders, check-ins and messages, last 30 days</span></div>
+          <div id="actSummary" class="act-cards" aria-label="Summary"></div>
+          <div id="actFilters" class="act-filters" role="group" aria-label="Show"></div>
+          <div id="actList" class="act-list"></div>
+          <div id="actPager" class="act-pager" hidden>
+            <button id="actNewer" class="btn" type="button">Newer</button>
+            <span id="actPage" class="sec-sub" aria-live="polite"></span>
+            <button id="actOlder" class="btn" type="button">Older</button>
+          </div>
         </section>
+
+        <div class="log-wrap">
+          <details class="log">
+            <summary>Notification log</summary>
+            <div id="notifs" class="stack"></div>
+          </details>
+        </div>
       </div>
     </div>
   </div>

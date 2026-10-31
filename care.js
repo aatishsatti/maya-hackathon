@@ -279,6 +279,7 @@ function advance(p, n, status) {
 }
 // Exactly one vocabulary, shared with the dashboard (and later WhatsApp).
 function statusLabel(n) {
+  if (n.paused) return 'Paused';   // a welfare check that was asked for while calls were paused and could not be sent another way
   if (n.calling) return 'Calling now';   // a welfare check call (existing labels only)
   if (n.unreached) return "Couldn't reach senior";
   if (n.status === 'replied') return 'Replied';
@@ -853,7 +854,8 @@ function appFacts(id, now = Date.now(), { family = true } = {}) {
 
 // ---------------------------------------------------------------- reminders (information only, as the family wrote them)
 const PERIOD = { daily: 24 * 60 * MIN, weekly: 7 * 24 * 60 * MIN };
-function addReminder(id, { task, dueAt, repeat }) {
+const DELIVER = ['call', 'text', 'voice'];   // the per-reminder picker; none = the old default (voice or text per person)
+function addReminder(id, { task, dueAt, repeat, deliver }) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   task = clip(task, 80);
@@ -862,7 +864,8 @@ function addReminder(id, { task, dueAt, repeat }) {
   if (!Number.isFinite(dueAt) || dueAt < Date.now() - 60000) throw Object.assign(new Error('Please choose a time that has not passed.'), { status: 400 });
   repeat = repeat || 'none';
   if (repeat !== 'none' && !PERIOD[repeat]) throw Object.assign(new Error('Repeat must be none, daily or weekly.'), { status: 400 });
-  const r = { id: uid(), task, dueAt, repeat, active: null, last: null, created: Date.now() };
+  if (deliver != null && deliver !== '' && !DELIVER.includes(deliver)) throw Object.assign(new Error('Delivery must be call, text or voice note.'), { status: 400 });
+  const r = { id: uid(), task, dueAt, repeat, active: null, last: null, created: Date.now(), ...(deliver ? { deliver } : {}) };
   p.reminders.push(r);
   save(id);
   return r;
@@ -881,7 +884,7 @@ function finishOccurrence(p, rid, state, extra = {}) {
   const r = p.reminders.find((x) => x.id === rid);
   if (!r) return;
   const act = r.active || { dueAt: r.dueAt, attempts: 0 };
-  const wa = act.channel === 'whatsapp' ? { channel: 'whatsapp', via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged) } : {};
+  const wa = act.channel === 'whatsapp' ? { channel: 'whatsapp', via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged), ...(act.pausedBy ? { pausedBy: act.pausedBy } : {}) } : {};
   r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...extra };
   r.active = null;
   if (state === 'done') trendEvent(p.id, { kind: 'reminder', acked: true });                          // answered
@@ -919,7 +922,7 @@ function reminderNoAck(id, rid) {
 // The occurrence uses the same states and labels as the app's own ring: calling (Calling now) -> answered (Picked up; set by claim() when the Call starts) -> done (the
 // acknowledgement, call.js) | no_reply (the call ended without one) ; or unanswered (Couldn't reach: nobody picked up / they rejected it). A pretend ring (an outreach in state 'ringing',
 // no timer, nothing sent to the app) lets the Call claim it exactly as it claims an app ring, so the greeting IS the reminder and the acknowledgement rule is the one already tested.
-function reminderFor(id, { rid, task }) {
+function reminderFor(id, { rid, task, message }) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   let r;
@@ -928,12 +931,13 @@ function reminderFor(id, { rid, task }) {
     if (!r) throw Object.assign(new Error('That reminder no longer exists.'), { status: 404 });
   } else {
     r = addReminder(id, { task, dueAt: Date.now(), repeat: 'none' });   // typed for this test only; it keeps its result on the dashboard
+    if (message) r.msg = true;   // a family MESSAGE delivered by a call: shown under Messages, not Reminders
   }
   if (r.active) throw Object.assign(new Error('That reminder is already being delivered.'), { status: 409 });
   return { p, r };
 }
 function reminderCallStart(id, spec) {
-  const { p, r } = reminderFor(id, spec); const now = Date.now(), dueAt = r.dueAt || now;
+  const { p, r } = reminderFor(id, spec); const now = Date.now(), dueAt = spec.dueAt || r.dueAt || now;
   const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: 'Maya is calling with a reminder from your family.', ref: null });
   const o = { id: uid(), profileId: id, kind: 'reminder', reminderId: r.id, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
   n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
@@ -951,11 +955,19 @@ function welfareCallStart(id) {
   if (activeByProfile.get(id)) throw Object.assign(new Error('Maya is already trying to reach them.'), { status: 409 });
   const now = Date.now();
   const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: 'Maya called on WhatsApp to check how they are (welfare check).', ref: null });
-  n.channel = 'whatsapp'; n.calling = true;
+  n.channel = 'whatsapp'; n.via = 'call'; n.calling = true;
   const o = { id: uid(), profileId: id, kind: 'welfare', reminderId: null, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
   n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
   save(id); pushFamily('refresh', { id });
   return { nid: n.id, outreachId: o.id, startedAt: now };
+}
+// A welfare check asked for by CALL while calls were paused (2 unanswered in a row, or 5 answered today) and nothing could be sent instead: one entry that says so (no words).
+function welfarePaused(id, reason) {
+  const p = get(id);
+  if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: 'A welfare check call was not placed: calls are paused.', ref: null });
+  n.channel = 'whatsapp'; n.via = 'call'; n.paused = reason === 'cap' ? 'cap' : 'misses'; save(id); pushFamily('refresh', { id });
+  return n;
 }
 // The call is over (whatever way). Returns 'unreached' | 'spoke' | 'silent' | null (unknown entry). Safe to call twice.
 function welfareCallEnded(id, nid, startedAt) {
@@ -988,6 +1000,7 @@ function reminderViaMessage(id, spec) {
   if (!reminderSender) throw Object.assign(new Error('WhatsApp is not set up on this server.'), { status: 503 });
   const { p, r } = reminderFor(id, spec);
   fireReminderWhatsApp(p, r, Date.now());
+  if (spec.pausedBy && r.active) { r.active.pausedBy = spec.pausedBy; save(id); }   // so the list can say the call was paused (and show Paused if nothing could be sent)
   return r.id;
 }
 
@@ -1000,6 +1013,14 @@ function fireReminder(p, r, now) {
     occ.notifId = n.id; advance(p, n, 'delivered');
     r.active = occ;
     if (!live.deliverReminder(r)) { r.active = null; return false; }
+  } else if (r.deliver === 'call' && reminderSender && reminderSender.placeCall && reminderSender.channelFor(p.id) === 'whatsapp') {
+    // The family chose a CALL for this reminder: the same call as the test button, with every limit. If it cannot be placed the occurrence says Not sent (never a call that did not happen).
+    const rid = r.id, id = p.id, dueAt = r.dueAt;
+    advanceDue(r, now); save(id);
+    Promise.resolve().then(() => reminderSender.placeCall(id, rid, dueAt)).then(() => pushFamily('refresh', { id }), (e) => {
+      const q = get(id); if (q) { finishOccurrence(q, rid, 'wa_failed', { reason: 'call_not_placed', error: { title: String((e && e.message) || 'error').slice(0, 120) } }); waLog({ event: 'not sent', reason: 'call_not_placed' }); pushFamily('refresh', { id }); }
+    });
+    return true;
   } else if (reminderSender && reminderSender.channelFor(p.id) === 'whatsapp') {
     return fireReminderWhatsApp(p, r, now);
   } else {
@@ -1029,7 +1050,7 @@ function fireReminderWhatsApp(p, r, now) {
   advanceDue(r, now);
   flushOne(p.id);   // on disk BEFORE the network call: a restart in the middle can never send this reminder twice
   const id = p.id, rid = r.id, key = occ.key, task = r.task;
-  Promise.resolve().then(() => reminderSender.send(id, { task, nudge: false }))
+  Promise.resolve().then(() => reminderSender.send(id, { task, nudge: false, deliver: r.deliver }))
     .then((res) => reminderSent(id, rid, key, res), (e) => reminderSent(id, rid, key, { ok: false, reason: 'error', error: { title: String((e && e.message) || 'error').slice(0, 120) } }));
   return true;
 }
@@ -1159,8 +1180,8 @@ function waTick(p, r, now) {
         finishOccurrence(p, r.id, 'wa_missed', {}); waLog({ event: 'missed' }); escalate(p, r, 'missed', now); pushFamily('refresh', { id: p.id });
       } else if (!a.nudged && now >= a.nudgeAt && !quiet) {
         a.nudged = true; a.attempts = 2; save(p.id);
-        const id = p.id, task = r.task;
-        Promise.resolve().then(() => reminderSender.send(id, { task, nudge: true })).then((res) => waLog({ event: res && res.ok && res.wamid ? 'nudge sent' : 'nudge not sent', reason: res && res.reason ? res.reason : undefined }), () => waLog({ event: 'nudge not sent', reason: 'error' }));
+        const id = p.id, task = r.task, deliver = r.deliver;
+        Promise.resolve().then(() => reminderSender.send(id, { task, nudge: true, deliver })).then((res) => waLog({ event: res && res.ok && res.wamid ? 'nudge sent' : 'nudge not sent', reason: res && res.reason ? res.reason : undefined }), () => waLog({ event: 'nudge not sent', reason: 'error' }));
       }
     }
   }
@@ -1287,7 +1308,7 @@ function view(id) {
   if (!p) return null;
   const seen = lastSeen(p);
   const fl = (f) => ({ ...f, name: nameOf(id), timeline: timeline(p, f) });
-  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat,
+  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, msg: Boolean(r.msg),
     active: r.active && { ...r.active, label: occLabel(r.active) },
     last: r.last && { ...r.last, label: occLabel(r.last) } });
   return {
@@ -1311,6 +1332,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, welfareCallStart, welfareCallEnded, reminderCallStart, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, welfarePaused, welfareCallStart, welfareCallEnded, reminderCallStart, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };
