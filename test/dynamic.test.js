@@ -149,7 +149,7 @@ test('Both + Call: the app rings if it is open; otherwise where they were last a
     // app closed, a phone registered for the push (so both are possible), WhatsApp active more recently -> WhatsApp first
     push.deps.configured = () => true; const pushes = []; push.deps.send = async (d, payload) => { pushes.push(payload); return { ok: true }; };
     quiet(); const b = linked(true); care.registerDevice(b.id, { platform: 'ios', token: 'T'.repeat(64) }); care.get(b.id).lastActivity.app = Date.now() - 3 * 3600000; care.get(b.id).lastActivity.whatsapp = Date.now() - 60000;
-    add(b.id, { deliver: 'call', channel: 'both' }); rang = 0; await fire(); assert.equal(rang, 1, 'WhatsApp was the more recent door: it rings first'); assert.equal(pushes.length, 0, 'and the phone is not also rung');
+    add(b.id, { deliver: 'call', channel: 'both' }); rang = 0; let pushesWhileWA = null; const inner = wa.deps.callOut; wa.deps.callOut = async (o) => { pushesWhileWA = pushes.length; return inner(o); }; await fire(); wa.deps.callOut = inner; assert.equal(rang, 1, 'WhatsApp was the more recent door: it rings first'); assert.equal(pushesWhileWA, 0, 'and the phone is not also rung while WhatsApp rings');
     quiet(); const c = linked(true); care.registerDevice(c.id, { platform: 'ios', token: 'U'.repeat(64) }); care.get(c.id).lastActivity.app = Date.now() - 60000; care.get(c.id).lastActivity.whatsapp = Date.now() - 3 * 3600000;
     add(c.id, { deliver: 'call', channel: 'both' }); rang = 0; pushes.length = 0; await fire(); assert.equal(pushes.length, 1, 'the app was the more recent door: the phone is rung'); assert.equal(rang, 0, 'and WhatsApp does not also ring');
     quiet(); const d = linked(true); care.registerDevice(d.id, { platform: 'ios', token: 'V'.repeat(64) }); care.get(d.id).lastActivity.whatsapp = Date.now() - 1000; wa.deps.callOut = async () => { throw Object.assign(new Error('No approved call permission'), { code: 138006, status: 502 }); };
@@ -217,4 +217,66 @@ test('welfare options: Every hour, Every day, Every 3 days, Every week and Custo
 test('the welfare options are on the web page and in the app: no disabled "not available yet" row, a number-and-unit custom choice', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); for (const v of ['60', '1440', '4320', '10080', 'custom']) assert.match(html, new RegExp(`<option value="${v}">`)); assert.match(html, /id="schedUnit"/); assert.doesNotMatch(html, /not available yet/);
   const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_welfare.dart'), 'utf8'); for (const t of ['Every hour', 'Every day', 'Every 3 days', 'Every week', 'Custom']) assert.match(dart, new RegExp(t)); assert.doesNotMatch(dart, /not available yet/);
+});
+
+// ---------------------------------------------------------------- follow-up: Both + Call when the first ring is NOT ANSWERED
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+test('Both + Call, the app rings first and is NOT ANSWERED: WhatsApp is tried once, only after that ring has ended; if nobody answers there either it is over (no third ring)', async () => {
+  quiet(); const keepRing = care.cfg.ringMs; care.cfg.ringMs = 40; const keep = wa.deps.callOut; let rang = 0, appEndedFirst = null;
+  const { id } = linked(true); const app = openApp(id);
+  wa.deps.callOut = async (o) => { rang += 1; appEndedFirst = app.ev.some(([k]) => k === 'incomingEnd'); await o.place({ sdp_type: 'offer', sdp: 'x' }); return 'no answer'; };
+  try { add(id, { deliver: 'call', channel: 'both' }); care.tick(Date.now() + 5000); await wait(300); await settleT(); } finally { care.cfg.ringMs = keepRing; wa.deps.callOut = keep; app.detach(); }
+  assert.equal(app.ev.filter(([k]) => k === 'incoming').length, 1, 'the app rang once: it was not retried, WhatsApp had the next turn'); assert.equal(rang, 1, 'WhatsApp rang once'); assert.equal(appEndedFirst, true, 'the app ring had ENDED before WhatsApp rang: never two rings at once');
+  assert.equal(calls().filter((c) => c.action === 'connect').length, 1); const r = rem(id); assert.equal(r.active, null); assert.equal(r.last.state, 'unanswered'); assert.equal(r.last.alsoTried.channel, 'app');
+  assert.match(acts(id).find((e) => e.status !== 'scheduled').note, /The Maya app rang first and was not answered, so WhatsApp was tried/);
+});
+
+test('Both + Call, WhatsApp rings first (more recent) and is NOT ANSWERED: the app gets one ring; unanswered there too, it is over', async () => {
+  quiet(); const keepRing = care.cfg.ringMs; care.cfg.ringMs = 40; const keep = wa.deps.callOut; let rang = 0; push.deps.configured = () => true; const pushes = []; push.deps.send = async (d, payload) => { pushes.push(payload); return { ok: true }; };
+  const { id } = linked(true); care.registerDevice(id, { platform: 'ios', token: 'W'.repeat(64) }); care.get(id).lastActivity.app = Date.now() - 3 * 3600000; care.get(id).lastActivity.whatsapp = Date.now() - 1000;
+  wa.deps.callOut = async (o) => { rang += 1; await o.place({ sdp_type: 'offer', sdp: 'x' }); return 'no answer'; };
+  try { add(id, { deliver: 'call', channel: 'both' }); care.tick(Date.now() + 5000); await wait(300); await settleT(); } finally { care.cfg.ringMs = keepRing; wa.deps.callOut = keep; push.deps.configured = () => false; }
+  assert.equal(rang, 1, 'WhatsApp rang once, first'); assert.equal(pushes.filter((p) => p.type === 'incoming').length, 1, 'then the phone was rung once'); const r = rem(id);
+  assert.equal(r.active, null); assert.equal(r.last.state, 'unanswered'); assert.equal(r.last.alsoTried.channel, 'whatsapp'); assert.match(acts(id).find((e) => e.status !== 'scheduled').note, /WhatsApp rang first and was not answered, so the Maya app was tried/);
+});
+
+test('Both + Call, answered on the first platform: the other is never rung', async () => {
+  quiet(); const keep = wa.deps.callOut; let rang = 0; wa.deps.callOut = async (o) => { rang += 1; await o.place({ sdp_type: 'offer', sdp: 'x' }); return 'completed'; };
+  const { id } = linked(true); const app = openApp(id);
+  try { add(id, { deliver: 'call', channel: 'both' }); care.tick(Date.now() + 5000); await settle(); const o = [...care.outreaches.values()].find((x) => x.profileId === id); assert.ok(o && o.alt, 'WhatsApp is the standby'); assert.ok(care.claim(id, o.id), 'they pick up the app ring'); await wait(80); } finally { wa.deps.callOut = keep; app.detach(); }
+  assert.equal(rang, 0, 'answered: WhatsApp never rang');
+});
+
+// ---------------------------------------------------------------- follow-up: the template name, a wrong or missing one
+test('a missing or wrong template name falls back to the Maya app cleanly: Activity says why, nothing crashes, no silent "Not sent"', async () => {
+  const keepName = process.env.WHATSAPP_TEMPLATE_NAME, keepFetch = wa.deps.fetch;
+  try {
+    // 1. nothing set: not guessed (no hello_world), the app covers it, and the reason names the setting to check
+    delete process.env.WHATSAPP_TEMPLATE_NAME; quiet(); const a = linked(false); const appA = openApp(a.id); add(a.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); appA.detach();
+    assert.equal(sent().length, 0, 'no template was sent'); assert.ok(appA.ev.some(([k, d]) => k === 'notice' && /take your tablets/.test(d.text)), 'the app delivered the reminder'); assert.equal(cur(a.id).fellBack.reason, 'template_not_configured');
+    assert.match(acts(a.id).find((e) => e.where === 'app').note, /no approved invitation template is set up on the server \(WHATSAPP_TEMPLATE_NAME\).*Maya app instead/);
+    // 2. a name WhatsApp does not know (132001): the app covers it, the reason says the template was rejected
+    process.env.WHATSAPP_TEMPLATE_NAME = 'no_such_template'; wa.deps.fetch = async (url, opts = {}) => { const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : null; graphCalls.push({ url, body }); if (body && body.type === 'template') return { ok: false, status: 400, json: async () => ({ error: { code: 132001, message: 'Template name does not exist in the translation' } }) }; return { ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.x' }] }) }; };
+    quiet(); const b = linked(false); const appB = openApp(b.id); add(b.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); appB.detach();
+    assert.ok(appB.ev.some(([k, d]) => k === 'notice' && /take your tablets/.test(d.text))); assert.equal(cur(b.id).fellBack.reason, 'template_rejected'); assert.match(acts(b.id).find((e) => e.where === 'app').note, /rejected the invitation template \(its name or language is not an approved one\)/);
+    assert.equal(rem(b.id).active.state === 'wa_invited', false, 'it is not left waiting for a reply to an invitation that never went');
+    // 3. Meta is down for the invitation (any other error): still the app
+    process.env.WHATSAPP_TEMPLATE_NAME = 'maya_checkin'; wa.deps.fetch = async (url, opts = {}) => { graphCalls.push({ url, body: null }); return { ok: false, status: 500, json: async () => ({ error: { code: 1, message: 'Server error' } }) }; };
+    quiet(); const c = linked(false); const appC = openApp(c.id); add(c.id, { deliver: 'voice', channel: 'whatsapp' }); await fire(); appC.detach(); assert.equal(cur(c.id).fellBack.reason, 'invite_failed'); assert.ok(chat.thread(c.id).some((m) => m.kind === 'voice'), 'the voice note reached the app chat');
+  } finally { wa.deps.fetch = keepFetch; if (keepName === undefined) delete process.env.WHATSAPP_TEMPLATE_NAME; else process.env.WHATSAPP_TEMPLATE_NAME = keepName; }
+});
+
+// ---------------------------------------------------------------- follow-up: the IP lookup, in plain words and switchable
+test('the IP-to-time-zone lookup can be switched off by config (nothing is sent to the service); device, phone-country and the dashboard still work; the privacy page says it in plain words', async () => {
+  const keep = process.env.MAYA_TZ_IP_LOOKUP; let asked = 0; tz.deps.geoTz = async () => { asked += 1; return 'America/Chicago'; };
+  try {
+    process.env.MAYA_TZ_IP_LOOKUP = 'off'; quiet(); const a = person(); assert.equal(await tz.learnFromIp(care, a, '8.8.8.8'), false); assert.equal(asked, 0, 'switched off: the address is never sent anywhere'); assert.equal(care.get(a).tz, null);
+    care.touch(a, 'app', Date.now(), 'Europe/Paris'); assert.equal(care.get(a).tz, 'Europe/Paris', 'the device still works');
+    const lk = linked(false, '447700'); assert.equal(care.get(lk.id).tz, 'Europe/London', 'the phone number\'s country still works'); const m = person(); assert.equal(care.setTimezone(m, 'Asia/Tokyo'), true, 'and so does the dashboard');
+    process.env.MAYA_TZ_IP_LOOKUP = 'on'; quiet(); const b = person(); assert.equal(await tz.learnFromIp(care, b, '8.8.8.8'), true); assert.equal(asked, 1, 'on: exactly one lookup');
+    care.get(b).tz = null; assert.equal(await tz.learnFromIp(care, b, '8.8.4.4'), false, 'and the same person is not looked up again within hours'); assert.equal(asked, 1);
+  } finally { if (keep === undefined) delete process.env.MAYA_TZ_IP_LOOKUP; else process.env.MAYA_TZ_IP_LOOKUP = keep; }
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'privacy.html'), 'utf8'); const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  for (const re of [/Time zone/, /one-time lookup of where their internet connection is/, /only while the time zone is still unknown/, /is not kept by Maya/, /public location service/, /can be switched off by whoever runs the server/, /country code of their linked WhatsApp number/, /Only if none of these works does the family dashboard ask/]) assert.match(text, re);
+  assert.match(text, /approved invitation message that asks them to reply/); assert.doesNotMatch(text, /whose text is the reminder/);
 });

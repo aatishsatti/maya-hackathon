@@ -21,6 +21,8 @@ function fromPhone(phone) {
 }
 
 // The two automatic GUESSES (the connection, the phone number's country) can be switched off with MAYA_TZ_GUESS=off; they are off by default inside the test runner, which links made-up numbers, unless MAYA_TZ_GUESS=on.
+// MAYA_TZ_IP_LOOKUP=off switches off ONLY the connection lookup (nothing is then sent to the lookup service); the device, the phone number's country and the dashboard still work.
+const ipLookupOn = () => process.env.MAYA_TZ_IP_LOOKUP !== 'off';
 const guessing = () => (process.env.MAYA_TZ_GUESS === 'on') || (process.env.MAYA_TZ_GUESS !== 'off' && !process.env.NODE_TEST_CONTEXT);
 const isPrivate = (ip) => !ip || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fc|fd|fe80)/i.test(ip);
 const deps = {
@@ -43,7 +45,7 @@ function setZone(p, tz, source, save) {
 }
 async function learnFromIp(care, id, ip) {
   const p = care.get(id);
-  if (!p || p.tz || !guessing() || isPrivate(ip)) return false;
+  if (!p || p.tz || !guessing() || !ipLookupOn() || isPrivate(ip)) return false;
   const now = Date.now(); if (now - (tried.get(id) || 0) < 6 * 3600000) return false; tried.set(id, now);
   let tz = null; try { tz = await deps.geoTz(ip); } catch { tz = null; }
   const q = care.get(id);

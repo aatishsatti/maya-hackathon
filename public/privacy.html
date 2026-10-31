@@ -72,9 +72,16 @@
 
   <h2>Reminders</h2>
   <ul>
-    <li>A reminder is sent on WhatsApp as a text or a voice note in Maya's voice. When WhatsApp's 24-hour window is closed it goes as an approved template message whose text is the reminder. The reminder text goes to Meta for that, and to ElevenLabs when it is sent as a voice note.</li>
+    <li>A reminder is sent on WhatsApp as a text or a voice note in Maya's voice. When WhatsApp's 24-hour window is closed, Maya first sends a standard approved invitation message that asks them to reply (it holds none of the reminder's words); the reminder follows their reply, and if they do not reply soon it goes to the Maya app instead. The reminder text goes to Meta for that, and to ElevenLabs when it is sent as a voice note.</li>
     <li>The family dashboard shows what happened to each reminder: scheduled, sent, delivered, read, answered or missed. A missed reminder is shown as missed, never hidden.</li>
     <li>Maya is a companion, not medical care. She gives no doses and no medical advice. A reminder is only a reminder: it can fail or arrive late, so never rely on Maya for medicine or anything time-critical.</li>
+  </ul>
+
+  <h2>Time zone</h2>
+  <ul>
+    <li>Maya needs to know the time where the person is, so that a reminder "at 8" is at their 8 and nothing is sent at night. She finds it by herself, in this order: the phone or browser tells her its own time zone; failing that, a one-time lookup of where their internet connection is; failing that, the country code of their linked WhatsApp number (only for countries with a single time zone). Only if none of these works does the family dashboard ask for it.</li>
+    <li>The internet-connection lookup happens once, and only while the time zone is still unknown. Their internet address is sent to a public location service (ipapi.co) for that one lookup and is not kept by Maya: only the resulting time zone name is saved. The service sees the address, as any website you visit does.</li>
+    <li>This lookup can be switched off by whoever runs the server. Then the phone's own time zone, the phone number's country and the dashboard are used instead.</li>
   </ul>
 
   <h2>Contact</h2>

@@ -406,12 +406,28 @@ function ring(o) {
 function ringTimeout(o) {
   if (outreaches.get(o.id) !== o) return;
   pushSenior(o.profileId, 'incomingEnd', { outreachId: o.id });
+  if (o.alt && o.kind === 'reminder') { bothSecond(o); return; }   // 'Both' + Call: the app rang first and nobody answered: WhatsApp gets its one try, after this ring has ended (never two rings at once)
+  if (o.single) { exhausted(o); return; }   // the app was the SECOND platform: one ring, then it is over
   if (o.attempts < cfg.maxAttempts) {
     o.state = 'waiting';
     o.timer = setTimeout(() => ring(o), rand(cfg.retryMinMs, cfg.retryMaxMs));
     return;
   }
   exhausted(o);
+}
+
+// 'Both' + Call, the app rang first and was not answered: the SAME occurrence is handed to WhatsApp once (its own rules and limits apply). This ring is closed first, so two rings never overlap.
+// The family sees both tries in Activity ("The Maya app rang first and was not answered, so WhatsApp was tried").
+function bothSecond(o) {
+  const p = get(o.profileId), id = o.profileId, r = p && p.reminders.find((x) => x.id === o.reminderId), a = r && r.active;
+  if (!a || !reminderSender || !reminderSender.placeCall) { exhausted(o); return; }
+  const dueAt = a.dueAt, rid = r.id; o.alt = null;
+  o.notif.noReply = true; closeOutreach(o, 'missed'); r.active = null; save(id);
+  waLog({ event: 'both: app ring not answered', then: 'whatsapp' });
+  Promise.resolve().then(() => reminderSender.placeCall(id, rid, dueAt, undefined, { channel: 'app', result: 'unanswered' })).then(() => pushFamily('refresh', { id }), () => {
+    const q = get(id), rr = q && q.reminders.find((x) => x.id === rid);
+    if (rr && !rr.active) { rr.active = { dueAt, attempts: 1, where: 'app' }; finishOccurrence(q, rid, 'unanswered'); pushFamily('refresh', { id }); }   // WhatsApp could not ring either: the app's unanswered ring stands
+  });
 }
 
 function closeOutreach(o, state) {
@@ -982,7 +998,7 @@ function finishOccurrence(p, rid, state, extra = {}) {
   if (!r) return;
   const act = r.active || { dueAt: r.dueAt, attempts: 0 };
   const wa = act.channel === 'whatsapp' || act.channel === 'app' ? { channel: act.channel, ...(act.app ? { app: act.app } : {}), notifId: act.notifId || null, via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged), ...(act.pausedBy ? { pausedBy: act.pausedBy } : {}) } : {};
-  r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...(act.instead ? { instead: act.instead } : {}), ...(act.fellBack ? { fellBack: act.fellBack } : {}), ...extra };
+  r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...(act.instead ? { instead: act.instead } : {}), ...(act.fellBack ? { fellBack: act.fellBack } : {}), ...(act.alsoTried ? { alsoTried: act.alsoTried } : {}), ...extra };
   r.active = null;
   if (state === 'done') trendEvent(p.id, { kind: 'reminder', acked: true });                          // answered
   else if (state === 'no_reply' || state === 'unanswered' || state === 'wa_missed' || state === 'wa_failed') trendEvent(p.id, { kind: 'reminder', acked: false });   // missed (a decline is a choice, not counted)
@@ -1039,7 +1055,7 @@ function reminderCallStart(id, spec) {
   const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: ringText(p, r.id), ref: null });
   const o = { id: uid(), profileId: id, kind: 'reminder', reminderId: r.id, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
   n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
-  r.active = { dueAt, state: 'calling', attempts: 1, outreachId: o.id, notifId: n.id, ...(spec.instead ? { instead: spec.instead } : {}) };
+  r.active = { dueAt, state: 'calling', attempts: 1, outreachId: o.id, notifId: n.id, ...(spec.instead ? { instead: spec.instead } : {}), ...(spec.alsoTried ? { alsoTried: spec.alsoTried } : {}) };
   advanceDue(r, now);
   save(id); pushFamily('refresh', { id });
   return { rid: r.id, outreachId: o.id };
@@ -1094,6 +1110,10 @@ function reminderCallEnded(id, rid) {
   if (a.state === 'calling') {
     const o = a.outreachId && outreaches.get(a.outreachId); if (o) closeOutreach(o, 'missed');
     const n = p.notifications.find((x) => x.id === a.notifId); if (n) n.noReply = true;
+    if (effectiveChannel(p, r) === 'both' && !a.alsoTried && (appOpen(id) || pushReady(id))) {   // 'Both' + Call: WhatsApp rang first and was not answered: the app gets its one ring now (WhatsApp's call has ended)
+      const dueAt = a.dueAt; r.active = null; save(id); waLog({ event: 'both: whatsapp ring not answered', then: 'app' });
+      fireReminderApp(p, r, Date.now(), 'app', { dueAt, noWA: true, single: true, alsoTried: { channel: 'whatsapp', result: 'unanswered' } }); pushFamily('refresh', { id }); return 'unanswered';
+    }
     finishOccurrence(p, rid, 'unanswered'); pushFamily('refresh', { id }); return 'unanswered';
   }
   if (a.state === 'answered') { reminderNoAck(id, rid); return 'no_reply'; }
@@ -1182,10 +1202,12 @@ function fireReminderApp(p, r, now, chan, opts = {}) {
     // (3) otherwise by last activity: app open -> the app, else WhatsApp; and if the first pick cannot ring, the other one is tried. 'app' always rings the app, falling back to WhatsApp as before.
     const ringApp = () => {
       if (!appOpen(id) && !pushReady(id)) return false;   // open: it rings in the app; closed: a push rings the phone (a registered phone and the server's push keys)
-      const occ = { dueAt: dueAt0, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app', ...(opts.fellBack ? { fellBack: opts.fellBack } : {}) };
+      const occ = { dueAt: dueAt0, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app', ...(opts.fellBack ? { fellBack: opts.fellBack } : {}), ...(opts.alsoTried ? { alsoTried: opts.alsoTried } : {}) };
       r.active = occ;
       const o = startOutreach(id, { kind: 'reminder', reminderId: r.id });
       if (!o) { r.active = null; return false; }
+      if (opts.single) o.single = true;
+      else if (chan === 'both' && waOk && !opts.alsoTried && first === 'app') o.alt = 'whatsapp';   // unanswered: WhatsApp is tried once after this ring ends
       occ.outreachId = o.id; occ.notifId = o.notif.id;
       advanceDue(r, now); save(id); return true;
     };
@@ -1309,7 +1331,7 @@ function dispatchWA(p, r) {
 // ---- when WhatsApp cannot deliver: the app covers it, and the family SEES what happened (never a silent "Not sent" with nowhere else to go) ----
 // The occurrence on WhatsApp is closed as Not sent with its plain reason, then the SAME reminder (same delivery type) is delivered in the Maya app, which has none of WhatsApp's rules.
 // 'Both' already sent to the app at the same time, so nothing more is needed there. If the app cannot take it either (a call to a closed phone), that is told plainly too.
-const WA_WHY = { window_closed: "WhatsApp's 24 hour window was closed", no_reply_to_invitation: 'they did not reply to the invitation in time', invite_failed: "WhatsApp's invitation message could not be sent", daily_cap: "today's WhatsApp message limit was reached", not_linked: 'WhatsApp is not set up for this person',
+const WA_WHY = { window_closed: "WhatsApp's 24 hour window was closed", no_reply_to_invitation: 'they did not reply to the invitation in time', invite_failed: "WhatsApp's invitation message could not be sent", template_not_configured: 'no approved invitation template is set up on the server (WHATSAPP_TEMPLATE_NAME)', template_rejected: "WhatsApp rejected the invitation template (its name or language is not an approved one)", invite_limit: "today's limit of 2 invitations was reached", daily_cap: "today's WhatsApp message limit was reached", not_linked: 'WhatsApp is not set up for this person',
   not_configured: 'WhatsApp is not set up on this server', meta_error: 'WhatsApp refused it', voice_failed: 'the voice note could not be made or sent', call_not_placed: 'the WhatsApp call could not be placed', no_answer: 'WhatsApp did not answer', whatsapp_failed: 'WhatsApp reported that it failed', no_id: 'WhatsApp did not confirm it', error: 'a WhatsApp error' };
 const waWhy = (reason) => WA_WHY[reason] || 'WhatsApp could not deliver it';
 function failWA(p, r, reason, error, dueAt, { silent = false } = {}) {
@@ -1360,7 +1382,7 @@ function reminderSent(id, rid, key, res) {
       rr.active.state = 'wa_invited'; rr.active.inviteAt = Date.now(); rr.active.inviteExpireAt = Date.now() + cfg.waInviteWaitMs; save(id); pushFamily('refresh', { id }); waLog({ event: 'invitation sent' });
     }, (e) => {
       const q = get(id), rr = q && q.reminders.find((x) => x.id === rid);
-      if (rr && rr.active && rr.active.state === 'wa_invite_sending') failWA(q, rr, 'invite_failed', { title: String((e && e.message) || 'error').slice(0, 120) });
+      if (rr && rr.active && rr.active.state === 'wa_invite_sending') failWA(q, rr, (e && e.reason) || 'invite_failed', { title: String((e && e.message) || 'error').slice(0, 120), ...(e && e.code ? { code: e.code } : {}) });   // the app covers it; the reason is named
     });
     return true;
   }
