@@ -303,15 +303,16 @@
     finally { waBusy = false; $('waInvite').disabled = false; }
   }
   // "Call them now (test)": the server places ONE call and says a fixed sentence; this only shows what the server says really happened, polling its label for a minute.
-  const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', finished: 'answered, the call finished and Maya hung up', ended: 'ended', failed: 'failed (see the server log)' };
-  const TEST_DONE = ['rejected', 'no answer', 'completed', 'finished', 'ended', 'failed'];
+  const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', finished: 'answered, the call finished and Maya hung up', ended: 'ended', failed: 'failed (see the server log)', paused: "WhatsApp refused it (its call limit): nothing rang" };
+  const TEST_DONE = ['rejected', 'no answer', 'completed', 'finished', 'ended', 'failed', 'paused'];
   let waTesting = false;
   // The call limits, said exactly: which one is reached and when it clears. (Calls free up one at a time as each answered call turns 24 hours old.)
   function capText(c) {
     if (!c) return '';
-    if (c.blocked === 'cap') return `Calls are paused: ${c.answeredToday} of ${c.maxPerDay} answered calls used in the last 24 hours. The next call can be placed after ${t(c.clearsAt)}, when the oldest answered call is more than 24 hours old. Until then a reminder sent with this button goes as a WhatsApp message.`;
+    const m = c.meta ? `WhatsApp refused the last call at ${t(c.meta.at)} (error ${c.meta.code}): its limit on calls a business can start.${c.meta.note ? ` WhatsApp says: ${c.meta.note}.` : ''} Maya does not count that limit herself: she tries each call and WhatsApp decides when one is allowed again. ` : '';
+    if (c.blocked === 'meta') return `${m}Until then a reminder sent with this button goes as a WhatsApp message.`;
     if (c.blocked === 'misses') return `Calls are paused: the last ${c.maxMisses} calls to them were not answered. They start again when they write to Maya or call her. Until then a reminder sent with this button goes as a WhatsApp message.`;
-    return `Answered calls in the last 24 hours: ${c.answeredToday} of ${c.maxPerDay}. ${c.maxMisses} calls in a row that nobody answers pause calls (now ${c.misses} of ${c.maxMisses}).`;
+    return `${m}${c.maxMisses} calls in a row that nobody answers pause calls (now ${c.misses} of ${c.maxMisses}).`;
   }
   // The reminders you can choose for a test call. The list is only rebuilt when it really changed and never while the menu is open or has focus (a rebuild closed the menu and moved the choice).
   let remKey = '';

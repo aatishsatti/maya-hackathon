@@ -966,8 +966,15 @@ function welfarePaused(id, reason) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: 'A welfare check call was not placed: calls are paused.', ref: null });
-  n.channel = 'whatsapp'; n.via = 'call'; n.paused = reason === 'cap' ? 'cap' : 'misses'; save(id); pushFamily('refresh', { id });
+  n.channel = 'whatsapp'; n.via = 'call'; n.paused = reason === 'meta' ? 'meta' : 'misses'; save(id); pushFamily('refresh', { id });
   return n;
+}
+// WhatsApp refused the call (its own limit), so nothing rang: the entry that was started is taken back (the paused fallback then writes its own).
+function welfareCallCancel(id, nid) {
+  const p = get(id); const n = p && p.notifications.find((x) => x.id === nid); if (!n) return false;
+  const o = n.ref && outreaches.get(n.ref); if (o) closeOutreach(o, 'missed');
+  p.notifications = p.notifications.filter((x) => x.id !== nid); save(id); pushFamily('refresh', { id });
+  return true;
 }
 // The call is over (whatever way). Returns 'unreached' | 'spoke' | 'silent' | null (unknown entry). Safe to call twice.
 function welfareCallEnded(id, nid, startedAt) {
@@ -996,6 +1003,13 @@ function reminderCallEnded(id, rid) {
 }
 // The calls are blocked (2 unanswered in a row, or the 5 a day cap): the SAME reminder goes as a WhatsApp message through the ordinary reminder path (inside the 24 h window; outside it that
 // path records Not sent, honestly). Nothing is called.
+// WhatsApp refused the call (its own limit), so nothing rang: the occurrence that was started is taken back (the paused fallback then sends the reminder as a message).
+function reminderCallCancel(id, rid, oid) {
+  const p = get(id); const r = p && p.reminders.find((x) => x.id === rid); if (!r || !r.active) return false;
+  const a = r.active, o = oid && outreaches.get(oid); if (o) closeOutreach(o, 'missed');
+  p.notifications = p.notifications.filter((n) => n.id !== a.notifId); r.active = null; save(id); pushFamily('refresh', { id });
+  return true;
+}
 function reminderViaMessage(id, spec) {
   if (!reminderSender) throw Object.assign(new Error('WhatsApp is not set up on this server.'), { status: 503 });
   const { p, r } = reminderFor(id, spec);
@@ -1332,6 +1346,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, welfarePaused, welfareCallStart, welfareCallEnded, reminderCallStart, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

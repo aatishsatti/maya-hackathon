@@ -1165,7 +1165,7 @@ test('C2 answered and acknowledged: the Call claims the ring with the reminder, 
     assert.equal(starts.length, 1); assert.equal(starts[0].reason, 'reminder'); assert.equal(starts[0].profileId, id); assert.match(starts[0].outreachId, /^[a-z0-9]+$/i);
     assert.equal(remOf(id).last.state, 'done'); assert.equal(remOf(id).active, null); assert.equal(remOf(id).dueAt, null, 'a typed test reminder is not left scheduled');
     assert.deepEqual(actions(), ['connect', 'terminate']); assert.ok(dev.got.length >= 10, 'her greeting reached the phone');
-    const l = wa.linkOf(id); assert.equal(l.callMisses, 0); assert.equal(l.connected.length, 1);
+    const l = wa.linkOf(id); assert.equal(l.callMisses, 0); assert.equal(l.connected, undefined, 'the app no longer counts answered calls');
     assert.match(out, /reminder call [0-9a-f]{6} to number ending \d{4}: requested/); assert.match(out, /picked up; the call has started/); assert.match(out, /her first words are ready \d+ ms/); assert.match(out, /hung up \d+ ms.*maya hung up/);
     assert.doesNotMatch(out, /tablets|v=0|a=fingerprint|wacid|TEST-TOKEN/); assert.ok(!out.includes(phone)); assert.equal(sent().length, 0);
   } finally { await dev.peer.close(); }
@@ -1212,27 +1212,27 @@ test('C2 two unanswered calls in a row block the third: nothing rings, the same 
   reset(PLAIN); await wa.handleWebhook(incoming(phone, 'hello')); assert.equal(wa.linkOf(id).callMisses, 0, 'they wrote: the count starts again'); clearCalls();
 });
 
-test('C2 the 5 answered calls a day cap blocks the sixth (a reminder goes as a message, a test call is refused); unanswered calls do not count towards it; one call at a time and the cooldown still hold', async () => {
-  reminderReset(); const { id, phone } = inWindow(); const keep = wa.deps.callOut;
-  wa.deps.callOut = async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
+const META138012 = { connect: { code: 138012, message: 'Limit reached for maximum business initiated calls allowed in 24 hours.' } };
+const answeredStub = (keep) => async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
+
+test('cap fix: the app no longer blocks at 5 answered calls (six place); WhatsApp\'s own refusal (138012) is what pauses: a reminder goes as a message, a test call is refused in WhatsApp\'s words, the refusal is kept and the next call WhatsApp takes clears it; 2 unanswered still pause', async () => {
+  reminderReset(); const { id, phone } = inWindow(); const keep = wa.deps.callOut; wa.deps.callOut = answeredStub();
   try {
-    await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
-      for (let i = 0; i < 5; i++) { assert.deepEqual(await wa.placeTestCall(id), { placed: true }); await sleepMs(60); }
-      assert.equal(wa.linkOf(id).connected.length, 5); clearCalls();
-      await assert.rejects(wa.placeTestCall(id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /limit of 5 answered calls in 24 hours/); return true; });
-      { const r = await wa.placeReminderCall(id, { task: 'take your tablets' }); assert.deepEqual([r.placed, r.fallback, r.reason], [false, 'message', 'cap']); }
-      assert.equal(callPosts().length, 0); await settle(); assert.equal(sent().length, 1);
-    });
-  } finally { wa.deps.callOut = keep; }
-  // unanswered calls are not "connected": the count stays where it was
-  const b = inWindow(); wa.deps.testCooldownMs = 0;
-  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
-    await wa.placeTestCall(b.id); await wa.handleWebhook(outStatus(b.phone, 'REJECTED')); await waitFor(() => wa.view(b.id).testCall.state === 'rejected'); await sleepMs(100);
-    assert.equal((wa.linkOf(b.id).connected || []).length, 0); assert.equal(wa.linkOf(b.id).callMisses, 1);
-    // one call at a time, and the 60 s cooldown
-    wa.deps.testCooldownMs = 60000; clearCalls();
-    await assert.rejects(wa.placeTestCall(b.id), /Wait a minute/); assert.equal(callPosts().length, 0);
-  });
+    await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 6; i++) { assert.deepEqual(await wa.placeTestCall(id), { placed: true }, `call ${i + 1} is placed`); await sleepMs(60); } });
+    assert.equal(wa.linkOf(id).connected, undefined); assert.equal(wa.view(id).calls.blocked, null); assert.equal(wa.view(id).calls.meta, null);
+    // WhatsApp refuses (138012): a test call is refused with its words, the refusal is kept, nothing was claimed
+    wa.deps.callOut = keep; clearCalls(); callFail = META138012;
+    await assert.rejects(wa.placeTestCall(id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /WhatsApp refused the call \(error 138012\): Limit reached for maximum business initiated calls/); assert.match(e.message, /Nothing was placed/); return true; });
+    const c = wa.view(id).calls; assert.equal(c.meta.code, 138012); assert.match(c.meta.note, /Limit reached/); assert.equal(c.blocked, null, 'Maya does not block on it herself: she tries again'); assert.equal(wa.view(id).testCall.state, 'paused');
+    // a reminder call: the same refusal sends the same reminder as a message (inside the window), and the started occurrence is taken back
+    clearCalls(); callFail = META138012; let res; const out = await capture(async () => { res = await wa.placeReminderCall(id, { task: 'take your tablets' }); });
+    assert.deepEqual([res.placed, res.fallback, res.reason, res.calls.blocked, res.calls.meta.code], [false, 'message', 'meta', 'meta', 138012]); assert.equal(actions().join(), 'connect', 'one attempt, refused'); await settle(); assert.equal(sent().length, 1);
+    const q = care.get(id).reminders.filter((r) => r.task === 'take your tablets'); assert.equal(q.length, 1, 'no duplicate reminder record'); assert.match(q[0].active.state, /^wa_/); assert.equal(q[0].active.pausedBy, 'meta');
+    assert.equal(care.get(id).notifications.filter((n) => n.kind === 'reminder' && /calling/i.test(n.text)).length, 0, 'the call entry that was started is gone'); assert.match(out, /WhatsApp refused the call \(138012\); nothing rang/); assert.match(out, /reminder call to number ending \d{4} not placed \(WhatsApp refused the call \(138012\)\)/);
+    // the next call WhatsApp takes clears the refusal; unanswered calls are a different rule
+    callFail = null; wa.deps.callOut = answeredStub(); await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { assert.deepEqual(await wa.placeTestCall(id), { placed: true }); }); assert.equal(wa.view(id).calls.meta, null);
+    await sleepMs(60); wa.deps.testCooldownMs = 60000; await assert.rejects(wa.placeTestCall(id), /Wait a minute/);   // the cooldown still holds
+  } finally { wa.deps.callOut = keep; callFail = null; wa.deps.testCooldownMs = 0; }
 });
 
 test('C2 THE EARS: what the person says on the phone reaches the Call (it went nowhere in the first live test, so Maya heard silence and hung up)', async () => {
@@ -1318,17 +1318,13 @@ test('C2 a goodbye that Spark writes herself on a call Maya placed ("You can han
 });
 
 // ---- the page says exactly which call limit is reached and when it clears ----
-test('the view reports the call limits exactly (answered today of 5, misses of 2, which one blocks, when the cap clears); calls free up one at a time', async () => {
-  reminderReset(); const { id, phone } = inWindow(); const keep = wa.deps.callOut; const v0 = wa.view(id).calls;
-  assert.deepEqual(v0, { answeredToday: 0, maxPerDay: 5, clearsAt: null, misses: 0, maxMisses: 2, blocked: null });
-  wa.deps.callOut = async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
-  const first = Date.now();
-  try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 5; i++) { await wa.placeTestCall(id); await sleepMs(60); } }); } finally { wa.deps.callOut = keep; }
-  const c = wa.view(id).calls; assert.equal(c.answeredToday, 5); assert.equal(c.blocked, 'cap'); assert.ok(c.clearsAt >= first + 24 * 3600000 && c.clearsAt <= Date.now() + 24 * 3600000, 'clears when the OLDEST answered call is 24 h old');
-  clearCalls(); const r = await wa.placeReminderCall(id, { task: 'take your tablets' }); assert.equal(r.placed, false); assert.equal(r.reason, 'cap'); assert.equal(r.calls.clearsAt, c.clearsAt); assert.equal(r.calls.blocked, 'cap');
-  const old = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.match(old, /answered calls used in the last 24 hours/); assert.doesNotMatch(old, /two in a row went unanswered, or 5/);
+test('the view reports the call limits exactly: Maya\'s own count of calls nobody answered (of 2) and WhatsApp\'s last refusal in its own words; no count of answered calls', async () => {
+  reminderReset(); const { id } = inWindow();
+  assert.deepEqual(wa.view(id).calls, { misses: 0, maxMisses: 2, blocked: null, meta: null });
   const b = inWindow(); await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 2; i++) { await wa.placeTestCall(b.id); await wa.handleWebhook(outStatus(b.phone, 'REJECTED')); await sleepMs(150); } });
-  assert.equal(wa.view(b.id).calls.blocked, 'misses'); assert.equal(wa.view(b.id).calls.misses, 2); assert.equal(wa.view(b.id).calls.clearsAt, null); clearCalls();
+  assert.deepEqual(wa.view(b.id).calls, { misses: 2, maxMisses: 2, blocked: 'misses', meta: null });
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.doesNotMatch(src, /answered calls used in the last 24 hours|of \$\{c\.maxPerDay\}|5 answered/); assert.match(src, /Maya does not count that limit herself/);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'whatsapp.js'), 'utf8'), /MAX_CONNECTED_PER_DAY|answeredToday|maxPerDay|clearsAt/, 'the app no longer carries a 5 a day rule'); clearCalls();
 });
 
 test('the family page: the call section is its own column with headings, full-width fields and side-by-side large buttons (the live screenshot had a squeezed button and a sliver of a field)', () => {
@@ -1359,7 +1355,7 @@ test('Step 1 welfare: picked up and they spoke -> Calling now, Picked up, Replie
     assert.equal(r.before, 'Calling now'); assert.equal(r.during, 'Picked up, waiting for a reply'); assert.equal(labelOf(r.id), 'Replied');
     assert.equal(starts.length, 1); assert.equal(starts[0].reason, 'welfare'); assert.equal(starts[0].profileId, r.id); assert.match(starts[0].outreachId, /^[a-z0-9]+$/i);
     const n = noteOf(r.id); assert.equal(n.channel, 'whatsapp'); assert.equal(n.to, 'senior'); assert.doesNotMatch(n.text, /tablets|howare/i); assert.equal(care.get(r.id).reminders.length, 0, 'no reminder record');
-    assert.deepEqual(actions(), ['connect', 'terminate']); const l = wa.linkOf(r.id); assert.equal(l.callMisses, 0); assert.equal(l.connected.length, 1);
+    assert.deepEqual(actions(), ['connect', 'terminate']); const l = wa.linkOf(r.id); assert.equal(l.callMisses, 0); assert.equal(l.connected, undefined);
     assert.match(r.out, /welfare call [0-9a-f]{6} to number ending \d{4}: requested/); assert.match(r.out, /picked up; the call has started/); assert.match(r.out, /activity entry: Replied/);
     assert.doesNotMatch(r.out, /Your family asked|How are you today|v=0|a=fingerprint|wacid|TEST-TOKEN/); assert.ok(!r.out.includes(r.phone)); assert.equal(sent().length, 0);
   } finally { await r.dev.peer.close(); }
@@ -1379,21 +1375,19 @@ test('Step 1 welfare: nobody answers (cap here 200 ms) -> terminate, Couldn\'t r
   assert.equal(labelOf(b.id), "Couldn't reach senior"); assert.deepEqual(actions(), ['connect']); assert.equal(wa.linkOf(b.id).callMisses, 1); assert.equal(starts.length, 0);
 });
 
-test('Step 1 welfare: two unanswered in a row or 5 answered today -> no call, a fixed true text instead (inside the 24 h window; outside it nothing is sent); the text and its words never reach the log', async () => {
+test('Step 1 welfare: two unanswered in a row, or WhatsApp refusing (138012) -> no call, a fixed true text instead (inside the 24 h window; outside it nothing is sent and the entry says Paused); the words never reach the log', async () => {
   reminderReset(); const a = inWindow();
   await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 2; i++) { await wa.placeWelfareCall(a.id); await wa.handleWebhook(outStatus(a.phone, 'RINGING')); await wa.handleWebhook(outStatus(a.phone, 'REJECTED')); await waitFor(() => care.get(a.id).notifications.filter((n) => n.kind === 'welfare' && n.unreached).length === i + 1); await sleepMs(100); } });
   clearCalls(); let res; const out = await capture(async () => { res = await wa.placeWelfareCall(a.id); });
   assert.deepEqual([res.placed, res.fallback, res.reason, res.calls.blocked], [false, 'message', 'misses', 'misses']); assert.equal(callPosts().length, 0, 'no call'); assert.equal(sent().length, 1); assert.equal(sent()[0].type, 'text'); assert.equal(sent()[0].to, a.phone);
   assert.equal(sent()[0].text.body, 'This is Maya. Your family asked me to check in on you. How are you today?'); assert.match(out, /welfare check to number ending \d{4} not called \(2 unanswered in a row\); a fixed text was sent instead/); assert.doesNotMatch(out, /Your family asked|How are you today/);
-  // outside the 24 h window nothing is sent
-  const o = outside(); wa.deps.testCooldownMs = 0; clearCalls();
-  const keep = wa.deps.callOut; wa.deps.callOut = async (x) => { await x.place({ sdp_type: 'offer', sdp: 'x' }); x.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
-  try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 5; i++) { await wa.placeTestCall(o.id); await sleepMs(60); } }); } finally { wa.deps.callOut = keep; }
-  clearCalls(); await assert.rejects(wa.placeWelfareCall(o.id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /5 answered calls in 24 hours/); assert.match(e.message, /Nothing was sent/); return true; }); assert.equal(callPosts().length + sent().length, 0);
-  // 5 answered today, inside the window: the text
-  const w = inWindow(); wa.deps.callOut = async (x) => { await x.place({ sdp_type: 'offer', sdp: 'x' }); x.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
-  try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 5; i++) { await wa.placeTestCall(w.id); await sleepMs(60); } }); } finally { wa.deps.callOut = keep; }
-  clearCalls(); const r2 = await wa.placeWelfareCall(w.id); assert.deepEqual([r2.placed, r2.reason], [false, 'cap']); assert.equal(callPosts().length, 0); assert.equal(sent().length, 1);
+  // WhatsApp refuses (138012) inside the window: nothing rang, the started entry is taken back, the same fixed text goes
+  const w = inWindow(); clearCalls(); callFail = META138012; wa.deps.testCooldownMs = 0; let r2; const out2 = await capture(async () => { r2 = await wa.placeWelfareCall(w.id); }); callFail = null;
+  assert.deepEqual([r2.placed, r2.reason, r2.calls.blocked], [false, 'meta', 'meta']); assert.equal(actions().join(), 'connect'); assert.equal(sent().length, 1); assert.equal(care.get(w.id).notifications.filter((n) => n.kind === 'welfare').length, 0, 'the Calling now entry was taken back'); assert.match(out2, /welfare check to number ending \d{4} not called \(WhatsApp refused the call \(138012\)\)/);
+  // outside the window nothing is sent and the entry says Paused, with WhatsApp's words in the error
+  const o = outside(); clearCalls(); callFail = META138012;
+  await assert.rejects(wa.placeWelfareCall(o.id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /WhatsApp refused the call \(error 138012\)/); assert.match(e.message, /Nothing was sent/); return true; }); callFail = null;
+  assert.equal(sent().length, 0); assert.ok(wa.activityOf(o.id).entries.some((e) => e.type === 'welfare' && e.status === 'paused'));
 });
 
 test('Step 1 welfare: one call at a time and the 60 s cooldown hold; a welfare call is refused while another is ringing', async () => {
@@ -1496,14 +1490,12 @@ test('picker: a reminder set to CALL places the call when due (same call, same l
   assert.equal(sent().length, 0); clearCalls();
 });
 
-test('picker: a call chosen while calls are PAUSED is not placed: inside the window it goes as a message and says so; outside the window nothing goes and the entry says Paused; a call is never claimed in the list', async () => {
-  reminderReset(); const keep = wa.deps.callOut;
-  const fill = async (pid) => { wa.deps.callOut = async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; }; try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 5; i++) { await wa.placeTestCall(pid); await sleepMs(60); } }); } finally { wa.deps.callOut = keep; } clearCalls(); };
-  const w = inWindow(); await fill(w.id); const rw = addRem(w.id, 'paused in window', 3000).r; rw.deliver = 'call'; care.tick(Date.now() + 5000); await settle();
-  assert.equal(callPosts().length, 0, 'no call'); assert.equal(sent().length, 1); const ew = wa.activityOf(w.id).entries.find((e) => e.words === 'paused in window'); assert.ok(['text', 'voice'].includes(ew.channel), 'it went as a message, so it is not shown as a call'); assert.match(ew.note, /Calls were paused, so it went as a message/); assert.ok(['sent', 'delivered', 'read'].includes(ew.status));
-  clearCalls(); const o = outside(); await fill(o.id); const ro = addRem(o.id, 'paused outside', 3000).r; ro.deliver = 'call'; care.tick(Date.now() + 5000); await settle();
-  assert.equal(callPosts().length + sent().length, 0, 'nothing rang and nothing was sent'); const eo = wa.activityOf(o.id).entries.find((e) => e.words === 'paused outside'); assert.deepEqual([eo.status, eo.label], ['paused', 'Paused']);
-  const wp = care.get(o.id).notifications.length; await assert.rejects(wa.placeWelfare(o.id, 'call'), (e) => { assert.equal(e.status, 429); return true; }); assert.ok(care.get(o.id).notifications.length > wp, 'a Paused welfare entry is recorded'); assert.ok(wa.activityOf(o.id).entries.some((e) => e.type === 'welfare' && e.status === 'paused'));
+test('picker: a call chosen while WhatsApp refuses calls (138012) is not placed: inside the window it goes as a message and says so; outside the window nothing goes and the entry says Paused; a call is never claimed in the list', async () => {
+  reminderReset(); wa.deps.testCooldownMs = 0;
+  const w = inWindow(); const rw = addRem(w.id, 'paused in window', 3000).r; rw.deliver = 'call'; callFail = META138012; care.tick(Date.now() + 5000); await waitFor(() => callPosts().length >= 1); await settle(); callFail = null;
+  assert.equal(actions().join(), 'connect', 'one attempt, refused by WhatsApp'); assert.equal(sent().length, 1); const ew = wa.activityOf(w.id).entries.find((e) => e.words === 'paused in window'); assert.ok(['text', 'voice'].includes(ew.channel), 'it went as a message, so it is not shown as a call'); assert.match(ew.note, /Calls were paused, so it went as a message/); assert.ok(['sent', 'delivered', 'read'].includes(ew.status));
+  clearCalls(); const o = outside(); const ro = addRem(o.id, 'paused outside', 3000).r; ro.deliver = 'call'; callFail = META138012; care.tick(Date.now() + 5000); await waitFor(() => callPosts().length >= 1); await settle(); callFail = null;
+  assert.equal(sent().length, 0, 'nothing was sent'); const eo = wa.activityOf(o.id).entries.find((e) => e.words === 'paused outside'); assert.deepEqual([eo.status, eo.label], ['paused', 'Paused']);
 });
 
 test('picker: the welfare check as Call, Text or Voice note; the message as Call, Text or Voice note (a call is the same flow with the same limits; text and voice send the same words as before)', async () => {

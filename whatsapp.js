@@ -575,21 +575,41 @@ function activityOf(profileId) {
   return { entries, summary: { sent: done.filter((e) => e.rank >= 1).length, delivered: done.filter((e) => e.rank >= 2).length, read: done.filter((e) => e.rank >= 3).length, answered: done.filter((e) => e.status === 'answered').length, missed: done.filter((e) => e.status === 'missed' || e.status === 'unreached').length } };
 }
 
-const TEST_COOLDOWN_MS = 60000, MAX_CONNECTED_PER_DAY = 5, MAX_MISSES = 2, DAY_MS = 24 * 3600000;
+const TEST_COOLDOWN_MS = 60000, MAX_MISSES = 2, META_CALL_LIMIT = 138012;
 function setTest(profileId, state) { testCalls.set(profileId, { state, at: Date.now() }); }
-// Counters on the link record (they survive a restart), shared by every kind of call: answered calls in the last 24 h (WhatsApp allows 5 connected business-started calls a day, error 138012 when
-// it is hit) and calls in a row nobody answered or that were rejected. Any answered call, any call from them and any message from them clears the second.
-const connectedIn24h = (l) => (l.connected || []).filter((t) => Date.now() - t < DAY_MS).length;
-const noteConnected = (pid) => update(pid, (x) => { x.callMisses = 0; x.connected = [...(x.connected || []).filter((t) => Date.now() - t < DAY_MS), Date.now()]; });
+// Counters on the link record (they survive a restart), shared by every kind of call. The ONE limit Maya keeps herself: calls in a row nobody answered or that were rejected (2 pause calls; any answered call,
+// any call from them and any message from them clears it). The limit on calls a business may start is WhatsApp's: Maya does not count or guess it; she tries, and when WhatsApp refuses (error 138012,
+// "Business Initiated Calls Limit Hit") that refusal is kept (code and WhatsApp's own text) and the next answered call clears it.
+const noteConnected = (pid) => update(pid, (x) => { x.callMisses = 0; delete x.metaRefused; });
 const noteMissed = (pid) => update(pid, (x) => { x.callMisses = (x.callMisses || 0) + 1; });
 const noteReachable = (pid) => { const l = linkOf(pid); if (l && l.callMisses) update(pid, (x) => { x.callMisses = 0; }); };
-// What the page shows about the call limits: exactly which one is reached and when it clears (the oldest answered call is 24 h old: calls free up one at a time).
-const capInfo = (l) => { const ts = (l.connected || []).filter((t) => Date.now() - t < DAY_MS).sort((a, b) => a - b); return { answeredToday: ts.length, maxPerDay: MAX_CONNECTED_PER_DAY, clearsAt: ts.length >= MAX_CONNECTED_PER_DAY ? ts[ts.length - MAX_CONNECTED_PER_DAY] + DAY_MS : null, misses: l.callMisses || 0, maxMisses: MAX_MISSES, blocked: null }; };
-const callBlock = (l) => (l.callMisses || 0) >= MAX_MISSES ? 'misses' : connectedIn24h(l) >= MAX_CONNECTED_PER_DAY ? 'cap' : null;
+const noteMetaRefused = (pid, e) => update(pid, (x) => { x.metaRefused = { at: Date.now(), code: Number(e.code) || META_CALL_LIMIT, note: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').replace(/\s+/g, ' ').slice(0, 200) }; });
+// What the page shows about the call limits: Maya's own count of calls nobody answered, and WhatsApp's last refusal (if any), in WhatsApp's own words.
+const capInfo = (l) => ({ misses: l.callMisses || 0, maxMisses: MAX_MISSES, blocked: null, meta: l.metaRefused ? { at: l.metaRefused.at, code: l.metaRefused.code, note: l.metaRefused.note } : null });
+const callBlock = (l) => ((l.callMisses || 0) >= MAX_MISSES ? 'misses' : null);
+
+// A call that is not placed because calls are paused: Maya's own 2-unanswered rule (before anything is tried) or WhatsApp's refusal (after the connect was refused). A reminder goes as a message through the
+// ordinary reminder path; a welfare check as a fixed text; a family message as the same text; all only inside the 24 h window (outside it: nothing is sent and the entry says Paused). A test call is refused.
+function pausedFallback(kind, profileId, l, spec, block, why) {
+  const care = require('./care'), fail = (m, status) => Promise.reject(new WaError(m, status)), tail = end(l.phone);
+  const said = block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `WhatsApp refused the call (${META_CALL_LIMIT})`;
+  const result = () => ({ placed: false, fallback: 'message', reason: block, calls: { ...capInfo(linkOf(profileId) || l), blocked: block } });
+  if (kind === 'welfare') {
+    if (!(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) { care.welfarePaused(profileId, block); return fail(`${why} A text needs them to have written in the last 24 hours, and they have not. Nothing was sent.`, 429); }
+    return sendOut(profileId, { kind: 'text', text: WELFARE_TEXT, who: 'maya' }).then(() => { note(`welfare check to number ending ${tail} not called (${said}); a fixed text was sent instead`); return result(); }, (e) => fail(`${why} The text could not be sent either: ${e.message}`, e.status || 502));
+  }
+  if (kind !== 'reminder') return fail(`${why} Nothing was placed.`, 429);
+  if (spec && spec.message) {   // a family MESSAGE chosen as a call: the same words as a text, inside the window
+    return sendOut(profileId, { kind: 'text', text: spec.task, who: 'family' }).then(() => { note(`message call to number ending ${tail} not placed (${said}); the message was sent as a text instead`); return result(); }, (e) => fail(`${why} The message could not be sent as a text either: ${e.message}`, e.status || 502));
+  }
+  try { care.reminderViaMessage(profileId, { ...spec, pausedBy: block }); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
+  note(`reminder call to number ending ${tail} not placed (${said}); the reminder was sent as a message instead`);
+  return Promise.resolve(result());
+}
 
 // ONE outbound call to the linked, opted-in person. kind 'test' (C1): says a fixed sentence and hangs up (wacall.callOut). kind 'reminder' (C2): the family's reminder, delivered by the app's own Call
-// (spec { reminderId } or { task }). Resolves when Meta has taken the call (the phone is about to ring) with { placed: true }, or, when the calls are blocked (2 unanswered in a row, or 5 answered
-// today), with { placed: false, fallback: 'message' } after the same reminder went as a message; the rest (ringing, answered, ended) runs on and is logged and kept as a label. Throws if nothing was placed.
+// (spec { reminderId } or { task }). Resolves when Meta has taken the call (the phone is about to ring) with { placed: true }, or, when calls are paused (2 unanswered in a row, or WhatsApp refusing with 138012),
+// with { placed: false, fallback: 'message' } after the same reminder went as a message; the rest (ringing, answered, ended) runs on and is logged and kept as a label. Throws if nothing was placed.
 function placeCall(profileId, kind, spec) {
   const l = linkOf(profileId), care = require('./care');
   const fail = (m, status) => Promise.reject(new WaError(m, status));
@@ -599,20 +619,7 @@ function placeCall(profileId, kind, spec) {
   if (callBusy || outboundNow.cur) return fail('Another call is in progress. Nothing was placed.', 409);
   if (care.liveCalls.has(profileId)) return fail('They are in a call in the app right now. Nothing was placed.', 409);
   const block = callBlock(l);
-  if (block) {
-    const why = block === 'misses' ? `The last ${MAX_MISSES} calls to them were not answered, so Maya will not call again until they answer or write.` : `The limit of ${MAX_CONNECTED_PER_DAY} answered calls in 24 hours is reached.`;
-    if (kind === 'welfare') {   // the same limit, a fixed true text instead of a call (only inside the 24 h window, where free text is allowed)
-      if (!(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) { care.welfarePaused(profileId, block); return fail(`${why} A text needs them to have written in the last 24 hours, and they have not. Nothing was sent.`, 429); }
-      return sendOut(profileId, { kind: 'text', text: WELFARE_TEXT, who: 'maya' }).then(() => { note(`welfare check to number ending ${end(l.phone)} not called (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); a fixed text was sent instead`); return { placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } }; }, (e) => fail(`${why} The text could not be sent either: ${e.message}`, e.status || 502));
-    }
-    if (kind !== 'reminder') return fail(`${why} Nothing was placed.`, 429);
-    if (spec && spec.message) {   // a family MESSAGE chosen as a call: the same words as a text, inside the window
-      return sendOut(profileId, { kind: 'text', text: spec.task, who: 'family' }).then(() => { note(`message call to number ending ${end(l.phone)} not placed (${block}); the message was sent as a text instead`); return { placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } }; }, (e) => fail(`${why} The message could not be sent as a text either: ${e.message}`, e.status || 502));
-    }
-    try { care.reminderViaMessage(profileId, { ...spec, pausedBy: block }); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
-    note(`reminder call to number ending ${end(l.phone)} not placed (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); the reminder was sent as a message instead`);
-    return Promise.resolve({ placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } });
-  }
+  if (block) return pausedFallback(kind, profileId, l, spec, block, `The last ${MAX_MISSES} calls to them were not answered, so Maya will not call again until they answer or write.`);
   if (Date.now() - lastTestAt < (deps.testCooldownMs === undefined ? TEST_COOLDOWN_MS : deps.testCooldownMs)) return fail('A call was just placed. Wait a minute before another. Nothing was placed.', 429);
   let rc = null;
   if (kind === 'reminder') { try { rc = care.reminderCallStart(profileId, spec); } catch (e) { return fail(e.message, e.status || 400); } }
@@ -623,7 +630,7 @@ function placeCall(profileId, kind, spec) {
   const what = kind === 'reminder' ? 'reminder call' : kind === 'welfare' ? 'welfare call' : 'test call';
   let cid = 'unknown'; const log = (m) => note(`${what} ${cid} to number ending ${tail}: ${m}`);
   setTest(profileId, 'starting');
-  let connected = false;
+  let connected = false, placed = false;
   const settle = () => {
     if (wc) { const st = care.welfareCallEnded(profileId, wc.nid, wc.startedAt); if (st) log(`activity entry: ${st === 'unreached' ? "Couldn't reach senior" : st === 'spoke' ? 'Replied' : "Hasn't replied yet"}`); return; }
     if (!rc) return; const st = care.reminderCallEnded(profileId, rc.rid); if (st) log(`dashboard state: ${st === 'unanswered' ? "Couldn't reach" : "Hasn't replied yet"}`);
@@ -635,6 +642,7 @@ function placeCall(profileId, kind, spec) {
       note(`${what} to number ending ${tail}: connect response fields [${shapeOf(d)}], call id ${viaCalls ? 'from calls[0].id' : id ? 'from call_id' : 'not in the response (taken from the first webhook)'}`); // names only, never a value: shows the real shape of Meta's answer
       if (typeof id === 'string' && id) { if (cur.id === null) { cur.id = id; liveEnds.set(id, (why) => sig.emit('end', why)); } cid = callTag(id); }
       else if (cur.id) cid = callTag(cur.id);
+      placed = true; if (linkOf(profileId) && linkOf(profileId).metaRefused) update(profileId, (x) => { delete x.metaRefused; });   // WhatsApp took a call: its refusal no longer stands
       setTest(profileId, 'requested'); resolve({ placed: true });
     };
     const terminate = async () => { if (!cur.id) throw new Error('Meta has not named the call, so it cannot be hung up by id'); await callAction(cur.id, 'terminate'); };
@@ -649,7 +657,15 @@ function placeCall(profileId, kind, spec) {
         setTest(profileId, /^no answer/.test(r) ? 'no answer' : r === 'rejected' ? 'rejected' : r === 'completed' ? (rc || wc ? 'finished' : 'completed') : 'ended');
         settle(); note(`${what} ${cid} to number ending ${tail}: finished, ${r}`);
       })
-      .catch((e) => { setTest(profileId, 'failed'); settle(); note(`${what} ${cid} to number ending ${tail}: FAILED, ${sayWhy(e)}`); reject(e instanceof WaError ? e : new WaError(sayWhy(e), 502)); })
+      .catch((e) => {
+        if (e && Number(e.code) === META_CALL_LIMIT && !placed) {   // WhatsApp's own limit: nothing rang. What was started is taken back, the refusal is kept in WhatsApp's words, and the same fallback as a pause runs.
+          if (rc) care.reminderCallCancel(profileId, rc.rid, rc.outreachId); if (wc) care.welfareCallCancel(profileId, wc.nid);
+          noteMetaRefused(profileId, e); setTest(profileId, 'paused'); note(`${what} to number ending ${tail}: WhatsApp refused the call (${META_CALL_LIMIT}); nothing rang`);
+          pausedFallback(kind, profileId, linkOf(profileId) || l, rc ? { ...spec, rid: rc.rid } : spec, 'meta', `WhatsApp refused the call (error ${META_CALL_LIMIT}): ${linkOf(profileId).metaRefused.note || 'its limit on calls a business can start has been reached'}.`).then(resolve, reject);
+          return;
+        }
+        setTest(profileId, 'failed'); settle(); note(`${what} ${cid} to number ending ${tail}: FAILED, ${sayWhy(e)}`); reject(e instanceof WaError ? e : new WaError(sayWhy(e), 502));
+      })
       .finally(() => { callBusy = false; if (cur.id) liveEnds.delete(cur.id); outboundNow.cur = null; });
   });
 }
