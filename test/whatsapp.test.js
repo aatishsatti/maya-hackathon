@@ -1260,6 +1260,8 @@ test('C2 end of a call Maya placed: "no / that\'s all" after her question, or an
   for (const t of ['No, but who wrote this?', 'No, wait, one thing', 'No thanks. Actually, can you tell me the time?', 'Nothing about that, but how is the weather?', 'No, why do you ask?']) assert.equal(E(t, true), null, t);
   for (const t of ['No.', 'Nothing', "That's all"]) assert.equal(E(t, false), null, `${t} without her question does not end the call`);
   for (const t of ['Bye', 'Goodbye Maya', 'Good night', 'Okay, bye bye', 'Thank you, goodbye', 'Talk to you later', 'Take care']) { assert.equal(E(t, false), 'bye', t); assert.equal(E(t, true), 'bye', t); }
+  for (const t of ['Sounds good for now. Maya, you can hang up.', 'You can hang up now, thank you', 'Okay, I will let you go', "That's fine, we're done"]) assert.equal(E(t, false), 'bye', t);   // the live phrase: the person tells her to end it
+  for (const t of ["Please don't hang up", 'Wait, do not hang up yet', 'Hang up the washing, will you?']) assert.equal(E(t, true), null, t);
   for (const t of ['Yes, one thing', 'Who wrote that message?', 'No, wait, I wanted to ask about my daughter', 'Thank you', 'Okay', "Goodbye is a word I don't like to hear when you have so much to tell me about the garden"]) assert.equal(E(t, true), null, t);
 });
 
@@ -1518,4 +1520,15 @@ test('dashboard: no senior words in the list or the logs; the page file has the 
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
   for (const id of ['actSummary', 'actFilters', 'actList', 'actPager', 'deliverPick', 'waWelfareVia']) assert.match(html, new RegExp(`id="${id}"`), id);
   assert.match(html, /<h2>Activity<\/h2>/); assert.match(html, /data-kind="call">Call and say it</); assert.match(html, /<details class="log">/); for (const v of ['call', 'text', 'voice']) assert.match(html, new RegExp(`id="deliverPick"[\\s\\S]*?data-v="${v}"`));
+});
+
+test('live fix: "No, thank you." right after the reminder ends the call: the reminder\'s own fact rides along for four turns and used to count as "something in play"; a fact of weight (the family, safety) still stops it', async () => {
+  voiceReset(); const { id } = linked(); const said = [];
+  const run = async (text, setup) => { const { call } = outCall(id); call.sayFixed = async (t, o) => { said.push([t, o.bye]); }; call.closing = 'asked'; call.reminderFacts = { task: 'take your tablets', turns: 4 }; if (setup) setup(call); call.pending = [{ text, partial: '', completedAt: Date.now(), endedAt: Date.now() }]; call.attribute = (t) => [{ label: 'A', text: t.text }]; try { await Promise.race([call.respond(0), sleepMs(300)]); } catch { /* a normal reply needs Spark: not under test */ } return call; };
+  const c = await run('No, thank you.'); assert.deepEqual(c.factLabels, ['family-written-reminder'], 'the one fact that was always there'); assert.deepEqual(said, [[callMod.BYE_NOMORE, true]]);
+  said.length = 0; await run('No thanks, got it, all set then.'); assert.deepEqual(said, [[callMod.BYE_NOMORE, true]]);
+  said.length = 0; await run('Sounds good for now. Maya, you can hang up.'); assert.deepEqual(said, [[callMod.BYE_SAID, true]]);
+  said.length = 0; const d = await run('No thanks, please tell my family I am fine.'); assert.ok(d.factLabels.some((l) => l !== 'family-written-reminder'), `a fact of weight was in play: ${d.factLabels}`); assert.deepEqual(said, [], 'the family request goes to Spark, not to a goodbye');
+  said.length = 0; await run('No, thank you.', (call) => { call.safety = true; }); assert.deepEqual(said, [], 'safety in play: never a goodbye in code');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'); assert.match(src, /console\.log\('outbound reply', JSON\.stringify\(\{ farewell, pieces: said\.length \}\)\)/); assert.match(src, /console\.log\('outbound end', JSON\.stringify\(\{ rule: endNow, plain, safety:/);
 });
