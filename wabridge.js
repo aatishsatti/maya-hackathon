@@ -36,7 +36,8 @@ class PhoneSocket {
 class PhoneBridge {
   // newCall(socket, apiKey) -> a Call (call.js). speak(text) -> PCM16 24 kHz (Maya's voice), for the one fixed fatal line.
   // outbound: a call WE placed (call.js ends it itself after a goodbye; an answered inbound call is ended by the person, as before).
-  constructor({ newCall, apiKey, profileId, tz, log, speak, outbound = false }) {
+  // prefetch: a promise of the first line written while it rang (call.js prefetchReminderLine); the Call uses it instead of asking Spark again.
+  constructor({ newCall, apiKey, profileId, tz, log, speak, outbound = false, prefetch = null }) {
     this.log = log; this.speak = speak; this.profileId = profileId; this.tz = tz || null;
     this.out = null; this.held = []; this.accepted = false; this.callReady = false; this.error = null; this.finished = false;
     this.speechEnds = 0; this.replies = 0; this.lastChunkAt = 0; this.born = Date.now(); this.maxTtv = 0;
@@ -48,6 +49,7 @@ class PhoneBridge {
     this.socket = new PhoneSocket({ onEvent: (m) => this.onEvent(m), onVoice: (b) => this.onVoice(b), onClose: (code) => this.finish(code === 1000 ? 'maya hung up' : 'fatal') });
     this.socket.outbound = outbound;
     this.call = newCall(this.socket, apiKey);
+    if (prefetch && this.call) this.call.prefetched = prefetch;
   }
 
   // The Call starts: it opens its own transcribe session, files memory as in the app, and speaks first with its own written greeting.
@@ -72,7 +74,7 @@ class PhoneBridge {
     else if (m.type === 'error') { this.error = String(m.message || 'unknown').replace(/\s+/g, ' ').slice(0, 160); this.log(`the call brain reported an error: ${this.error}`); }
   }
   onVoice(buf) {
-    if (!this.accepted) { this.held.push(buf); if (!this.voiceLogged) { this.voiceLogged = true; const t = this.call && this.call.greetTiming; if (t) this.log(`her first words, step by step: the Call started ${t.startMs} ms after its start message, Spark wrote the line in ${t.sparkMs} ms in ${t.tries} ${t.tries === 1 ? 'try' : 'tries'}, the first voice chunk came ${Date.now() - t.lineAt} ms after the line was written`); } this.greetingReady(); return; }
+    if (!this.accepted) { this.held.push(buf); if (!this.voiceLogged) { this.voiceLogged = true; const t = this.call && this.call.greetTiming; if (t) this.log(`her first words, step by step: the Call started ${t.startMs} ms after its start message, ${t.prefetched ? `the line was written while the phone rang (${t.prefetchMs} ms, ${t.tries} ${t.tries === 1 ? 'try' : 'tries'}) and the Call waited ${t.sparkMs} ms for it` : `Spark wrote the line in ${t.sparkMs} ms in ${t.tries} ${t.tries === 1 ? 'try' : 'tries'}`}, the first voice chunk came ${Date.now() - t.lineAt} ms after the line was written`); } this.greetingReady(); return; }
     this.play(buf);
   }
   play(buf) {

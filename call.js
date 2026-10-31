@@ -1496,15 +1496,18 @@ class Call {
     let line;
     const greetAt = Date.now();
     const rem = this.outreach && this.outreach.kind === 'reminder' ? care.findReminder(this.profile.id, this.outreach.reminderId) : null;
+    let pre = null;   // the first line of a reminder call, written while the phone rang (prefetchReminderLine): used when it is for THIS reminder, otherwise written now as before
+    if (rem && this.prefetched) { try { pre = await this.prefetched; } catch { console.log('greeting prefetch failed', JSON.stringify({ fallback: 'written now' })); } if (pre && pre.rid !== rem.id) pre = null; }
     try {
-      if (rem) line = await this.reminderLine(rem, this.abort.signal);
+      if (pre) { line = pre.line; this.awaitTask = pre.awaitTask; this.reminderFacts = pre.reminderFacts; }
+      else if (rem) line = await this.reminderLine(rem, this.abort.signal);
       else line = await this.dynamicLine({ pool: 'greeting', signal: this.abort.signal, what: this.greetingNote(hour), sentences: 2 });
     } catch (e) {
       if (myGen !== this.gen || this.closed) return;
       return this.fatal(e.message);
     }
     if (myGen !== this.gen || this.closed) return;
-    this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: Date.now() - greetAt, tries: line.tries || 1, lineAt: Date.now() };   // milliseconds and a count, never a word (wabridge logs it)
+    this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: Date.now() - greetAt, tries: line.tries || 1, lineAt: Date.now(), ...(pre ? { prefetched: true, prefetchMs: pre.ms } : {}) };   // milliseconds and a count, never a word (wabridge logs it)
     care.addLine(this.profile.id, rem ? 'reminder' : 'greeting', line.said);
     this.history.push({ role: 'assistant', content: line.said });
     this.mirror('maya', line.said);
@@ -2099,4 +2102,15 @@ class Call {
   }
 }
 
-module.exports = { outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+// Pre-ring: the first line of a reminder call is written WHILE the phone rings, so the person is not kept waiting for Spark after they pick up. It uses a scratch Call that is never started, so
+// nothing a real call does happens for a call nobody answers (no call counted, no 'last seen', no live call, no ring claimed, no line filed): it only asks Spark. The cost of an unanswered call is that one Spark request.
+async function prefetchReminderLine(profileId, rid, tz, signal) {
+  const profile = memory.load(profileId), rem = care.findReminder(profileId, rid);
+  if (!profile || !rem) return null;
+  const c = new Call({ send() {}, close() {}, onmessage: null, onclose: null, outbound: true }, 'k'); clearInterval(c.endTimer);
+  c.profile = profile; try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); c.tz = tz; } catch { c.tz = null; }
+  const t0 = Date.now(), line = await c.reminderLine(rem, signal);
+  return { rid, line, awaitTask: c.awaitTask, reminderFacts: c.reminderFacts, ms: Date.now() - t0 };
+}
+
+module.exports = { prefetchReminderLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

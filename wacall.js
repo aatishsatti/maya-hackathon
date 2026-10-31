@@ -181,6 +181,9 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
   const track = new MediaStreamTrack({ kind: 'audio' });
   const tx = pc.addTransceiver(track, { direction: 'sendrecv' });
   let out = null, over = null, capTimer = null, t0 = Date.now(), placed = false, br = null;
+  // Pre-ring: the first line is written WHILE the connect goes out and the phone rings (bridge.prefetch(signal) -> a promise). Aborted if nobody picks up.
+  const pfAbort = new AbortController(); let prefetched = null;
+  if (bridge && bridge.prefetch) { prefetched = Promise.resolve().then(() => bridge.prefetch(pfAbort.signal)); prefetched.catch(() => {}); }
   const since = () => `${Date.now() - t0} ms`;
   let gotAnswer, gotAccepted, resolveOutcome;
   const answerP = new Promise((r) => { gotAnswer = r; }), acceptedP = new Promise((r) => { gotAccepted = r; });
@@ -237,7 +240,7 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     r = await step(acceptedP); if (!r.ok) return await finish(r);
     clearTimeout(capTimer); capTimer = null;
     if (bridge) {
-      br = new PhoneBridge({ newCall: bridge.newCall, apiKey: bridge.apiKey, profileId: bridge.profileId, tz: bridge.tz, log, speak, outbound: true });
+      br = new PhoneBridge({ newCall: bridge.newCall, apiKey: bridge.apiKey, profileId: bridge.profileId, tz: bridge.tz, log, speak, outbound: true, prefetch: prefetched });
       br.begin({ reason: bridge.reason || 'reminder', outreachId: bridge.outreachId });
     }
     r = await step(waitConnected(pc, mediaUpMs)); if (!r.ok) return await finish(r);
@@ -255,6 +258,7 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     throw e;
   } finally {
     clearTimeout(capTimer); sig.off('answer', onAnswer); sig.off('status', onStatus); sig.off('end', onEnd);
+    if (!br) pfAbort.abort();   // nobody picked up (or it failed): the line written ahead is not needed
     if (br) br.stop('call over'); if (out) out.stop();
     try { await pc.close(); } catch { /* already closed */ }
   }

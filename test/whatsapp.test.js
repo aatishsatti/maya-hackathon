@@ -1149,7 +1149,7 @@ class FakeCall {
   end() { if (this.closed) return; this.closed = true; if (this.awaitAck) care.reminderNoAck(this.pid, this.awaitAck); if (this.welfare) care.callEnded(this.pid, this, 'left'); }
 }
 const remOf = (id) => care.get(id).reminders[0];
-const reminderReset = () => { outReset(); starts.length = 0; script = 'ack'; heardFrames = 0; wa.deps.newCall = (socket) => new FakeCall(socket); wa.deps.callTailMs = 50; };
+const reminderReset = () => { outReset(); starts.length = 0; script = 'ack'; heardFrames = 0; wa.deps.prefetchLine = async () => null; wa.deps.newCall = (socket) => new FakeCall(socket); wa.deps.callTailMs = 50; };
 const driveAnswered = async (phone, conn) => { const dev = await fakeDevice(conn.session.sdp); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outAnswer(phone, dev.answer)); await wa.handleWebhook(outStatus(phone, 'ACCEPTED')); return dev; };
 
 test('C2 answered and acknowledged: the Call claims the ring with the reminder, the reminder is Done, one connect and one terminate, the answered call is counted; logs hold no words', async () => {
@@ -1531,4 +1531,44 @@ test('live fix: "No, thank you." right after the reminder ends the call: the rem
   said.length = 0; const d = await run('No thanks, please tell my family I am fine.'); assert.ok(d.factLabels.some((l) => l !== 'family-written-reminder'), `a fact of weight was in play: ${d.factLabels}`); assert.deepEqual(said, [], 'the family request goes to Spark, not to a goodbye');
   said.length = 0; await run('No, thank you.', (call) => { call.safety = true; }); assert.deepEqual(said, [], 'safety in play: never a goodbye in code');
   const src = fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'); assert.match(src, /console\.log\('outbound reply', JSON\.stringify\(\{ farewell, pieces: said\.length \}\)\)/); assert.match(src, /console\.log\('outbound end', JSON\.stringify\(\{ rule: endNow, plain, safety:/);
+});
+
+// ---- pre-ring: the first line of a reminder call is written while the phone rings (a scratch Call; nothing a real call does happens for a call nobody answers) ----
+test('pre-ring: the line is written ahead by a scratch Call that changes nothing (no call counted, no live call, no ring claimed, no line filed); a missing reminder gives nothing', async () => {
+  voiceReset(); const { id } = inWindow(); const tg = (x) => `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} ${x}`;
+  const r = care.addReminder(id, { task: 'take your tablets', dueAt: Date.now() + 60000, repeat: 'none' }); const before = { calls: care.get(id).callCount, lines: JSON.stringify(care.recentLines(id, 'reminder')), seen: care.get(id).lastActivity.maya, live: care.liveCalls.has(id), active: r.active };
+  reset(tg('Time for your tablets.')); const pre = await callMod.prefetchReminderLine(id, r.id, 'Europe/London', new AbortController().signal);
+  assert.equal(pre.rid, r.id); assert.equal(pre.line.said, 'Time for your tablets.'); assert.equal(pre.line.tries, 1); assert.equal(pre.awaitTask, 'take your tablets'); assert.deepEqual(pre.reminderFacts, { task: 'take your tablets', turns: 4 }); assert.ok(pre.ms >= 0);
+  const after = { calls: care.get(id).callCount, lines: JSON.stringify(care.recentLines(id, 'reminder')), seen: care.get(id).lastActivity.maya, live: care.liveCalls.has(id), active: r.active };
+  assert.deepEqual(after, before, 'a line written for a call nobody may answer leaves no trace'); assert.equal(await callMod.prefetchReminderLine(id, 'nope', null, new AbortController().signal), null);
+});
+
+test('pre-ring: the real greeting uses the line written ahead (no second Spark request); a different reminder or a failed prefetch writes it now as before; the timing line says which', async () => {
+  voiceReset(); const { id } = inWindow(); const r = care.addReminder(id, { task: 'drink water', dueAt: Date.now() + 60000, repeat: 'none' }); r.dueAt = null;
+  const mk = (prefetched) => { const { call } = outCall(id); call.outreach = { kind: 'reminder', reminderId: r.id }; call.prefetched = prefetched; call.speakReply = async () => {}; let written = 0; call.reminderLine = async () => { written++; call.awaitTask = 'drink water'; call.reminderFacts = { task: 'drink water', turns: 4 }; return { full: 'x', said: 'Written now.', tries: 2 }; }; return { call, count: () => written }; };
+  const ahead = { rid: r.id, line: { full: '[[f]] Drink some water.', said: 'Drink some water.', tries: 1 }, awaitTask: 'drink water', reminderFacts: { task: 'drink water', turns: 4 }, ms: 3300 };
+  let a = mk(Promise.resolve(ahead)); await a.call.greet(12); assert.equal(a.count(), 0, 'no second Spark request'); assert.equal(a.call.awaitAck, r.id); assert.deepEqual(a.call.reminderFacts, { task: 'drink water', turns: 4 }); assert.equal(a.call.greetTiming.prefetched, true); assert.equal(a.call.greetTiming.prefetchMs, 3300); assert.ok(a.call.history.some((m) => m.content === 'Drink some water.'));
+  let b = mk(Promise.resolve({ ...ahead, rid: 'other' })); await b.call.greet(12); assert.equal(b.count(), 1, 'a line for another reminder is not used'); assert.equal(b.call.greetTiming.prefetched, undefined);
+  const logs = []; const l0 = console.log; console.log = (...x) => logs.push(x.join(' ')); let c; try { c = mk(Promise.reject(new Error('Spark was down'))); await c.call.greet(12); } finally { console.log = l0; } assert.equal(c.count(), 1, 'a failed prefetch: written now'); assert.ok(logs.some((m) => /greeting prefetch failed/.test(m)));
+  const fake = { greetTiming: { startMs: 1300, sparkMs: 0, tries: 1, lineAt: Date.now() - 100, prefetched: true, prefetchMs: 3400 } }; const out = []; const br = new wabridge.PhoneBridge({ newCall: () => fake, apiKey: 'k', profileId: id, tz: null, log: (m) => out.push(m), speak: async () => Buffer.alloc(2), outbound: true }); br.onVoice(Buffer.alloc(960)); br.mic.stop('x'); br.finish('x');
+  assert.match(out.find((m) => /step by step/.test(m)), /the Call started 1300 ms after its start message, the line was written while the phone rang \(3400 ms, 1 try\) and the Call waited 0 ms for it, the first voice chunk came \d+ ms/);
+});
+
+test('pre-ring: it starts when the call is requested (before WhatsApp answers), the Call gets it at pick-up, and nothing is claimed while it rings; an unanswered call aborts it', async () => {
+  reminderReset(); const { id, phone } = linked(); const seen = { at: null, signal: null, posts: -1 }; let resolveLine;
+  wa.deps.prefetchLine = (pid, rid, tz, signal) => { seen.posts = callPosts().length; seen.signal = signal; seen.at = Date.now(); return new Promise((res) => { resolveLine = () => res({ rid, line: { full: 'f', said: 'Ahead.', tries: 1 }, awaitTask: 'by call', reminderFacts: { task: 'by call', turns: 4 }, ms: 10 }); }); };
+  let dev, fake = null; wa.deps.newCall = (socket) => { fake = new FakeCall(socket); return fake; };
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeReminderCall(id, { task: 'by call' }); assert.equal(seen.posts, 0, 'the line is asked for BEFORE the connect goes to WhatsApp'); resolveLine();
+    await wa.handleWebhook(outStatus(phone, 'RINGING')); await sleepMs(50);
+    assert.equal(rem(id).active.state, 'calling', 'still Calling now: nothing was claimed while it rang'); assert.equal(care.liveCalls.has(id), false); assert.equal(starts.length, 0, 'the Call has not started'); assert.equal(seen.signal.aborted, false);
+    dev = await driveAnswered(phone, callPosts().find((b) => b.action === 'connect')); await waitFor(() => starts.length === 1);
+    assert.ok(fake.prefetched && typeof fake.prefetched.then === 'function', 'the Call was handed the line written ahead'); assert.equal((await fake.prefetched).line.said, 'Ahead.');
+    await waitFor(() => actions().includes('terminate')); await waitFor(() => wa.view(id).testCall.state === 'finished');
+  });
+  try { assert.equal(seen.signal.aborted, false, 'a call that was answered keeps it'); } finally { await dev.peer.close(); }
+  // nobody answers: the line written ahead is aborted
+  reminderReset(); wa.deps.testRingCapMs = 200; const b = linked(); let sig2 = null; wa.deps.prefetchLine = (pid, rid, tz, signal) => { sig2 = signal; return new Promise(() => {}); };
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeReminderCall(b.id, { task: 'unanswered' }); await wa.handleWebhook(outStatus(b.phone, 'RINGING')); await waitFor(() => actions().includes('terminate')); await sleepMs(100); });
+  assert.equal(sig2.aborted, true, 'unanswered: the pending Spark request is aborted'); wa.deps.prefetchLine = async () => null;
 });
