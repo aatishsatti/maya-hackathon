@@ -136,7 +136,7 @@
       const d = JSON.parse(e.data);
       post(`/api/care/${id}/notifications/${d.notifId}/delivered`);
       chime();
-      card(`n${d.notifId}`, `Message from your family: ${d.text}`, [{ label: 'Close', run: () => seen(d.notifId) }]);
+      card(`n${d.notifId}`, `${d.kind === 'reminder' ? 'Reminder from your family' : 'Message from your family'}: ${d.text}`, [{ label: 'Close', run: () => seen(d.notifId) }]);
     });
   }
   function disconnect() { stopRing(); if (es) es.close(); es = null; for (const k of [...cards.keys()]) drop(k); }

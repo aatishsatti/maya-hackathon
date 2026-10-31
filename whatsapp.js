@@ -409,7 +409,7 @@ async function onImage(l, msg) {
   catch (e) { note(`could not download a photo from number ending ${end(msg.from)}: ${e.message}`); await sendTextTo(l.phone, PHOTO_NOT_SEEN); return 'unseen'; }
   require('./care').touch(l.profileId, 'whatsapp'); // chat.sendImage records the 'app' door; this is the WhatsApp door (text and voice do it through opts.source)
   let r;
-  try { r = await chat.sendImage(l.profileId, buf, typeof im.caption === 'string' ? im.caption : '', null); }
+  try { r = await chat.sendImage(l.profileId, buf, typeof im.caption === 'string' ? im.caption : '', null, { source: 'whatsapp' }); }
   catch (e) {
     note(`could not answer a photo from number ending ${end(msg.from)}: ${e.message}`); // the error text only: no caption, no image
     await sendTextTo(l.phone, e.status === 415 ? PHOTO_NOT_READ : PHOTO_NOT_SEEN);
@@ -546,6 +546,7 @@ async function onCalls(value) {
 // Text / Voice note; status = Scheduled / Sent / Delivered / Read / Answered / Hasn't replied yet / Couldn't reach / Missed / Paused (and Not sent). The words shown are only what the family wrote
 // (a reminder or message they typed); the person's own words are never kept here. ----
 const OCC = { calling: ['sent', 'Calling now', 1], answered: ['delivered', 'Picked up', 2], done: ['answered', 'Answered', 4], no_reply: ['noreply', "Hasn't replied yet", 2], unanswered: ['unreached', "Couldn't reach", 0], declined: ['noreply', 'Declined', 2], missed: ['missed', 'Missed', 0],
+  app_sending: ['sent', 'Sending', 1], app_sent: ['sent', 'Sent', 1], app_delivered: ['delivered', 'Delivered', 2], app_read: ['read', 'Seen', 3], app_done: ['answered', 'Answered', 4], app_missed: ['missed', 'Missed', 2], app_failed: ['failed', 'Not sent', 0],
   wa_sending: ['sent', 'Sending', 1], wa_sent: ['sent', 'Sent', 1], wa_delivered: ['delivered', 'Delivered', 2], wa_read: ['read', 'Read', 3], wa_missed: ['missed', 'Missed', 2], wa_failed: ['failed', 'Not sent', 0] };   // [status, label, rank]: rank 1 left Maya, 2 arrived / picked up, 3 read, 4 answered
 const OUTMSG = { sending: ['sent', 'Sending', 1], sent: ['sent', 'Sent', 1], delivered: ['delivered', 'Delivered', 2], read: ['read', 'Read', 3], failed: ['failed', 'Not sent', 0] };
 const NOTE_LABEL = { Sent: ['sent', 'Sent', 1], Delivered: ['delivered', 'Delivered', 2], Seen: ['read', 'Read', 3], Played: ['read', 'Read', 3], Replied: ['answered', 'Answered', 4], "Hasn't replied yet": ['noreply', "Hasn't replied yet", 2], 'Seen · Not replied yet': ['noreply', "Hasn't replied yet", 3],
@@ -558,27 +559,40 @@ function activityOf(profileId) {
   const waOn = Boolean(l && l.optIn && configured()), pref = (p.delivery && p.delivery.reminders) === 'text' ? 'text' : 'voice';
   const push = (e) => { if (e.at && (e.status === 'scheduled' || now - e.at < ACTIVITY_DAYS * 86400000)) out.push(e); };
   for (const r of p.reminders || []) {
-    const type = r.msg ? 'message' : 'reminder', planned = r.deliver || (waOn ? pref : 'call');
-    if (r.dueAt && !r.active) push({ id: `r:${r.id}:s`, type, channel: planned, status: 'scheduled', label: r.held ? 'Held' : 'Scheduled', rank: 0, at: r.dueAt, words: r.task, ...(r.held ? { note: `Held for quiet hours (${String(care.cfg.quietStart).padStart(2, '0')}:00 to ${String(care.cfg.quietEnd).padStart(2, '0')}:00): it will go at ${String(care.cfg.quietEnd).padStart(2, '0')}:00.` } : {}) });
+    const CH = ['whatsapp', 'app', 'both'], chan = CH.includes(r.channel) ? r.channel : p.delivery && CH.includes(p.delivery.channel) ? p.delivery.channel : 'whatsapp';
+    const type = r.msg ? 'message' : 'reminder', planned = r.deliver || (waOn || chan === 'app' ? pref : 'call');
+    if (r.dueAt && !r.active) push({ id: `r:${r.id}:s`, type, where: chan, channel: planned, status: 'scheduled', label: r.held ? 'Held' : 'Scheduled', rank: 0, at: r.dueAt, words: r.task, ...(r.held ? { note: `Held for quiet hours (${String(care.cfg.quietStart).padStart(2, '0')}:00 to ${String(care.cfg.quietEnd).padStart(2, '0')}:00): it will go at ${String(care.cfg.quietEnd).padStart(2, '0')}:00.` } : {}) });
     for (const [k, x] of [['a', r.active], ['l', r.last]]) {
       if (!x) continue;
       const [status0, label0, rank0] = OCC[x.state] || ['sent', String(x.state), 1];
       const paused = x.pausedBy && x.state === 'wa_failed';
-      const channel = x.channel === 'whatsapp' ? (x.via === 'voice' ? 'voice' : x.via === 'text' ? 'text' : planned === 'voice' ? 'voice' : 'text') : paused ? (planned === 'voice' ? 'voice' : 'text') : (r.deliver === 'text' || r.deliver === 'voice') && x.state === 'wa_failed' ? r.deliver : 'call';   // a Paused one shows the channel that was asked for: nothing went on any
+      const channel = x.channel === 'app' ? (x.via === 'voice' || x.via === 'text' ? x.via : 'call') : x.channel === 'whatsapp' ? (x.via === 'voice' ? 'voice' : x.via === 'text' ? 'text' : planned === 'voice' ? 'voice' : 'text') : paused ? (planned === 'voice' ? 'voice' : 'text') : (r.deliver === 'text' || r.deliver === 'voice') && x.state === 'wa_failed' ? r.deliver : 'call';   // a Paused one shows the channel that was asked for: nothing went on any
       const note = paused ? (x.pausedBy === 'window' ? `The 24 hour window was closed and the call could not be placed (${(x.error && x.error.title) || 'no reason given'}): nothing was sent.` : `The 24 hour window is closed and calls are paused (${PAUSED_WHY[x.pausedBy] || 'calls are paused'}): nothing was sent.`) : x.pausedBy ? 'Calls were paused, so it went as a message.' : x.instead === 'window' ? 'The 24 hour window was closed, so Maya called instead.' : null;
-      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.task, ...(note ? { note } : {}) });
+      const where = x.channel === 'app' ? 'app' : x.channel === 'whatsapp' ? 'whatsapp' : (x.where || 'whatsapp');
+      const note2 = note || (x.voiceUnavailable && x.channel === 'app' ? 'Her voice was not available, so it went as a text.' : x.reason === 'app_closed' ? 'The app was closed, and a closed phone cannot be rung yet.' : null);
+      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, where, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.task, ...(note2 ? { note: note2 } : {}) });
+      if (x.app) {   // "both": the same reminder also went to the app, with its own state
+        const [as, al, ar] = OCC[x.app.state] || ['sent', String(x.app.state), 1];
+        push({ id: `r:${r.id}:${k}:${x.dueAt}:app`, type, where: 'app', channel: x.app.via === 'voice' ? 'voice' : 'text', status: as, label: al, rank: ar, at: x.app.sentAt || x.app.startedAt || x.dueAt, words: r.task, ...(x.app.voiceUnavailable ? { note: 'Her voice was not available, so it went as a text.' } : {}) });
+      }
     }
   }
   for (const n of p.notifications || []) {
     if (n.to !== 'senior') continue;
     const lab = care.statusLabel(n), [status, label, rank] = NOTE_LABEL[lab] || ['sent', lab, 1];
-    if (n.kind === 'welfare') push({ id: `n:${n.id}`, type: 'welfare', channel: n.paused && n.via === 'call' && n.paused === 'window' ? 'text' : 'call', status: n.paused ? 'paused' : status, label: n.paused ? 'Paused' : label, rank: n.paused ? 0 : rank, at: n.times && n.times.sent, words: null,
+    if (n.kind === 'welfare') push({ id: `n:${n.id}`, type: 'welfare', where: 'whatsapp', channel: n.paused && n.via === 'call' && n.paused === 'window' ? 'text' : 'call', status: n.paused ? 'paused' : status, label: n.paused ? 'Paused' : label, rank: n.paused ? 0 : rank, at: n.times && n.times.sent, words: null,
       ...(n.paused ? { note: n.pausedWhy || `The 24 hour window is closed and calls are paused (${PAUSED_WHY[n.paused] || 'calls are paused'}): nothing was sent.` } : n.instead === 'window' ? { note: 'The 24 hour window was closed, so Maya called instead.' } : {}) });
-    else if (n.kind === 'family_message') push({ id: `n:${n.id}`, type: 'message', channel: 'text', status, label, rank, at: n.times && n.times.sent, words: n.text });
+    else if (n.kind === 'family_message') push({ id: `n:${n.id}`, type: 'message', where: 'app', channel: 'text', status, label, rank, at: n.times && n.times.sent, words: n.text });
   }
   for (const m of (l && l.sent) || []) {
     const [status, label, rank] = m.repliedAt && m.who === 'maya' ? ['answered', 'Answered', 4] : OUTMSG[m.status] || ['sent', String(m.status), 1];   // a welfare check they replied to
-    push({ id: `m:${m.at}`, type: m.who === 'maya' ? 'welfare' : 'message', channel: m.kind === 'voice' ? 'voice' : 'text', status, label, rank, at: m.at, words: null });
+    push({ id: `m:${m.at}`, type: m.who === 'maya' ? 'welfare' : 'message', where: 'whatsapp', channel: m.kind === 'voice' ? 'voice' : 'text', status, label, rank, at: m.at, words: null });
+  }
+  const mins = (s) => (s >= 90 ? `${Math.round(s / 60)} min` : `${Math.max(1, s)} s`);
+  for (const e of p.callLog || []) {   // calls, timers and chats in the app: times, counts and a label, never a word
+    if (e.kind === 'call') push({ id: `c:${e.id}`, type: 'call', where: e.source === 'whatsapp' ? 'whatsapp' : 'app', channel: 'call', status: 'completed', label: !e.endedAt ? 'In progress' : e.talked ? `Talked, ${mins(e.seconds)}` : 'No talk', rank: 0, at: e.at, words: null });
+    else if (e.kind === 'timer') push({ id: `t:${e.id}`, type: 'reminder', where: 'app', channel: 'call', status: 'delivered', label: 'Delivered', rank: 2, at: e.at, words: null, note: 'A reminder they set themselves during a call.' });
+    else if (e.kind === 'chat') push({ id: `h:${e.id}`, type: 'chat', where: 'app', channel: e.voice ? 'voice' : 'text', status: 'completed', label: `${e.count} ${e.count === 1 ? 'message' : 'messages'}`, rank: 0, at: e.at, words: null });
   }
   out.sort((a, b) => b.at - a.at);
   const entries = out.slice(0, ACTIVITY_MAX), done = entries.filter((e) => e.status !== 'scheduled');

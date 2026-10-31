@@ -73,12 +73,23 @@
               <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
               <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
             </div>
+            <label class="wa-label" id="channelLabel">Where it goes</label>
+            <div id="channelPick" class="seg" role="radiogroup" aria-labelledby="channelLabel" data-clearable="1">
+              <button type="button" role="radio" aria-checked="false" data-v="whatsapp">WhatsApp</button>
+              <button type="button" role="radio" aria-checked="false" data-v="app">Maya app</button>
+              <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
+            </div>
+            <p class="hint" id="channelHint">Not chosen: Maya uses the setting below. In the app there is no 24 hour window and no template. A closed app cannot be rung yet: a call falls back to WhatsApp.</p>
             <p class="hint" id="deliverHint">Not chosen: Maya uses the setting below (a voice note or text). Tap a choice again to clear it.</p>
             <button class="btn primary" type="submit">Add reminder</button>
           </form>
           <div class="form-row">
             <label for="deliv" class="hint">On WhatsApp, send reminders as</label>
             <select id="deliv" aria-label="Send reminders on WhatsApp as"><option value="voice">A voice note in Maya's voice</option><option value="text">Text</option></select>
+          </div>
+          <div class="form-row">
+            <label for="delivChan" class="hint">When no choice is made, reminders go</label>
+            <select id="delivChan" aria-label="Where reminders go by default"><option value="whatsapp">On WhatsApp</option><option value="app">In the Maya app</option><option value="both">On both</option></select>
           </div>
           <p class="hint">A reminder goes on WhatsApp only while they have written to Maya in the last 24 hours. Every reminder shows what really happened to it: sent, delivered, read, answered, or missed. Maya is a companion, not medical care: a reminder can fail or arrive late, so never rely on it for medicine.</p>
           <div id="reminders" class="stack"></div>

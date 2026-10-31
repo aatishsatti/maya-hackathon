@@ -374,6 +374,8 @@ const EMERGENCY_WORDS = /\b(i fell|i have fallen|fell down|chest pain|can'?t bre
 const SCAM_CONTEXT_MS = 10 * 60000; // after a scam-looking turn, this long counts as the same scam conversation
 const SCAM_LATER_FRESH_MS = 30000; // a verdict that arrives after her answer shapes the NEXT answer only if that comes within this long
 const NAME_OK = /^[\p{L}][\p{L} '\-]{0,29}$/u;
+const letters = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[^a-z]/g, '');
+const sameName = (a, b) => { const x = letters(a), y = letters(b); return x.length > 0 && x === y; };   // the profile's own name, spelt the same (case, accents, spaces and punctuation aside)
 
 // ---- Lead-in clips: Maya's own voice saying one short line, rendered once and kept (see lead.js). Real mode only; never faked. ----
 const leadClips = new Map();      // text -> { text, pcm } (PCM16 24 kHz, trimmed like any other piece)
@@ -1613,7 +1615,7 @@ class Call {
       : 'The timer they asked you to set is up. In ONE short warm sentence tell them the time they asked for has come, in your own words. Add nothing else.';
     const line = await this.speakWhenFree((signal) => this.dynamicLine({ pool: 'timer', signal, what }));
     console.log('timer', JSON.stringify({ event: line ? 'spoken' : 'not spoken (she was busy for too long or the call ended)', seconds: t.seconds }));
-    if (line) care.addLine(this.profile.id, 'timer', line.said);
+    if (line) { care.addLine(this.profile.id, 'timer', line.said); care.timerFired(this.profile.id); }   // one Activity entry, no words
   }
 
   async respond(holdMs) {
@@ -1869,7 +1871,11 @@ class Call {
     // The first turn of a call can be answered before Transcribe has sent any speaker label; a name
     // given then belongs to the only voice there is.
     if (!this.seen.size && /^[A-H]$/.test(label)) this.seen.add(label);
-    if (this.seen.has(label) && NAME_OK.test(name)) { this.names.set(label, name); memory.noteNames(this.profile.id, this.callId, Object.fromEntries(this.names)); }
+    if (!this.seen.has(label) || !NAME_OK.test(name)) return;
+    // The person on this profile is the one the family named. A different name that Spark attaches to the FIRST voice is a mishearing or somebody else's name (live: Maya called Kali "Ravi"),
+    // so it is never kept for that voice, never reaches Maya's prompt and never reaches memory. Other voices (a second person who says who they are) keep their own names.
+    if (this.profile && label === [...this.seen][0] && !sameName(name, this.profile.name)) { console.log('name ignored', JSON.stringify({ label, why: 'not the profile name' })); return; }   // a label and a reason, never the name
+    this.names.set(label, name); memory.noteNames(this.profile.id, this.callId, Object.fromEntries(this.names));
   }
 
   // Streams Spark's text into the voice sentence by sentence. Each sentence is sent to the voice
@@ -2125,4 +2131,4 @@ async function prefetchWelfareLine(profileId, tz, signal) {
   return { kind: 'welfare', line, ms: Date.now() - t0 };
 }
 
-module.exports = { prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { sameName, prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

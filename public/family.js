@@ -148,11 +148,12 @@
 
   // Reminder state -> short pill. Done and Missed are the two the family cares about; the full sentence stays below it.
   // ---- Activity: counts, a paged list grouped by day, filtered by type. Everything shown comes from the server's activity list (the family's own reminder words, never the person's). ----
-  const ACT_TYPE = { reminder: 'Reminder', welfare: 'Welfare check', message: 'Message' };
+  const ACT_TYPE = { reminder: 'Reminder', welfare: 'Welfare check', message: 'Message', call: 'Call with Maya', chat: 'Chat' };
+  const ACT_WHERE = { app: 'App', whatsapp: 'WhatsApp', both: 'App + WhatsApp' };
   const ACT_CHAN = { call: 'Call', text: 'Text', voice: 'Voice note' };
-  const ACT_PILL = { scheduled: 'pill-plain', sent: 'pill-info', delivered: 'pill-info', read: 'pill-info', answered: 'pill-ok', noreply: 'pill-wait', unreached: 'pill-miss', missed: 'pill-miss', paused: 'pill-wait', failed: 'pill-miss' };
-  const ACT_ICON = { reminder: '\u25F7', welfare: '\u2661', message: '\u2709' };   // plain type glyphs in a circle: a clock, a heart, an envelope (no pictures, no markup insertion)
-  const ACT_FILTERS = [['all', 'All'], ['reminder', 'Reminders'], ['welfare', 'Welfare'], ['message', 'Messages']];
+  const ACT_PILL = { scheduled: 'pill-plain', sent: 'pill-info', delivered: 'pill-info', read: 'pill-info', answered: 'pill-ok', noreply: 'pill-wait', completed: 'pill-ok', unreached: 'pill-miss', missed: 'pill-miss', paused: 'pill-wait', failed: 'pill-miss' };
+  const ACT_ICON = { reminder: '\u25F7', welfare: '\u2661', message: '\u2709', call: '\u260E', chat: '\u270E' };   // plain type glyphs in a circle: a clock, a heart, an envelope (no pictures, no markup insertion)
+  const ACT_FILTERS = [['all', 'All'], ['reminder', 'Reminders'], ['welfare', 'Welfare'], ['message', 'Messages'], ['call', 'Calls']];
   const ACT_CARDS = [['sent', 'Sent'], ['delivered', 'Delivered'], ['read', 'Read'], ['answered', 'Answered'], ['missed', 'Missed']];
   const ACT_PAGE = 8;
   const act = { entries: [], summary: null, filter: 'all', page: 0 };
@@ -163,6 +164,7 @@
   function actRow(e, group) {
     const row = el('div', 'act-row'), icon = el('span', 'act-icon', ACT_ICON[e.type] || '');
     const main = el('div', 'act-main'), pills = el('div', 'act-pills');
+    if (e.where) pills.append(el('span', 'pill pill-plain', ACT_WHERE[e.where] || e.where));
     pills.append(el('span', 'pill pill-plain', ACT_CHAN[e.channel] || e.channel), el('span', `pill ${ACT_PILL[e.status] || 'pill-plain'}`, e.label));
     main.append(el('div', 'act-title', e.words || ACT_TYPE[e.type] || 'Activity'), pills);
     if (e.words) main.children[0].title = ACT_TYPE[e.type] || '';
@@ -174,7 +176,7 @@
     if (a) { act.entries = a.entries || []; act.summary = a.summary || null; }
     $('actSummary').replaceChildren(...ACT_CARDS.map(([k, label]) => { const c = el('div', 'act-card'); c.append(el('b', '', String(act.summary ? act.summary[k] || 0 : 0)), el('span', '', label)); return c; }));
     $('actFilters').replaceChildren(...ACT_FILTERS.map(([k, label]) => { const b = el('button', `chip${act.filter === k ? ' on' : ''}`, label); b.type = 'button'; b.setAttribute && b.setAttribute('aria-pressed', String(act.filter === k)); b.addEventListener('click', () => { act.filter = k; act.page = 0; renderActivity(); }); return b; }));
-    const rows = act.entries.filter((e) => act.filter === 'all' || e.type === act.filter), pages = Math.max(1, Math.ceil(rows.length / ACT_PAGE));
+    const rows = act.entries.filter((e) => act.filter === 'all' || e.type === act.filter || (act.filter === 'call' && e.type === 'chat')), pages = Math.max(1, Math.ceil(rows.length / ACT_PAGE));
     act.page = Math.min(act.page, pages - 1);
     const out = []; let last = null;
     for (const e of rows.slice(act.page * ACT_PAGE, act.page * ACT_PAGE + ACT_PAGE)) { const g = dayGroup(e.at); if (g !== last) { out.push(el('div', 'act-day', g)); last = g; } out.push(actRow(e, g)); }
@@ -196,7 +198,8 @@
   const hh = (n) => String(n).padStart(2, '0');
   const inQuietAt = (ms) => { if (!quiet || !quiet.tz || !Number.isFinite(ms)) return false; try { const h = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: quiet.tz }).format(new Date(ms))); return quiet.start > quiet.end ? (h >= quiet.start || h < quiet.end) : (h >= quiet.start && h < quiet.end); } catch { return false; } };
   function remQuietWarn() { const on = inQuietAt(new Date($('at').value).getTime()); $('remQuietWarn').hidden = !on; $('remQuietWarn').textContent = on ? `That time is in their quiet hours (${hh(quiet.start)}:00 to ${hh(quiet.end)}:00). The reminder is kept and will be held until ${hh(quiet.end)}:00: nothing is sent, texted or rung at night.` : ''; }
-  const deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia'));
+  let pendingAdds = [], showAllRem = false;
+  const channelSeg = seg($('channelPick')), deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia'));
   // ---- scheduled check-ins: every hour / 2 h / 3 h / custom, by call, text or voice note, for 24 hours; the server runs it and pauses it by itself when a check cannot go out ----
   const everyMin = () => { const v = $('schedEvery').value; return v === 'custom' ? Number($('schedCustom').value) : Number(v); };
   const EVERY_TEXT = (n) => (n === 60 ? 'hour' : n % 60 === 0 ? `${n / 60} hours` : `${n} minutes`);
@@ -254,7 +257,7 @@
   }
 
   const REM_PILL = { done: ['pill-ok', 'Answered'], missed: ['pill-miss', 'Missed'], no_reply: ['pill-wait', "Hasn't replied yet"], unanswered: ['pill-miss', "Couldn't reach"], declined: ['pill-wait', 'Declined'], calling: ['pill-info', 'Calling'], answered: ['pill-info', 'Picked up'],
-    wa_sending: ['pill-info', 'Sending'], wa_sent: ['pill-info', 'Sent'], wa_delivered: ['pill-info', 'Delivered'], wa_read: ['pill-wait', 'Read'], wa_missed: ['pill-miss', 'Missed'], wa_failed: ['pill-miss', 'Not sent'] };
+    wa_sending: ['pill-info', 'Sending'], wa_sent: ['pill-info', 'Sent'], wa_delivered: ['pill-info', 'Delivered'], wa_read: ['pill-wait', 'Read'], wa_missed: ['pill-miss', 'Missed'], app_sending: ['pill-info', 'Sending'], app_sent: ['pill-info', 'Sent'], app_delivered: ['pill-info', 'Delivered'], app_read: ['pill-wait', 'Seen'], app_missed: ['pill-miss', 'Missed'], app_failed: ['pill-miss', 'Not sent'], wa_failed: ['pill-miss', 'Not sent'] };
   // Message status -> pill. The words are the server's own: Sent, Delivered, Seen, Played, Replied, Hasn't replied yet.
   const NOTE_PILL = (label) => (/^Replied/.test(label) ? 'pill-ok' : /^Hasn't/.test(label) ? 'pill-wait' : /^(Seen|Played)/.test(label) ? 'pill-info' : 'pill-plain');
 
@@ -275,22 +278,34 @@
     const sc = v.scams || [], scAlerts = sc.filter((x) => x.level === 'alert' || x.status === 'expired' && x.notified === 'alert'), scFlags = sc.filter((x) => !scAlerts.includes(x));
     list($('alerts'), [...act(scAlerts).map((x) => scamCard(x, v.name)), ...act(v.alerts).map((f) => flagCard(f, v.name)), ...done(scAlerts).map((x) => scamCard(x, v.name)), ...done(v.alerts).map((f) => flagCard(f, v.name))], 'No alerts.');
     list($('flags'), [...act(scFlags).map((x) => scamCard(x, v.name)), ...act(v.flags).map((f) => flagCard(f, v.name)), ...done(scFlags).map((x) => scamCard(x, v.name)), ...done(v.flags).map((f) => flagCard(f, v.name))], 'No flags.');
-    const rem = v.reminders.map((r) => {
+    // The list: what is coming (and what is being delivered right now) first, soonest at the top; finished ones below, newest first, and only the latest five until "Show earlier" is pressed.
+    // A reminder that was just added is shown at once (the server confirmed it) and is replaced by the server's own copy as soon as the list is read again.
+    const have = new Set(v.reminders.map((x) => x.id)), fresh = pendingAdds.filter((x) => Date.now() - x.addedAt < 10000 && !have.has(x.id));
+    const all = [...v.reminders, ...fresh];
+    const upcoming = all.filter((r) => r.active || r.dueAt != null).sort((a, b) => (a.active ? 0 : 1) - (b.active ? 0 : 1) || (a.dueAt || 0) - (b.dueAt || 0));
+    const finished = all.filter((r) => !r.active && r.dueAt == null).sort((a, b) => ((b.last && b.last.at) || 0) - ((a.last && a.last.at) || 0));
+    const shown = [...upcoming, ...(showAllRem ? finished : finished.slice(0, 5))];
+    const reminderItem = (r) => {
       const c = el('div', 'item');
       const cur = r.active || r.last;
       const head = el('div', 'item-head'); head.append(el('span', 'grow', r.task));
       if (r.deliver) head.append(el('span', 'pill pill-plain', ACT_CHAN[r.deliver] || r.deliver));   // this reminder's own pick
+      if (r.channel) head.append(el('span', 'pill pill-plain', ACT_WHERE[r.channel] || r.channel));
+      if (r.held) head.append(el('span', 'pill pill-wait', 'Held for quiet hours'));
       const tag = cur && REM_PILL[cur.state];
       if (tag) head.append(el('span', `pill ${tag[0]}`, tag[1]));
-      const del = el('button', 'btn small danger', 'Delete'); del.addEventListener('click', () => api(`/api/care/${id}/reminders/${r.id}`, 'DELETE').then(load).catch((e) => showErr(e.message))); head.append(del);
+      const del = el('button', 'btn small danger', 'Delete'); del.addEventListener('click', () => api(`/api/care/${id}/reminders/${r.id}`, 'DELETE').then(() => { pendingAdds = pendingAdds.filter((x) => x.id !== r.id); load(); }).catch((e) => showErr(e.message))); head.append(del);
       c.append(head);
       if (r.dueAt) c.append(el('div', 'meta', `Next: ${t(r.dueAt)}${r.repeat !== 'none' ? ` · repeats ${r.repeat}` : ''}`));
       if (cur) c.append(el('div', 'detail', `${r.active ? 'Now' : 'Last'} (${t(cur.dueAt)}): ${cur.label}${cur.attempts ? ` · ${cur.attempts} ${cur.attempts === 1 ? 'try' : 'tries'}` : ''}`));
       return c;
-    });
+    };
+    const rem = shown.map(reminderItem);
+    if (finished.length > 5) { const b = el('button', 'btn', showAllRem ? 'Show fewer finished reminders' : `Show ${finished.length - 5} earlier finished reminders`); b.type = 'button'; b.addEventListener('click', () => { showAllRem = !showAllRem; load(); }); rem.push(b); }
     list($('reminders'), rem, 'No reminders yet.');
     fillRemPick(v.reminders);
     if (v.delivery && document.activeElement !== $('deliv')) $('deliv').value = v.delivery.reminders;
+    if (v.delivery && document.activeElement !== $('delivChan')) $('delivChan').value = v.delivery.channel || 'whatsapp';
     const nots = v.notifications.map((n) => {
       const c = el('div', 'item');
       const head = el('div', 'item-head');
@@ -450,11 +465,12 @@
   function pick(newId) { id = newId; store.set(id); showPeople(); clearInterval(timer); load(); timer = setInterval(load, 3000); }
 
   $('who').addEventListener('change', () => pick($('who').value));
+  $('delivChan').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { channel: $('delivChan').value }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('deliv').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { reminders: $('deliv').value }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('remForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    api(`/api/care/${id}/reminders`, 'POST', { task: $('task').value, dueAt: new Date($('at').value).getTime(), repeat: $('repeat').value, ...(deliverSeg.get() ? { deliver: deliverSeg.get() } : {}) })
-      .then(() => { $('task').value = ''; deliverSeg.set(null); showErr(''); load(); }).catch((x) => showErr(x.message));
+    api(`/api/care/${id}/reminders`, 'POST', { task: $('task').value, dueAt: new Date($('at').value).getTime(), repeat: $('repeat').value, ...(deliverSeg.get() ? { deliver: deliverSeg.get() } : {}), ...(channelSeg.get() ? { channel: channelSeg.get() } : {}) })
+      .then((j) => { if (j && j.reminder) pendingAdds.push({ ...j.reminder, addedAt: Date.now() }); $('task').value = ''; deliverSeg.set(null); channelSeg.set(null); showErr(''); load(); }).catch((x) => showErr(x.message));
   });
   $('msgForm').addEventListener('submit', (e) => {
     e.preventDefault();

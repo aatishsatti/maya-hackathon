@@ -1467,7 +1467,7 @@ test('activity page: summary cards, day groups (Today / Yesterday / Earlier), fi
   assert.deepEqual(list().map((t) => t.replace(/\s+/g, ' ')).filter((t) => /Welfare check/.test(t)).length, 1); assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 1); assert.equal(els.actPager.hidden, true);
   const msg = els.actFilters.children.find((b) => b.textContent === 'Messages'); msg.handlers.click(); assert.match(list().join('|'), /Message.*Text.*Delivered/);
   els.actFilters.children.find((b) => b.textContent === 'Reminders').handlers.click(); assert.ok(list().every((t) => !/Welfare check|Message/.test(t)));
-  assert.equal(els.actFilters.children.length, 4); assert.ok(els.actFilters.children.some((b) => /chip on/.test(b.className)));
+  assert.equal(els.actFilters.children.length, 5, 'All, Reminders, Welfare, Messages, Calls'); assert.ok(els.actFilters.children.some((b) => /chip on/.test(b.className)));
 });
 
 test('picker: a reminder\'s own Call / Text / Voice note beats the person-wide switch; no pick keeps the old default; a bad pick is refused', async () => {

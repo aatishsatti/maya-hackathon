@@ -129,7 +129,7 @@ async function handleChat(req, res, url) {
   const tzParam = url.searchParams.get('tz');
   const tz = /^[\w/+\-]{1,60}$/.test(tzParam || '') ? tzParam : null;
   try {
-    if (req.method === 'GET' && !what) return sendJson(res, 200, { messages: chat.thread(pid), callLive: chat.callLive(pid) });
+    if (req.method === 'GET' && !what) { care.appThreadOpened(pid); return sendJson(res, 200, { messages: chat.thread(pid), callLive: chat.callLive(pid) }); }   // opening the chat is how a voice reminder that waited there arrives
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
     if (what === 'message') {
       const body = await readJson(req, 8192);

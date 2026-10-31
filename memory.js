@@ -271,7 +271,7 @@ function profileNote(p, tz, focus = null) {
   const when = `${now.toLocaleDateString('en-US', { ...opt, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${now.toLocaleTimeString('en-US', { ...opt, hour: 'numeric', minute: '2-digit' })}`;
   const m = p.memory;
   const lines = [`Current date and time where they are: ${when} (${today(tz)}).`,
-    `This call is on the profile of ${p.name} (${GENDERS[p.gender]}); pronouns are for talking about ${p.name} to others only. This profile was picked for ${p.name}, so the person talking is ${p.name} unless they say they are someone else: if asked who they are or whether you know them, say yes, they are ${p.name}. If another person joins and speaks, they are a separate person, keep their facts apart.`];
+    `This call is on the profile of ${p.name} (${GENDERS[p.gender]}); pronouns are for talking about ${p.name} to others only. This profile was picked for ${p.name}, so the person talking is ${p.name} unless they say they are someone else: if asked who they are or whether you know them, say yes, they are ${p.name}. If another person joins and speaks, they are a separate person, keep their facts apart. NAME RULE: call them ${p.name} and no other name, never a name you guessed or made up. A different name you hear for them is a mishearing or another person's: do not use it for them. If you are unsure who is speaking, say so or ask; never guess a name.`];
   const mem = [];
   const who = (x) => (x.who ? `${x.who}: ` : '');
   m.people.forEach((x) => {

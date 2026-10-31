@@ -346,6 +346,8 @@ async function sendText(profileId, text, tz, opts = {}) {
   if (!t) throw new ChatError('Please type a message first.', 400);
   const s = session(profileId, tz);
   care.touch(profileId, opts.source === 'whatsapp' ? 'whatsapp' : 'app'); // whatsapp.js: the same chat, a different door
+  if (opts.source !== 'whatsapp') care.chatNote(profileId, 'text');   // an Activity entry for the app chat (a WhatsApp reply is not one: it answers a check or a reminder)
+  if (opts.source !== 'whatsapp' && require('./call').isAck(t)) care.reminderAckApp(profileId);   // "okay" to a reminder that came to the app: answered
   const you = s.push({ role: 'senior', kind: 'text', text: t });
   // A reconfirm question is open: this message may settle it (a plain yes / no to the family question does not). Otherwise the usual scam check.
   let scam = null, off = null;
@@ -381,10 +383,21 @@ async function voiceFor(pieces) {
   return pcmToWav(Buffer.concat(bufs));
 }
 
+// A reminder (or any short note) as Maya's voice in the chat: a voice message with its words, pushed to the open app as a normal chat message (a closed app finds it in the thread when it opens).
+// Returns { message, reached }: reached counts the open apps it was pushed to. Throws if her voice cannot be made (the caller then sends the words as text; never a fake voice note).
+async function deliverVoiceNote(profileId, spoken, text) {
+  const s = session(profileId);
+  const pcm = await deps.speak(spoken);
+  const name = saveMedia(profileId, 'wav', pcmToWav(pcm));
+  const m = s.push({ role: 'maya', kind: 'voice', text: String(text || spoken), mediaUrl: mediaUrl(profileId, name) });
+  return { message: m, reached: care.pushSenior(profileId, 'chat', { message: m }) };
+}
+
 async function sendVoiceNote(profileId, wav, tz, opts = {}) {
   if (!isWav(wav)) throw new ChatError('The voice note must be a WAV recording.', 415);
   const s = session(profileId, tz);
   care.touch(profileId, opts.source === 'whatsapp' ? 'whatsapp' : 'app');
+  if (opts.source !== 'whatsapp') care.chatNote(profileId, 'voice');
   let words;
   try { words = await deps.transcribe(wav); } catch (e) { throw new ChatError(e.message); }
   if (!words) throw new ChatError('I could not hear any words in that voice note. Please try recording it again.', 422);
@@ -421,11 +434,12 @@ function scamNote(scam, profileId) {
   return `SCAM CHECK (a fact from the app, not from them): what they showed you has one warning sign (${signs}). Say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. No phone numbers, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
 }
 
-async function sendImage(profileId, buf, caption, tz) {
+async function sendImage(profileId, buf, caption, tz, opts = {}) {
   const mime = imageMime(buf);
   if (!mime) throw new ChatError('That file is not a photo Maya can read (JPEG, PNG, GIF or WebP).', 415);
   const s = session(profileId, tz);
   care.touch(profileId, 'app');
+  if (opts.source !== 'whatsapp') care.chatNote(profileId, 'text');
   let seen, scam = null;
   try {
     // Two Spark vision calls side by side: what the photo shows, and whether it is a scam (scam.js). A failed scam check never blocks
@@ -478,4 +492,4 @@ function forget(profileId) {
 // Test and shutdown helper: files every open chat into memory now.
 function endAll() { for (const [id, s] of sessions) { sessions.delete(id); s.finish(); } }
 
-module.exports = { continuity, lastWrittenAt, mirrorSpoken, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
+module.exports = { continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
