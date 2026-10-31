@@ -125,6 +125,28 @@
               <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
             </div>
             <div class="wa-actions"><button id="waWelfareCall" class="btn primary" type="button">Check in with them now (test)</button></div>
+            <h3 class="wa-sub" id="schedHead">Scheduled check-ins</h3>
+            <p class="hint" id="schedLine">No schedule is running.</p>
+            <label class="wa-label" for="schedEvery">Check in</label>
+            <select id="schedEvery" class="wa-wide">
+              <option value="60">Every hour</option>
+              <option value="120">Every 2 hours</option>
+              <option value="180">Every 3 hours</option>
+              <option value="custom">Custom (minutes)</option>
+              <option value="daily" disabled>Every day (needs WhatsApp's approved message template: not available yet)</option>
+            </select>
+            <input id="schedCustom" class="wa-wide" type="number" min="5" max="720" placeholder="Minutes between check-ins (5 to 720)" hidden>
+            <label class="wa-label" id="schedViaLabel">Check in by</label>
+            <div id="schedVia" class="seg" role="radiogroup" aria-labelledby="schedViaLabel">
+              <button type="button" role="radio" aria-checked="true" data-v="call">Call</button>
+              <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
+              <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
+            </div>
+            <p class="hint" id="schedPlan"></p>
+            <div class="wa-actions">
+              <button id="schedStart" class="btn primary" type="button">Start the schedule (24 hours)</button>
+              <button id="schedStop" class="btn" type="button">Stop</button>
+            </div>
             <h3 class="wa-sub">Ring test with one fixed sentence</h3>
             <p class="hint">Rings once, Maya says one fixed sentence and hangs up. No reminder is used.</p>
             <div class="wa-actions"><button id="waTestCall" class="btn" type="button">Call them now (test)</button></div>

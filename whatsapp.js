@@ -100,10 +100,10 @@ function update(profileId, fn) { const all = readLinks(); if (!all[profileId]) r
 // What the dashboard may know: the state, never a message word.
 function view(profileId) {
   const l = linkOf(profileId);
-  if (!l) return { linked: false, configured: configured(), activity: activityOf(profileId) };
+  if (!l) return { linked: false, configured: configured(), activity: activityOf(profileId), welfareSchedule: require('./care').welfareScheduleView(profileId) };
   const open = Boolean(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS);
   const last = (l.sent || []).slice(-1)[0] || null;
-  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null, calls: { ...capInfo(l), blocked: callBlock(l) }, activity: activityOf(profileId) };
+  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null, calls: { ...capInfo(l), blocked: callBlock(l) }, activity: activityOf(profileId), welfareSchedule: require('./care').welfareScheduleView(profileId) };
 }
 
 // ---- webhook security ----
@@ -669,6 +669,11 @@ function placeCall(profileId, kind, spec) {
       .finally(() => { callBusy = false; if (cur.id) liveEnds.delete(cur.id); outboundNow.cur = null; });
   });
 }
+// The scheduled welfare checks do exactly what the picker does (placeWelfare); this tells care.js when a schedule may run at all: linked, opted in, and inside the 24 h window.
+require('./care').setWelfareSender({
+  blocked: (profileId) => { const l = linkOf(profileId); if (!configured() || !l || !l.optIn) return 'WhatsApp is not linked for them.'; if (!(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) return 'They have not written to Maya in the last 24 hours, so no check goes out. Start the schedule again after they write.'; return null; },
+  fire: (profileId, via) => placeWelfare(profileId, via),
+});
 const placeTestCall = (profileId) => placeCall(profileId, 'test');
 const placeReminderCall = (profileId, spec) => placeCall(profileId, 'reminder', spec);
 const placeWelfareCall = (profileId) => placeCall(profileId, 'welfare');

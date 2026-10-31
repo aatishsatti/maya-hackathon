@@ -1204,8 +1204,61 @@ function waTick(p, r, now) {
 }
 
 let ticker = null;
+// ---- scheduled welfare checks (Step 2): one schedule per person, every N minutes for up to 24 hours, by call, text or voice note. The family starts and stops it; it fires from tick() ----
+// The schedule only ever DOES a welfare check the way the welfare picker does (whatsapp.js placeWelfare): every limit, every fallback and every activity entry are that code's. What it adds: it never runs
+// without a window (they have written to Maya in the last 24 hours), it is recorded as fired BEFORE the network call (a restart can never fire a check twice), it pauses itself when a check cannot go out as asked
+// (WhatsApp's refusal, the 2-unanswered pause, an error) instead of texting every interval, and it ends after 24 hours. "Every day" needs an approved WhatsApp template and is not available.
+const SCHEDULE_VIA = ['call', 'text', 'voice'], SCHEDULE_MIN = 5, SCHEDULE_MAX = 720, SCHEDULE_MS = 24 * 3600000;
+let welfareSender = null;   // { blocked(profileId) -> reason | null, fire(profileId, via) -> Promise<result> } (whatsapp.js registers it)
+function setWelfareSender(sender) { welfareSender = sender; }
+function welfareScheduleView(id) {
+  const p = get(id); const s = p && p.welfareSchedule; if (!s) return null;
+  return { ...s, planned: Math.max(1, Math.floor((s.until - s.startedAt) / (s.everyMin * 60000))) };
+}
+function welfareScheduleStart(id, { everyMin, via } = {}) {
+  const p = get(id);
+  if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  const n = Number(everyMin);
+  if (!Number.isInteger(n) || n < SCHEDULE_MIN || n > SCHEDULE_MAX) throw Object.assign(new Error(`Choose how often: every hour, 2 hours, 3 hours, or between ${SCHEDULE_MIN} and ${SCHEDULE_MAX} minutes. A daily check needs WhatsApp's approved message template, which is not available yet.`), { status: 400 });
+  if (!SCHEDULE_VIA.includes(via)) throw Object.assign(new Error('Choose a call, a text or a voice note.'), { status: 400 });
+  if (!welfareSender) throw Object.assign(new Error('WhatsApp is not set up on this server.'), { status: 503 });
+  const why = welfareSender.blocked(id); if (why) throw Object.assign(new Error(`${why} Nothing was scheduled.`), { status: 429 });
+  const now = Date.now();
+  p.welfareSchedule = { everyMin: n, via, startedAt: now, until: now + SCHEDULE_MS, next: now + n * 60000, fired: 0, status: 'running', note: null };
+  save(id); pushFamily('refresh', { id });
+  return welfareScheduleView(id);
+}
+function welfareScheduleStop(id, note = 'Stopped by you.') {
+  const p = get(id); const s = p && p.welfareSchedule;
+  if (!s || s.status === 'ended') return false;
+  s.status = 'ended'; s.note = note; save(id); pushFamily('refresh', { id });
+  return true;
+}
+function welfareSchedulePause(id, why) {
+  const p = get(id); const s = p && p.welfareSchedule;
+  if (!s || s.status !== 'running') return;
+  s.status = 'paused'; s.note = String(why || 'A check could not be sent.').slice(0, 300); save(id); pushFamily('refresh', { id });
+  console.log('welfare schedule', JSON.stringify({ event: 'paused', fired: s.fired }));   // counts only
+}
+function welfareTick(p, now) {
+  const s = p.welfareSchedule;
+  if (!s || s.status !== 'running') return;
+  if (now >= s.until) { s.status = 'ended'; s.note = 'The 24 hours are over.'; save(p.id); pushFamily('refresh', { id: p.id }); return; }
+  if (now < s.next || !welfareSender) return;
+  const id = p.id, via = s.via;
+  s.next = now + s.everyMin * 60000; s.fired += 1; flushOne(id);   // recorded on disk BEFORE anything is sent
+  const why = welfareSender.blocked(id);
+  if (why) { welfareSchedulePause(id, why); return; }
+  console.log('welfare schedule', JSON.stringify({ event: 'check', via, fired: s.fired }));
+  Promise.resolve().then(() => welfareSender.fire(id, via)).then((res) => {
+    if (res && res.fallback) welfareSchedulePause(id, `The check could not go out as a ${via === 'call' ? 'call' : via === 'voice' ? 'voice note' : 'text'}: ${res.reason === 'meta' ? 'WhatsApp refused the call.' : 'two calls in a row were not answered.'} A message was sent instead, and the schedule is paused. Start it again when you are ready.`);
+    pushFamily('refresh', { id });
+  }, (e) => { if (e && e.status === 409) { console.log('welfare schedule', JSON.stringify({ event: 'skipped: another call in progress' })); return; } welfareSchedulePause(id, `A check could not be sent: ${String((e && e.message) || 'error').slice(0, 200)}`); });
+}
+
 function tick(now = Date.now()) {
   for (const p of cache.values()) {
+    welfareTick(p, now);
     for (const f of p.flags) if (f.status === 'active' && now - f.createdAt >= (f.safety ? cfg.expireCriticalMs : cfg.expireLightMs)) closeUnseen(p, f, now);
     for (const sc of p.scams || []) if (sc.status === 'active' && now - sc.createdAt >= cfg.expireLightMs) closeScamUnseen(p, sc, now); // scam: not an emergency, so the 2-day (light) rule
     for (const r of p.reminders) {
@@ -1346,6 +1399,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, setWelfareSender, welfareScheduleStart, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };

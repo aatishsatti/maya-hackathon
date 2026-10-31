@@ -191,7 +191,32 @@
     node.addEventListener('click', (e) => { const b = e.target && e.target.closest ? e.target.closest('button') : null; if (!b) return; if (cur() === b && node.dataset.clearable) set(null); else set(b.dataset.v); });
     return { get: () => (cur() ? cur().dataset.v : null), set };
   }
-  const deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia'));
+  const deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia'));
+  // ---- scheduled check-ins: every hour / 2 h / 3 h / custom, by call, text or voice note, for 24 hours; the server runs it and pauses it by itself when a check cannot go out ----
+  const everyMin = () => { const v = $('schedEvery').value; return v === 'custom' ? Number($('schedCustom').value) : Number(v); };
+  const EVERY_TEXT = (n) => (n === 60 ? 'hour' : n % 60 === 0 ? `${n / 60} hours` : `${n} minutes`);
+  function schedPlan() {
+    const n = everyMin(), via = schedSeg.get() || 'call';
+    $('schedCustom').hidden = $('schedEvery').value !== 'custom';
+    if (!Number.isInteger(n) || n < 5 || n > 720) { $('schedPlan').textContent = 'Choose between 5 and 720 minutes.'; return; }
+    const count = Math.max(1, Math.floor(24 * 60 / n)), what = via === 'call' ? 'calls' : via === 'voice' ? 'voice notes' : 'texts';
+    $('schedPlan').textContent = `Up to ${count} ${what} in the next 24 hours, one every ${EVERY_TEXT(n)}. ${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}It also pauses by itself after 2 unanswered calls in a row, and when they have not written to Maya in the last 24 hours. Every check shows in Activity. You can stop it any time.`;
+  }
+  function renderSchedule(s) {
+    const live = Boolean(s && s.status === 'running');
+    $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next about ${clock(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
+    $('schedStart').disabled = live; $('schedStop').disabled = !live;
+  }
+  $('schedEvery').addEventListener('change', schedPlan); $('schedCustom').addEventListener('input', schedPlan); $('schedVia').addEventListener('click', schedPlan); schedPlan();
+  $('schedStart').addEventListener('click', async () => {
+    $('schedStart').disabled = true;
+    try {
+      const r = await waCall(`/api/whatsapp/${id}/welfare-schedule`, 'POST', { everyMin: everyMin(), via: schedSeg.get() || 'call' });
+      if (!r.ok) { $('schedLine').textContent = r.j.error || 'Could not start the schedule.'; $('schedStart').disabled = false; return; }
+      renderSchedule(r.j.schedule); load();
+    } catch (e) { $('schedLine').textContent = `Could not reach the server: ${e.message}. Nothing was scheduled.`; $('schedStart').disabled = false; }
+  });
+  $('schedStop').addEventListener('click', async () => { $('schedStop').disabled = true; await waCall(`/api/whatsapp/${id}/welfare-schedule`, 'DELETE').catch(() => {}); loadWa(); });
 
   const REM_PILL = { done: ['pill-ok', 'Answered'], missed: ['pill-miss', 'Missed'], no_reply: ['pill-wait', "Hasn't replied yet"], unanswered: ['pill-miss', "Couldn't reach"], declined: ['pill-wait', 'Declined'], calling: ['pill-info', 'Calling'], answered: ['pill-info', 'Picked up'],
     wa_sending: ['pill-info', 'Sending'], wa_sent: ['pill-info', 'Sent'], wa_delivered: ['pill-info', 'Delivered'], wa_read: ['pill-wait', 'Read'], wa_missed: ['pill-miss', 'Missed'], wa_failed: ['pill-miss', 'Not sent'] };
@@ -257,7 +282,7 @@
     let v;
     try { v = (await waCall(`/api/whatsapp/${mine}`, 'GET')).j; } catch { return; }
     if (mine !== id) return;
-    renderActivity(v.activity);
+    renderActivity(v.activity); renderSchedule(v.welfareSchedule);
     $('waLink').hidden = Boolean(v.linked && v.optIn);
     $('waSend').hidden = !(v.linked && v.optIn);
     $('waNote').hidden = !v.linked;

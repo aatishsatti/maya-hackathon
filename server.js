@@ -178,6 +178,10 @@ async function handleWhatsapp(req, res, url) {
       const body = (await readJson(req)) || {}, via = body.via === 'text' || body.via === 'voice' ? body.via : 'call';
       return via === 'call' && MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeWelfare(a, via));
     } // TEMPORARY (render-test): Step 1, a one-off welfare check call
+    if (b === 'welfare-schedule') {   // Step 2: scheduled welfare checks, started and stopped by the family
+      if (req.method === 'POST') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, { schedule: care.welfareScheduleStart(a, { everyMin: body.everyMin, via: body.via }) }); }
+      if (req.method === 'DELETE') return sendJson(res, 200, { stopped: care.welfareScheduleStop(a) });
+    }
     if (req.method === 'POST' && b === 'reminder-call') { // TEMPORARY (render-test): C2, a reminder delivered by an outbound call
       if (MODE !== 'real') return sendJson(res, 503, { error: 'Calls need real mode.' });
       const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' });
