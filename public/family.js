@@ -218,6 +218,35 @@
   });
   $('schedStop').addEventListener('click', async () => { $('schedStop').disabled = true; await waCall(`/api/whatsapp/${id}/welfare-schedule`, 'DELETE').catch(() => {}); loadWa(); });
 
+  // ---- section navigation: the jump links scroll to their section (a hidden target falls back to the WhatsApp panel and a folded panel opens), and every panel can be folded; what is folded is remembered on this device ----
+  const FOLD_KEY = 'maya-folded';
+  const folded = () => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || '[]'); } catch { return []; } };
+  const rememberFold = (panelId, on) => { try { const s = new Set(folded()); if (on) s.add(panelId); else s.delete(panelId); localStorage.setItem(FOLD_KEY, JSON.stringify([...s])); } catch { /* no storage: it simply is not remembered */ } };
+  function foldable(panels) {
+    for (const panel of panels) {
+      const head = panel.querySelector ? panel.querySelector('.sec-head') : null; if (!head || !panel.id) continue;
+      const btn = el('button', 'fold', 'Hide'); btn.type = 'button'; btn.setAttribute('aria-expanded', 'true');
+      const set = (on) => { panel.classList[on ? 'add' : 'remove']('collapsed'); btn.textContent = on ? 'Show' : 'Hide'; btn.setAttribute('aria-expanded', String(!on)); rememberFold(panel.id, on); };
+      btn.addEventListener('click', () => set(!panel.classList.contains('collapsed')));
+      head.append(btn); if (folded().includes(panel.id)) set(true);
+    }
+  }
+  function jump(targetId) {
+    let target = document.getElementById(targetId); const visible = (x) => Boolean(x) && (x.offsetParent === undefined || x.offsetParent !== null) && !x.hidden;
+    if (!visible(target)) target = document.getElementById('waPanel');
+    const panel = target && target.closest ? target.closest('.panel') : null; if (panel && panel.classList.contains('collapsed')) { const b = panel.querySelector('.fold'); if (b) b.click(); }
+    if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  if (document.querySelectorAll) {
+    foldable([...document.querySelectorAll('section.panel')]);
+    for (const a of [...document.querySelectorAll('#tabs .tab')]) a.addEventListener('click', (e) => { e.preventDefault(); jump(String(a.getAttribute('href')).slice(1)); });
+    if (typeof IntersectionObserver === 'function') {   // the tab of the section in view is marked
+      const tabs = [...document.querySelectorAll('#tabs .tab')], seen = new Map();
+      const io = new IntersectionObserver((rows) => { for (const r of rows) seen.set(r.target.id, r.isIntersecting ? r.intersectionRatio : 0); const top = [...seen.entries()].sort((x, y) => y[1] - x[1])[0]; for (const a of tabs) a.setAttribute('aria-current', String(Boolean(top && top[1] > 0 && a.getAttribute('href') === `#${top[0]}`))); }, { threshold: [0, 0.25, 0.5, 0.75, 1] });
+      for (const a of tabs) { const t = document.getElementById(String(a.getAttribute('href')).slice(1)); if (t) io.observe(t); }
+    }
+  }
+
   const REM_PILL = { done: ['pill-ok', 'Answered'], missed: ['pill-miss', 'Missed'], no_reply: ['pill-wait', "Hasn't replied yet"], unanswered: ['pill-miss', "Couldn't reach"], declined: ['pill-wait', 'Declined'], calling: ['pill-info', 'Calling'], answered: ['pill-info', 'Picked up'],
     wa_sending: ['pill-info', 'Sending'], wa_sent: ['pill-info', 'Sent'], wa_delivered: ['pill-info', 'Delivered'], wa_read: ['pill-wait', 'Read'], wa_missed: ['pill-miss', 'Missed'], wa_failed: ['pill-miss', 'Not sent'] };
   // Message status -> pill. The words are the server's own: Sent, Delivered, Seen, Played, Replied, Hasn't replied yet.

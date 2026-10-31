@@ -189,3 +189,15 @@ select:focus-visible, input:focus-visible, .btn:focus-visible, .mode:focus-withi
 .seg button:focus-visible { outline: 3px solid #1a1a1a; outline-offset: -3px; }
 @media (max-width: 600px) { .act-cards { grid-template-columns: repeat(3, 1fr); } .act-card b { font-size: 26px; } .act-row { align-items: flex-start; } }
 .act-filters .chip.on { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+
+/* Section navigation: a sticky bar of jump links (scrolls sideways on a phone) and panels that fold */
+.tabs { position: sticky; top: 0; z-index: 20; display: flex; gap: 8px; overflow-x: auto; padding: 8px 0; margin: 0 0 12px; background: var(--bg, #fff); border-bottom: 1px solid var(--line); -webkit-overflow-scrolling: touch; }
+.tab { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 44px; padding: 8px 16px; border: 1.5px solid #d9d9d9; border-radius: 999px; background: #fff; color: var(--ink); font-weight: 600; font-size: 15px; text-decoration: none; white-space: nowrap; }
+.tab:hover { background: #f2f2f2; }
+.tab[aria-current="true"] { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.tab:focus-visible { outline: 3px solid #1a1a1a; outline-offset: 2px; }
+html { scroll-behavior: smooth; }
+.panel, #welfareHead { scroll-margin-top: 72px; }
+.fold { margin-left: auto; font: inherit; font-size: 14px; font-weight: 600; min-height: 44px; padding: 6px 14px; border: 1px solid #d9d9d9; border-radius: 10px; background: #fff; color: var(--ink); cursor: pointer; }
+.panel.collapsed > :not(.sec-head) { display: none; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

@@ -1405,7 +1405,7 @@ test('Step 1 welfare: the Call gets the welfare-check fact (a welfare check, how
   voiceReset(); const { id } = linked(); const { call } = outCall(id); call.outreach = { kind: 'welfare' }; call.shortGreeting = false;
   const note = call.greetingNote(14);
   assert.match(note, /welfare check/); assert.match(note, /see how they are/); assert.match(note, /Their family asked you to call and check in on them/); assert.match(note, /Invent nothing: no condition, no news, no weather, no time of day/); assert.match(note, /No medicine, no dose, no advice/);
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waWelfareCall"[^>]*>Check in with them now \(test\)</); assert.match(html, /<h3 class="wa-sub">Check in with them \(test\)<\/h3>/);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waWelfareCall"[^>]*>Check in with them now \(test\)</); assert.match(html, /<h3 class="wa-sub" id="welfareHead">Check in with them \(test\)<\/h3>/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /b === 'welfare-call'\) \{/);
 });
 
@@ -1649,4 +1649,35 @@ test('schedule: the dashboard section shows the plan (how many in 24 hours, What
   stopAllSchedules(); const { id } = inWindow(); const s = sched(id, { everyMin: 120, via: 'text' }); assert.deepEqual(wa.view(id).welfareSchedule, s); assert.equal(wa.view(senior()).welfareSchedule, null);
   const els = actPage({ entries: [], summary: null }); await new Promise((r) => setTimeout(r, 20)); assert.ok(els.schedPlan.textContent !== undefined);   // the page loads with the section in place
   stopAllSchedules();
+});
+
+// ---- part 3: section navigation (sticky jump links, folding panels remembered on the device) ----
+const navPage = (stored = {}) => {
+  class E { constructor(t) { this.tag = t; this.children = []; this.textContent = ''; this.hidden = false; this.disabled = false; this.value = ''; this.className = ''; this.handlers = {}; this.style = {}; this.dataset = {}; this.attrs = {}; this.scrolled = 0; }
+    append(...k) { this.children.push(...k); } replaceChildren(...k) { this.children = k; } addEventListener(e, f) { this.handlers[e] = f; } setAttribute(k, v) { this.attrs[k] = v; } getAttribute(k) { return this.attrs[k]; } focus() {} scrollIntoView() { this.scrolled++; } click() { this.handlers.click && this.handlers.click({ preventDefault() {} }); }
+    closest() { return this.panel || null; } text() { return [this.textContent, ...this.children.map((c) => (c.text ? c.text() : String(c)))].join(' '); } }
+  const els = {}; const mkPanel = (id) => { const p = new E('section'); p.id = id; const head = new E('div'); p.heads = { '.sec-head': head }; p.querySelector = (s) => (s === '.fold' ? head.children.find((c) => /fold/.test(c.className)) : p.heads[s]); const set = new Set(); p.classList = { add: (c) => set.add(c), remove: (c) => set.delete(c), contains: (c) => set.has(c), toggle() {} }; p.head = head; els[id] = p; return p; };
+  const panels = ['waPanel', 'remPanel', 'msgPanel', 'activityPanel'].map(mkPanel);
+  const tabs = [['waPanel'], ['remPanel'], ['welfareHead'], ['msgPanel'], ['activityPanel']].map(([id]) => { const a = new E('a'); a.attrs.href = `#${id}`; return a; });
+  const store = { ...stored };
+  const document = { getElementById: (i) => (els[i] = els[i] || new E('x')), createElement: (t) => new E(t), querySelectorAll: (s) => (s === 'section.panel' ? panels : s === '#tabs .tab' ? tabs : []) };
+  els.welfareHead = new E('h3'); els.welfareHead.panel = els.waPanel; els.remPanel.panel = els.remPanel;
+  const sandbox = { document, window: {}, localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } }, Date, JSON, Promise, console, Intl, EventSource: class { addEventListener() {} }, setInterval: () => 1, clearInterval() {},
+    fetch: async (url) => (url === '/api/profiles' ? { ok: true, status: 200, json: async () => ({ profiles: [{ id: 'abcdef12', name: 'Rosa' }] }) } : { ok: true, status: 200, json: async () => ({}) }) };
+  sandbox.localStorage.getItem = (k) => (k === 'maya-folded' ? (store.folded === undefined ? null : store.folded) : k === 'maya-profile' ? 'abcdef12' : 'abcdef12');
+  sandbox.localStorage.setItem = (k, v) => { if (k === 'maya-folded') store.folded = v; };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'), sandbox); return { els, panels, tabs, store };
+};
+test('navigation: the five jump links point at real sections; the bar is sticky and scrolls sideways on a phone; no new section was added', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'), css = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.css'), 'utf8');
+  const nav = html.slice(html.indexOf('<nav id="tabs"'), html.indexOf('</nav>')); const targets = [...nav.matchAll(/<a class="tab" href="#(\w+)">([^<]+)<\/a>/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(targets, [['waPanel', 'WhatsApp'], ['remPanel', 'Reminders'], ['welfareHead', 'Welfare'], ['msgPanel', 'Send message'], ['activityPanel', 'Activity']]); for (const [t] of targets) assert.match(html, new RegExp(`id="${t}"`), `the section ${t} exists`);
+  assert.match(css, /\.tabs \{[^}]*position: sticky[^}]*top: 0[^}]*overflow-x: auto/); assert.match(css, /\.tab \{[^}]*min-height: 44px/); assert.match(css, /\.panel\.collapsed > :not\(\.sec-head\) \{ display: none; \}/); assert.match(css, /scroll-margin-top/); assert.equal((html.match(/<section/g) || []).length, 8, 'no new section: the same page, easier to move around');
+});
+test('navigation: every panel gets a Hide / Show button that folds it and is remembered on this device; a jump opens a folded panel; a hidden target (not linked yet) falls back to the WhatsApp panel', () => {
+  const a = navPage(); for (const p of a.panels) { const b = p.head.children.find((c) => /fold/.test(c.className)); assert.ok(b, `${p.id} has a fold button`); assert.equal(b.textContent, 'Hide'); assert.equal(b.attrs['aria-expanded'], 'true'); }
+  const rem = a.els.remPanel, btn = rem.head.children.find((c) => /fold/.test(c.className)); btn.click(); assert.equal(rem.classList.contains('collapsed'), true); assert.equal(btn.textContent, 'Show'); assert.equal(btn.attrs['aria-expanded'], 'false'); assert.deepEqual(JSON.parse(a.store.folded), ['remPanel']);
+  const b = navPage({ folded: a.store.folded }); assert.equal(b.els.remPanel.classList.contains('collapsed'), true, 'folded stays folded on the next visit'); assert.equal(b.els.waPanel.classList.contains('collapsed'), false);
+  b.tabs[1].handlers.click({ preventDefault() {} }); assert.equal(b.els.remPanel.classList.contains('collapsed'), false, 'a jump opens a folded panel'); assert.equal(b.els.remPanel.scrolled, 1); assert.deepEqual(JSON.parse(b.store.folded), []);
+  b.els.welfareHead.hidden = true; b.tabs[2].handlers.click({ preventDefault() {} }); assert.equal(b.els.waPanel.scrolled, 1, 'the Welfare target is hidden until a number is linked: the WhatsApp panel is shown instead'); assert.equal(b.els.welfareHead.scrolled, 0);
 });
