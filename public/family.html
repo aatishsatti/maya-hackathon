@@ -66,6 +66,7 @@
               <input id="at" type="datetime-local" required aria-label="When">
               <select id="repeat" aria-label="Repeat"><option value="none">Once</option><option value="daily">Every day</option><option value="weekly">Every week</option></select>
             </div>
+            <p class="hint" id="remQuietWarn" role="status" aria-live="polite" hidden></p>
             <label class="wa-label" id="deliverLabel">Deliver this reminder as</label>
             <div id="deliverPick" class="seg" role="radiogroup" aria-labelledby="deliverLabel" data-clearable="1">
               <button type="button" role="radio" aria-checked="false" data-v="call">Call</button>

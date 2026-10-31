@@ -117,6 +117,8 @@ function localHour(ts, tz) {
   try { return Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', ...(tz ? { timeZone: tz } : {}) }).format(new Date(ts))); }
   catch { return new Date(ts).getHours(); }
 }
+// Is it quiet hours where this person is (22:00 to 07:00 in their time zone)? Unknown time zone: no (nothing is held).
+const inQuiet = (id, now = Date.now()) => { const p = get(id); return Boolean(p && p.tz && inQuietHours(now, p.tz)); };
 function inQuietHours(ts, tz) {
   const h = localHour(ts, tz);
   return cfg.quietStart > cfg.quietEnd ? (h >= cfg.quietStart || h < cfg.quietEnd) : (h >= cfg.quietStart && h < cfg.quietEnd);
@@ -966,7 +968,7 @@ function welfarePaused(id, reason, why) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: 'A welfare check call was not placed: calls are paused.', ref: null });
-  n.channel = 'whatsapp'; n.via = 'call'; n.paused = reason === 'meta' ? 'meta' : reason === 'window' ? 'window' : 'misses'; if (why) n.pausedWhy = String(why).replace(/\s+/g, ' ').slice(0, 240); save(id); pushFamily('refresh', { id });
+  n.channel = 'whatsapp'; n.via = 'call'; n.paused = reason === 'meta' ? 'meta' : reason === 'window' ? 'window' : reason === 'quiet' ? 'quiet' : 'misses'; if (why) n.pausedWhy = String(why).replace(/\s+/g, ' ').slice(0, 240); save(id); pushFamily('refresh', { id });
   return n;
 }
 // WhatsApp refused the call (its own limit), so nothing rang: the entry that was started is taken back (the paused fallback then writes its own).
@@ -1080,6 +1082,7 @@ function reminderSent(id, rid, key, res) {
     return true;
   }
   const reason = (res && res.reason) || 'error', error = (res && res.error) || null;
+  if (reason === 'window_closed' && inQuiet(id, a.startedAt || Date.now())) { finishOccurrence(p, rid, 'wa_failed', { reason: 'window_closed_quiet', error }); waLog({ event: 'not sent', reason: 'window_closed_quiet' }); escalate(p, r, 'failed'); pushFamily('refresh', { id }); return true; }   // the window is closed and it is night: Maya never rings in quiet hours as a rescue
   if (reason === 'window_closed' && !a.noCall && reminderSender && reminderSender.placeCall && reminderSender.channelFor(id) === 'whatsapp') {
     // The 24 h window is closed, so a text or voice note cannot go: try a CALL for this round (a rescue, not a change of the pick: the next time it is due the pick is tried first again). The occurrence
     // that was started is taken back; the call makes its own. If the call cannot be placed either, the entry says Paused with the exact reason and nothing was sent.
@@ -1223,7 +1226,7 @@ let welfareSender = null;   // { blocked(profileId) -> reason | null, fire(profi
 function setWelfareSender(sender) { welfareSender = sender; }
 function welfareScheduleView(id) {
   const p = get(id); const s = p && p.welfareSchedule; if (!s) return null;
-  return { ...s, planned: Math.max(1, Math.floor((s.until - s.startedAt) / (s.everyMin * 60000))) };
+  return { ...s, held: Boolean(s.held), planned: Math.max(1, Math.floor((s.until - s.startedAt) / (s.everyMin * 60000))) };
 }
 function welfareScheduleStart(id, { everyMin, via } = {}) {
   const p = get(id);
@@ -1255,6 +1258,8 @@ function welfareTick(p, now) {
   if (!s || s.status !== 'running') return;
   if (now >= s.until) { s.status = 'ended'; s.note = 'The 24 hours are over.'; save(p.id); pushFamily('refresh', { id: p.id }); return; }
   if (now < s.next || !welfareSender) return;
+  if (inQuiet(p.id, now)) { if (!s.held) { s.held = true; save(p.id); pushFamily('refresh', { id: p.id }); console.log('welfare schedule', JSON.stringify({ event: 'held for quiet hours' })); } return; }   // the check is due but it is night: it goes when the quiet hours end
+  s.held = false;
   const id = p.id, via = s.via;
   s.next = now + s.everyMin * 60000; s.fired += 1; flushOne(id);   // recorded on disk BEFORE anything is sent
   const why = welfareSender.blocked(id, via);
@@ -1274,12 +1279,17 @@ function tick(now = Date.now()) {
     for (const r of p.reminders) {
       waTick(p, r, now);
       if (r.dueAt == null || r.dueAt > now || r.active) continue;
-      if (now - r.dueAt > cfg.reminderLateMs) {
+      // Quiet hours (22:00 to 07:00 where they are): nothing is sent, texted or rung at night. A due reminder is HELD and goes when the quiet hours end; being held is not being late. Only Tier A safety alerts
+      // ignore quiet hours (they never pass through here). With no known time zone nothing is held (as before).
+      if (inQuiet(p.id, now)) { if (!r.held) { r.held = true; save(p.id); pushFamily('refresh', { id: p.id }); console.log('reminder', JSON.stringify({ event: 'held for quiet hours' })); } continue; }
+      if (r.held) { r.held = false; r.releasedAt = now; save(p.id); }
+      const lateBase = r.releasedAt || r.dueAt;
+      if (now - lateBase > cfg.reminderLateMs) {
         r.last = { dueAt: r.dueAt, state: 'missed', at: now, attempts: 0 };
-        advanceDue(r, now); save(p.id);
+        advanceDue(r, now); r.releasedAt = null; save(p.id);
         continue;
       }
-      fireReminder(p, r, now);
+      fireReminder(p, r, now); r.releasedAt = null;
     }
     const keep = p.reminders.filter((r) => !(r.repeat === 'none' && r.dueAt == null && !r.active && r.last && now - r.last.at > cfg.doneKeepMs));   // finished one-time reminders go after 30 days
     if (keep.length !== p.reminders.length) { p.reminders = keep; save(p.id); }
@@ -1317,6 +1327,7 @@ function waLabel(o) {
     case 'wa_missed': return `Missed: no reply within ${Math.round(cfg.waMissMs / MIN)} minutes`;
     case 'wa_failed': return {
       window_closed: "Not sent: WhatsApp's 24-hour window is closed, so Maya cannot message them yet",
+      window_closed_quiet: "Not sent: WhatsApp's 24-hour window is closed and it is quiet hours, so Maya did not ring",
       window_closed_call_failed: `Not sent: WhatsApp's 24-hour window is closed and a call could not be placed (${(o.error && o.error.title) || 'no reason given'})`,
       restart: 'Not sent: the server restarted while sending, so it may not have reached them',
       whatsapp_failed: `WhatsApp could not deliver it${code}`,
@@ -1386,11 +1397,11 @@ function view(id) {
   if (!p) return null;
   const seen = lastSeen(p);
   const fl = (f) => ({ ...f, name: nameOf(id), timeline: timeline(p, f) });
-  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, msg: Boolean(r.msg),
+  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, msg: Boolean(r.msg), held: Boolean(r.held),
     active: r.active && { ...r.active, label: occLabel(r.active) },
     last: r.last && { ...r.last, label: occLabel(r.last) } });
   return {
-    id, name: nameOf(id), mode: p.mode, modes: MODES, delivery: p.delivery, appOpen: appOpen(id), inCall: liveCalls.has(id),
+    id, name: nameOf(id), mode: p.mode, modes: MODES, delivery: p.delivery, quiet: { start: cfg.quietStart, end: cfg.quietEnd, tz: p.tz || null }, appOpen: appOpen(id), inCall: liveCalls.has(id),
     lastActivity: p.lastActivity, lastSeen: seen, lastCallAt: p.lastActivity.maya, callCount: p.callCount || 0,
     activeOutreach: activeByProfile.has(id) ? { kind: activeByProfile.get(id).kind, attempts: activeByProfile.get(id).attempts, of: cfg.maxAttempts, state: activeByProfile.get(id).state } : null,
     flags: p.flags.filter((f) => f.level === 'flag').map(fl),
@@ -1411,5 +1422,5 @@ module.exports = {
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
   addReminder, setWelfareSender, welfareScheduleStart, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
-  setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
+  setMode, sendMessage, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

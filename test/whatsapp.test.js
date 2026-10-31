@@ -951,11 +951,11 @@ test('Phase 2: one nudge after 10 minutes if not answered, then Missed after 60 
   }
 });
 
-test('Phase 2: quiet hours (22:00-07:00, when the time zone is known): the reminder is sent at its time, but the nudge and the family note wait; with no time zone nothing is assumed', async () => {
-  voiceReset(); const x = remindProfile({ mode: 'ultra', delivery: 'text', tz: 'UTC' }); const due = Date.UTC(2026, 10, 3, 22, 50);
+test('Phase 2: quiet hours (22:00-07:00, when the time zone is known): a reminder sent just before them is sent at its time, but its nudge and the family note wait for the morning; with no time zone nothing is assumed (a reminder DUE inside the quiet hours is held: see the quiet-hours tests)', async () => {
+  voiceReset(); const x = remindProfile({ mode: 'ultra', delivery: 'text', tz: 'UTC' }); const due = Date.UTC(2026, 10, 3, 21, 55);
   care.addReminder(x.id, { task: 'take your tablets', dueAt: Date.now() + 5000, repeat: 'none' }); care.get(x.id).reminders[0].dueAt = due;
-  care.tick(due); await settle(); assert.equal(sent().length, 1, 'the reminder itself goes at the time the family chose, even in quiet hours'); clearCalls();
-  care.tick(due + 11 * MIN); await settle(); assert.equal(sent().length, 0, 'the nudge waits for 07:00');
+  care.tick(due); await settle(); assert.equal(sent().length, 1, 'the reminder goes at the time the family chose (21:55, before the quiet hours)'); clearCalls();
+  care.tick(due + 11 * MIN); await settle(); assert.equal(sent().length, 0, 'the nudge (22:06) waits for 07:00');
   care.tick(due + 61 * MIN); await settle(); assert.equal(stateOf(x.id), 'wa_missed', 'Missed is recorded at once'); assert.equal(care.get(x.id).notifications.filter((n) => n.ref === 'reminder_missed').length, 0, 'but the family note is held');
   assert.equal(rem(x.id).last.escalate.pending, true);
   care.tick(Date.UTC(2026, 10, 4, 7, 1)); assert.equal(care.get(x.id).notifications.filter((n) => n.ref === 'reminder_missed' && n.kind === 'alert').length, 1, 'sent once quiet hours end'); assert.equal(rem(x.id).last.escalate.pending, false);
@@ -1740,4 +1740,52 @@ test('window closed: a reminder set to Text or Voice (or the default) is placed 
   await withAnswered(async () => { care.tick(Date.now() + 5000); await waitFor(() => callPosts().some((x) => x.action === 'connect')); await sleepMs(80); }); assert.equal(sent().length, 0);
   clearCalls(); setInbound(d.id, 2 * H); const due2 = rd.dueAt; assert.ok(due2 > Date.now() + 20 * 3600000); care.get(d.id).reminders[0].last = null; rd.active = null; care.tick(due2 + 1000); await settle(); assert.equal(sent().length, 1, 'the window is open again: the text goes, not a call'); assert.equal(callPosts().length, 0);
   const note = fs.readFileSync(path.join(__dirname, '..', 'whatsapp.js'), 'utf8') + fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.doesNotMatch(note, /5 of 5|answered calls used/);
+});
+
+// ---- quiet hours (22:00 to 07:00 where THEY are): due deliveries are held until the morning, a rescue call never rings at night, Tier A alerts do not wait ----
+// The tests make "now" be 23:xx for a profile by choosing a fixed-offset time zone; "morning" is now + 8 h, which is 07:xx there (the window, the real clock and the 24 h end of a schedule all stay valid).
+const nightTz = () => { const h = new Date().getUTCHours(); let o = (23 - h + 24) % 24; if (o > 14) o -= 24; return o === 0 ? 'Etc/GMT' : o > 0 ? `Etc/GMT-${o}` : `Etc/GMT+${-o}`; };
+const atNight = (x) => { care.get(x.id).tz = nightTz(); return x; };
+const MORNING = () => Date.now() + 8 * 3600000;
+const nightRem = (id, task, extra = {}) => { const r = care.addReminder(id, { task, dueAt: Date.now() + 3000, repeat: 'none', ...extra }); return r; };
+
+test('quiet hours: a reminder due at night is HELD (nothing sent, the entry says so), is not late when the morning comes, goes then through its pick, and a repeating one keeps its own time', async () => {
+  stopAllSchedules(); reminderReset(); const x = atNight(remindProfile({ delivery: 'text' })); const r = nightRem(x.id, 'night one'); const due = r.dueAt;
+  care.tick(Date.now() + 5000); await settle(); assert.equal(sent().length, 0, 'nothing at night'); assert.equal(callPosts().length, 0); assert.equal(r.held, true); assert.equal(r.active, null);
+  const e = wa.activityOf(x.id).entries.find((q) => q.words === 'night one'); assert.deepEqual([e.status, e.label], ['scheduled', 'Held']); assert.equal(e.note, 'Held for quiet hours (22:00 to 07:00): it will go at 07:00.'); assert.equal(care.view(x.id).reminders[0].held, true);
+  care.tick(Date.now() + 3 * 3600000); await settle(); assert.equal(sent().length, 0, 'still night: still held');
+  care.tick(MORNING()); await settle(); assert.equal(sent().length, 1, 'goes at the end of the quiet hours'); assert.equal(sent()[0].type, 'text'); assert.equal(r.held, false); assert.notEqual(stateOf(x.id), 'missed', 'held is not late'); assert.match(wa.activityOf(x.id).entries.find((q) => q.words === 'night one').label, /Sent/);
+  // a daily reminder keeps its own time of day
+  clearCalls(); const y = atNight(remindProfile({ delivery: 'text' })); const d = nightRem(y.id, 'daily night', { repeat: 'daily' }); const due0 = d.dueAt; care.tick(Date.now() + 5000); await settle(); care.tick(MORNING()); await settle(); assert.equal(sent().length, 1); assert.equal(d.dueAt, due0 + 24 * 3600000, 'the next one is the same time tomorrow, not shifted to the morning');
+  // someone with no known time zone is never held (as before)
+  clearCalls(); const z = remindProfile({ delivery: 'text' }); care.get(z.id).tz = null; nightRem(z.id, 'no zone'); care.tick(Date.now() + 5000); await settle(); assert.equal(sent().length, 1);
+});
+
+test('quiet hours: the rescue Call NEVER rings at night; at 07:00 the pick is tried first and, with the window still closed, the call is placed then; a manual check-in at night is refused with the reason, not rung', async () => {
+  stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0; const x = atNight(remindProfile({ delivery: 'text' })); setInbound(x.id, 30 * H); const r = nightRem(x.id, 'rescue at night');
+  await withAnswered(async () => {
+    care.tick(Date.now() + 5000); await settle(); assert.equal(callPosts().length, 0, 'no call at night, even with the window closed'); assert.equal(sent().length, 0); assert.equal(r.held, true);
+    care.tick(MORNING()); await waitFor(() => callPosts().some((q) => q.action === 'connect')); await sleepMs(60);
+  });
+  assert.equal(callPosts().find((q) => q.action === 'connect').to, x.phone, 'at 07:00 the window is still closed: the call goes then'); assert.equal(sent().length, 0); assert.equal(wa.activityOf(x.id).entries.find((q) => q.words === 'rescue at night').note, 'The 24 hour window was closed, so Maya called instead.');
+  clearCalls(); const o = atNight(outside()); await assert.rejects(wa.placeWelfare(o.id, 'text'), (e) => { assert.equal(e.status, 429); assert.match(e.message, /quiet hours \(22:00 to 07:00\), so Maya will not ring\. Nothing was sent\./); return true; });
+  assert.equal(callPosts().length, 0); assert.equal(sent().length, 0); const en = wa.activityOf(o.id).entries.find((q) => q.type === 'welfare'); assert.deepEqual([en.status, en.label], ['paused', 'Paused']); assert.match(en.note, /quiet hours/);
+});
+
+test('quiet hours: a scheduled welfare check that falls at night is HELD (the page says so), goes at the end of the quiet hours, and the interval restarts from then; a Tier A safety alert ignores quiet hours', async () => {
+  stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0; const x = atNight(inWindow()); sched(x.id, { everyMin: 5, via: 'text' });
+  care.tick(Date.now() + 6 * 60000); await settle(); assert.equal(sent().length, 0, 'due, but it is night'); assert.equal(care.welfareScheduleView(x.id).held, true); assert.equal(care.welfareScheduleView(x.id).status, 'running'); assert.equal(care.welfareScheduleView(x.id).fired, 0);
+  const t = MORNING(); care.tick(t); await settle(); assert.equal(sent().length, 1); assert.equal(sent()[0].text.body, WTEXT); const v = care.welfareScheduleView(x.id); assert.deepEqual([v.held, v.fired], [false, 1]); assert.ok(v.next >= t + 5 * 60000 - 1000, 'the next one is a full interval after the morning check'); stopAllSchedules();
+  // Tier A: a self-harm alert is raised at once at night, topic only, as before
+  const y = atNight(linked()); const a = care.selfHarmAlert(y.id, { kind: 'self_harm', channel: 'call' }); assert.equal(a.isNew, true, 'raised immediately, at night'); assert.ok(care.get(y.id).flags.some((f) => f.safety && f.status === 'active')); assert.ok(care.get(y.id).notifications.some((n) => n.to === 'family'), 'the family is told at once');
+});
+
+test('quiet hours: the dashboard warns when a reminder time falls in their quiet hours (kept, held until 07:00), says so on a held schedule, and says nothing for a daytime time or an unknown time zone', async () => {
+  const tz = nightTz(); const mk = (q) => { const els = actPage({ entries: [], summary: null }); return els; };
+  const { id } = inWindow(); care.get(id).tz = tz; assert.deepEqual(care.view(id).quiet, { start: 22, end: 7, tz }); care.get(id).tz = null; assert.deepEqual(care.view(id).quiet, { start: 22, end: 7, tz: null });
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'), html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
+  assert.match(src, /That time is in their quiet hours \(\$\{hh\(quiet\.start\)\}:00 to \$\{hh\(quiet\.end\)\}:00\)\. The reminder is kept and will be held until/); assert.match(src, /Held for quiet hours: the next check goes at/); assert.match(src, /is held until \$\{hh\(quiet\.end\)\}:00/); assert.match(html, /id="remQuietWarn"[^>]*hidden/);
+  // the page logic, run for real: the same hour test as the server
+  const vmSrc = src.match(/const inQuietAt = [^\n]+/)[0]; const run = (quiet, ms) => vm.runInNewContext(`let quiet = ${JSON.stringify(quiet)}; ${vmSrc}; inQuietAt(${ms})`, { Intl, Number, Date });
+  const night = Date.now(), day = Date.now() + 9 * 3600000; assert.equal(run({ start: 22, end: 7, tz }, night), true); assert.equal(run({ start: 22, end: 7, tz }, day), false); assert.equal(run({ start: 22, end: 7, tz: null }, night), false); assert.equal(run(null, night), false);
 });

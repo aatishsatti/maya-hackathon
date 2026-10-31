@@ -552,7 +552,7 @@ function activityOf(profileId) {
   const push = (e) => { if (e.at && (e.status === 'scheduled' || now - e.at < ACTIVITY_DAYS * 86400000)) out.push(e); };
   for (const r of p.reminders || []) {
     const type = r.msg ? 'message' : 'reminder', planned = r.deliver || (waOn ? pref : 'call');
-    if (r.dueAt && !r.active) push({ id: `r:${r.id}:s`, type, channel: planned, status: 'scheduled', label: 'Scheduled', rank: 0, at: r.dueAt, words: r.task });
+    if (r.dueAt && !r.active) push({ id: `r:${r.id}:s`, type, channel: planned, status: 'scheduled', label: r.held ? 'Held' : 'Scheduled', rank: 0, at: r.dueAt, words: r.task, ...(r.held ? { note: `Held for quiet hours (${String(care.cfg.quietStart).padStart(2, '0')}:00 to ${String(care.cfg.quietEnd).padStart(2, '0')}:00): it will go at ${String(care.cfg.quietEnd).padStart(2, '0')}:00.` } : {}) });
     for (const [k, x] of [['a', r.active], ['l', r.last]]) {
       if (!x) continue;
       const [status0, label0, rank0] = OCC[x.state] || ['sent', String(x.state), 1];
@@ -692,6 +692,9 @@ async function placeWelfare(profileId, via = 'call') {
   if (via !== 'text' && via !== 'voice') throw new WaError('Choose a call, a text or a voice note.', 400);
   const l0 = linkOf(profileId);
   if (l0 && l0.optIn && !(l0.lastInboundAt && Date.now() - l0.lastInboundAt < WINDOW_MS)) {   // the window is closed: a text or a voice note cannot go, so a CALL is tried for this round (a rescue; the pick stays as it was)
+    if (require('./care').inQuiet(profileId)) {   // never a rescue ring at night
+      const why = `The 24 hour window is closed and it is quiet hours (${String(require('./care').cfg.quietStart).padStart(2, '0')}:00 to ${String(require('./care').cfg.quietEnd).padStart(2, '0')}:00), so Maya will not ring. Nothing was sent.`; require('./care').welfarePaused(profileId, 'quiet', why); throw new WaError(why, 429);
+    }
     note(`welfare check to number ending ${end(l0.phone)}: the 24 h window is closed, trying a call instead of the ${via === 'voice' ? 'voice note' : 'text'}`);
     const placed = await placeWelfareCall(profileId, { instead: 'window' });
     return placed && placed.placed ? { placed: true, calledInstead: true, via: 'call' } : placed;

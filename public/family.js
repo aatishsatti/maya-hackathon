@@ -191,6 +191,11 @@
     node.addEventListener('click', (e) => { const b = e.target && e.target.closest ? e.target.closest('button') : null; if (!b) return; if (cur() === b && node.dataset.clearable) set(null); else set(b.dataset.v); });
     return { get: () => (cur() ? cur().dataset.v : null), set };
   }
+  // ---- quiet hours (where THEY are): nothing is sent, texted or rung at night, so a time that falls in them is warned about (and still accepted: it is held, never dropped) ----
+  let quiet = null;   // { start, end, tz } from the server; unknown time zone: nothing is held, so nothing is warned about
+  const hh = (n) => String(n).padStart(2, '0');
+  const inQuietAt = (ms) => { if (!quiet || !quiet.tz || !Number.isFinite(ms)) return false; try { const h = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: quiet.tz }).format(new Date(ms))); return quiet.start > quiet.end ? (h >= quiet.start || h < quiet.end) : (h >= quiet.start && h < quiet.end); } catch { return false; } };
+  function remQuietWarn() { const on = inQuietAt(new Date($('at').value).getTime()); $('remQuietWarn').hidden = !on; $('remQuietWarn').textContent = on ? `That time is in their quiet hours (${hh(quiet.start)}:00 to ${hh(quiet.end)}:00). The reminder is kept and will be held until ${hh(quiet.end)}:00: nothing is sent, texted or rung at night.` : ''; }
   const deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia'));
   // ---- scheduled check-ins: every hour / 2 h / 3 h / custom, by call, text or voice note, for 24 hours; the server runs it and pauses it by itself when a check cannot go out ----
   const everyMin = () => { const v = $('schedEvery').value; return v === 'custom' ? Number($('schedCustom').value) : Number(v); };
@@ -200,13 +205,14 @@
     $('schedCustom').hidden = $('schedEvery').value !== 'custom';
     if (!Number.isInteger(n) || n < 5 || n > 720) { $('schedPlan').textContent = 'Choose between 5 and 720 minutes.'; return; }
     const count = Math.max(1, Math.floor(24 * 60 / n)), what = via === 'call' ? 'calls' : via === 'voice' ? 'voice notes' : 'texts';
-    $('schedPlan').textContent = `Up to ${count} ${what} in the next 24 hours, one every ${EVERY_TEXT(n)}. ${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}${via === 'call' ? '' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round, and tries the text or voice note again first the next time. '}It pauses by itself after 2 unanswered calls in a row or when WhatsApp refuses a call, and says why. Every check shows in Activity. You can stop it any time.`;
+    $('schedPlan').textContent = `Up to ${count} ${what} in the next 24 hours, one every ${EVERY_TEXT(n)}. ${quiet && quiet.tz ? `A check that falls between ${hh(quiet.start)}:00 and ${hh(quiet.end)}:00 (their night) is held until ${hh(quiet.end)}:00. ` : ''}${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}${via === 'call' ? '' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round, and tries the text or voice note again first the next time. '}It pauses by itself after 2 unanswered calls in a row or when WhatsApp refuses a call, and says why. Every check shows in Activity. You can stop it any time.`;
   }
   function renderSchedule(s) {
     const live = Boolean(s && s.status === 'running');
-    $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next about ${clock(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
+    $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' && s.held ? `Held for quiet hours: the next check goes at ${quiet ? hh(quiet.end) : '07'}:00. Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'} every ${EVERY_TEXT(s.everyMin)}, ${s.fired} sent so far of about ${s.planned}. Ends ${t(s.until)}.` : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next about ${clock(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
     $('schedStart').disabled = live; $('schedStop').disabled = !live;
   }
+  $('at').addEventListener('input', remQuietWarn); $('at').addEventListener('change', remQuietWarn);
   $('schedEvery').addEventListener('change', schedPlan); $('schedCustom').addEventListener('input', schedPlan); $('schedVia').addEventListener('click', schedPlan); schedPlan();
   $('schedStart').addEventListener('click', async () => {
     $('schedStart').disabled = true;
@@ -254,7 +260,7 @@
 
   function render(v) {
     $('body').hidden = false;
-    lastName = v.name || 'them';
+    lastName = v.name || 'them'; quiet = v.quiet || null; remQuietWarn(); schedPlan();
     $('presence').textContent = `${v.inCall ? 'On a call with Maya now' : v.appOpen ? 'App is open' : 'App is not open (Maya cannot ring)'} · Last seen ${t(v.lastSeen && v.lastSeen.at)} · ${v.callCount || 0} ${v.callCount === 1 ? 'call' : 'calls'}`;
     $('modeNow').textContent = v.modes[v.mode].label;
     $('modes').replaceChildren(...Object.entries(v.modes).map(([k, m]) => {
