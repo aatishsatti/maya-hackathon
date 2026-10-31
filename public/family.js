@@ -214,6 +214,8 @@
     $('waSend').hidden = !(v.linked && v.optIn);
     $('waNote').hidden = !v.linked;
     $('waTest').hidden = !(v.linked && v.optIn && v.configured);
+    $('waSendHead').hidden = $('waSend').hidden;
+    $('waCap').textContent = capText(v.calls);
     if (v.testCall && !waTesting) $('waTestLine').textContent = `Last test call: ${TEST_STATE[v.testCall.state] || v.testCall.state} (${t(v.testCall.at)}).`;
     const canFree = Boolean(v.linked && v.optIn && v.windowOpen);
     for (const b of $('waSend').querySelectorAll ? $('waSend').querySelectorAll('button[data-kind]') : []) b.disabled = !canFree;   // outside the 24 h window WhatsApp refuses free text and voice, so they cannot be pressed
@@ -256,6 +258,13 @@
   const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', finished: 'answered, the call finished and Maya hung up', ended: 'ended', failed: 'failed (see the server log)' };
   const TEST_DONE = ['rejected', 'no answer', 'completed', 'finished', 'ended', 'failed'];
   let waTesting = false;
+  // The call limits, said exactly: which one is reached and when it clears. (Calls free up one at a time as each answered call turns 24 hours old.)
+  function capText(c) {
+    if (!c) return '';
+    if (c.blocked === 'cap') return `Calls are paused: ${c.answeredToday} of ${c.maxPerDay} answered calls used in the last 24 hours. The next call can be placed after ${t(c.clearsAt)}, when the oldest answered call is more than 24 hours old. Until then a reminder sent with this button goes as a WhatsApp message.`;
+    if (c.blocked === 'misses') return `Calls are paused: the last ${c.maxMisses} calls to them were not answered. They start again when they write to Maya or call her. Until then a reminder sent with this button goes as a WhatsApp message.`;
+    return `Answered calls in the last 24 hours: ${c.answeredToday} of ${c.maxPerDay}. ${c.maxMisses} calls in a row that nobody answers pause calls (now ${c.misses} of ${c.maxMisses}).`;
+  }
   // The reminders you can choose for a test call. The list is only rebuilt when it really changed and never while the menu is open or has focus (a rebuild closed the menu and moved the choice).
   let remKey = '';
   function fillRemPick(reminders) {
@@ -278,7 +287,7 @@
     try {
       const r = await waCall(`/api/whatsapp/${id}/${path}`, 'POST', body);
       if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; return; }
-      if (r.j.placed === false) { $('waTestLine').textContent = 'Calls to them are paused (two in a row went unanswered, or 5 answered calls today). The reminder was sent as a WhatsApp message instead. Nothing rang.'; load(); return; }
+      if (r.j.placed === false) { $('waTestLine').textContent = `Nothing rang. ${capText(r.j.calls)} The reminder was sent as a WhatsApp message instead.`; load(); return; }
       $('waTestLine').textContent = 'WhatsApp took the call: their phone should ring now.';
       const mine = id;
       for (let i = 0; i < 25 && mine === id; i++) {

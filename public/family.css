@@ -153,3 +153,11 @@ select:focus-visible, input:focus-visible, .btn:focus-visible, .mode:focus-withi
   .card-when { margin-left: 0; width: 100%; }
   .btn.small, .card-actions .btn { min-height: 44px; }
 }
+
+/* WhatsApp panel: the call section is one clear column (own rows, full width, large tap targets) and is told apart from the message form by headings */
+.wa-sub { font-size: 16px; margin: 20px 0 8px; }
+.wa-call .wa-label { display: block; font-size: 14px; font-weight: 600; margin: 10px 0 4px; }
+.wa-call .wa-wide { display: block; width: 100%; box-sizing: border-box; min-height: 46px; }
+.wa-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.wa-actions .btn { flex: 1 1 160px; min-height: 48px; white-space: normal; }
+.wa-source { margin-top: 8px; font-weight: 600; }

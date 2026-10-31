@@ -103,7 +103,7 @@ function view(profileId) {
   if (!l) return { linked: false, configured: configured() };
   const open = Boolean(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS);
   const last = (l.sent || []).slice(-1)[0] || null;
-  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null };
+  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null, calls: { ...capInfo(l), blocked: callBlock(l) } };
 }
 
 // ---- webhook security ----
@@ -542,6 +542,8 @@ const connectedIn24h = (l) => (l.connected || []).filter((t) => Date.now() - t <
 const noteConnected = (pid) => update(pid, (x) => { x.callMisses = 0; x.connected = [...(x.connected || []).filter((t) => Date.now() - t < DAY_MS), Date.now()]; });
 const noteMissed = (pid) => update(pid, (x) => { x.callMisses = (x.callMisses || 0) + 1; });
 const noteReachable = (pid) => { const l = linkOf(pid); if (l && l.callMisses) update(pid, (x) => { x.callMisses = 0; }); };
+// What the page shows about the call limits: exactly which one is reached and when it clears (the oldest answered call is 24 h old: calls free up one at a time).
+const capInfo = (l) => { const ts = (l.connected || []).filter((t) => Date.now() - t < DAY_MS).sort((a, b) => a - b); return { answeredToday: ts.length, maxPerDay: MAX_CONNECTED_PER_DAY, clearsAt: ts.length >= MAX_CONNECTED_PER_DAY ? ts[ts.length - MAX_CONNECTED_PER_DAY] + DAY_MS : null, misses: l.callMisses || 0, maxMisses: MAX_MISSES, blocked: null }; };
 const callBlock = (l) => (l.callMisses || 0) >= MAX_MISSES ? 'misses' : connectedIn24h(l) >= MAX_CONNECTED_PER_DAY ? 'cap' : null;
 
 // ONE outbound call to the linked, opted-in person. kind 'test' (C1): says a fixed sentence and hangs up (wacall.callOut). kind 'reminder' (C2): the family's reminder, delivered by the app's own Call
@@ -561,7 +563,7 @@ function placeCall(profileId, kind, spec) {
     if (kind !== 'reminder') return fail(`${why} Nothing was placed.`, 429);
     try { care.reminderViaMessage(profileId, spec); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
     note(`reminder call to number ending ${end(l.phone)} not placed (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); the reminder was sent as a message instead`);
-    return Promise.resolve({ placed: false, fallback: 'message', reason: block });
+    return Promise.resolve({ placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } });
   }
   if (Date.now() - lastTestAt < (deps.testCooldownMs === undefined ? TEST_COOLDOWN_MS : deps.testCooldownMs)) return fail('A call was just placed. Wait a minute before another. Nothing was placed.', 429);
   let rc = null;

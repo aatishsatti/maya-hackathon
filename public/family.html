@@ -85,6 +85,7 @@
             <label class="hint" style="margin:0"><input id="waOpt" type="checkbox"> They have agreed to hear from Maya on WhatsApp</label>
             <button class="btn primary" type="submit">Link this number</button>
           </form>
+          <h3 class="wa-sub" id="waSendHead" hidden>Send a message</h3>
           <form id="waSend" class="form" hidden>
             <input id="waText" placeholder="A short note for them (Maya says it is from you)" maxlength="300" aria-label="WhatsApp message">
             <div class="form-row">
@@ -94,16 +95,23 @@
             <button id="waInvite" class="btn primary" type="button" hidden>Send a standard invitation to reply</button>
           </form>
           <p id="waResult" class="hint" role="status" aria-live="polite" hidden></p>
-          <div id="waTest" hidden>
-            <button id="waTestCall" class="btn" type="button">Call them now (test)</button>
-            <div class="form-row">
-              <select id="waRemPick" aria-label="A reminder you already set"><option value="">No saved reminder: use what I type</option></select>
-              <input id="waRemText" placeholder="or type one, e.g. take your tablets" maxlength="80" aria-label="Reminder for this test call">
-              <button id="waRemClear" class="btn small" type="button">Clear choice</button>
-              <button id="waRemCall" class="btn" type="button">Call them with this reminder (test)</button>
+          <div id="waTest" class="wa-call" hidden>
+            <h3 class="wa-sub">Call them with a reminder (test)</h3>
+            <p class="hint">Rings their WhatsApp once. Maya says the reminder in her own words, listens, and ends the call herself. Needs their call permission.</p>
+            <label class="wa-label" for="waRemPick">A reminder you already set</label>
+            <select id="waRemPick" class="wa-wide"><option value="">No saved reminder: use what I type</option></select>
+            <label class="wa-label" for="waRemText">Or type one for this test</label>
+            <input id="waRemText" class="wa-wide" placeholder="e.g. take your tablets" maxlength="80">
+            <p class="hint wa-source" id="waRemSource" role="status" aria-live="polite"></p>
+            <div class="wa-actions">
+              <button id="waRemClear" class="btn" type="button">Clear choice</button>
+              <button id="waRemCall" class="btn primary" type="button">Call them with this reminder (test)</button>
             </div>
-            <p class="hint" id="waRemSource" role="status" aria-live="polite"></p>
-            <p class="hint" id="waTestLine" role="status" aria-live="polite">Test only: rings their WhatsApp once, Maya says one fixed sentence and hangs up. Needs their call permission.</p>
+            <p class="hint" id="waCap" role="status" aria-live="polite"></p>
+            <p class="hint" id="waTestLine" role="status" aria-live="polite"></p>
+            <h3 class="wa-sub">Ring test with one fixed sentence</h3>
+            <p class="hint">Rings once, Maya says one fixed sentence and hangs up. No reminder is used.</p>
+            <div class="wa-actions"><button id="waTestCall" class="btn" type="button">Call them now (test)</button></div>
           </div>
           <p class="hint" id="waNote" hidden>Maya does not call on her own. The test button above is the only call she places. Words are never stored here.</p>
         </section>

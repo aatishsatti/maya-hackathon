@@ -1205,7 +1205,7 @@ test('C2 two unanswered calls in a row block the third: nothing rings, the same 
     for (let i = 0; i < 2; i++) { await wa.placeReminderCall(id, { task: `walk ${i}` }); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await waitFor(() => care.get(id).reminders[i].last); await sleepMs(100); }
   });
   assert.equal(wa.linkOf(id).callMisses, 2); clearCalls();
-  const out = await capture(async () => assert.deepEqual(await wa.placeReminderCall(id, { task: 'take your tablets' }), { placed: false, fallback: 'message', reason: 'misses' }));
+  const out = await capture(async () => { const r = await wa.placeReminderCall(id, { task: 'take your tablets' }); assert.deepEqual([r.placed, r.fallback, r.reason], [false, 'message', 'misses']); });
   assert.equal(callPosts().length, 0, 'no call was placed'); await settle(); const m = sent(); assert.equal(m.length, 1); assert.ok(['audio', 'text'].includes(m[0].type)); assert.equal(m[0].to, phone);
   assert.match(care.get(id).reminders[2].active.state, /^wa_/); assert.match(out, /not placed \(2 unanswered in a row\).*sent as a message instead/); assert.doesNotMatch(out, /tablets/);
   await assert.rejects(wa.placeTestCall(id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /will not call again/); return true; });
@@ -1220,7 +1220,7 @@ test('C2 the 5 answered calls a day cap blocks the sixth (a reminder goes as a m
       for (let i = 0; i < 5; i++) { assert.deepEqual(await wa.placeTestCall(id), { placed: true }); await sleepMs(60); }
       assert.equal(wa.linkOf(id).connected.length, 5); clearCalls();
       await assert.rejects(wa.placeTestCall(id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /limit of 5 answered calls in 24 hours/); return true; });
-      assert.deepEqual(await wa.placeReminderCall(id, { task: 'take your tablets' }), { placed: false, fallback: 'message', reason: 'cap' });
+      { const r = await wa.placeReminderCall(id, { task: 'take your tablets' }); assert.deepEqual([r.placed, r.fallback, r.reason], [false, 'message', 'cap']); }
       assert.equal(callPosts().length, 0); await settle(); assert.equal(sent().length, 1);
     });
   } finally { wa.deps.callOut = keep; }
@@ -1315,4 +1315,27 @@ test('C2 a goodbye that Spark writes herself on a call Maya placed ("You can han
   const F = callMod.sayingFarewell;
   for (const t of ['Have a quiet rest of your night. You can hang up now.', 'Goodbye for now.', 'Bye-bye, take care.', 'Alright, I will let you go.', 'Talk to you soon.', 'Good night.', 'Take care.', "I'm hanging up now."]) assert.equal(F(t), true, t);
   for (const t of ['It is a good night for stargazing, is it clear where you are?', 'Take care of your knee on the stairs, did it hurt today?', 'I will stay on the line with you.', 'That sounds like a lovely walk.', 'Did your daughter say goodbye to you at the door?']) assert.equal(F(t), false, t);   // including a question that merely contains the word
+});
+
+// ---- the page says exactly which call limit is reached and when it clears ----
+test('the view reports the call limits exactly (answered today of 5, misses of 2, which one blocks, when the cap clears); calls free up one at a time', async () => {
+  reminderReset(); const { id, phone } = inWindow(); const keep = wa.deps.callOut; const v0 = wa.view(id).calls;
+  assert.deepEqual(v0, { answeredToday: 0, maxPerDay: 5, clearsAt: null, misses: 0, maxMisses: 2, blocked: null });
+  wa.deps.callOut = async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
+  const first = Date.now();
+  try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 5; i++) { await wa.placeTestCall(id); await sleepMs(60); } }); } finally { wa.deps.callOut = keep; }
+  const c = wa.view(id).calls; assert.equal(c.answeredToday, 5); assert.equal(c.blocked, 'cap'); assert.ok(c.clearsAt >= first + 24 * 3600000 && c.clearsAt <= Date.now() + 24 * 3600000, 'clears when the OLDEST answered call is 24 h old');
+  clearCalls(); const r = await wa.placeReminderCall(id, { task: 'take your tablets' }); assert.equal(r.placed, false); assert.equal(r.reason, 'cap'); assert.equal(r.calls.clearsAt, c.clearsAt); assert.equal(r.calls.blocked, 'cap');
+  const old = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.match(old, /answered calls used in the last 24 hours/); assert.doesNotMatch(old, /two in a row went unanswered, or 5/);
+  const b = inWindow(); await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 2; i++) { await wa.placeTestCall(b.id); await wa.handleWebhook(outStatus(b.phone, 'REJECTED')); await sleepMs(150); } });
+  assert.equal(wa.view(b.id).calls.blocked, 'misses'); assert.equal(wa.view(b.id).calls.misses, 2); assert.equal(wa.view(b.id).calls.clearsAt, null); clearCalls();
+});
+
+test('the family page: the call section is its own column with headings, full-width fields and side-by-side large buttons (the live screenshot had a squeezed button and a sliver of a field)', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'), css = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.css'), 'utf8');
+  assert.match(html, /<h3 class="wa-sub" id="waSendHead"[^>]*>Send a message<\/h3>/); assert.match(html, /<h3 class="wa-sub">Call them with a reminder \(test\)<\/h3>/);
+  const call = html.slice(html.indexOf('id="waTest"'), html.indexOf('id="waNote"'));
+  assert.match(call, /<select id="waRemPick" class="wa-wide">/); assert.match(call, /<input id="waRemText" class="wa-wide"/); assert.doesNotMatch(call, /form-row/, 'no squeezed flex row');
+  assert.ok(call.indexOf('waRemSource') < call.indexOf('waRemClear'), 'the line that says which source wins sits under the fields'); assert.match(call, /class="wa-actions">\s*<button id="waRemClear"[^>]*>Clear choice<\/button>\s*<button id="waRemCall" class="btn primary"/);
+  assert.match(css, /\.wa-call \.wa-wide \{[^}]*width: 100%[^}]*min-height: 46px/); assert.match(css, /\.wa-actions \.btn \{[^}]*flex: 1 1 160px[^}]*min-height: 48px/);
 });
