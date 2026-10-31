@@ -10,7 +10,12 @@ Uri apiUri(String path, [Map<String, String>? query]) {
 
 /// The call socket. The server only opens it for a request whose Origin is its own host (a browser rule); the app
 /// is not a browser, so it sends that same Origin itself.
+/// Tests point the call socket at a local server; nothing else ever sets this.
+Uri? debugWsUri;
+
 Uri wsUri() {
+  final d = debugWsUri;
+  if (d != null) return d;
   final base = Uri.parse(kServer);
   return base.replace(scheme: base.scheme == 'https' ? 'wss' : 'ws', path: '/ws');
 }

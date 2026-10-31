@@ -9,9 +9,12 @@ class DeliveryPicker extends StatelessWidget {
   final String? value;
   final ValueChanged<String?> onChanged;
   final bool clearable;
-  const DeliveryPicker({super.key, required this.value, required this.onChanged, this.clearable = false});
+  final List<(String, String)> choices;
+  const DeliveryPicker({super.key, required this.value, required this.onChanged, this.clearable = false, this.choices = options});
 
   static const options = [('call', 'Call'), ('text', 'Text'), ('voice', 'Voice note')];
+  /// Where a reminder goes: WhatsApp (its own rules), the Maya app (none of them), or both.
+  static const channels = [('whatsapp', 'WhatsApp'), ('app', 'Maya app'), ('both', 'Both')];
 
   @override
   Widget build(BuildContext context) {
@@ -20,24 +23,24 @@ class DeliveryPicker extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Row(
         children: [
-          for (var i = 0; i < options.length; i++) ...[
+          for (var i = 0; i < choices.length; i++) ...[
             if (i > 0) const SizedBox(width: 1.5, height: 48, child: ColoredBox(color: kLine)),
             Expanded(
               child: Semantics(
                 button: true,
-                selected: value == options[i].$1,
-                label: options[i].$2,
+                selected: value == choices[i].$1,
+                label: choices[i].$2,
                 child: InkWell(
                   onTap: () {
                     HapticFeedback.selectionClick();
-                    onChanged(clearable && value == options[i].$1 ? null : options[i].$1);
+                    onChanged(clearable && value == choices[i].$1 ? null : choices[i].$1);
                   },
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 160),
                     height: 48,
                     alignment: Alignment.center,
-                    color: value == options[i].$1 ? kInk : Colors.white,
-                    child: Text(options[i].$2, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: value == options[i].$1 ? Colors.white : kInk)),
+                    color: value == choices[i].$1 ? kInk : Colors.white,
+                    child: Text(choices[i].$2, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: value == choices[i].$1 ? Colors.white : kInk)),
                   ),
                 ),
               ),

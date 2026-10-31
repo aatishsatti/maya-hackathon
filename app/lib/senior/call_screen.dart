@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/call_log.dart';
 import '../services/call_session.dart';
 import '../theme.dart';
 import '../widgets/orb.dart';
@@ -47,6 +48,7 @@ class _CallScreenState extends State<CallScreen> {
 
   String get _status {
     if (s.ended) return s.endMessage == null ? 'The call has ended.' : 'The call has ended.';
+    if (s.reconnecting) return 'Reconnecting...';
     if (s.phase == CallPhase.connecting) return 'Calling Maya...';
     if (s.muted) return 'Your microphone is off';
     switch (s.orb) {
@@ -99,8 +101,10 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  if (s.ended && s.endMessage != null)
-                    FilledButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Close'))
+                  if (s.ended && s.endMessage != null) ...[
+                    FilledButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Close')),
+                    TextButton(onPressed: () => showCallLog(context, headline: s.endDetail), child: const Text('Details', style: TextStyle(color: kSoft))),
+                  ]
                   else
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -156,4 +160,24 @@ class _RoundButton extends StatelessWidget {
       Text(label, style: const TextStyle(fontSize: 14, color: kSoft)),
     ]);
   }
+}
+
+/// The facts of a call, with times: how it ended and every step before it. For finding out why a call dropped.
+void showCallLog(BuildContext context, {String headline = '', int lines = 60}) {
+  showDialog<void>(
+    context: context,
+    builder: (c) => AlertDialog(
+      title: const Text('Call details'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: SelectableText(
+            '${headline.isEmpty ? '' : 'How it ended: $headline\n\n'}${CallLog.last(lines).isEmpty ? 'No call has been made on this phone yet.' : CallLog.last(lines).join('\n')}',
+            style: const TextStyle(fontSize: 12, fontFamily: 'monospace', height: 1.35),
+          ),
+        ),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('Close'))],
+    ),
+  );
 }

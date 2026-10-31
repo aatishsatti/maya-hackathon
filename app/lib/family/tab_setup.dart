@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../senior/call_screen.dart' show showCallLog;
 import '../senior/profile_picker.dart';
 import '../services/api.dart';
 import '../services/store.dart';
 import '../theme.dart';
+import '../widgets/delivery_picker.dart';
 import '../widgets/pill.dart';
 import 'common.dart';
 import 'family_data.dart';
@@ -80,6 +82,14 @@ class _SetupTabState extends State<SetupTab> {
           if (await act(context, () => Api.postJson('/api/care/${d.profileId}/delivery', {'reminders': s.first}))) d.refresh(quiet: true);
         },
       ),
+      sectionLabel('When no choice is made on a reminder, it goes'),
+      DeliveryPicker(
+        value: (d.care['delivery'] is Map ? (d.care['delivery'] as Map)['channel'] : null) as String? ?? 'whatsapp',
+        choices: DeliveryPicker.channels,
+        onChanged: (v) async {
+          if (v != null && await act(context, () => Api.postJson('/api/care/${d.profileId}/delivery', {'channel': v}))) d.refresh(quiet: true);
+        },
+      ),
       sectionLabel('Mode'),
       RadioGroup<String>(
         groupValue: d.mode,
@@ -117,6 +127,8 @@ class _SetupTabState extends State<SetupTab> {
         child: Text('Delete ${widget.profile.name}', style: const TextStyle(color: kAlert)),
       ),
       sectionLabel('This phone'),
+      OutlinedButton(onPressed: () => showCallLog(context, lines: 300), child: const Text('Call log (for finding out why a call dropped)')),
+      const SizedBox(height: 8),
       OutlinedButton(
         onPressed: () async {
           final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(title: const Text('Change the family PIN?'), content: const Text('You will choose a new PIN the next time you open the family area. The PIN only locks this phone.'), actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')), TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Change'))]));

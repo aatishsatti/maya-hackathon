@@ -40,7 +40,9 @@ http.Client fakeServer() => MockClient((req) async {
           'lastSeen': {'at': DateTime.now().millisecondsSinceEpoch},
           'quiet': {'start': 22, 'end': 7, 'tz': 'Europe/London'},
           'reminders': [
-            {'id': 'r1', 'task': 'Take your tablets', 'dueAt': DateTime.now().add(const Duration(hours: 2)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'call', 'held': false, 'msg': false, 'active': null, 'last': null}
+            {'id': 'r1', 'task': 'Take your tablets', 'dueAt': DateTime.now().add(const Duration(hours: 2)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'call', 'channel': 'both', 'held': false, 'msg': false, 'active': null, 'last': null},
+            for (var i = 0; i < 8; i++) {'id': 'f$i', 'task': 'Old reminder $i', 'dueAt': null, 'repeat': 'none', 'held': false, 'msg': false, 'active': null, 'last': {'state': 'done', 'at': 1700000000000 + i * 1000, 'label': 'Done, senior replied'}},
+            {'id': 'r2', 'task': 'Drink water', 'dueAt': DateTime.now().add(const Duration(minutes: 5)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'text', 'channel': 'app', 'held': false, 'msg': false, 'active': null, 'last': null},
           ],
           'alerts': [],
           'flags': [],
@@ -59,7 +61,8 @@ http.Client fakeServer() => MockClient((req) async {
           'activity': {
             'entries': [
               {'id': 'a', 'type': 'reminder', 'channel': 'voice', 'status': 'read', 'label': 'Read', 'at': now - 600000, 'words': 'Take your tablets'},
-              {'id': 'b', 'type': 'welfare', 'channel': 'call', 'status': 'answered', 'label': 'Answered', 'at': now - 3600000, 'words': null},
+              {'id': 'b', 'type': 'welfare', 'channel': 'call', 'status': 'answered', 'label': 'Answered', 'at': now - 3600000, 'words': null, 'where': 'whatsapp'},
+              {'id': 'c', 'type': 'call', 'channel': 'call', 'status': 'completed', 'label': 'Talked, 4 min', 'at': now - 7200000, 'words': null, 'where': 'app'},
             ],
             'summary': {'sent': 7, 'delivered': 6, 'read': 4, 'answered': 3, 'missed': 1},
           },
@@ -176,8 +179,56 @@ void main() {
       await t.pump(const Duration(milliseconds: 400));
       await t.tap(find.text('Add a reminder'));
       await t.pumpAndSettle(const Duration(milliseconds: 100));
-      expect(find.byType(DeliveryPicker), findsOneWidget);
-      expect(find.text('Deliver this reminder as'.toUpperCase()), findsNothing);
+      expect(find.byType(DeliveryPicker), findsNWidgets(2)); // where it goes (WhatsApp / Maya app / Both) and how (Call / Text / Voice note)
+      for (final o in const ['WhatsApp', 'Maya app', 'Both']) {
+        expect(find.text(o), findsWidgets);
+      }
+      await t.pumpWidget(const SizedBox());
+    });
+  });
+
+  group('reminders, activity and setup on the app', () {
+    testWidgets('the reminder list shows what is coming first (soonest at the top), then only the latest five finished ones, with the channel and the pick on each', (t) async {
+      await phone(t, 360, 700);
+      await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Reminders').last);
+      await t.pump(const Duration(milliseconds: 400));
+      await t.pump(const Duration(milliseconds: 400)); // the old tab fades out over 180 ms, over the second frame
+      expect(t.takeException(), isNull);
+      final water = t.getTopLeft(find.text('Drink water')).dy, tablets = t.getTopLeft(find.text('Take your tablets')).dy;
+      expect(water, lessThan(tablets), reason: 'the one due in 5 minutes is above the one due in 2 hours');
+      expect(find.text('Old reminder 0'), findsNothing, reason: 'only the latest five finished ones show');
+      expect(find.text('Maya app'), findsWidgets);
+      expect(find.text('WhatsApp + app'), findsWidgets);
+      expect(find.text('Text'), findsWidgets);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('Activity has a Calls filter, shows App / WhatsApp on each row, and a call row says how long they talked', (t) async {
+      await phone(t, 360, 700);
+      await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.text('Calls'), findsOneWidget);
+      expect(find.text('Talked, 4 min'), findsOneWidget);
+      expect(find.text('WhatsApp'), findsWidgets);
+      await t.tap(find.text('Calls'));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text('Talked, 4 min'), findsOneWidget);
+      expect(find.text('Take your tablets'), findsNothing, reason: 'the filter hides what is not a call');
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('Setup has the default channel, the call log and the person tools', (t) async {
+      await phone(t, 360, 700);
+      await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Setup').last);
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.textContaining('When no choice is made'), findsOneWidget);
+      expect(find.text('Maya app'), findsWidgets);
+      await t.scrollUntilVisible(find.textContaining('Call log'), 200, scrollable: find.byType(Scrollable).last);
+      expect(find.textContaining('Call log'), findsOneWidget);
       await t.pumpWidget(const SizedBox());
     });
   });

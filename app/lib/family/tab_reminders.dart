@@ -8,14 +8,29 @@ import '../widgets/pill.dart';
 import 'common.dart';
 import 'family_data.dart';
 
-/// Reminders: the list stays in view and scrolls inside itself; adding one opens a sheet.
-class RemindersTab extends StatelessWidget {
+const _whereLabel = {'whatsapp': 'WhatsApp', 'app': 'Maya app', 'both': 'WhatsApp + app'};
+const _howLabel = {'call': 'Call', 'text': 'Text', 'voice': 'Voice note'};
+
+/// Reminders: what is coming first (soonest at the top), finished ones below, newest first, the latest five until "Show earlier".
+/// A reminder just added shows at once. The list stays in view and scrolls inside itself; adding one opens a sheet.
+class RemindersTab extends StatefulWidget {
   final FamilyData data;
   const RemindersTab({super.key, required this.data});
+  @override
+  State<RemindersTab> createState() => _RemindersTabState();
+}
+
+class _RemindersTabState extends State<RemindersTab> {
+  bool _showAll = false;
 
   @override
   Widget build(BuildContext context) {
-    final list = data.reminders.where((r) => !r.msg).toList();
+    final data = widget.data;
+    final all = data.reminders.where((r) => !r.msg).toList();
+    final upcoming = all.where((r) => !r.finished).toList()..sort((a, b) => (a.dueAt ?? 0).compareTo(b.dueAt ?? 0));
+    final finished = all.where((r) => r.finished).toList()..sort((a, b) => (b.lastAt ?? 0).compareTo(a.lastAt ?? 0));
+    final shownFinished = _showAll ? finished : finished.take(5).toList();
+    final rows = [...upcoming, ...shownFinished];
     return Column(children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -27,14 +42,17 @@ class RemindersTab extends StatelessWidget {
       ),
       if (data.error != null) ErrorBanner(message: data.error!, onRetry: () => data.refresh()),
       Expanded(
-        child: list.isEmpty
+        child: rows.isEmpty
             ? const Center(child: Text('No reminders yet.', style: TextStyle(color: kSoft, fontSize: 16)))
             : ListView.separated(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                itemCount: list.length,
+                itemCount: rows.length + (finished.length > 5 ? 1 : 0),
                 separatorBuilder: (_, _) => const Divider(height: 1),
                 itemBuilder: (context, i) {
-                  final r = list[i];
+                  if (i == rows.length) {
+                    return TextButton(onPressed: () => setState(() => _showAll = !_showAll), child: Text(_showAll ? 'Show fewer finished reminders' : 'Show ${finished.length - 5} earlier finished reminders'));
+                  }
+                  final r = rows[i];
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -43,7 +61,8 @@ class RemindersTab extends StatelessWidget {
                           Text(r.task, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
                           const SizedBox(height: 4),
                           Wrap(spacing: 6, runSpacing: 4, children: [
-                            if (r.deliver != null) Pill({'call': 'Call', 'text': 'Text', 'voice': 'Voice note'}[r.deliver] ?? r.deliver!),
+                            if (r.channel != null) Pill(_whereLabel[r.channel] ?? r.channel!),
+                            if (r.deliver != null) Pill(_howLabel[r.deliver] ?? r.deliver!),
                             if (r.held) const Pill('Held for quiet hours', tone: kToneWait),
                             if (r.stateLabel != null) Pill(r.stateLabel!, tone: kToneInfo),
                           ]),
@@ -79,7 +98,7 @@ class _AddSheetState extends State<_AddSheet> {
   final _task = TextEditingController();
   DateTime _at = DateTime.now().add(const Duration(minutes: 30));
   String _repeat = 'none';
-  String? _deliver;
+  String? _deliver, _channel;
   bool _busy = false;
 
   @override
@@ -119,6 +138,9 @@ class _AddSheetState extends State<_AddSheet> {
             items: const [DropdownMenuItem(value: 'none', child: Text('Once')), DropdownMenuItem(value: 'daily', child: Text('Every day')), DropdownMenuItem(value: 'weekly', child: Text('Every week'))],
             onChanged: (v) => setState(() => _repeat = v ?? 'none'),
           ),
+          sectionLabel('Where it goes'),
+          DeliveryPicker(value: _channel, clearable: true, choices: DeliveryPicker.channels, onChanged: (v) => setState(() => _channel = v)),
+          Padding(padding: const EdgeInsets.only(top: 6), child: Text(_channel == null ? 'Not chosen: Maya uses the setting in Setup. Tap a choice again to clear it.' : _channel == 'app' ? 'In the Maya app: no 24 hour window, no template. A closed app cannot be rung yet, so a call falls back to WhatsApp.' : _channel == 'both' ? 'On WhatsApp (its rules) and in the app. A call rings the app if it is open, otherwise WhatsApp.' : 'On WhatsApp, under its rules: the 24 hour window and the call limits.', style: const TextStyle(fontSize: 13, color: kSoft))),
           sectionLabel('Deliver this reminder as'),
           DeliveryPicker(value: _deliver, clearable: true, onChanged: (v) => setState(() => _deliver = v)),
           Padding(padding: const EdgeInsets.only(top: 6), child: Text(_deliver == null ? 'Not chosen: Maya uses the person-wide setting. Tap a choice again to clear it.' : _deliver == 'call' ? 'Maya will ring them on WhatsApp.' : 'If the 24 hour window is closed, Maya calls instead for that round.', style: const TextStyle(fontSize: 13, color: kSoft))),
@@ -129,7 +151,7 @@ class _AddSheetState extends State<_AddSheet> {
                 : () async {
                     setState(() => _busy = true);
                     final nav = Navigator.of(context);
-                    final ok = await act(context, () => Api.postJson('/api/care/${widget.data.profileId}/reminders', {'task': _task.text, 'dueAt': _at.millisecondsSinceEpoch, 'repeat': _repeat, if (_deliver != null) 'deliver': _deliver}), done: 'Reminder added.');
+                    final ok = await act(context, () => Api.postJson('/api/care/${widget.data.profileId}/reminders', {'task': _task.text, 'dueAt': _at.millisecondsSinceEpoch, 'repeat': _repeat, if (_deliver != null) 'deliver': _deliver, if (_channel != null) 'channel': _channel}), done: 'Reminder added.');
                     if (!mounted) return;
                     setState(() => _busy = false);
                     if (ok) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/api.dart';
+import 'common.dart' show act;
 import '../theme.dart';
 import '../widgets/delivery_picker.dart';
 import 'family_data.dart';
@@ -88,6 +89,17 @@ class _MessageTabState extends State<MessageTab> {
         ],
         const SizedBox(height: 12),
         FilledButton(onPressed: _busy ? null : _send, child: Text(_busy ? 'Sending...' : 'Send')),
+        if (!_inApp && _via != 'call' && d.linked && d.optIn && !d.windowOpen)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: OutlinedButton(
+              onPressed: _busy ? null : () async {
+                final ok = await act(context, () => Api.postJson('/api/whatsapp/${d.profileId}/send', {'kind': 'text', 'text': '', 'useTemplate': true}), done: 'The standard invitation was sent. Your own words were not: WhatsApp only allows that until they write back.');
+                if (ok) d.refresh(quiet: true);
+              },
+              child: const Text('Send a standard invitation to reply'),
+            ),
+          ),
         if (_result != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_result!, style: const TextStyle(fontSize: 15))),
       ]),
     );

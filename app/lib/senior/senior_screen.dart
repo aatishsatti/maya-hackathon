@@ -357,7 +357,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
                   child: Center(child: _CallButton(size: callSize, onTap: _ready ? () => _startCall() : null)),
                 ),
               Expanded(child: ClipRect(child: ChatView(messages: _messages, controller: _scroll))),
-              if (_notice != null) _NoticeBar(text: '${_notice!['text']}', onClose: () {
+              if (_notice != null) _NoticeBar(text: '${_notice!['text']}', label: _notice!['kind'] == 'reminder' ? 'Reminder from your family' : 'Message from your family', onClose: () {
                 Api.postJson('/api/care/$_pid/notifications/${_notice!['notifId']}/seen').catchError((_) => null);
                 setState(() => _notice = null);
               }),
@@ -482,9 +482,9 @@ class _Composer extends StatelessWidget {
 }
 
 class _NoticeBar extends StatelessWidget {
-  final String text;
+  final String text, label;
   final VoidCallback onClose;
-  const _NoticeBar({required this.text, required this.onClose});
+  const _NoticeBar({required this.text, required this.onClose, this.label = 'Message from your family'});
   @override
   Widget build(BuildContext context) => TweenAnimationBuilder<double>(
         tween: Tween(begin: 0, end: 1),
@@ -495,7 +495,7 @@ class _NoticeBar extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
           decoration: BoxDecoration(color: kToneInfo.bg, border: Border.all(color: kToneInfo.line), borderRadius: BorderRadius.circular(14)),
           child: Row(children: [
-            Expanded(child: Text('Message from your family: $text', style: const TextStyle(fontSize: 16, color: kInk))),
+            Expanded(child: Text('$label: $text', style: const TextStyle(fontSize: 16, color: kInk))),
             TextButton(onPressed: onClose, child: const Text('Close')),
           ]),
         ),

@@ -22,6 +22,7 @@ class Pill extends StatelessWidget {
 Tone toneForStatus(String status) {
   switch (status) {
     case 'answered':
+    case 'completed':
       return kToneOk;
     case 'sent':
     case 'delivered':

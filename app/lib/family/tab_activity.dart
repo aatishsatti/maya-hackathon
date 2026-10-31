@@ -6,9 +6,10 @@ import '../widgets/pill.dart';
 import 'common.dart';
 import 'family_data.dart';
 
-const _typeLabel = {'reminder': 'Reminder', 'welfare': 'Welfare check', 'message': 'Message'};
+const _typeLabel = {'reminder': 'Reminder', 'welfare': 'Welfare check', 'message': 'Message', 'call': 'Call with Maya', 'chat': 'Chat'};
+const _whereLabel = {'app': 'App', 'whatsapp': 'WhatsApp', 'both': 'App + WhatsApp'};
 const _chanLabel = {'call': 'Call', 'text': 'Text', 'voice': 'Voice note'};
-const _typeIcon = {'reminder': Icons.notifications_none, 'welfare': Icons.favorite_border, 'message': Icons.mail_outline};
+const _typeIcon = {'reminder': Icons.notifications_none, 'welfare': Icons.favorite_border, 'message': Icons.mail_outline, 'call': Icons.call_outlined, 'chat': Icons.chat_bubble_outline};
 
 /// Activity: the five count cards and the filters stay put; only the list scrolls, inside its own area.
 class ActivityTab extends StatefulWidget {
@@ -25,7 +26,7 @@ class _ActivityTabState extends State<ActivityTab> {
   Widget build(BuildContext context) {
     final d = widget.data;
     final sum = d.summary;
-    final rows = d.activity.where((e) => _filter == 'all' || e.type == _filter).toList();
+    final rows = d.activity.where((e) => _filter == 'all' || e.type == _filter || (_filter == 'call' && e.type == 'chat')).toList();
     final alerts = d.activeAlerts;
     return Column(children: [
       if (alerts.isNotEmpty) _AlertsBanner(alerts: alerts),
@@ -50,20 +51,25 @@ class _ActivityTabState extends State<ActivityTab> {
             ),
         ]),
       ),
-      SizedBox(
-        height: 52,
-        child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
-          for (final f in const [('all', 'All'), ('reminder', 'Reminders'), ('welfare', 'Welfare'), ('message', 'Messages')])
-            Padding(
-              padding: const EdgeInsets.only(right: 8, top: 4, bottom: 4),
-              child: ChoiceChip(
-                label: Text(f.$2),
-                selected: _filter == f.$1,
-                onSelected: (_) => setState(() => _filter = f.$1),
-                materialTapTargetSize: MaterialTapTargetSize.padded,
-                selectedColor: kInk,
-                labelStyle: TextStyle(color: _filter == f.$1 ? Colors.white : kInk, fontWeight: FontWeight.w600),
-                showCheckmark: false,
+      Padding(
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+        child: Row(children: [
+          // five filters side by side: they fit one row at phone width, so nothing here scrolls sideways
+          for (final f in const [('all', 'All'), ('reminder', 'Reminders'), ('welfare', 'Welfare'), ('message', 'Messages'), ('call', 'Calls')])
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: ChoiceChip(
+                  label: SizedBox(width: double.infinity, child: FittedBox(fit: BoxFit.scaleDown, child: Text(f.$2))),
+                  selected: _filter == f.$1,
+                  onSelected: (_) => setState(() => _filter = f.$1),
+                  materialTapTargetSize: MaterialTapTargetSize.padded,
+                  padding: const EdgeInsets.symmetric(horizontal: 0),
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                  selectedColor: kInk,
+                  labelStyle: TextStyle(fontSize: 13, color: _filter == f.$1 ? Colors.white : kInk, fontWeight: FontWeight.w600),
+                  showCheckmark: false,
+                ),
               ),
             ),
         ]),
@@ -107,7 +113,7 @@ class _Row extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(e.words ?? _typeLabel[e.type] ?? 'Activity', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
-            Wrap(spacing: 6, runSpacing: 4, children: [Pill(_chanLabel[e.channel] ?? e.channel), Pill(e.label, tone: toneForStatus(e.status))]),
+            Wrap(spacing: 6, runSpacing: 4, children: [if (e.where != null) Pill(_whereLabel[e.where] ?? e.where!), Pill(_chanLabel[e.channel] ?? e.channel), Pill(e.label, tone: toneForStatus(e.status))]),
             if (e.note != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text(e.note!, style: const TextStyle(fontSize: 13, color: kSoft))),
           ]),
         ),
