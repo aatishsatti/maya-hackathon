@@ -1789,3 +1789,26 @@ test('quiet hours: the dashboard warns when a reminder time falls in their quiet
   const vmSrc = src.match(/const inQuietAt = [^\n]+/)[0]; const run = (quiet, ms) => vm.runInNewContext(`let quiet = ${JSON.stringify(quiet)}; ${vmSrc}; inQuietAt(${ms})`, { Intl, Number, Date });
   const night = Date.now(), day = Date.now() + 9 * 3600000; assert.equal(run({ start: 22, end: 7, tz }, night), true); assert.equal(run({ start: 22, end: 7, tz }, day), false); assert.equal(run({ start: 22, end: 7, tz: null }, night), false); assert.equal(run(null, night), false);
 });
+
+// ---- a reply to a welfare check by text or voice note answers THAT check's entry (no second entry, no words kept) ----
+test('welfare reply: a scheduled text check the person replies to flips THAT entry from Delivered to Answered (no second entry, no words); a voice-note reply does too; STOP, a sticker and an older check do not', async () => {
+  stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0; const M = 60000; const x = inWindow();
+  sched(x.id, { everyMin: 5, via: 'text' }); care.tick(Date.now() + 5 * M + 1000); await settle(); assert.equal(sent().length, 1); const wid = wa.linkOf(x.id).sent.at(-1).id; wa.onStatus({ id: wid, status: 'delivered' });
+  let e = welfareEntries(x.id); assert.equal(e.length, 1); assert.deepEqual([e[0].channel, e[0].status, e[0].label], ['text', 'delivered', 'Delivered']);
+  reset(PLAIN); await wa.handleWebhook(incoming(x.phone, 'I am fine, thank you very much')); e = welfareEntries(x.id);
+  assert.equal(e.length, 1, 'no second entry for the reply'); assert.deepEqual([e[0].channel, e[0].status, e[0].label], ['text', 'answered', 'Answered']); assert.doesNotMatch(JSON.stringify(wa.activityOf(x.id)) + JSON.stringify(wa.linkOf(x.id).sent), /fine, thank you/, 'their words are not kept');
+  wa.onStatus({ id: wid, status: 'read' }); assert.equal(welfareEntries(x.id)[0].status, 'answered', 'a late read receipt does not take Answered back'); assert.ok(wa.activityOf(x.id).summary.answered >= 1);
+  // only the newest unanswered check is answered by one reply; an older one stays as it was
+  clearCalls(); const y = inWindow(); await wa.sendOut(y.id, { kind: 'text', text: 'x', who: 'maya' }); wa.onStatus({ id: wa.linkOf(y.id).sent.at(-1).id, status: 'delivered' }); shift(y.id, 3600000);
+  await wa.sendOut(y.id, { kind: 'text', text: 'x', who: 'maya' }); wa.onStatus({ id: wa.linkOf(y.id).sent.at(-1).id, status: 'delivered' }); reset(PLAIN); await wa.handleWebhook(incoming(y.phone, 'hello'));
+  const ys = welfareEntries(y.id).sort((a, b) => a.at - b.at); assert.deepEqual(ys.map((q) => q.status), ['delivered', 'answered'], 'the NEWEST check was answered, the older one is untouched');
+  // a voice-note reply
+  clearCalls(); const v = inWindow(); await wa.sendOut(v.id, { kind: 'voice', text: 'x', who: 'maya' }); wa.onStatus({ id: wa.linkOf(v.id).sent.at(-1).id, status: 'delivered' }); reset(PLAIN); await wa.handleWebhook(voiceIn(v.phone));
+  assert.deepEqual([welfareEntries(v.id)[0].channel, welfareEntries(v.id)[0].status], ['voice', 'answered']);
+  // a sticker does not count as a reply; STOP does not either
+  clearCalls(); const s = inWindow(); await wa.sendOut(s.id, { kind: 'text', text: 'x', who: 'maya' }); wa.onStatus({ id: wa.linkOf(s.id).sent.at(-1).id, status: 'delivered' }); reset(PLAIN);
+  await wa.handleWebhook(incoming(s.phone, '', { type: 'sticker', text: undefined, sticker: { id: 'z' } })); assert.equal(welfareEntries(s.id)[0].status, 'delivered', 'a sticker is not a reply');
+  await wa.handleWebhook(incoming(s.phone, 'STOP')); assert.equal(welfareEntries(s.id)[0].status, 'delivered', 'STOP is not a reply'); clearCalls();
+  // a family message is not a welfare check: a reply does not flip it
+  const f = inWindow(); await wa.sendOut(f.id, { kind: 'text', text: 'dinner at six', who: 'family' }); wa.onStatus({ id: wa.linkOf(f.id).sent.at(-1).id, status: 'delivered' }); reset(PLAIN); await wa.handleWebhook(incoming(f.phone, 'ok')); assert.equal(wa.activityOf(f.id).entries.find((q) => q.type === 'message').status, 'delivered'); clearCalls(); stopAllSchedules();
+});

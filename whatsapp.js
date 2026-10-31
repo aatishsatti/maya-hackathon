@@ -438,7 +438,14 @@ async function onMessage(msg) {
   if (msg.type === 'interactive' && msg.interactive && msg.interactive.type === 'call_permission_reply') { note(`ignored a call permission reply from number ending ${end(msg.from)}: a WhatsApp system message after a call, nothing is sent back and the 24 h window is not opened by it`); return 'system'; }
   if ((l.seen || []).includes(msg.id)) { note(`ignored a repeated message from number ending ${end(msg.from)} (Meta retry)`); return 'duplicate'; }
   update(l.profileId, (x) => {
-    x.lastInboundAt = Math.max(x.lastInboundAt || 0, Number(msg.timestamp) * 1000 || Date.now()); x.callMisses = 0; // they are reachable: the unanswered-calls count starts again
+    const at = Number(msg.timestamp) * 1000 || Date.now();
+    x.lastInboundAt = Math.max(x.lastInboundAt || 0, at); x.callMisses = 0; // they are reachable: the unanswered-calls count starts again
+    // A reply (a typed message, a voice note or a photo; not STOP, not a sticker) answers the NEWEST welfare check Maya sent by text or voice note and has not been answered yet, within the 24 h after it.
+    // The existing entry is marked (repliedAt, a time and nothing else); no second entry, and none of their words is kept.
+    if ((msg.type === 'text' && !(msg.text && STOP.test(String(msg.text.body)))) || msg.type === 'audio' || msg.type === 'image') {
+      const w = [...(x.sent || [])].reverse().find((m) => m.who === 'maya' && !m.repliedAt && m.status !== 'failed' && m.status !== 'sending' && m.at <= at + 5000 && at - m.at < WINDOW_MS);
+      if (w) w.repliedAt = at;
+    }
     x.seen = [...(x.seen || []), msg.id].slice(-SEEN_KEEP);
   });
   note(`received a ${typeName(msg.type)} from number ending ${end(msg.from)}${msg.type === 'interactive' ? ` (interactive type ${/^[a-z_]{1,40}$/.test(String(msg.interactive && msg.interactive.type)) ? msg.interactive.type : 'unknown'})` : ''}`); // the interactive type is an enum (button_reply, call_permission_reply ...), never the person's words
@@ -570,7 +577,7 @@ function activityOf(profileId) {
     else if (n.kind === 'family_message') push({ id: `n:${n.id}`, type: 'message', channel: 'text', status, label, rank, at: n.times && n.times.sent, words: n.text });
   }
   for (const m of (l && l.sent) || []) {
-    const [status, label, rank] = OUTMSG[m.status] || ['sent', String(m.status), 1];
+    const [status, label, rank] = m.repliedAt && m.who === 'maya' ? ['answered', 'Answered', 4] : OUTMSG[m.status] || ['sent', String(m.status), 1];   // a welfare check they replied to
     push({ id: `m:${m.at}`, type: m.who === 'maya' ? 'welfare' : 'message', channel: m.kind === 'voice' ? 'voice' : 'text', status, label, rank, at: m.at, words: null });
   }
   out.sort((a, b) => b.at - a.at);
