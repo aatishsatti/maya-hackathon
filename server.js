@@ -174,6 +174,7 @@ async function handleWhatsapp(req, res, url) {
     if (req.method === 'DELETE' && !b) return sendJson(res, 200, { ok: whatsapp.unlink(a) });
     if (req.method === 'POST' && b === 'send') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, await whatsapp.sendOut(a, { kind: body.kind, text: body.text, who: 'family', useTemplate: body.useTemplate === true })); }
     if (req.method === 'POST' && b === 'test-call') return MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeTestCall(a)); // TEMPORARY (render-test): one outbound test call, see wacall.callOut
+    if (req.method === 'POST' && b === 'welfare-call') return MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeWelfareCall(a)); // TEMPORARY (render-test): Step 1, a one-off welfare check call
     if (req.method === 'POST' && b === 'reminder-call') { // TEMPORARY (render-test): C2, a reminder delivered by an outbound call
       if (MODE !== 'real') return sendJson(res, 503, { error: 'Calls need real mode.' });
       const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' });

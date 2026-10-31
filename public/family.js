@@ -283,11 +283,11 @@
   }
   async function runCall(path, body, button) {
     if (waTesting) return;
-    waTesting = true; $('waTestCall').disabled = true; $('waRemCall').disabled = true; $('waTestLine').textContent = 'Placing the call...';
+    waTesting = true; for (const b of ['waTestCall', 'waRemCall', 'waWelfareCall']) $(b).disabled = true; $('waTestLine').textContent = 'Placing the call...';
     try {
       const r = await waCall(`/api/whatsapp/${id}/${path}`, 'POST', body);
       if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; return; }
-      if (r.j.placed === false) { $('waTestLine').textContent = `Nothing rang. ${capText(r.j.calls)} The reminder was sent as a WhatsApp message instead.`; load(); return; }
+      if (r.j.placed === false) { $('waTestLine').textContent = `Nothing rang. ${capText(r.j.calls)} A WhatsApp message was sent instead.`; load(); return; }
       $('waTestLine').textContent = 'WhatsApp took the call: their phone should ring now.';
       const mine = id;
       for (let i = 0; i < 25 && mine === id; i++) {
@@ -298,9 +298,10 @@
       }
       load();
     } catch (e) { $('waTestLine').textContent = `Could not reach the server: ${e.message}. Nothing rang.`; }
-    finally { waTesting = false; $('waTestCall').disabled = false; $('waRemCall').disabled = false; }
+    finally { waTesting = false; for (const b of ['waTestCall', 'waRemCall', 'waWelfareCall']) $(b).disabled = false; }
   }
   $('waTestCall').addEventListener('click', () => runCall('test-call'));
+  $('waWelfareCall').addEventListener('click', () => runCall('welfare-call'));   // Step 1: a welfare check call, no reminder
   // C2: the family's reminder, delivered by the call. A reminder you already set wins over typed text.
   $('waRemPick').addEventListener('change', remSource); $('waRemText').addEventListener('input', remSource);
   $('waRemClear').addEventListener('click', () => { $('waRemPick').value = ''; $('waRemText').value = ''; remSource(); });

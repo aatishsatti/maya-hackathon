@@ -560,6 +560,10 @@ function placeCall(profileId, kind, spec) {
   const block = callBlock(l);
   if (block) {
     const why = block === 'misses' ? `The last ${MAX_MISSES} calls to them were not answered, so Maya will not call again until they answer or write.` : `The limit of ${MAX_CONNECTED_PER_DAY} answered calls in 24 hours is reached.`;
+    if (kind === 'welfare') {   // the same limit, a fixed true text instead of a call (only inside the 24 h window, where free text is allowed)
+      if (!(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) return fail(`${why} A text needs them to have written in the last 24 hours, and they have not. Nothing was sent.`, 429);
+      return sendTextTo(l.phone, WELFARE_TEXT).then(() => { note(`welfare check to number ending ${end(l.phone)} not called (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); a fixed text was sent instead`); return { placed: false, fallback: 'message', reason: block, calls: { ...capInfo(l), blocked: block } }; }, (e) => fail(`${why} The text could not be sent either: ${e.message}`, e.status || 502));
+    }
     if (kind !== 'reminder') return fail(`${why} Nothing was placed.`, 429);
     try { care.reminderViaMessage(profileId, spec); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
     note(`reminder call to number ending ${end(l.phone)} not placed (${block === 'misses' ? `${MAX_MISSES} unanswered in a row` : `${MAX_CONNECTED_PER_DAY} answered calls in 24 h`}); the reminder was sent as a message instead`);
@@ -568,13 +572,18 @@ function placeCall(profileId, kind, spec) {
   if (Date.now() - lastTestAt < (deps.testCooldownMs === undefined ? TEST_COOLDOWN_MS : deps.testCooldownMs)) return fail('A call was just placed. Wait a minute before another. Nothing was placed.', 429);
   let rc = null;
   if (kind === 'reminder') { try { rc = care.reminderCallStart(profileId, spec); } catch (e) { return fail(e.message, e.status || 400); } }
+  let wc = null;
+  if (kind === 'welfare') { try { wc = care.welfareCallStart(profileId); } catch (e) { return fail(e.message, e.status || 400); } }
   callBusy = true; lastTestAt = Date.now();
   const tail = end(l.phone), sig = new (require('node:events'))(), cur = { id: null, sig, profileId }; outboundNow.cur = cur;
-  const what = kind === 'reminder' ? 'reminder call' : 'test call';
+  const what = kind === 'reminder' ? 'reminder call' : kind === 'welfare' ? 'welfare call' : 'test call';
   let cid = 'unknown'; const log = (m) => note(`${what} ${cid} to number ending ${tail}: ${m}`);
   setTest(profileId, 'starting');
   let connected = false;
-  const settle = () => { if (!rc) return; const st = care.reminderCallEnded(profileId, rc.rid); if (st) log(`dashboard state: ${st === 'unanswered' ? "Couldn't reach" : "Hasn't replied yet"}`); };
+  const settle = () => {
+    if (wc) { const st = care.welfareCallEnded(profileId, wc.nid, wc.startedAt); if (st) log(`activity entry: ${st === 'unreached' ? "Couldn't reach senior" : st === 'spoke' ? 'Replied' : "Hasn't replied yet"}`); return; }
+    if (!rc) return; const st = care.reminderCallEnded(profileId, rc.rid); if (st) log(`dashboard state: ${st === 'unanswered' ? "Couldn't reach" : "Hasn't replied yet"}`);
+  };
   return new Promise((resolve, reject) => {
     const place = async (session) => {
       const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/calls`, { messaging_product: 'whatsapp', to: l.phone, action: 'connect', session });
@@ -589,11 +598,11 @@ function placeCall(profileId, kind, spec) {
     sig.on('status', (s) => { if (label[s]) setTest(profileId, label[s]); if (s === 'ACCEPTED' && !connected) { connected = true; noteConnected(profileId); } });
     const tzOf = () => (care.get(profileId) || {}).tz || null;
     Promise.resolve().then(() => deps.callOut({ sig, place, terminate, log, speak: (t) => chat.deps.speak(t), ringCapMs: deps.testRingCapMs, tailMs: deps.testTailMs,
-      ...(rc ? { bridge: { newCall: deps.newCall, apiKey: process.env.META_API_KEY, profileId, tz: tzOf(), outreachId: rc.outreachId, capMs: deps.callCapMs, greetingTimeoutMs: deps.greetingTimeoutMs } } : {}) }))
+      ...((rc || wc) ? { bridge: { newCall: deps.newCall, apiKey: process.env.META_API_KEY, profileId, tz: tzOf(), outreachId: (rc || wc).outreachId, reason: wc ? 'welfare' : 'reminder', capMs: deps.callCapMs, greetingTimeoutMs: deps.greetingTimeoutMs } } : {}) }))
       .then((r) => {
         const missed = /^no answer/.test(r) || r === 'rejected';
         if (missed) noteMissed(profileId);
-        setTest(profileId, /^no answer/.test(r) ? 'no answer' : r === 'rejected' ? 'rejected' : r === 'completed' ? (rc ? 'finished' : 'completed') : 'ended');
+        setTest(profileId, /^no answer/.test(r) ? 'no answer' : r === 'rejected' ? 'rejected' : r === 'completed' ? (rc || wc ? 'finished' : 'completed') : 'ended');
         settle(); note(`${what} ${cid} to number ending ${tail}: finished, ${r}`);
       })
       .catch((e) => { setTest(profileId, 'failed'); settle(); note(`${what} ${cid} to number ending ${tail}: FAILED, ${sayWhy(e)}`); reject(e instanceof WaError ? e : new WaError(sayWhy(e), 502)); })
@@ -602,6 +611,8 @@ function placeCall(profileId, kind, spec) {
 }
 const placeTestCall = (profileId) => placeCall(profileId, 'test');
 const placeReminderCall = (profileId, spec) => placeCall(profileId, 'reminder', spec);
+const placeWelfareCall = (profileId) => placeCall(profileId, 'welfare');
+const WELFARE_TEXT = 'This is Maya. Your family asked me to check in on you. How are you today?';   // fixed and true for a dashboard-triggered check; used only when calls are paused
 
 // Called by server.js after it answered 200. Never throws; errors are logged as a message only (no words, no numbers).
 async function handleWebhook(payload) {
@@ -627,4 +638,4 @@ async function handleWebhook(payload) {
   return (await Promise.all(done)).flat(); // calls answer with one result per call
 }
 
-module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, placeWelfareCall, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

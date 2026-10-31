@@ -372,7 +372,7 @@ test('never a live call: only text, audio and template ever leave; a call promis
   shift(id, 60000); await wa.sendOut(id, { kind: 'voice', text: 'ok' });
   const o = outside(); shift(o.id, 1); await wa.sendOut(o.id, { kind: 'text', useTemplate: true });
   assert.ok(sent().length >= 3 && sent().every((b) => ['text', 'audio', 'template'].includes(b.type)));
-  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)).sort(), ['placeReminderCall', 'placeTestCall']); // the one test call (C1) is the only exception, and it never sends a message
+  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)).sort(), ['placeReminderCall', 'placeTestCall', 'placeWelfareCall']); // the one test call (C1) is the only exception, and it never sends a message
   await refusal(wa.sendOut(id, { kind: 'call', text: 'x' }), /text message or a voice note/, { status: 400 });
   await refusal(wa.sendOut(id, { kind: 'text', text: 'x', who: 'stranger' }), /Bad sender/);
 });
@@ -1140,13 +1140,13 @@ const starts = []; let script = 'ack', heardFrames = 0;
 class FakeCall {
   constructor(socket) { this.socket = socket; this.closed = false; this.awaitAck = null; socket.onmessage = (data, bin) => { if (bin) { const f = new Float32Array(data.buffer, data.byteOffset, data.length >> 2); let pk = 0; for (const v of f) pk = Math.max(pk, Math.abs(v)); if (pk > 0.05) heardFrames++; } if (!bin) { const m = JSON.parse(data.toString()); if (m.type === 'start') this.start(m); } }; }
   async start(m) {
-    starts.push(m); this.pid = m.profileId; const info = m.reason === 'reminder' ? care.claim(m.profileId, m.outreachId) : null; if (info) this.awaitAck = info.reminderId;
+    starts.push(m); this.pid = m.profileId; this.welfare = m.reason === 'welfare'; this.userTurns = script === 'spoke' ? 1 : 0; const info = m.reason === 'reminder' || this.welfare ? care.claim(m.profileId, m.outreachId) : null; if (info && info.reminderId) this.awaitAck = info.reminderId;
     this.socket.send(JSON.stringify({ type: 'ready' })); this.socket.send(tone(0.3));
     await sleepMs(script === 'listen' ? 2500 : 150);
     if (script === 'ack') { care.reminderAck(this.pid, this.awaitAck); this.awaitAck = null; }
     await sleepMs(50); this.socket.close(1000);
   }
-  end() { if (this.closed) return; this.closed = true; if (this.awaitAck) care.reminderNoAck(this.pid, this.awaitAck); }
+  end() { if (this.closed) return; this.closed = true; if (this.awaitAck) care.reminderNoAck(this.pid, this.awaitAck); if (this.welfare) care.callEnded(this.pid, this, 'left'); }
 }
 const remOf = (id) => care.get(id).reminders[0];
 const reminderReset = () => { outReset(); starts.length = 0; script = 'ack'; heardFrames = 0; wa.deps.newCall = (socket) => new FakeCall(socket); wa.deps.callTailMs = 50; };
@@ -1166,7 +1166,7 @@ test('C2 answered and acknowledged: the Call claims the ring with the reminder, 
     assert.equal(remOf(id).last.state, 'done'); assert.equal(remOf(id).active, null); assert.equal(remOf(id).dueAt, null, 'a typed test reminder is not left scheduled');
     assert.deepEqual(actions(), ['connect', 'terminate']); assert.ok(dev.got.length >= 10, 'her greeting reached the phone');
     const l = wa.linkOf(id); assert.equal(l.callMisses, 0); assert.equal(l.connected.length, 1);
-    assert.match(out, /reminder call [0-9a-f]{6} to number ending \d{4}: requested/); assert.match(out, /picked up; the reminder call has started/); assert.match(out, /her first words are ready \d+ ms/); assert.match(out, /hung up \d+ ms.*maya hung up/);
+    assert.match(out, /reminder call [0-9a-f]{6} to number ending \d{4}: requested/); assert.match(out, /picked up; the call has started/); assert.match(out, /her first words are ready \d+ ms/); assert.match(out, /hung up \d+ ms.*maya hung up/);
     assert.doesNotMatch(out, /tablets|v=0|a=fingerprint|wacid|TEST-TOKEN/); assert.ok(!out.includes(phone)); assert.equal(sent().length, 0);
   } finally { await dev.peer.close(); }
 });
@@ -1338,4 +1338,77 @@ test('the family page: the call section is its own column with headings, full-wi
   assert.match(call, /<select id="waRemPick" class="wa-wide">/); assert.match(call, /<input id="waRemText" class="wa-wide"/); assert.doesNotMatch(call, /form-row/, 'no squeezed flex row');
   assert.ok(call.indexOf('waRemSource') < call.indexOf('waRemClear'), 'the line that says which source wins sits under the fields'); assert.match(call, /class="wa-actions">\s*<button id="waRemClear"[^>]*>Clear choice<\/button>\s*<button id="waRemCall" class="btn primary"/);
   assert.match(css, /\.wa-call \.wa-wide \{[^}]*width: 100%[^}]*min-height: 46px/); assert.match(css, /\.wa-actions \.btn \{[^}]*flex: 1 1 160px[^}]*min-height: 48px/);
+});
+
+// ---- Step 1: a welfare check call (no reminder; the Call claims a welfare ring; one activity entry with the existing labels) ----
+const noteOf = (id) => care.get(id).notifications.find((n) => n.kind === 'welfare');
+const labelOf = (id) => care.statusLabel(noteOf(id));
+const runWelfare = async (spokeScript, { cap = 0 } = {}) => {
+  reminderReset(); script = spokeScript; const { id, phone } = inWindow(); let dev, before, during;
+  const out = await capture(() => withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    assert.deepEqual(await wa.placeWelfareCall(id), { placed: true }); before = labelOf(id);
+    dev = await driveAnswered(phone, callPosts().find((b) => b.action === 'connect')); await waitFor(() => starts.length === 1); during = labelOf(id);
+    await waitFor(() => actions().includes('terminate')); await waitFor(() => wa.view(id).testCall.state === 'finished');
+  }));
+  return { id, phone, dev, before, during, out };
+};
+
+test('Step 1 welfare: picked up and they spoke -> Calling now, Picked up, Replied; the Call claims a welfare ring; no reminder record; logs hold no words, number or call id', async () => {
+  const r = await runWelfare('spoke');
+  try {
+    assert.equal(r.before, 'Calling now'); assert.equal(r.during, 'Picked up, waiting for a reply'); assert.equal(labelOf(r.id), 'Replied');
+    assert.equal(starts.length, 1); assert.equal(starts[0].reason, 'welfare'); assert.equal(starts[0].profileId, r.id); assert.match(starts[0].outreachId, /^[a-z0-9]+$/i);
+    const n = noteOf(r.id); assert.equal(n.channel, 'whatsapp'); assert.equal(n.to, 'senior'); assert.doesNotMatch(n.text, /tablets|howare/i); assert.equal(care.get(r.id).reminders.length, 0, 'no reminder record');
+    assert.deepEqual(actions(), ['connect', 'terminate']); const l = wa.linkOf(r.id); assert.equal(l.callMisses, 0); assert.equal(l.connected.length, 1);
+    assert.match(r.out, /welfare call [0-9a-f]{6} to number ending \d{4}: requested/); assert.match(r.out, /picked up; the call has started/); assert.match(r.out, /activity entry: Replied/);
+    assert.doesNotMatch(r.out, /Your family asked|How are you today|v=0|a=fingerprint|wacid|TEST-TOKEN/); assert.ok(!r.out.includes(r.phone)); assert.equal(sent().length, 0);
+  } finally { await r.dev.peer.close(); }
+});
+
+test('Step 1 welfare: picked up but nothing was heard -> Hasn\'t replied yet (not a miss: they picked up)', async () => {
+  const r = await runWelfare('silent');
+  try { assert.equal(labelOf(r.id), "Hasn't replied yet"); assert.equal(wa.linkOf(r.id).callMisses, 0); assert.match(r.out, /activity entry: Hasn't replied yet/); assert.deepEqual(actions(), ['connect', 'terminate']); } finally { await r.dev.peer.close(); }
+});
+
+test('Step 1 welfare: nobody answers (cap here 200 ms) -> terminate, Couldn\'t reach senior, one attempt; rejected -> Couldn\'t reach senior, no terminate; each is one miss', async () => {
+  reminderReset(); wa.deps.testRingCapMs = 200; const a = inWindow();
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeWelfareCall(a.id); await wa.handleWebhook(outStatus(a.phone, 'RINGING')); await waitFor(() => actions().includes('terminate')); await waitFor(() => noteOf(a.id).unreached); await sleepMs(50); });
+  assert.equal(labelOf(a.id), "Couldn't reach senior"); assert.deepEqual(actions(), ['connect', 'terminate']); assert.equal(starts.length, 0); assert.equal(wa.linkOf(a.id).callMisses, 1); await sleepMs(300); assert.deepEqual(actions(), ['connect', 'terminate'], 'no retry');
+  reminderReset(); const b = inWindow();
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeWelfareCall(b.id); await wa.handleWebhook(outStatus(b.phone, 'RINGING')); await wa.handleWebhook(outStatus(b.phone, 'REJECTED')); await waitFor(() => noteOf(b.id).unreached); await sleepMs(100); });
+  assert.equal(labelOf(b.id), "Couldn't reach senior"); assert.deepEqual(actions(), ['connect']); assert.equal(wa.linkOf(b.id).callMisses, 1); assert.equal(starts.length, 0);
+});
+
+test('Step 1 welfare: two unanswered in a row or 5 answered today -> no call, a fixed true text instead (inside the 24 h window; outside it nothing is sent); the text and its words never reach the log', async () => {
+  reminderReset(); const a = inWindow();
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 2; i++) { await wa.placeWelfareCall(a.id); await wa.handleWebhook(outStatus(a.phone, 'RINGING')); await wa.handleWebhook(outStatus(a.phone, 'REJECTED')); await waitFor(() => care.get(a.id).notifications.filter((n) => n.kind === 'welfare' && n.unreached).length === i + 1); await sleepMs(100); } });
+  clearCalls(); let res; const out = await capture(async () => { res = await wa.placeWelfareCall(a.id); });
+  assert.deepEqual([res.placed, res.fallback, res.reason, res.calls.blocked], [false, 'message', 'misses', 'misses']); assert.equal(callPosts().length, 0, 'no call'); assert.equal(sent().length, 1); assert.equal(sent()[0].type, 'text'); assert.equal(sent()[0].to, a.phone);
+  assert.equal(sent()[0].text.body, 'This is Maya. Your family asked me to check in on you. How are you today?'); assert.match(out, /welfare check to number ending \d{4} not called \(2 unanswered in a row\); a fixed text was sent instead/); assert.doesNotMatch(out, /Your family asked|How are you today/);
+  // outside the 24 h window nothing is sent
+  const o = outside(); wa.deps.testCooldownMs = 0; clearCalls();
+  const keep = wa.deps.callOut; wa.deps.callOut = async (x) => { await x.place({ sdp_type: 'offer', sdp: 'x' }); x.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
+  try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 5; i++) { await wa.placeTestCall(o.id); await sleepMs(60); } }); } finally { wa.deps.callOut = keep; }
+  clearCalls(); await assert.rejects(wa.placeWelfareCall(o.id), (e) => { assert.equal(e.status, 429); assert.match(e.message, /5 answered calls in 24 hours/); assert.match(e.message, /Nothing was sent/); return true; }); assert.equal(callPosts().length + sent().length, 0);
+  // 5 answered today, inside the window: the text
+  const w = inWindow(); wa.deps.callOut = async (x) => { await x.place({ sdp_type: 'offer', sdp: 'x' }); x.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
+  try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 5; i++) { await wa.placeTestCall(w.id); await sleepMs(60); } }); } finally { wa.deps.callOut = keep; }
+  clearCalls(); const r2 = await wa.placeWelfareCall(w.id); assert.deepEqual([r2.placed, r2.reason], [false, 'cap']); assert.equal(callPosts().length, 0); assert.equal(sent().length, 1);
+});
+
+test('Step 1 welfare: one call at a time and the 60 s cooldown hold; a welfare call is refused while another is ringing', async () => {
+  reminderReset(); const { id, phone } = inWindow();
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeWelfareCall(id); await assert.rejects(wa.placeWelfareCall(id), (e) => { assert.equal(e.status, 409); assert.match(e.message, /Another call is in progress/); return true; });
+    await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await waitFor(() => noteOf(id).unreached); await sleepMs(100);
+    wa.deps.testCooldownMs = 60000; clearCalls(); await assert.rejects(wa.placeWelfareCall(id), /Wait a minute/); assert.equal(callPosts().length, 0);
+  });
+});
+
+test('Step 1 welfare: the Call gets the welfare-check fact (a welfare check, how are you; the family asked, which is true here; invent nothing, no medicine, no advice); the button and route exist', () => {
+  voiceReset(); const { id } = linked(); const { call } = outCall(id); call.outreach = { kind: 'welfare' }; call.shortGreeting = false;
+  const note = call.greetingNote(14);
+  assert.match(note, /welfare check/); assert.match(note, /see how they are/); assert.match(note, /Their family asked you to call and check in on them/); assert.match(note, /Invent nothing: no condition, no news, no weather, no time of day/); assert.match(note, /No medicine, no dose, no advice/);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waWelfareCall"[^>]*>Check in with them now \(test\)</); assert.match(html, /<h3 class="wa-sub">Check in with them \(test\)<\/h3>/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /b === 'welfare-call'\) return MODE !== 'real'/);
 });

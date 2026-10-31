@@ -208,7 +208,7 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     finally { clearTimeout(tm); }
     log(`her first words are ready ${Date.now() - br.born} ms after the media connected`);
     out = new Outbound(track, codecPt); out.start(); br.attach(out);
-    log('picked up; the reminder call has started');
+    log('picked up; the call has started');
     const lost = pcLost(pc); let capTimer2; const cap = new Promise((res) => { capTimer2 = setTimeout(() => res('time cap'), bridge.capMs || CALL_CAP_MS); });
     let why;
     try { why = await Promise.race([br.done, outcome.then((o) => ({ over: o })), cap, lost.promise.then(() => 'the media connection dropped'), out.failed.then((e) => { throw e; })]); }
@@ -238,7 +238,7 @@ async function callOut({ sig, place, terminate, log, speak, text = TEST_CALL_LIN
     clearTimeout(capTimer); capTimer = null;
     if (bridge) {
       br = new PhoneBridge({ newCall: bridge.newCall, apiKey: bridge.apiKey, profileId: bridge.profileId, tz: bridge.tz, log, speak, outbound: true });
-      br.begin({ reason: 'reminder', outreachId: bridge.outreachId });
+      br.begin({ reason: bridge.reason || 'reminder', outreachId: bridge.outreachId });
     }
     r = await step(waitConnected(pc, mediaUpMs)); if (!r.ok) return await finish(r);
     log(`media up ${since()} after the request`);

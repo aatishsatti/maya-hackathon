@@ -279,8 +279,11 @@ function advance(p, n, status) {
 }
 // Exactly one vocabulary, shared with the dashboard (and later WhatsApp).
 function statusLabel(n) {
+  if (n.calling) return 'Calling now';   // a welfare check call (existing labels only)
+  if (n.unreached) return "Couldn't reach senior";
   if (n.status === 'replied') return 'Replied';
   if (n.noReply) return "Hasn't replied yet";
+  if (n.pickedUp) return 'Picked up, waiting for a reply';
   if (n.status === 'seen' && n.kind === 'family_message') return 'Seen · Not replied yet';
   if (n.status === 'seen') return n.played ? 'Played' : 'Seen';
   return n.status === 'delivered' ? 'Delivered' : 'Sent';
@@ -398,7 +401,8 @@ function claim(id, oid) {
   if (!o || !p || o.profileId !== id || o.state !== 'ringing') return null;
   const info = { kind: o.kind, reminderId: o.reminderId, talked: o.talked, safety: o.safety };
   if (o.safety) { const f = safetyFlag(p); if (f) { f.callbackState = 'answered'; f.answers = (f.answers || 0) + 1; } } // answering does NOT close the ticket
-  advance(p, o.notif, o.kind === 'reminder' ? 'seen' : 'replied');
+  advance(p, o.notif, o.kind === 'reminder' || o.kind === 'welfare' ? 'seen' : 'replied');
+  if (o.kind === 'welfare') { o.notif.calling = false; o.notif.pickedUp = true; }   // picked up: whether they spoke is settled when the call ends
   if (o.reminderId) { const r = p.reminders.find((x) => x.id === o.reminderId); if (r && r.active) r.active.state = 'answered'; } // picked up; waiting for the acknowledgement
   closeOutreach(o, 'answered');
   pushFamily('refresh', { id });
@@ -938,6 +942,33 @@ function reminderCallStart(id, spec) {
   save(id); pushFamily('refresh', { id });
   return { rid: r.id, outreachId: o.id };
 }
+// ---- a welfare check call (whatsapp.js placeWelfareCall; Step 1) ----
+// One entry in the activity list (channel WhatsApp, kind welfare, no words), labelled with the existing words: Calling now -> Picked up, waiting for a reply -> Replied (they said at least one thing)
+// | Hasn't replied yet (picked up, nothing heard) | Couldn't reach senior (nobody picked up / rejected). A pretend ring (outreach kind welfare) lets the Call claim it as it does an app ring.
+function welfareCallStart(id) {
+  const p = get(id);
+  if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  if (activeByProfile.get(id)) throw Object.assign(new Error('Maya is already trying to reach them.'), { status: 409 });
+  const now = Date.now();
+  const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: 'Maya called on WhatsApp to check how they are (welfare check).', ref: null });
+  n.channel = 'whatsapp'; n.calling = true;
+  const o = { id: uid(), profileId: id, kind: 'welfare', reminderId: null, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
+  n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
+  save(id); pushFamily('refresh', { id });
+  return { nid: n.id, outreachId: o.id, startedAt: now };
+}
+// The call is over (whatever way). Returns 'unreached' | 'spoke' | 'silent' | null (unknown entry). Safe to call twice.
+function welfareCallEnded(id, nid, startedAt) {
+  const p = get(id); const n = p && p.notifications.find((x) => x.id === nid);
+  if (!n || !n.calling && !n.pickedUp) return null;
+  const o = n.ref && outreaches.get(n.ref);
+  let out;
+  if (o) { closeOutreach(o, 'missed'); n.unreached = true; n.noReply = true; out = 'unreached'; }   // nobody picked up: the ring was never claimed
+  else if (n.status === 'replied' || n.noReply) return null;                                      // already settled
+  else { const lc = p.lastCall, talked = Boolean(lc && lc.at >= startedAt && lc.talked); if (talked) advance(p, n, 'replied'); else n.noReply = true; out = talked ? 'spoke' : 'silent'; }
+  n.calling = false; save(id); pushFamily('refresh', { id });
+  return out;
+}
 // The call is over (whatever way). Settles what is still open, once: nobody picked up -> Couldn't reach; picked up with no acknowledgement -> Hasn't replied yet. Returns the state it settled, or null.
 function reminderCallEnded(id, rid) {
   const p = get(id); const r = p && p.reminders.find((x) => x.id === rid);
@@ -1280,6 +1311,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, reminderCallStart, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, welfareCallStart, welfareCallEnded, reminderCallStart, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, outreaches, activeByProfile,
 };
