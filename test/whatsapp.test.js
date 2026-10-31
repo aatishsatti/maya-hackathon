@@ -180,6 +180,7 @@ const heard = []; let transcript = 'I made some soup today.';
 chat.deps.transcribe = async (wav) => { heard.push(wav); return transcript; };
 const spoken = []; let speakFail = false;
 chat.deps.speak = async (t) => { spoken.push(t); if (speakFail) throw new Error('voice is down'); return tone(1); };
+const stopAllSchedules = () => { for (const m of memory.listProfiles()) { care.welfareScheduleStop(m.id); const q = care.get(m.id); if (q) q.reminders = []; } };   // care.tick ticks EVERY person: a schedule (or a reminder) left by one test would fire in another
 const voiceReset = () => { clearCalls(); heard.length = 0; spoken.length = 0; speakFail = false; transcript = 'I made some soup today.'; };
 
 test('incoming voice note -> Transcribe gets a real WAV -> the same Maya -> a voice note back (uploaded Ogg/Opus, voice:true), same ElevenLabs voice path as the app', async () => {
@@ -886,7 +887,7 @@ test('Reminder replies: a Missed reminder is known silently for 2 hours; a messa
   r.last.at -= 3 * 60 * MIN; asked.length = 0; await wa.handleWebhook(incoming(phone, 'Anything new?')); assert.ok(!rosterWith(/from their family/), 'after 2 hours it is forgotten');
   const m = remindProfile({ delivery: 'text' }); await sendReminderTo(m.id, "Mum, it's your daughter - I love you!", 1); asked.length = 0; await wa.handleWebhook(incoming(m.phone, 'who is this?'));
   const rm = rosterWith(/Their message may be a reply to it/); assert.match(rm, /1 minute ago you sent them a message from their family: "Mum, it's your daughter - I love you!"/); assert.doesNotMatch(rm, /reminder from their family/);
-  const f = outside(); care.setMode(f.id, 'standard'); const due2 = Date.now() + 5000; care.addReminder(f.id, { task: 'never sent', dueAt: due2, repeat: 'none' }); care.tick(due2); await settle(); asked.length = 0; await wa.handleWebhook(incoming(f.phone, 'hello')); assert.ok(!rosterWith(/never sent/), 'Not sent: it never reached them, so Maya says nothing about it'); clearCalls();
+  const f = outside(); care.setMode(f.id, 'standard'); const due2 = Date.now() + 5000; care.addReminder(f.id, { task: 'never sent', dueAt: due2, repeat: 'none' }); wa.deps.testCooldownMs = 0; callFail = { connect: { code: 138006, message: 'No approved call permission' } }; care.tick(due2); await waitFor(() => care.get(f.id).reminders[0].last); await settle(); callFail = null; asked.length = 0; await wa.handleWebhook(incoming(f.phone, 'hello')); assert.ok(!rosterWith(/never sent/), 'Not sent: it never reached them, so Maya says nothing about it'); clearCalls();
 });
 
 test('Reminder replies: only a reply that really came through WhatsApp is told (not the same person typing in the app, not a call), and the door is closed again afterwards', async () => {
@@ -918,11 +919,11 @@ test('chat.js onWords hook: called once with the transcript BEFORE Maya\'s reply
   chat.deps.transcribe = keepT; voiceReset(); clearCalls();
 });
 
-test('Phase 2: outside the 24 h window nothing is sent (no Meta call), it is shown as Not sent with the reason; the family is told in cautious and ultra, not in standard', async () => {
+test('Phase 2: outside the 24 h window nothing is SENT; a call is tried instead and, when it cannot be placed, it is shown as Not sent with the reason; the family is told in cautious and ultra, not in standard', async () => {
   for (const [mode, kind] of [['standard', null], ['cautious', 'gentle'], ['ultra', 'alert']]) {
-    voiceReset(); const x = outside(); care.setMode(x.id, mode); const { dueAt } = addRem(x.id); care.tick(dueAt); await settle();
-    assert.equal(stateOf(x.id), 'wa_failed'); assert.equal(rem(x.id).last.reason, 'window_closed'); assert.equal(graphCalls.length, 0, 'no Meta call at all');
-    assert.equal(care.view(x.id).reminders[0].last.label, "Not sent: WhatsApp's 24-hour window is closed, so Maya cannot message them yet");
+    stopAllSchedules(); voiceReset(); const x = outside(); care.setMode(x.id, mode); const { dueAt } = addRem(x.id); wa.deps.testCooldownMs = 0; callFail = { connect: { code: 138006, message: 'No approved call permission' } }; care.tick(dueAt); await waitFor(() => rem(x.id).last); await settle(); callFail = null;
+    assert.equal(stateOf(x.id), 'wa_failed'); assert.equal(rem(x.id).last.reason, 'window_closed_call_failed'); assert.equal(sent().length, 0, 'no message at all'); assert.deepEqual(actions(), ['connect'], 'one call attempt, refused');
+    assert.equal(care.view(x.id).reminders[0].last.label, "Not sent: WhatsApp's 24-hour window is closed and a call could not be placed (No approved call permission)");
     const fam = care.get(x.id).notifications.filter((n) => n.to === 'family' && n.ref === 'reminder_failed'); assert.equal(fam.length, kind ? 1 : 0); if (kind) { assert.equal(fam[0].kind, kind); assert.match(fam[0].text, /Maya could not send the reminder "take your tablets"/); }
   }
 });
@@ -1505,7 +1506,7 @@ test('picker: the welfare check as Call, Text or Voice note; the message as Call
   assert.deepEqual(await wa.placeWelfare(id, 'text'), { placed: false, sent: true, via: 'text' }); const t1 = sent()[0]; assert.equal(t1.type, 'text'); assert.equal(t1.text.body, 'This is Maya. Your family asked me to check in on you. How are you today?', 'from Maya, no family prefix');
   shift(id, 60000); assert.deepEqual(await wa.placeWelfare(id, 'voice'), { placed: false, sent: true, via: 'voice' }); assert.equal(sent()[1].type, 'audio'); assert.ok(spoken.includes('This is Maya. Your family asked me to check in on you. How are you today?'));
   assert.equal(wa.activityOf(id).entries.filter((e) => e.type === 'welfare').map((e) => e.channel).sort().join(), 'text,voice'); await assert.rejects(wa.placeWelfare(id, 'fax'), /Choose a call, a text or a voice note/);
-  const o = outside(); await assert.rejects(wa.placeWelfare(o.id, 'text'), (e) => { assert.match(e.message, /24 hours|template|written/i); return true; });   // outside the window nothing is sent, with the reason
+  const o = outside(); callFail = { connect: { code: 138006, message: 'No approved call permission' } }; await assert.rejects(wa.placeWelfare(o.id, 'text'), (e) => { assert.match(e.message, /24 hour window is closed and the call could not be placed \(No approved call permission\)\. Nothing was sent/); return true; }); callFail = null;   // outside the window a call is tried instead; when it cannot be placed nothing is sent, with the reason (the rescue itself is tested under 'window closed')
   clearCalls(); const long = 'x'.repeat(81); await assert.rejects(wa.placeMessageCall(id, long), /up to 80 characters/); await assert.rejects(wa.placeMessageCall(id, '   '), /type a message/); assert.equal(callPosts().length, 0);
   await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
     assert.deepEqual(await wa.placeMessageCall(id, 'Dinner is at six'), { placed: true }); const rr = care.get(id).reminders.find((r) => r.msg); assert.equal(rr.task, 'Dinner is at six');
@@ -1606,12 +1607,11 @@ test('welfare pre-ring: it starts when the call is requested, nothing is claimed
 // ---- part 2: scheduled welfare checks (every N minutes for up to 24 hours, by call, text or voice note) ----
 const WTEXT = 'This is Maya. Your family asked me to check in on you. How are you today?';
 const sched = (id, o = {}) => care.welfareScheduleStart(id, { everyMin: 5, via: 'text', ...o });
-const stopAllSchedules = () => { for (const m of memory.listProfiles()) { care.welfareScheduleStop(m.id); const q = care.get(m.id); if (q) q.reminders = []; } };   // care.tick ticks EVERY person: a schedule (or a reminder) left by one test would fire in another
 test('schedule: validation (5 to 720 minutes, call/text/voice, never daily), refused outside the 24 h window, starts with the first check one interval away; no daily option is selectable on the page', () => {
   stopAllSchedules(); voiceReset(); const { id } = inWindow(); const bad = (o, re) => assert.throws(() => sched(id, o), (e) => { assert.match(e.message, re); assert.ok([400, 429].includes(e.status)); return true; });
   bad({ everyMin: 4 }, /every hour, 2 hours, 3 hours/); bad({ everyMin: 721 }, /every hour/); bad({ everyMin: 'daily' }, /daily check needs WhatsApp's approved message template/); bad({ everyMin: 60, via: 'fax' }, /call, a text or a voice note/);
-  const o = outside(); for (const via of ['text', 'voice']) assert.throws(() => sched(o.id, { via }), (e) => { assert.equal(e.status, 429); assert.match(e.message, /not written to Maya in the last 24 hours/); assert.match(e.message, /Nothing was scheduled/); return true; });
-  const oc = sched(o.id, { via: 'call', everyMin: 60 }); assert.equal(oc.status, 'running', 'a CALL schedule starts outside the window: a silent senior is exactly who it is for'); care.welfareScheduleStop(o.id);
+  const o = outside(); for (const via of ['text', 'voice', 'call']) { assert.equal(sched(o.id, { via, everyMin: 60 }).status, 'running', `a ${via} schedule starts with the window closed: a closed window is rescued by a call, round by round`); care.welfareScheduleStop(o.id); }
+  const un = senior(); assert.throws(() => sched(un), (e) => { assert.equal(e.status, 429); assert.match(e.message, /WhatsApp is not linked for them/); assert.match(e.message, /Nothing was scheduled/); return true; });
   const t0 = Date.now(); const s = sched(id, { everyMin: 60, via: 'call' }); assert.deepEqual([s.status, s.everyMin, s.via, s.fired, s.planned], ['running', 60, 'call', 0, 24]); assert.ok(s.next >= t0 + 3600000 && s.next < Date.now() + 3600000 + 5, 'the first check is one interval away'); assert.ok(s.until - s.startedAt === 24 * 3600000);
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /<option value="daily" disabled>Every day \(needs WhatsApp's approved message template: not available yet\)<\/option>/); for (const v of ['60', '120', '180', 'custom']) assert.match(html, new RegExp(`<option value="${v}">`));
   assert.match(html, /id="schedVia"[\s\S]*?data-v="call"[\s\S]*?data-v="text"[\s\S]*?data-v="voice"/); assert.ok(care.welfareScheduleStop(id)); assert.equal(care.welfareScheduleView(id).status, 'ended');
@@ -1632,14 +1632,12 @@ test('schedule: each interval fires ONE check the way the picker does (text, voi
   assert.equal(callPosts().find((x) => x.action === 'connect').to, c.phone); assert.equal(sent().length, 0); assert.ok(wa.activityOf(c.id).entries.some((e) => e.type === 'welfare' && e.channel === 'call')); stopAllSchedules();
 });
 
-test('schedule: it stops when asked, ends after 24 hours, and pauses itself (no repeated texting) when a check cannot go out as asked, when the window closes, or on an error; another call in progress only skips that round', async () => {
+test('schedule: it stops when asked, ends after 24 hours, and pauses itself (no repeated texting) when a check cannot go out as asked or on an error; another call in progress only skips that round', async () => {
   stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0; const M = 60000; const a = inWindow(); sched(a.id, { everyMin: 5 }); assert.equal(care.welfareScheduleStop(a.id), true); care.tick(Date.now() + 6 * M); await settle(); assert.equal(sent().length, 0, 'stopped: nothing'); assert.equal(care.welfareScheduleView(a.id).note, 'Stopped by you.'); assert.equal(care.welfareScheduleStop(a.id), false);
   const b = inWindow(); const sb = sched(b.id, { everyMin: 60 }); care.tick(sb.until + 1000); assert.deepEqual([care.welfareScheduleView(b.id).status, care.welfareScheduleView(b.id).note], ['ended', 'The 24 hours are over.']);
   // WhatsApp refuses the call (138012): the same fallback text goes ONCE and the schedule pauses
   clearCalls(); const c = inWindow(); sched(c.id, { everyMin: 5, via: 'call' }); callFail = META138012; care.tick(Date.now() + 5 * M + 1000); await waitFor(() => care.welfareScheduleView(c.id).status === 'paused'); await settle(); callFail = null;
   assert.equal(sent().length, 1, 'one fallback text'); assert.match(care.welfareScheduleView(c.id).note, /WhatsApp refused the call\. A message was sent instead, and the schedule is paused/); const f = sent().length; care.tick(Date.now() + 12 * M); await settle(); assert.equal(sent().length, f, 'paused: no more texts every interval');
-  // the window closes between checks: a TEXT schedule pauses with the reason, nothing sent
-  clearCalls(); const d = inWindow(); sched(d.id, { everyMin: 5 }); setInbound(d.id, 26 * H); care.tick(Date.now() + 5 * M + 1000); await settle(); assert.equal(sent().length, 0); assert.equal(care.welfareScheduleView(d.id).status, 'paused'); assert.match(care.welfareScheduleView(d.id).note, /not written to Maya in the last 24 hours/);
   // a CALL schedule is not window-gated: with the window closed the call is still placed
   clearCalls(); const w = outside(); const keepW = wa.deps.callOut; wa.deps.callOut = async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
   try { await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { sched(w.id, { everyMin: 5, via: 'call' }); care.tick(Date.now() + 5 * M + 1000); await waitFor(() => callPosts().some((x) => x.action === 'connect')); await sleepMs(60); }); } finally { wa.deps.callOut = keepW; }
@@ -1685,4 +1683,61 @@ test('navigation: every panel gets a Hide / Show button that folds it and is rem
   const b = navPage({ folded: a.store.folded }); assert.equal(b.els.remPanel.classList.contains('collapsed'), true, 'folded stays folded on the next visit'); assert.equal(b.els.waPanel.classList.contains('collapsed'), false);
   b.tabs[1].handlers.click({ preventDefault() {} }); assert.equal(b.els.remPanel.classList.contains('collapsed'), false, 'a jump opens a folded panel'); assert.equal(b.els.remPanel.scrolled, 1); assert.deepEqual(JSON.parse(b.store.folded), []);
   b.els.welfareHead.hidden = true; b.tabs[2].handlers.click({ preventDefault() {} }); assert.equal(b.els.waPanel.scrolled, 1, 'the Welfare target is hidden until a number is linked: the WhatsApp panel is shown instead'); assert.equal(b.els.welfareHead.scrolled, 0);
+});
+
+// ---- fallback to a CALL when the 24 h window is closed (a rescue for this round; the pick is tried first again next time) ----
+const answeredCalls = (keep) => async (o) => { await o.place({ sdp_type: 'offer', sdp: 'x' }); o.sig.emit('status', 'ACCEPTED'); await sleepMs(10); return 'completed'; };
+const withAnswered = async (fn) => { const keep = wa.deps.callOut; wa.deps.callOut = answeredCalls(); try { return await withConnectReply({ calls: [{ id: OUT_ID }] }, fn); } finally { wa.deps.callOut = keep; } };
+const welfareEntries = (id) => wa.activityOf(id).entries.filter((e) => e.type === 'welfare');
+
+test('window closed: a Text or Voice check-in (picker or schedule) is placed as a CALL for that round, the entry says so and shows Call; the next round tries the pick first and goes back to text when the window has reopened; no duplicate records', async () => {
+  stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0; const M = 60000;
+  for (const via of ['text', 'voice']) {
+    clearCalls(); const w = outside(); const out = await capture(() => withAnswered(async () => { sched(w.id, { everyMin: 5, via }); care.tick(Date.now() + 5 * M + 1000); await waitFor(() => callPosts().some((x) => x.action === 'connect')); await sleepMs(60); }));
+    assert.equal(callPosts().find((x) => x.action === 'connect').to, w.phone, `${via} schedule, window closed: a call was placed`); assert.equal(sent().length, 0, 'no text or voice note went'); assert.equal(care.welfareScheduleView(w.id).status, 'running');
+    const e = welfareEntries(w.id); assert.equal(e.length, 1); assert.equal(e[0].channel, 'call'); assert.equal(e[0].note, 'The 24 hour window was closed, so Maya called instead.'); assert.match(out, /the 24 h window is closed, trying a call instead of the (text|voice note)/);
+    // the window reopens (they wrote): the NEXT round goes back to the pick, not stuck on Call
+    clearCalls(); setInbound(w.id, 2 * H); shift(w.id, 3600000); await withAnswered(async () => { care.tick(Date.now() + 11 * M); await settle(); });
+    assert.equal(callPosts().length, 0, 'no call: the window is open again'); assert.equal(sent().length, 1); assert.equal(sent()[0].type, via === 'voice' ? 'audio' : 'text'); const e2 = welfareEntries(w.id); assert.equal(e2.length, 2, 'one entry per check, no duplicates'); assert.deepEqual(e2.map((x) => x.channel).sort(), ['call', via]);
+    care.welfareScheduleStop(w.id);
+  }
+  // the picker does the same
+  clearCalls(); const p = outside(); await withAnswered(async () => { assert.deepEqual(await wa.placeWelfare(p.id, 'text'), { placed: true, calledInstead: true, via: 'call' }); await sleepMs(60); }); assert.equal(sent().length, 0); assert.equal(welfareEntries(p.id)[0].channel, 'call');
+});
+
+test('window closed and the call cannot be placed either (WhatsApp refuses 138012, 2 unanswered in a row, permission): Paused with the exact reason, nothing sent, no message claimed', async () => {
+  stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0; const M = 60000;
+  clearCalls(); const a = outside(); callFail = META138012;
+  await assert.rejects(wa.placeWelfare(a.id, 'text'), (e) => { assert.match(e.message, /WhatsApp refused the call \(error 138012\)/); assert.match(e.message, /last 24 hours/); assert.match(e.message, /Nothing was sent/); return true; }); callFail = null;
+  assert.equal(sent().length, 0); const ea = welfareEntries(a.id); assert.equal(ea.length, 1); assert.deepEqual([ea[0].status, ea[0].label], ['paused', 'Paused']); assert.match(ea[0].note, /nothing was sent/i);
+  clearCalls(); const b = outside(); callFail = { connect: { code: 138006, message: 'No approved call permission from the user' } };
+  await assert.rejects(wa.placeWelfare(b.id, 'voice'), (e) => { assert.match(e.message, /The 24 hour window is closed and the call could not be placed \(No approved call permission from the user\)\. Nothing was sent\./); return true; }); callFail = null;
+  assert.equal(sent().length, 0); const eb = welfareEntries(b.id); assert.equal(eb.length, 1); assert.deepEqual([eb[0].status, eb[0].channel], ['paused', 'text']); assert.match(eb[0].note, /call could not be placed \(No approved call permission from the user\)/);
+  // 2 unanswered in a row
+  clearCalls(); const c = outside(); await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { for (let i = 0; i < 2; i++) { await wa.placeWelfareCall(c.id); await wa.handleWebhook(outStatus(c.phone, 'RINGING')); await wa.handleWebhook(outStatus(c.phone, 'REJECTED')); await waitFor(() => care.get(c.id).notifications.filter((n) => n.kind === 'welfare' && n.unreached).length === i + 1); await sleepMs(100); } });
+  clearCalls(); await assert.rejects(wa.placeWelfare(c.id, 'text'), (e) => { assert.match(e.message, /last 2 calls to them were not answered/); assert.match(e.message, /Nothing was sent/); return true; }); assert.equal(sent().length, 0); assert.equal(callPosts().length, 0);
+  assert.ok(welfareEntries(c.id).some((e) => e.status === 'paused' && /calls are paused \(2 calls in a row were not answered\)/.test(e.note)));
+  // a schedule pauses with the reason (no repeated rescue every interval)
+  clearCalls(); const d = outside(); sched(d.id, { everyMin: 5, via: 'text' }); callFail = META138012; care.tick(Date.now() + 5 * M + 1000); await waitFor(() => care.welfareScheduleView(d.id).status === 'paused'); callFail = null;
+  assert.match(care.welfareScheduleView(d.id).note, /24 hour window is closed and the call could not be placed|WhatsApp refused the call/); assert.equal(sent().length, 0); const posts = callPosts().length; care.tick(Date.now() + 12 * M); await settle(); assert.equal(callPosts().length, posts, 'paused: no call every interval'); stopAllSchedules();
+});
+
+test('window closed: a reminder set to Text or Voice (or the default) is placed as a call for that round; if the call cannot go, Paused with the exact reason; next due, the pick is tried first again', async () => {
+  stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0;
+  // rescued by a call
+  const a = remindProfile({ delivery: 'text' }); setInbound(a.id, 30 * H); const ra = addRem(a.id, 'take your tablets', 3000).r;
+  await withAnswered(async () => { care.tick(Date.now() + 5000); await waitFor(() => callPosts().some((x) => x.action === 'connect')); await sleepMs(80); });
+  assert.equal(callPosts().find((x) => x.action === 'connect').to, a.phone); assert.equal(sent().length, 0); const ea = wa.activityOf(a.id).entries.find((e) => e.words === 'take your tablets'); assert.equal(ea.channel, 'call'); assert.equal(ea.note, 'The 24 hour window was closed, so Maya called instead.');
+  assert.equal(care.get(a.id).notifications.filter((n) => n.kind === 'reminder').length, 1, 'no duplicate: the text entry was taken back, the call made its own');
+  // the call is refused by WhatsApp (138012): Paused, nothing sent
+  clearCalls(); const b = remindProfile({ delivery: 'voice' }); setInbound(b.id, 30 * H); addRem(b.id, 'drink water', 3000); callFail = META138012; care.tick(Date.now() + 5000); await waitFor(() => care.get(b.id).reminders[0].last); await settle(); callFail = null;
+  assert.equal(sent().length, 0); const eb = wa.activityOf(b.id).entries.find((e) => e.words === 'drink water'); assert.deepEqual([eb.status, eb.label, eb.channel], ['paused', 'Paused', 'voice']); assert.match(eb.note, /24 hour window is closed and calls are paused \(WhatsApp refused the call\): nothing was sent/);
+  // the call cannot be placed for another reason (permission): Paused with WhatsApp's words
+  clearCalls(); const c = remindProfile({ delivery: 'text' }); setInbound(c.id, 30 * H); addRem(c.id, 'walk', 3000); callFail = { connect: { code: 138006, message: 'No approved call permission from the user' } }; care.tick(Date.now() + 5000); await waitFor(() => care.get(c.id).reminders[0].last); await settle(); callFail = null;
+  assert.equal(sent().length, 0); const ec = wa.activityOf(c.id).entries.find((e) => e.words === 'walk'); assert.deepEqual([ec.status, ec.channel], ['paused', 'text']); assert.match(ec.note, /24 hour window was closed and the call could not be placed \(No approved call permission from the user\): nothing was sent/);
+  // a repeating reminder: the window reopens, the next occurrence goes back to the pick
+  clearCalls(); const d = remindProfile({ delivery: 'text' }); setInbound(d.id, 30 * H); const rd = care.addReminder(d.id, { task: 'daily one', dueAt: Date.now() + 3000, repeat: 'daily' });
+  await withAnswered(async () => { care.tick(Date.now() + 5000); await waitFor(() => callPosts().some((x) => x.action === 'connect')); await sleepMs(80); }); assert.equal(sent().length, 0);
+  clearCalls(); setInbound(d.id, 2 * H); const due2 = rd.dueAt; assert.ok(due2 > Date.now() + 20 * 3600000); care.get(d.id).reminders[0].last = null; rd.active = null; care.tick(due2 + 1000); await settle(); assert.equal(sent().length, 1, 'the window is open again: the text goes, not a call'); assert.equal(callPosts().length, 0);
+  const note = fs.readFileSync(path.join(__dirname, '..', 'whatsapp.js'), 'utf8') + fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.doesNotMatch(note, /5 of 5|answered calls used/);
 });

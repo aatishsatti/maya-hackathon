@@ -885,7 +885,7 @@ function finishOccurrence(p, rid, state, extra = {}) {
   if (!r) return;
   const act = r.active || { dueAt: r.dueAt, attempts: 0 };
   const wa = act.channel === 'whatsapp' ? { channel: 'whatsapp', via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged), ...(act.pausedBy ? { pausedBy: act.pausedBy } : {}) } : {};
-  r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...extra };
+  r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...(act.instead ? { instead: act.instead } : {}), ...extra };
   r.active = null;
   if (state === 'done') trendEvent(p.id, { kind: 'reminder', acked: true });                          // answered
   else if (state === 'no_reply' || state === 'unanswered' || state === 'wa_missed' || state === 'wa_failed') trendEvent(p.id, { kind: 'reminder', acked: false });   // missed (a decline is a choice, not counted)
@@ -941,7 +941,7 @@ function reminderCallStart(id, spec) {
   const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: 'Maya is calling with a reminder from your family.', ref: null });
   const o = { id: uid(), profileId: id, kind: 'reminder', reminderId: r.id, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
   n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
-  r.active = { dueAt, state: 'calling', attempts: 1, outreachId: o.id, notifId: n.id };
+  r.active = { dueAt, state: 'calling', attempts: 1, outreachId: o.id, notifId: n.id, ...(spec.instead ? { instead: spec.instead } : {}) };
   advanceDue(r, now);
   save(id); pushFamily('refresh', { id });
   return { rid: r.id, outreachId: o.id };
@@ -949,24 +949,24 @@ function reminderCallStart(id, spec) {
 // ---- a welfare check call (whatsapp.js placeWelfareCall; Step 1) ----
 // One entry in the activity list (channel WhatsApp, kind welfare, no words), labelled with the existing words: Calling now -> Picked up, waiting for a reply -> Replied (they said at least one thing)
 // | Hasn't replied yet (picked up, nothing heard) | Couldn't reach senior (nobody picked up / rejected). A pretend ring (outreach kind welfare) lets the Call claim it as it does an app ring.
-function welfareCallStart(id) {
+function welfareCallStart(id, { instead } = {}) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   if (activeByProfile.get(id)) throw Object.assign(new Error('Maya is already trying to reach them.'), { status: 409 });
   const now = Date.now();
   const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: 'Maya called on WhatsApp to check how they are (welfare check).', ref: null });
-  n.channel = 'whatsapp'; n.via = 'call'; n.calling = true;
+  n.channel = 'whatsapp'; n.via = 'call'; n.calling = true; if (instead) n.instead = instead;   // instead: the window was closed, so it is a call instead of the text or voice note that was asked for
   const o = { id: uid(), profileId: id, kind: 'welfare', reminderId: null, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
   n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
   save(id); pushFamily('refresh', { id });
   return { nid: n.id, outreachId: o.id, startedAt: now };
 }
 // A welfare check asked for by CALL while calls were paused (2 unanswered in a row, or 5 answered today) and nothing could be sent instead: one entry that says so (no words).
-function welfarePaused(id, reason) {
+function welfarePaused(id, reason, why) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: 'A welfare check call was not placed: calls are paused.', ref: null });
-  n.channel = 'whatsapp'; n.via = 'call'; n.paused = reason === 'meta' ? 'meta' : 'misses'; save(id); pushFamily('refresh', { id });
+  n.channel = 'whatsapp'; n.via = 'call'; n.paused = reason === 'meta' ? 'meta' : reason === 'window' ? 'window' : 'misses'; if (why) n.pausedWhy = String(why).replace(/\s+/g, ' ').slice(0, 240); save(id); pushFamily('refresh', { id });
   return n;
 }
 // WhatsApp refused the call (its own limit), so nothing rang: the entry that was started is taken back (the paused fallback then writes its own).
@@ -1014,7 +1014,7 @@ function reminderViaMessage(id, spec) {
   if (!reminderSender) throw Object.assign(new Error('WhatsApp is not set up on this server.'), { status: 503 });
   const { p, r } = reminderFor(id, spec);
   fireReminderWhatsApp(p, r, Date.now());
-  if (spec.pausedBy && r.active) { r.active.pausedBy = spec.pausedBy; save(id); }   // so the list can say the call was paused (and show Paused if nothing could be sent)
+  if (r.active) { r.active.noCall = true; if (spec.pausedBy) r.active.pausedBy = spec.pausedBy; save(id); }   // so the list can say the call was paused (and show Paused if nothing could be sent); noCall: a call was already tried or ruled out, so a closed window is not rescued by another call
   return r.id;
 }
 
@@ -1080,6 +1080,16 @@ function reminderSent(id, rid, key, res) {
     return true;
   }
   const reason = (res && res.reason) || 'error', error = (res && res.error) || null;
+  if (reason === 'window_closed' && !a.noCall && reminderSender && reminderSender.placeCall && reminderSender.channelFor(id) === 'whatsapp') {
+    // The 24 h window is closed, so a text or voice note cannot go: try a CALL for this round (a rescue, not a change of the pick: the next time it is due the pick is tried first again). The occurrence
+    // that was started is taken back; the call makes its own. If the call cannot be placed either, the entry says Paused with the exact reason and nothing was sent.
+    const dueAt = a.dueAt; p.notifications = p.notifications.filter((n) => n.id !== a.notifId); r.active = null; save(id); waLog({ event: 'window closed', then: 'call' });
+    Promise.resolve().then(() => reminderSender.placeCall(id, rid, dueAt, 'window')).then(() => pushFamily('refresh', { id }), (e) => {
+      const q = get(id), rr = q && q.reminders.find((x) => x.id === rid);
+      if (rr && !rr.active) { finishOccurrence(q, rid, 'wa_failed', { reason: 'window_closed_call_failed', error: { title: String((e && e.title) || (e && e.message) || 'error').replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 160) }, pausedBy: 'window' }); waLog({ event: 'not sent', reason: 'window_closed_call_failed' }); escalate(q, rr, 'failed'); pushFamily('refresh', { id }); }
+    });
+    return true;
+  }
   finishOccurrence(p, rid, 'wa_failed', { reason, error });
   waLog({ event: 'not sent', reason, code: error && error.code ? Number(error.code) || null : null });
   escalate(p, r, 'failed');
@@ -1307,6 +1317,7 @@ function waLabel(o) {
     case 'wa_missed': return `Missed: no reply within ${Math.round(cfg.waMissMs / MIN)} minutes`;
     case 'wa_failed': return {
       window_closed: "Not sent: WhatsApp's 24-hour window is closed, so Maya cannot message them yet",
+      window_closed_call_failed: `Not sent: WhatsApp's 24-hour window is closed and a call could not be placed (${(o.error && o.error.title) || 'no reason given'})`,
       restart: 'Not sent: the server restarted while sending, so it may not have reached them',
       whatsapp_failed: `WhatsApp could not deliver it${code}`,
       not_linked: 'Not sent: no WhatsApp number is linked, or they have stopped messages',

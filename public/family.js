@@ -200,7 +200,7 @@
     $('schedCustom').hidden = $('schedEvery').value !== 'custom';
     if (!Number.isInteger(n) || n < 5 || n > 720) { $('schedPlan').textContent = 'Choose between 5 and 720 minutes.'; return; }
     const count = Math.max(1, Math.floor(24 * 60 / n)), what = via === 'call' ? 'calls' : via === 'voice' ? 'voice notes' : 'texts';
-    $('schedPlan').textContent = `Up to ${count} ${what} in the next 24 hours, one every ${EVERY_TEXT(n)}. ${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}It also pauses by itself after 2 unanswered calls in a row${via === 'call' ? '' : ', and when they have not written to Maya in the last 24 hours (WhatsApp only allows a text or voice note inside that window; a call does not need it)'}. Every check shows in Activity. You can stop it any time.`;
+    $('schedPlan').textContent = `Up to ${count} ${what} in the next 24 hours, one every ${EVERY_TEXT(n)}. ${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}${via === 'call' ? '' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round, and tries the text or voice note again first the next time. '}It pauses by itself after 2 unanswered calls in a row or when WhatsApp refuses a call, and says why. Every check shows in Activity. You can stop it any time.`;
   }
   function renderSchedule(s) {
     const live = Boolean(s && s.status === 'running');
@@ -390,6 +390,7 @@
     try {
       const r = await waCall(`/api/whatsapp/${id}/${path}`, 'POST', body);
       if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; return; }
+      if (r.j.calledInstead) { $('waTestLine').textContent = 'The 24 hour window is closed, so a text or voice note cannot go: Maya is calling instead. Their phone should ring now.'; load(); return; }
       if (r.j.sent) { $('waTestLine').textContent = `Sent as a ${r.j.via === 'voice' ? 'voice note' : 'text'}. No call was placed.`; load(); return; }
       if (r.j.placed === false) { $('waTestLine').textContent = `Nothing rang. ${capText(r.j.calls)} A WhatsApp message was sent instead.`; load(); return; }
       $('waTestLine').textContent = 'WhatsApp took the call: their phone should ring now.';

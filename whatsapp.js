@@ -326,7 +326,7 @@ async function sendReminder(profileId, { task, nudge = false, deliver = null } =
   try { const wamid = await sendTextTo(l.phone, w.text); return wamid ? { ok: true, via: 'text', wamid, voiceUnavailable: voiceFailed } : { ok: false, reason: 'no_id' }; }
   catch (e) { return { ok: false, reason: 'meta_error', error: { code: e.code || null, title: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } }; }
 }
-require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, send: sendReminder, placeCall: (profileId, rid, dueAt) => placeCall(profileId, 'reminder', { rid, dueAt }) });
+require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, send: sendReminder, placeCall: (profileId, rid, dueAt, instead) => placeCall(profileId, 'reminder', { rid, dueAt, ...(instead ? { instead } : {}) }) });
 
 // ---- Maya's words must be true about WhatsApp ----
 // A text door cannot ring a phone or hold a live WhatsApp call. A reply that promises one is replaced by the plain truth.
@@ -544,6 +544,7 @@ const OUTMSG = { sending: ['sent', 'Sending', 1], sent: ['sent', 'Sent', 1], del
 const NOTE_LABEL = { Sent: ['sent', 'Sent', 1], Delivered: ['delivered', 'Delivered', 2], Seen: ['read', 'Read', 3], Played: ['read', 'Read', 3], Replied: ['answered', 'Answered', 4], "Hasn't replied yet": ['noreply', "Hasn't replied yet", 2], 'Seen · Not replied yet': ['noreply', "Hasn't replied yet", 3],
   'Calling now': ['sent', 'Calling now', 1], 'Picked up, waiting for a reply': ['delivered', 'Picked up', 2], "Couldn't reach senior": ['unreached', "Couldn't reach", 0], Paused: ['paused', 'Paused', 0] };
 const ACTIVITY_DAYS = 30, ACTIVITY_MAX = 300;
+const PAUSED_WHY = { misses: '2 calls in a row were not answered', meta: 'WhatsApp refused the call' };
 function activityOf(profileId) {
   const care = require('./care'), p = care.get(profileId), l = linkOf(profileId), now = Date.now(), out = [];
   if (!p) return { entries: [], summary: { sent: 0, delivered: 0, read: 0, answered: 0, missed: 0 } };
@@ -556,14 +557,16 @@ function activityOf(profileId) {
       if (!x) continue;
       const [status0, label0, rank0] = OCC[x.state] || ['sent', String(x.state), 1];
       const paused = x.pausedBy && x.state === 'wa_failed';
-      const channel = x.channel === 'whatsapp' ? (x.via === 'voice' ? 'voice' : x.via === 'text' ? 'text' : planned === 'voice' ? 'voice' : 'text') : (r.deliver === 'text' || r.deliver === 'voice') && x.state === 'wa_failed' && !x.pausedBy ? r.deliver : 'call';
-      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.task, ...(x.pausedBy && !paused ? { note: 'Calls were paused, so it went as a message.' } : {}) });
+      const channel = x.channel === 'whatsapp' ? (x.via === 'voice' ? 'voice' : x.via === 'text' ? 'text' : planned === 'voice' ? 'voice' : 'text') : paused ? (planned === 'voice' ? 'voice' : 'text') : (r.deliver === 'text' || r.deliver === 'voice') && x.state === 'wa_failed' ? r.deliver : 'call';   // a Paused one shows the channel that was asked for: nothing went on any
+      const note = paused ? (x.pausedBy === 'window' ? `The 24 hour window was closed and the call could not be placed (${(x.error && x.error.title) || 'no reason given'}): nothing was sent.` : `The 24 hour window is closed and calls are paused (${PAUSED_WHY[x.pausedBy] || 'calls are paused'}): nothing was sent.`) : x.pausedBy ? 'Calls were paused, so it went as a message.' : x.instead === 'window' ? 'The 24 hour window was closed, so Maya called instead.' : null;
+      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.task, ...(note ? { note } : {}) });
     }
   }
   for (const n of p.notifications || []) {
     if (n.to !== 'senior') continue;
     const lab = care.statusLabel(n), [status, label, rank] = NOTE_LABEL[lab] || ['sent', lab, 1];
-    if (n.kind === 'welfare') push({ id: `n:${n.id}`, type: 'welfare', channel: 'call', status: n.paused ? 'paused' : status, label: n.paused ? 'Paused' : label, rank: n.paused ? 0 : rank, at: n.times && n.times.sent, words: null });
+    if (n.kind === 'welfare') push({ id: `n:${n.id}`, type: 'welfare', channel: n.paused && n.via === 'call' && n.paused === 'window' ? 'text' : 'call', status: n.paused ? 'paused' : status, label: n.paused ? 'Paused' : label, rank: n.paused ? 0 : rank, at: n.times && n.times.sent, words: null,
+      ...(n.paused ? { note: n.pausedWhy || `The 24 hour window is closed and calls are paused (${PAUSED_WHY[n.paused] || 'calls are paused'}): nothing was sent.` } : n.instead === 'window' ? { note: 'The 24 hour window was closed, so Maya called instead.' } : {}) });
     else if (n.kind === 'family_message') push({ id: `n:${n.id}`, type: 'message', channel: 'text', status, label, rank, at: n.times && n.times.sent, words: n.text });
   }
   for (const m of (l && l.sent) || []) {
@@ -624,7 +627,7 @@ function placeCall(profileId, kind, spec) {
   let rc = null;
   if (kind === 'reminder') { try { rc = care.reminderCallStart(profileId, spec); } catch (e) { return fail(e.message, e.status || 400); } }
   let wc = null;
-  if (kind === 'welfare') { try { wc = care.welfareCallStart(profileId); } catch (e) { return fail(e.message, e.status || 400); } }
+  if (kind === 'welfare') { try { wc = care.welfareCallStart(profileId, { instead: spec && spec.instead }); } catch (e) { return fail(e.message, e.status || 400); } }
   callBusy = true; lastTestAt = Date.now();
   const tail = end(l.phone), sig = new (require('node:events'))(), cur = { id: null, sig, profileId }; outboundNow.cur = cur;
   const what = kind === 'reminder' ? 'reminder call' : kind === 'welfare' ? 'welfare call' : 'test call';
@@ -664,23 +667,35 @@ function placeCall(profileId, kind, spec) {
           pausedFallback(kind, profileId, linkOf(profileId) || l, rc ? { ...spec, rid: rc.rid } : spec, 'meta', `WhatsApp refused the call (error ${META_CALL_LIMIT}): ${linkOf(profileId).metaRefused.note || 'its limit on calls a business can start has been reached'}.`).then(resolve, reject);
           return;
         }
+        if (!placed && spec && spec.instead) {   // a call that was only a rescue for a closed window and could not even be placed: nothing rang and nothing was sent, and the entry says exactly why
+          if (rc) care.reminderCallCancel(profileId, rc.rid, rc.outreachId); if (wc) care.welfareCallCancel(profileId, wc.nid);
+          const why = String(e && e.message).replace(/^WhatsApp refused it \(\d+\): /, '').replace(/\s+/g, ' ').slice(0, 160); setTest(profileId, 'failed'); note(`${what} to number ending ${tail}: window closed and the call could not be placed (${sayWhy(e)}); nothing was sent`);
+          if (wc) care.welfarePaused(profileId, 'window', `The 24 hour window was closed and the call could not be placed (${why}).`);
+          reject(Object.assign(new WaError(`The 24 hour window is closed and the call could not be placed (${why}). Nothing was sent.`, (e && e.status) || 502), { title: why })); return;
+        }
         setTest(profileId, 'failed'); settle(); note(`${what} ${cid} to number ending ${tail}: FAILED, ${sayWhy(e)}`); reject(e instanceof WaError ? e : new WaError(sayWhy(e), 502));
       })
       .finally(() => { callBusy = false; if (cur.id) liveEnds.delete(cur.id); outboundNow.cur = null; });
   });
 }
-// The scheduled welfare checks do exactly what the picker does (placeWelfare); this tells care.js when a schedule may run at all: linked and opted in; for a text or a voice note also inside the 24 h window (a call is not window-gated).
+// The scheduled welfare checks do exactly what the picker does (placeWelfare); this tells care.js when a schedule may run at all: linked and opted in. The 24 h window only decides text or voice note: a closed window is rescued by a call, round by round.
 require('./care').setWelfareSender({
-  blocked: (profileId, via) => { const l = linkOf(profileId); if (!configured() || !l || !l.optIn) return 'WhatsApp is not linked for them.'; if (via !== 'call' && !(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) return `They have not written to Maya in the last 24 hours, and WhatsApp only allows a ${via === 'voice' ? 'voice note' : 'text'} inside that window, so no check goes out. Start the schedule again after they write, or schedule calls (a call does not need it).`; return null; },
+  blocked: (profileId) => { const l = linkOf(profileId); if (!configured() || !l || !l.optIn) return 'WhatsApp is not linked for them.'; return null; },   // a closed window is not a block: a text or voice note check is rescued by a call (placeWelfare)
   fire: (profileId, via) => placeWelfare(profileId, via),
 });
 const placeTestCall = (profileId) => placeCall(profileId, 'test');
 const placeReminderCall = (profileId, spec) => placeCall(profileId, 'reminder', spec);
-const placeWelfareCall = (profileId) => placeCall(profileId, 'welfare');
+const placeWelfareCall = (profileId, spec) => placeCall(profileId, 'welfare', spec);
 // The welfare check by the picker: Call (the call flow with every limit), Text or Voice note (the same fixed words, from Maya, inside the 24 h window only: sendOut enforces it and says why).
 async function placeWelfare(profileId, via = 'call') {
   if (via === 'call') return placeWelfareCall(profileId);
   if (via !== 'text' && via !== 'voice') throw new WaError('Choose a call, a text or a voice note.', 400);
+  const l0 = linkOf(profileId);
+  if (l0 && l0.optIn && !(l0.lastInboundAt && Date.now() - l0.lastInboundAt < WINDOW_MS)) {   // the window is closed: a text or a voice note cannot go, so a CALL is tried for this round (a rescue; the pick stays as it was)
+    note(`welfare check to number ending ${end(l0.phone)}: the 24 h window is closed, trying a call instead of the ${via === 'voice' ? 'voice note' : 'text'}`);
+    const placed = await placeWelfareCall(profileId, { instead: 'window' });
+    return placed && placed.placed ? { placed: true, calledInstead: true, via: 'call' } : placed;
+  }
   const r = await sendOut(profileId, { kind: via, text: WELFARE_TEXT, who: 'maya' });
   return { placed: false, sent: true, via: r.kind };
 }
