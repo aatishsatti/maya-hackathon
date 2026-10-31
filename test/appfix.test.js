@@ -50,7 +50,7 @@ const setInbound = (id, ago) => { const all = JSON.parse(fs.readFileSync(LF(), '
 let ph = 0;
 const linked = (open = true) => { const id = senior(), phone = `4477008${String(10000 + ph++)}`; wa.link(id, phone, true); if (open) setInbound(id, 2 * 3600000); return { id, phone }; };
 // care.tick ticks everybody: start each test with no other reminder, schedule or ring running
-const quiet = () => { for (const m of memory.listProfiles()) { care.welfareScheduleStop(m.id); const q = care.get(m.id); if (q) { q.reminders = []; for (const o of [...care.outreaches.values()]) care.outreaches.delete(o.id); care.activeByProfile.clear(); } } graphCalls.length = 0; wa.deps.testCooldownMs = 0; };
+const quiet = () => { for (const m of memory.listProfiles()) { care.welfareScheduleStop(m.id); const q = care.get(m.id); if (q) { q.reminders = []; for (const o of [...care.outreaches.values()]) { clearTimeout(o.timer); care.outreaches.delete(o.id); } care.activeByProfile.clear(); } } graphCalls.length = 0; wa.deps.testCooldownMs = 0; };
 // an open Maya app: an event stream that records what the server pushes
 const openApp = (id) => { const ev = []; const res = { write: (s) => { const m = /event: (\w+)\ndata: (.*)\n/.exec(s); if (m) ev.push([m[1], JSON.parse(m[2])]); return true; } }; const detach = care.attachSenior(id, res, null); return { ev, detach }; };
 const due = (id, task, extra = {}) => care.addReminder(id, { task, dueAt: Date.now() + 3000, repeat: 'none', ...extra });
@@ -210,4 +210,32 @@ test('reminders on WhatsApp still go as a call, a text and a voice note (the exi
     graphCalls.length = 0; quiet(); setInbound(id, 30 * 3600000); const app = openApp(id); due(id, 'app text no window', { channel: 'app', deliver: 'text' }); care.tick(Date.now() + 5000); await settle();
     assert.ok(app.ev.some(([k, d]) => k === 'notice' && /app text no window/.test(d.text)), 'in the app: no window, it just arrives'); assert.equal(sent().length + calls().length, 0); app.detach();
   } finally { wa.deps.callOut = keep; }
+});
+
+// ---- 'both' + Call: ONE live call only, chosen in order ----
+test('both + Call, rule 1: no WhatsApp call permission -> the app rings at once and WhatsApp is not tried', async () => {
+  quiet(); const { id } = linked(true); const app = openApp(id);
+  const j = JSON.parse(fs.readFileSync(LF(), 'utf8')); j[id].noCallPermission = { at: Date.now() }; fs.writeFileSync(LF(), JSON.stringify(j));
+  const before = calls().length; due(id, 'no permission', { channel: 'both', deliver: 'call' }); care.tick(Date.now() + 5000); await settleT();
+  assert.ok(app.ev.some(([k]) => k === 'incoming'), 'the app rings'); assert.equal(calls().length, before, 'WhatsApp was not tried'); app.detach(); quiet();
+  // the app is closed too: nothing rings, WhatsApp is still not tried, and the entry says so
+  quiet(); const b = linked(true); const j2 = JSON.parse(fs.readFileSync(LF(), 'utf8')); j2[b.id].noCallPermission = { at: Date.now() }; fs.writeFileSync(LF(), JSON.stringify(j2));
+  due(b.id, 'no permission closed', { channel: 'both', deliver: 'call' }); care.tick(Date.now() + 5000); await settleT();
+  assert.equal(calls().length, before, 'still no WhatsApp call'); assert.ok(entry(b.id, 'no permission closed').every((e) => e.status === 'failed' || e.status === 'app_failed' || /closed/i.test(JSON.stringify(e)))); quiet();
+});
+
+test('both + Call, rule 2: the WhatsApp window is shut (they have not written for a long time) -> the app rings and WhatsApp is not tried', async () => {
+  quiet(); const { id } = linked(false); const app = openApp(id); setInbound(id, 3 * 24 * 3600000);
+  const before = calls().length; due(id, 'window shut call', { channel: 'both', deliver: 'call' }); care.tick(Date.now() + 5000); await settleT();
+  assert.ok(app.ev.some(([k]) => k === 'incoming'), 'the app rings'); assert.equal(calls().length, before, 'WhatsApp was not tried'); app.detach(); quiet();
+});
+
+test('both + Call, rule 3: permission and window fine -> WhatsApp rings when the app is closed (one ring); the app when it is open; a WhatsApp that cannot ring falls to the app', async () => {
+  const keep = wa.deps.callOut, keepCd = wa.deps.testCooldownMs; let rang = 0; wa.deps.testCooldownMs = 0; wa.deps.callOut = async (o) => { rang++; await o.place({ sdp_type: 'offer', sdp: 'x' }); return 'completed'; };
+  try {
+  quiet(); const a = linked(true); const before = calls().length; due(a.id, 'wa pick', { channel: 'both', deliver: 'call' }); care.tick(Date.now() + 5000); await settleT();
+  assert.equal(rang, 1, 'WhatsApp rang once'); assert.equal(calls().length - before, 1);
+  quiet(); const b = linked(true); const app = openApp(b.id); const n1 = calls().length; due(b.id, 'app pick', { channel: 'both', deliver: 'call' }); care.tick(Date.now() + 5000); await settleT();
+  assert.ok(app.ev.some(([k]) => k === 'incoming')); assert.equal(calls().length, n1, 'not two rings'); assert.equal(rang, 1); app.detach(); quiet();
+  } finally { wa.deps.callOut = keep; wa.deps.testCooldownMs = keepCd; }
 });

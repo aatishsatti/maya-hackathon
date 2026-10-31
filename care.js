@@ -1070,13 +1070,14 @@ function fireReminder(p, r, now) {
 }
 
 // WhatsApp, with every one of its rules (whatsapp.js): a call when the pick is Call, else a text or voice note. null = WhatsApp is not available for this person.
-function fireReminderWA(p, r, now) {
+function fireReminderWA(p, r, now, onFail) {
   if (r.deliver === 'call' && reminderSender && reminderSender.placeCall && reminderSender.channelFor(p.id) === 'whatsapp') {
     // The family chose a CALL for this reminder: the same call as the test button, with every limit. If it cannot be placed the occurrence says Not sent (never a call that did not happen).
     const rid = r.id, id = p.id, dueAt = r.dueAt;
     advanceDue(r, now); save(id);
     Promise.resolve().then(() => reminderSender.placeCall(id, rid, dueAt)).then(() => pushFamily('refresh', { id }), (e) => {
-      const q = get(id); if (q) { finishOccurrence(q, rid, 'wa_failed', { reason: 'call_not_placed', error: { title: String((e && e.message) || 'error').slice(0, 120) } }); waLog({ event: 'not sent', reason: 'call_not_placed' }); pushFamily('refresh', { id }); }
+      const q = get(id); if (q && onFail && onFail(q)) return;   // 'both': the first pick (WhatsApp) could not ring, so the other one (the app) was tried
+      if (q) { finishOccurrence(q, rid, 'wa_failed', { reason: 'call_not_placed', error: { title: String((e && e.message) || 'error').slice(0, 120) } }); waLog({ event: 'not sent', reason: 'call_not_placed' }); pushFamily('refresh', { id }); }
     });
     return true;
   }
@@ -1094,17 +1095,31 @@ function fireReminderApp(p, r, now, chan) {
   const id = p.id, d = r.deliver || (p.delivery.reminders === 'text' ? 'text' : 'voice');
   const waLinked = Boolean(reminderSender && reminderSender.channelFor(id) === 'whatsapp');
   if (d === 'call') {
-    if (appOpen(id)) {   // ring the app: the same ring, Accept and Decline as ever
+    // One live call only, never two rings. 'both' picks in order: (1) no WhatsApp call permission -> the app; (2) the window is shut (they have not written for 24 h) -> the app;
+    // (3) otherwise by last activity: app open -> the app, else WhatsApp; and if the first pick cannot ring, the other one is tried. 'app' always rings the app, falling back to WhatsApp as before.
+    const ringApp = () => {
+      if (!appOpen(id)) return false;
       const occ = { dueAt: r.dueAt, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app' };
       r.active = occ;
       const o = startOutreach(id, { kind: 'reminder', reminderId: r.id });
       if (!o) { r.active = null; return false; }
       occ.outreachId = o.id; occ.notifId = o.notif.id;
       advanceDue(r, now); save(id); return true;
+    };
+    const dueAt0 = r.dueAt;
+    const route = waLinked && reminderSender.callRoute ? reminderSender.callRoute(id) : { permission: false, windowOpen: false };
+    let first = 'app', why = chan === 'both' ? (waLinked ? (!route.permission ? 'no call permission' : !route.windowOpen ? 'window shut' : 'app open') : 'no whatsapp') : 'app';
+    if (chan === 'both' && waLinked && route.permission && route.windowOpen && !appOpen(id)) first = 'whatsapp';
+    if (chan !== 'both') first = appOpen(id) ? 'app' : 'whatsapp';
+    waLog({ event: 'call route', channel: chan, first, why: chan === 'both' ? why : 'app' });
+    if (first === 'app' && ringApp()) return true;
+    const mayWA = waLinked && (chan !== 'both' || (first === 'whatsapp') || (route.permission && route.windowOpen));   // rules 1 and 2: WhatsApp is not tried at all
+    if (mayWA) {
+      const onFail = chan === 'both' && first === 'whatsapp' ? (q) => { const rr = q.reminders.find((x) => x.id === r.id); if (!rr || !appOpen(id)) return false; rr.active = { dueAt: dueAt0, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app' }; const o = startOutreach(id, { kind: 'reminder', reminderId: rr.id }); if (!o) { rr.active = null; return false; } rr.active.outreachId = o.id; rr.active.notifId = o.notif.id; save(id); pushFamily('refresh', { id }); return true; } : null;
+      const done = fireReminderWA(p, r, now, onFail); if (done !== null) return done;
     }
-    // The app is closed and a closed phone cannot ring yet. WhatsApp is the fallback (its own rules); without it nothing can ring and the entry says so.
-    waLog({ event: 'app closed', then: waLinked ? 'whatsapp' : 'nothing' });
-    if (waLinked) { const done = fireReminderWA(p, r, now); if (done !== null) return done; }
+    if (first === 'whatsapp' && ringApp()) return true;   // WhatsApp could not start: the app is the fallback
+    waLog({ event: 'app closed', then: 'nothing' });
     const dueAt = r.dueAt; advanceDue(r, now);
     finishOccurrence(p, r.id, 'app_failed', { reason: 'app_closed', channel: 'app', via: 'call', dueAt }); save(id); pushFamily('refresh', { id });
     return true;

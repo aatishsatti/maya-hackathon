@@ -326,7 +326,7 @@ async function sendReminder(profileId, { task, nudge = false, deliver = null } =
   try { const wamid = await sendTextTo(l.phone, w.text); return wamid ? { ok: true, via: 'text', wamid, voiceUnavailable: voiceFailed } : { ok: false, reason: 'no_id' }; }
   catch (e) { return { ok: false, reason: 'meta_error', error: { code: e.code || null, title: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } }; }
 }
-require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, send: sendReminder, placeCall: (profileId, rid, dueAt, instead) => placeCall(profileId, 'reminder', { rid, dueAt, ...(instead ? { instead } : {}) }) });
+require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, callRoute: (profileId) => { const l = linkOf(profileId); return { permission: !(l && l.noCallPermission), windowOpen: Boolean(l && l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS) }; }, send: sendReminder, placeCall: (profileId, rid, dueAt, instead) => placeCall(profileId, 'reminder', { rid, dueAt, ...(instead ? { instead } : {}) }) });
 
 // ---- Maya's words must be true about WhatsApp ----
 // A text door cannot ring a phone or hold a live WhatsApp call. A reply that promises one is replaced by the plain truth.
@@ -435,7 +435,7 @@ async function onMessage(msg) {
   const l = findByPhone(msg.from);
   if (!l) { note(`ignored a ${typeName(msg.type)} from number ending ${end(msg.from)}: no profile is linked to that number (it must be linked with its country code, digits only, exactly as WhatsApp shows it)`); return 'ignored'; } // unknown: no reply, so a stranger can never use Maya (or make her message them)
   if (!l.optIn) { note(`ignored a ${typeName(msg.type)} from number ending ${end(msg.from)}: that person has not opted in or has stopped messages`); return 'ignored'; }
-  if (msg.type === 'interactive' && msg.interactive && msg.interactive.type === 'call_permission_reply') { note(`ignored a call permission reply from number ending ${end(msg.from)}: a WhatsApp system message after a call, nothing is sent back and the 24 h window is not opened by it`); return 'system'; }
+  if (msg.type === 'interactive' && msg.interactive && msg.interactive.type === 'call_permission_reply') { if (msg.interactive.call_permission_reply && /^accept/i.test(String(msg.interactive.call_permission_reply.response || ''))) update(l.profileId, (x) => { delete x.noCallPermission; }); note(`ignored a call permission reply from number ending ${end(msg.from)}: a WhatsApp system message after a call, nothing is sent back and the 24 h window is not opened by it`); return 'system'; }
   if ((l.seen || []).includes(msg.id)) { note(`ignored a repeated message from number ending ${end(msg.from)} (Meta retry)`); return 'duplicate'; }
   update(l.profileId, (x) => {
     const at = Number(msg.timestamp) * 1000 || Date.now();
@@ -599,12 +599,12 @@ function activityOf(profileId) {
   return { entries, summary: { sent: done.filter((e) => e.rank >= 1).length, delivered: done.filter((e) => e.rank >= 2).length, read: done.filter((e) => e.rank >= 3).length, answered: done.filter((e) => e.status === 'answered').length, missed: done.filter((e) => e.status === 'missed' || e.status === 'unreached').length } };
 }
 
-const TEST_COOLDOWN_MS = 60000, MAX_MISSES = 2, META_CALL_LIMIT = 138012;
+const TEST_COOLDOWN_MS = 60000, MAX_MISSES = 2, META_CALL_LIMIT = 138012, NO_CALL_PERMISSION = 138006;
 function setTest(profileId, state) { testCalls.set(profileId, { state, at: Date.now() }); }
 // Counters on the link record (they survive a restart), shared by every kind of call. The ONE limit Maya keeps herself: calls in a row nobody answered or that were rejected (2 pause calls; any answered call,
 // any call from them and any message from them clears it). The limit on calls a business may start is WhatsApp's: Maya does not count or guess it; she tries, and when WhatsApp refuses (error 138012,
 // "Business Initiated Calls Limit Hit") that refusal is kept (code and WhatsApp's own text) and the next answered call clears it.
-const noteConnected = (pid) => update(pid, (x) => { x.callMisses = 0; delete x.metaRefused; });
+const noteConnected = (pid) => update(pid, (x) => { x.callMisses = 0; delete x.metaRefused; delete x.noCallPermission; });
 const noteMissed = (pid) => update(pid, (x) => { x.callMisses = (x.callMisses || 0) + 1; });
 const noteReachable = (pid) => { const l = linkOf(pid); if (l && l.callMisses) update(pid, (x) => { x.callMisses = 0; }); };
 const noteMetaRefused = (pid, e) => update(pid, (x) => { x.metaRefused = { at: Date.now(), code: Number(e.code) || META_CALL_LIMIT, note: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').replace(/\s+/g, ' ').slice(0, 200) }; });
@@ -666,7 +666,7 @@ function placeCall(profileId, kind, spec) {
       note(`${what} to number ending ${tail}: connect response fields [${shapeOf(d)}], call id ${viaCalls ? 'from calls[0].id' : id ? 'from call_id' : 'not in the response (taken from the first webhook)'}`); // names only, never a value: shows the real shape of Meta's answer
       if (typeof id === 'string' && id) { if (cur.id === null) { cur.id = id; liveEnds.set(id, (why) => sig.emit('end', why)); } cid = callTag(id); }
       else if (cur.id) cid = callTag(cur.id);
-      placed = true; if (linkOf(profileId) && linkOf(profileId).metaRefused) update(profileId, (x) => { delete x.metaRefused; });   // WhatsApp took a call: its refusal no longer stands
+      placed = true; if (linkOf(profileId) && (linkOf(profileId).metaRefused || linkOf(profileId).noCallPermission)) update(profileId, (x) => { delete x.metaRefused; delete x.noCallPermission; });   // WhatsApp took a call: its refusal no longer stands
       setTest(profileId, 'requested'); resolve({ placed: true });
     };
     const terminate = async () => { if (!cur.id) throw new Error('Meta has not named the call, so it cannot be hung up by id'); await callAction(cur.id, 'terminate'); };
@@ -682,6 +682,7 @@ function placeCall(profileId, kind, spec) {
         settle(); note(`${what} ${cid} to number ending ${tail}: finished, ${r}`);
       })
       .catch((e) => {
+        if (e && Number(e.code) === NO_CALL_PERMISSION && !placed) update(profileId, (x) => { x.noCallPermission = { at: Date.now() }; });   // WhatsApp says they have not granted Maya the call permission: remembered (a time, nothing else) so a 'both' call goes to the app without trying again
         if (e && Number(e.code) === META_CALL_LIMIT && !placed) {   // WhatsApp's own limit: nothing rang. What was started is taken back, the refusal is kept in WhatsApp's words, and the same fallback as a pause runs.
           if (rc) care.reminderCallCancel(profileId, rc.rid, rc.outreachId); if (wc) care.welfareCallCancel(profileId, wc.nid);
           noteMetaRefused(profileId, e); setTest(profileId, 'paused'); note(`${what} to number ending ${tail}: WhatsApp refused the call (${META_CALL_LIMIT}); nothing rang`);
