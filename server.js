@@ -94,6 +94,7 @@ async function handleCare(req, res, url) {
   if (req.method === 'GET' && b === 'trend' && !c) return sendJson(res, 200, care.trendView(a));   // family page only: plain facts built from daily numbers, see trends.js
   if (req.method === 'GET' && b === 'events') {
     const tz = url.searchParams.get('tz');
+    require('./tz').learnFromIp(care, a, require('./tz').clientIp(req)).catch(() => {});   // the zone is still unknown: where their connection is tells it (nothing is kept but the zone)
     return openStream(req, res, (r) => care.attachSenior(a, r, /^[\w/+\-]{1,60}$/.test(tz || '') ? tz : null));
   }
   if (req.method === 'DELETE' && b === 'device' && c) return care.removeDevice(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
@@ -103,6 +104,7 @@ async function handleCare(req, res, url) {
   if (!body) return sendJson(res, 400, { error: 'Bad request' });
   try {
     if (b === 'mode') return sendJson(res, 200, { mode: care.setMode(a, body.mode) });
+    if (b === 'timezone') return sendJson(res, 200, { ok: care.setTimezone(a, body.tz, 'manual') });   // the dashboard asks for this ONLY when it could not be found automatically
     if (b === 'delivery') return sendJson(res, 200, { delivery: care.setDelivery(a, body) });   // how reminders reach them on WhatsApp: a voice note in Maya's voice or text
     if (b === 'reminders' && !c) return sendJson(res, 200, { reminder: care.addReminder(a, body) });
     if (b === 'messages') return sendJson(res, 200, { notification: { id: care.sendMessage(a, body.text).id } });
@@ -130,6 +132,7 @@ async function handleChat(req, res, url) {
   if (MODE !== 'real') return sendJson(res, 503, { error: 'Chat needs real mode: it uses the Meta brain and ElevenLabs voice, and mock mode never invents a reply.' });
   const tzParam = url.searchParams.get('tz');
   const tz = /^[\w/+\-]{1,60}$/.test(tzParam || '') ? tzParam : null;
+  if (care.get(pid)) { if (tz) care.setTimezone(pid, tz, 'device'); else require('./tz').learnFromIp(care, pid, require('./tz').clientIp(req)).catch(() => {}); }   // the device's own zone first; with none, the connection's
   try {
     if (req.method === 'GET' && !what) { care.appThreadOpened(pid); return sendJson(res, 200, { messages: chat.thread(pid), callLive: chat.callLive(pid) }); }   // opening the chat is how a voice reminder that waited there arrives
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
@@ -181,7 +184,7 @@ async function handleWhatsapp(req, res, url) {
       return via === 'call' && MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeWelfare(a, via));
     } // TEMPORARY (render-test): Step 1, a one-off welfare check call
     if (b === 'welfare-schedule') {   // Step 2: scheduled welfare checks, started and stopped by the family
-      if (req.method === 'POST') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, { schedule: care.welfareScheduleStart(a, { everyMin: body.everyMin, via: body.via }) }); }
+      if (req.method === 'POST') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, { schedule: care.welfareScheduleStart(a, { everyMin: body.everyMin, every: body.every, unit: body.unit, via: body.via }) }); }
       if (req.method === 'DELETE') return sendJson(res, 200, { stopped: care.welfareScheduleStop(a) });
     }
     if (req.method === 'POST' && b === 'reminder-call') { // TEMPORARY (render-test): C2, a reminder delivered by an outbound call

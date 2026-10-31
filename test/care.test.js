@@ -330,34 +330,6 @@ test('3 reminder declined: respected, no flag, family sees declined', async () =
   slow();
 });
 
-test('3 in-call timer: parsed, spoken at the time, waits for a pause, never over for long', async () => {
-  assert.deepEqual(parseTimer("remind me in 30 seconds while we're talking"), { seconds: 30, task: null });
-  assert.equal(parseTimer('remind me to call Sam in two minutes').seconds, 120);
-  const id = newSenior();
-  const c = mkCall(); c.profile = memory.load(id);
-  const spoken = [];
-  c.speakReply = async (rs) => { spoken.push(Date.now()); };
-  c.dynamicLine = async () => ({ full: 'Your time is up, Mike.', said: 'Your time is up, Mike.' });
-  const note = c.careNotes('Maya, remind me in 1 seconds please');
-  assert.match(note, /timer is set/);
-  // Person is mid-sentence at fire time: she waits; they stop, she speaks.
-  c.curTurn = { partial: 'and then my daughter' };
-  const t0 = Date.now();
-  setTimeout(() => { c.curTurn = null; }, 1800);
-  await sleep(1300); assert.equal(spoken.length, 0, 'did not talk over them');
-  await sleep(1200); assert.equal(spoken.length, 1);
-  assert.ok(spoken[0] - t0 >= 1800 && spoken[0] - t0 < 3200);
-  // Never talks over for long: a person who keeps going gets interrupted only after the cap.
-  const d = mkCall(); d.profile = memory.load(id);
-  const s2 = []; d.speakReply = async () => { s2.push(Date.now()); }; d.dynamicLine = c.dynamicLine;
-  d.curTurn = { partial: 'blah' };
-  const t1 = Date.now();
-  d.setTimerFromWords({ seconds: 0.05, task: 'tea' });
-  await sleep(11000); assert.equal(s2.length, 0, 'still waiting just before the cap');
-  await sleep(2200); assert.equal(s2.length, 1, 'spoke at the cap'); assert.ok(s2[0] - t1 >= 12000);
-  c.end(); d.end();
-});
-
 test('6 notifications: Sent -> Delivered -> Seen -> Replied; Close marks Seen; no-reply wording; WhatsApp fields ready', () => {
   const id = newSenior();
   const p = care.get(id);

@@ -39,6 +39,7 @@ http.Client fakeServer() => MockClient((req) async {
           'inCall': false,
           'lastSeen': {'at': DateTime.now().millisecondsSinceEpoch},
           'quiet': {'start': 22, 'end': 7, 'tz': 'Europe/London'},
+          'whatsappRules': ['Text and voice notes: WhatsApp only lets Maya send these within 24 hours after the person last wrote to Maya on WhatsApp.', 'If WhatsApp cannot deliver, the same reminder goes to the Maya app instead, and the Activity list tells you what happened and why.'],
           'reminders': [
             {'id': 'r1', 'task': 'Take your tablets', 'dueAt': DateTime.now().add(const Duration(hours: 2)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'call', 'channel': 'both', 'held': false, 'msg': false, 'active': null, 'last': null},
             for (var i = 0; i < 8; i++) {'id': 'f$i', 'task': 'Old reminder $i', 'dueAt': null, 'repeat': 'none', 'held': false, 'msg': false, 'active': null, 'last': {'state': 'done', 'at': 1700000000000 + i * 1000, 'label': 'Done, senior replied'}},
@@ -203,6 +204,43 @@ void main() {
       expect(find.text('Maya app'), findsWidgets);
       expect(find.text('WhatsApp + app'), findsWidgets);
       expect(find.text('Text'), findsWidgets);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('WhatsApp\'s rules are shown in plain words in the Add sheet BEFORE the family picks WhatsApp', (t) async {
+      await phone(t, 360, 800);
+      await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Reminders').last);
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Add a reminder'));
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(find.text('WhatsApp rules, in plain words'), findsOneWidget);
+      await t.tap(find.text('WhatsApp rules, in plain words'));
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(find.textContaining('within 24 hours after the person last wrote'), findsOneWidget);
+      expect(find.textContaining('Maya app instead'), findsOneWidget);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('welfare check options: Every hour, Every day, Every 3 days, Every week and Custom with a number and a unit; nothing is greyed out as unavailable', (t) async {
+      await phone(t, 360, 800);
+      await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Welfare').last);
+      await t.pump(const Duration(milliseconds: 400));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.scrollUntilVisible(find.text('Every hour'), 200, scrollable: find.byType(Scrollable).last);
+      await t.tap(find.text('Every hour'));
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      for (final o in const ['Every day', 'Every 3 days', 'Every week']) {
+        expect(find.text(o), findsWidgets);
+      }
+      expect(find.textContaining('not available yet'), findsNothing);
+      await t.tap(find.textContaining('Custom').last);
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(find.text('How many?'), findsOneWidget);
+      expect(find.text('Unit'), findsOneWidget);
       await t.pumpWidget(const SizedBox());
     });
 

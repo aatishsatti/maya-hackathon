@@ -25,6 +25,7 @@ require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, e
 } };
 const memory = require('../memory');
 const care = require('../care');
+care.cfg.waFallback = false;   // this file tests WhatsApp's own mechanics (what WhatsApp did, as the family sees it); the app taking over when WhatsApp cannot deliver is tested in test/dynamic.test.js
 const chat = require('../chat');
 const S = require('../scam');
 const wa = require('../whatsapp');
@@ -1607,13 +1608,13 @@ test('welfare pre-ring: it starts when the call is requested, nothing is claimed
 // ---- part 2: scheduled welfare checks (every N minutes for up to 24 hours, by call, text or voice note) ----
 const WTEXT = 'This is Maya. Your family asked me to check in on you. How are you today?';
 const sched = (id, o = {}) => care.welfareScheduleStart(id, { everyMin: 5, via: 'text', ...o });
-test('schedule: validation (5 to 720 minutes, call/text/voice, never daily), refused outside the 24 h window, starts with the first check one interval away; no daily option is selectable on the page', () => {
+test('schedule: validation (5 minutes to 12 weeks, call/text/voice; every hour, day, 3 days, week or custom), refused outside the 24 h window, starts with the first check one interval away; no daily option is selectable on the page', () => {
   stopAllSchedules(); voiceReset(); const { id } = inWindow(); const bad = (o, re) => assert.throws(() => sched(id, o), (e) => { assert.match(e.message, re); assert.ok([400, 429].includes(e.status)); return true; });
-  bad({ everyMin: 4 }, /every hour, 2 hours, 3 hours/); bad({ everyMin: 721 }, /every hour/); bad({ everyMin: 'daily' }, /daily check needs WhatsApp's approved message template/); bad({ everyMin: 60, via: 'fax' }, /call, a text or a voice note/);
+  bad({ everyMin: 4 }, /every hour, every day, every 3 days, every week/); bad({ everyMin: 120961 }, /every hour/); bad({ everyMin: 'daily' }, /every hour, every day/); bad({ everyMin: 60, via: 'fax' }, /call, a text or a voice note/);
   const o = outside(); for (const via of ['text', 'voice', 'call']) { assert.equal(sched(o.id, { via, everyMin: 60 }).status, 'running', `a ${via} schedule starts with the window closed: a closed window is rescued by a call, round by round`); care.welfareScheduleStop(o.id); }
   const un = senior(); assert.throws(() => sched(un), (e) => { assert.equal(e.status, 429); assert.match(e.message, /WhatsApp is not linked for them/); assert.match(e.message, /Nothing was scheduled/); return true; });
   const t0 = Date.now(); const s = sched(id, { everyMin: 60, via: 'call' }); assert.deepEqual([s.status, s.everyMin, s.via, s.fired, s.planned], ['running', 60, 'call', 0, 24]); assert.ok(s.next >= t0 + 3600000 && s.next < Date.now() + 3600000 + 5, 'the first check is one interval away'); assert.ok(s.until - s.startedAt === 24 * 3600000);
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /<option value="daily" disabled>Every day \(needs WhatsApp's approved message template: not available yet\)<\/option>/); for (const v of ['60', '120', '180', 'custom']) assert.match(html, new RegExp(`<option value="${v}">`));
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.doesNotMatch(html, /not available yet/); for (const v of ['60', '1440', '4320', '10080']) assert.match(html, new RegExp(`<option value="${v}">`));
   assert.match(html, /id="schedVia"[\s\S]*?data-v="call"[\s\S]*?data-v="text"[\s\S]*?data-v="voice"/); assert.ok(care.welfareScheduleStop(id)); assert.equal(care.welfareScheduleView(id).status, 'ended');
 });
 

@@ -104,20 +104,8 @@ const firstSilenceWait = () => SILENCE_FIRST_MIN_MS + Math.floor(Math.random() *
 const SHORT_GREETING_AFTER_CALLS = 1;
 // Greeting facts about how recently they were in touch (recentContactNote): within this long, a call is a quick return, not a new day's first hello.
 const RECENT_TOUCH_MS = 30 * 60000, GREETED_TODAY_MS = 12 * 3600000;
-// In-call timer ("remind me in 30 seconds"): spoken at the time, after a pause if possible, never talking over for long.
+// Nothing here sets a timer: every "remind me ..." on a call, in the chat or on WhatsApp is a FUTURE reminder (setrem.js). Maya waits up to this long for a pause before speaking a reminder she is giving.
 const TIMER_MAX_WAIT_MS = 12000;
-const TIMER_MAX_SECONDS = 30 * 60;
-const NUM_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, fifteen: 15, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60 };
-const TIMER_RE = /\bremind me\b(?:\s+(?:to|about|that)\s+([^.?!]+?))?\s*\b(?:in|after)\s+(\d+(?:\.\d+)?|[a-z]+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b(?:\s+(?:to|about|that)\s+([^.?!]+))?/i;
-// { seconds, task } from "remind me in 30 seconds [to X]" / "remind me to X in 5 minutes"; null if it is not a timer request.
-// The standing fact for a pending timer (see careNotes). Seconds are rounded to what a person would say.
-const dueWords = (seconds) => (seconds < 90 ? `in about ${Math.max(seconds, 1)} second${seconds === 1 ? '' : 's'}` : `in about ${Math.round(seconds / 60)} minutes`);
-function timerOpenFact(timers, now = Date.now()) {
-  const list = [...timers].sort((x, y) => (x.dueAt || now) - (y.dueAt || now))
-    .map((t) => `${t.task ? `"${t.task}"` : 'one with no thing named'} (due ${dueWords(Math.max(0, Math.round(((t.dueAt || now) - now) / 1000)))})`).join('; ');
-  const many = timers.length > 1;
-  return `FACT: ${many ? `${timers.length} reminder timers are` : 'a reminder timer is'} running right now, and ${many ? 'these are the only ones' : 'it is the only one'} set: ${list}. They ONLY work while this call stays open: when the call ends the app drops them and nothing will remind them afterwards. If they ask what reminders you have, or whether anything is set, tell them exactly ${many ? 'these' : 'this one'} in one short sentence and nothing else. If they ask about hanging up, leaving or ending the call, or they say goodbye, tell them plainly in one short sentence that the reminder only works while the call stays open and they will not get it if they hang up. Otherwise do not bring it up. A reminder you have already given aloud is finished: never list it as still to come. Never say they can hang up whenever they like without saying that, never say you will remind them later or after the call, and never say you will call, ring or message them.`;
-}
 // The facts Maya is told when a person writes on WhatsApp while a reminder from their family is in flight (step 2 of the reminder replies; care.reminderContext decides which).
 // Code owns the state (Answered is marked by the acknowledgement, never by Spark); these facts only tell her what happened so her reply is ABOUT it and not a stock line.
 const agoWords = (m) => (m < 1 ? 'less than a minute ago' : m === 1 ? '1 minute ago' : `${m} minutes ago`);
@@ -136,25 +124,6 @@ function reminderFacts(ctx) {
   return { label, text: `FACT: ${agoWords(r.minutesAgo)} a reminder from their family went to them and they did not answer it. Do not mention it unless they do: no guilt, no pushing, no checking up. If they raise it, say only what the family's words were: ${quoteTask(msg ? r.task : stripAddressee(r.task))}. ${only}` };
 }
 
-// Asking again for a reminder that is already set (same length, made a moment ago, the same thing to remember) is the SAME reminder: it is kept once, not set twice (a person who
-// says "remind me in 30 seconds to take my medicine" and then "you just remind me in 30 seconds that I have to take it" used to hear it twice, in two wordings). A different thing
-// with the same length ("take my tablets" and "call my sister", both in 5 minutes) is a different reminder and is added. Only the words in common decide: stop-words do not count.
-const RESTATE_WINDOW_MS = 120000;
-const TASK_STOP = new Set(['i', 'me', 'my', 'we', 'you', 'to', 'the', 'a', 'an', 'it', 'that', 'this', 'have', 'has', 'had', 'need', 'must', 'should', 'got', 'gotta', 'am', 'is', 'be', 'do', 'of', 'and', 'just', 'please', 'again', 'now', 'then', 'so', 'for', 'about', 'remind', 'reminder', 'in', 'on', 'at']);
-const taskWords = (t) => String(t || '').toLowerCase().replace(/[^a-z' ]+/g, ' ').split(/\s+/).filter((w) => w && !TASK_STOP.has(w));
-function restatedTimer(timers, tm, now = Date.now()) {
-  return (timers || []).find((t) => t.seconds === tm.seconds && now - (t.createdAt || 0) <= RESTATE_WINDOW_MS
-    && (!t.task || !tm.task || taskWords(t.task).some((w) => taskWords(tm.task).includes(w)))) || null;
-}
-function parseTimer(text) {
-  const m = TIMER_RE.exec(String(text || ''));
-  if (!m) return null;
-  const n = /^\d/.test(m[2]) ? Number(m[2]) : NUM_WORDS[m[2].toLowerCase()];
-  if (!n) return null;
-  const unit = m[3].toLowerCase();
-  const seconds = Math.round(n * (unit.startsWith('s') ? 1 : unit.startsWith('m') ? 60 : 3600));
-  return { seconds, task: (m[1] || m[4] || '').trim().replace(/\s*,?\s*please$/i, '').replace(/[.?!,]+$/, '') || null };
-}
 // The senior acknowledging a reminder. "not now / later / not yet" wins over any thanks.
 const ACK_YES = /\b(ok|okay|yes|yeah|yep|sure|alright|all right|got it|thank(s| you)|will do|i will|i'll|i have|i did|done|already|noted|right away)\b/i;
 const ACK_NO = /\b(not now|later|not yet|don'?t want|in a (bit|minute|moment|while)|after (a bit|lunch|dinner|breakfast))\b/i;
@@ -492,7 +461,6 @@ class Call {
     this.closing = null;         // 'asked': the fixed "any questions?" was spoken on a call Maya placed and the answer decides whether she hangs up
     this.askQuestion = false; this.closeTimer = null;
     this.askWhat = false;        // a flag/alert just resolved: the next reply warmly asks what happened
-    this.timers = [];            // in-call timers the person asked for
     this.suddenReported = false;
     this.nameChance = 0.25;      // chance a task reminder uses the person's name (sparing, tests set it)
     this.reminderReply = null;   // { gen, said }: the reply that is giving a reminder (to re-speak it if they talk over it)
@@ -604,8 +572,6 @@ class Call {
     if (this.profile && this.awaitAck) care.reminderNoAck(this.profile.id, this.awaitAck);
     if (this.profile && this.registered) care.callEnded(this.profile.id, this, this.safety ? 'safety' : this.hungUpQuiet ? 'quiet' : 'left');
     if (this.profile && this.registered) care.safetyCut(this.profile.id, { kind: cutKind }); // an open ticket rings again whenever ANY call ends, whether or not this call had safety words
-    if (this.timers.length) console.log('timer', JSON.stringify({ event: 'dropped: the call ended before they were due', pending: this.timers.length }));
-    for (const t of this.timers) clearTimeout(t.handle);
     this.saveMemory();
     clearTimeout(this.holdTimer);
     clearTimeout(this.staleTimer);
@@ -1603,25 +1569,6 @@ class Call {
     return true;
   }
 
-  setTimerFromWords(t) {
-    const handle = setTimeout(() => this.fireTimer(t), t.seconds * 1000);
-    t.handle = handle; t.createdAt = Date.now(); t.dueAt = t.createdAt + t.seconds * 1000;
-    this.timers.push(t);
-    console.log('timer', JSON.stringify({ event: 'set', seconds: t.seconds, hasTask: Boolean(t.task), pending: this.timers.length })); // counts only: never the words
-  }
-
-  async fireTimer(t) {
-    this.timers = this.timers.filter((x) => x !== t);
-    if (this.closed) { console.log('timer', JSON.stringify({ event: 'not fired: call already over', seconds: t.seconds })); return; }
-    console.log('timer', JSON.stringify({ event: 'fired', seconds: t.seconds, hasTask: Boolean(t.task), lateMs: Math.max(0, Date.now() - (t.dueAt || Date.now())), pending: this.timers.length }));
-    const what = t.task
-      ? `The timer they asked for is up. They asked you to remind them: "${t.task}". In ONE short warm sentence say it plainly as a reminder, in your own words. Pass on only what they asked; never advise or add anything.`
-      : 'The timer they asked you to set is up. In ONE short warm sentence tell them the time they asked for has come, in your own words. Add nothing else.';
-    const line = await this.speakWhenFree((signal) => this.dynamicLine({ pool: 'timer', signal, what }));
-    console.log('timer', JSON.stringify({ event: line ? 'spoken' : 'not spoken (she was busy for too long or the call ended)', seconds: t.seconds }));
-    if (line) { care.addLine(this.profile.id, 'timer', line.said); care.timerFired(this.profile.id); }   // one Activity entry, no words
-  }
-
   async respond(holdMs) {
     clearTimeout(this.recoverTimer);
     this.cancelSilence();
@@ -1770,17 +1717,16 @@ class Call {
     }
     // "Remind me next time I call to ...": not a timer. Code files a next-call reminder now (recall.js, memory.js); Spark is told as a fact. Said again as
     // "not done yet / still to do" about a reminder shown in THIS call, it comes due again next call.
-    // A FUTURE reminder set by talking (setrem.js): understood, said back, only saved after a yes, then asked how and where. The short in-call timer ("remind me in 5 minutes", up to
-    // 30 minutes, only while the call stays open) stays as it was on a call; the written chat has no timers, so there every "remind me" is a future reminder.
+    // A FUTURE reminder set by talking (setrem.js), for EVERY ask on a call, in the chat or on WhatsApp, whatever the time ("in 5 minutes", "in an hour", "every 2 hours"): understood, said back, only saved
+    // after a yes, then asked how and where. There is no in-call timer: the person hangs up and the reminder still comes.
     const origin = this.channel === 'chat' ? (care.turnChannel(id) === 'whatsapp' ? 'whatsapp' : 'app') : 'call';
-    const tmq = parseTimer(heard), shortTimer = origin === 'call' && tmq && tmq.seconds > 0 && tmq.seconds <= TIMER_MAX_SECONDS && !setrem.readTime(heard).found.repeat && !setrem.pending(id);
     let sr = null;
-    if (!shortTimer && !(recall.parseNextCallReminder(heard) && !setrem.pending(id))) {
+    if (!(recall.parseNextCallReminder(heard) && !setrem.pending(id))) {
       const p0 = care.get(id);
-      sr = setrem.step(id, heard, { origin, tz: (p0 && p0.tz) || this.tz, waLinked: care.whatsappLinked(id), skipEmpty: Boolean(this.timers && this.timers.length) });
+      sr = setrem.step(id, heard, { origin, tz: (p0 && p0.tz) || this.tz, waLinked: care.whatsappLinked(id) });
       if (sr) note(sr.label, sr.text);
     }
-    const nextTask = sr || parseTimer(heard) ? '' : recall.parseNextCallReminder(heard);
+    const nextTask = sr ? '' : recall.parseNextCallReminder(heard);
     if (nextTask) {
       const r = memory.addReminder(id, nextTask, this.callId);
       if (r.status === 'added' || r.status === 'duplicate') note('next-call-reminder-added', 'FACT: they asked you to remind them, the next time they talk with you, of something they told you. The app keeps it and will bring it to you at the start of their next call. In one short sentence, in fresh words, confirm you will remind them then. Do not say you cannot do it, do not set a time, promise nothing else, and add no advice.');
@@ -1788,26 +1734,6 @@ class Call {
     } else if (recall.STILL_TO_DO.test(heard) && memory.reopenReminders(id, this.callId)) {
       note('reminder-still-to-do', 'FACT: they said the thing you just reminded them of is still to do. The app will remind them again the next time they call. Take it kindly in one short sentence, no advice, and do not remind them again in this call.');
     }
-    const tm = sr ? null : parseTimer(heard);
-    let timerSet = false;
-    if (tm && this.noTimers) {
-      note('timer-unavailable-in-chat', 'They asked for a timer. In this written chat you cannot set one; say kindly that you can only remind them during a voice call, and that their family can set reminders. Promise nothing else.');
-    } else if (tm) {
-      if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS && restatedTimer(this.timers, tm)) {
-        const old = restatedTimer(this.timers, tm); timerSet = true;
-        if (!old.task && tm.task) old.task = tm.task;   // the first ask had no thing to remember, the repeat has: keep it
-        console.log('timer', JSON.stringify({ event: 'already set', seconds: old.seconds, hasTask: Boolean(old.task), pending: this.timers.length })); // counts only: never the words
-        note('timer-already-set', `They asked again for a reminder that is already set (it is due ${dueWords(Math.max(0, Math.round((old.dueAt - Date.now()) / 1000)))}). Do not set another. Say in one short sentence that it is already set and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
-      } else if (tm.seconds > 0 && tm.seconds <= TIMER_MAX_SECONDS) {
-        this.setTimerFromWords({ seconds: tm.seconds, task: tm.task }); timerSet = true;
-        note('timer-set', `They asked you to remind them in ${tm.seconds < 90 ? `${tm.seconds} seconds` : `${Math.round(tm.seconds / 60)} minutes`}${tm.task ? ` about "${tm.task}"` : ''}. A timer is set for it right now. Confirm in one short sentence that you will remind them then, and that they need to stay on the call for it, because the reminder only works while the call is open. Promise nothing else.`);
-      } else {
-        note('timer-too-long', 'They asked for a timer that is too long or unclear. Say kindly you can only remind them within about half an hour during a call, and that their family can set longer reminders. Promise nothing else.');
-      }
-    }
-    // A timer is running and this turn did not set it: the reminder only lives while the call is open (end() drops every pending timer), so if they ask about hanging up or say goodbye
-    // she must say so plainly and never let "hang up whenever you like" sound like the reminder will still come. True in the app and on a WhatsApp call alike.
-    if (!timerSet && this.timers && this.timers.length) note('timer-open', timerOpenFact(this.timers)); // chat.js borrows careNotes for the written chat: it has no timers at all
     // A reply on WhatsApp while a reminder from the family is in flight (or was just answered): she is told, so her reply is about it. Not on a call (a call speaks its reminders itself),
     // and not for the same person typing in the app (care.turnChannel is 'whatsapp' only inside whatsapp.js's chat call).
     if (this.channel === 'chat' && care.turnChannel(id) === 'whatsapp') { const rf = reminderFacts(care.reminderContext(id)); if (rf) note(rf.label, rf.text); }
@@ -2146,4 +2072,4 @@ async function prefetchWelfareLine(profileId, tz, signal) {
   return { kind: 'welfare', line, ms: Date.now() - t0 };
 }
 
-module.exports = { sameName, prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { sameName, prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, explicitFamilyRequest, ownPlan, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

@@ -81,7 +81,6 @@ class ChatSession {
     this.profile = profile;
     this.tz = tz || null;
     this.channel = 'chat';       // care.selfHarmAlert words the family note for a chat, not a call
-    this.noTimers = true;        // in-call timers need a voice call (call.js careNotes)
     this.callId = `chat-${crypto.randomBytes(4).toString('hex')}`;
     this.names = new Map();
     this.seen = new Set();

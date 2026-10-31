@@ -31,7 +31,8 @@ class _WelfareTabState extends State<WelfareTab> {
     super.dispose();
   }
 
-  int get _everyMin => _every == 'custom' ? (int.tryParse(_custom.text) ?? 0) : int.parse(_every);
+  String _unit = 'days';
+  int get _everyMin => _every == 'custom' ? (int.tryParse(_custom.text) ?? 0) * (_unit == 'hours' ? 60 : _unit == 'days' ? 1440 : 10080) : int.parse(_every);
 
   Future<void> _checkNow() async {
     setState(() {
@@ -71,7 +72,7 @@ class _WelfareTabState extends State<WelfareTab> {
     if (ok) d.refresh(quiet: true);
   }
 
-  String _everyText(int n) => n == 60 ? 'hour' : n % 60 == 0 ? '${n ~/ 60} hours' : '$n minutes';
+  String _everyText(int n) => n == 60 ? 'hour' : n == 1440 ? 'day' : n == 10080 ? 'week' : n % 10080 == 0 ? '${n ~/ 10080} weeks' : n % 1440 == 0 ? '${n ~/ 1440} days' : n % 60 == 0 ? '${n ~/ 60} hours' : '$n minutes';
 
   @override
   Widget build(BuildContext context) {
@@ -80,7 +81,7 @@ class _WelfareTabState extends State<WelfareTab> {
     final q = d.quiet;
     final n = _everyMin;
     final via = _schedVia;
-    final planned = n >= 5 && n <= 720 ? (24 * 60 ~/ n).clamp(1, 288) : 0;
+    final planned = n >= 5 && n <= 120960 ? ((n >= 1440 ? 90 * 1440 : 24 * 60) ~/ n).clamp(1, 288) : 0;
     final line = s == null
         ? 'No schedule is running.'
         : s['status'] == 'running'
@@ -109,26 +110,42 @@ class _WelfareTabState extends State<WelfareTab> {
               decoration: const InputDecoration(labelText: 'Check in'),
               items: const [
                 DropdownMenuItem(value: '60', child: Text('Every hour')),
-                DropdownMenuItem(value: '120', child: Text('Every 2 hours')),
-                DropdownMenuItem(value: '180', child: Text('Every 3 hours')),
-                DropdownMenuItem(value: 'custom', child: Text('Custom (minutes)')),
-                DropdownMenuItem(value: 'daily', enabled: false, child: Text('Every day (needs WhatsApp\'s template: not available yet)', overflow: TextOverflow.ellipsis)),
+                DropdownMenuItem(value: '1440', child: Text('Every day')),
+                DropdownMenuItem(value: '4320', child: Text('Every 3 days')),
+                DropdownMenuItem(value: '10080', child: Text('Every week')),
+                DropdownMenuItem(value: 'custom', child: Text('Custom (every other week is 2 weeks)')),
               ],
               onChanged: (v) => setState(() => _every = v ?? '60'),
             ),
-            if (_every == 'custom') Padding(padding: const EdgeInsets.only(top: 8), child: TextField(controller: _custom, keyboardType: TextInputType.number, onChanged: (_) => setState(() {}), decoration: const InputDecoration(labelText: 'Minutes between check-ins (5 to 720)'))),
+            if (_every == 'custom')
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(children: [
+                  Expanded(child: TextField(controller: _custom, keyboardType: TextInputType.number, onChanged: (_) => setState(() {}), decoration: const InputDecoration(labelText: 'How many?'))),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _unit,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Unit'),
+                      items: const [DropdownMenuItem(value: 'hours', child: Text('hours')), DropdownMenuItem(value: 'days', child: Text('days')), DropdownMenuItem(value: 'weeks', child: Text('weeks'))],
+                      onChanged: (v) => setState(() => _unit = v ?? 'days'),
+                    ),
+                  ),
+                ]),
+              ),
             const SizedBox(height: 8),
             DeliveryPicker(value: _schedVia, onChanged: (v) => setState(() => _schedVia = v ?? 'call')),
             const SizedBox(height: 6),
             Text(
               planned == 0
-                  ? 'Choose between 5 and 720 minutes.'
-                  : 'Up to $planned ${via == 'call' ? 'calls' : via == 'voice' ? 'voice notes' : 'texts'} in the next 24 hours. ${q != null && q['tz'] != null ? 'A check that falls between ${hh(q['start'] as num)}:00 and ${hh(q['end'] as num)}:00 (their night) is held until ${hh(q['end'] as num)}:00. ' : ''}${via == 'call' ? 'WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. ' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round. '}It pauses by itself after 2 unanswered calls in a row, and says why. Every check shows in Activity.',
+                  ? 'Choose a number of hours, days or weeks (up to 12 weeks).'
+                  : 'Up to $planned ${via == 'call' ? 'calls' : via == 'voice' ? 'voice notes' : 'texts'} in the next ${n >= 1440 ? '90 days (it keeps going until you stop it)' : '24 hours'}. ${q != null && q['tz'] != null ? 'A check that falls between ${hh(q['start'] as num)}:00 and ${hh(q['end'] as num)}:00 (their night) is held until ${hh(q['end'] as num)}:00. ' : ''}${via == 'call' ? 'WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. ' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round. '}It pauses by itself after 2 unanswered calls in a row, and says why. Every check shows in Activity.',
               style: const TextStyle(fontSize: 13, color: kSoft),
             ),
             const SizedBox(height: 10),
             Row(children: [
-              Expanded(child: FilledButton(onPressed: _busy || running ? null : _startSchedule, child: const Text('Start (24 hours)'))),
+              Expanded(child: FilledButton(onPressed: _busy || running ? null : _startSchedule, child: Text(n >= 1440 ? 'Start' : 'Start (24 hours)'))),
               const SizedBox(width: 10),
               Expanded(child: OutlinedButton(onPressed: running ? _stopSchedule : null, child: const Text('Stop'))),
             ]),

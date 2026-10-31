@@ -73,20 +73,19 @@ test('the name: the first voice never gets a name that is not the profile\'s (li
   } finally { console.log = l0; }
 });
 
-test('Activity: an app call, a timer the person set in a call and an app chat each make an entry (times and counts, never a word); a Maya-placed call and a WhatsApp reply do not make a second one', async () => {
+test('Activity: an app call and an app chat each make an entry (times and counts, never a word); a Maya-placed call and a WhatsApp reply do not make a second one', async () => {
   quiet(); const id = senior(); care.get(id).tz = 'Europe/London';
   const call = { ws: {}, userTurns: 3 }; care.callStarted(id, call, 'Europe/London'); care.callEnded(id, call, 'left');
   const e = wa.activityOf(id).entries.find((x) => x.type === 'call'); assert.ok(e, 'the app call is in Activity'); assert.deepEqual([e.where, e.channel, e.status], ['app', 'call', 'completed']); assert.match(e.label, /^Talked, \d+ s$/); assert.equal(e.words, null);
   const quietCall = { ws: {}, userTurns: 0 }; care.callStarted(id, quietCall); care.callEnded(id, quietCall, 'quiet'); assert.equal(wa.activityOf(id).entries.filter((x) => x.type === 'call').find((x) => x.label === 'No talk').status, 'completed');
   const wcall = { ws: { noRingback: true }, userTurns: 1 }; care.callStarted(id, wcall); care.callEnded(id, wcall, 'left'); assert.ok(wa.activityOf(id).entries.some((x) => x.type === 'call' && x.where === 'whatsapp'), 'a call they made on WhatsApp is labelled so');
   const before = wa.activityOf(id).entries.length; const out = { ws: { noRingback: true, outbound: true }, userTurns: 2 }; care.callStarted(id, out); care.callEnded(id, out, 'left'); assert.equal(wa.activityOf(id).entries.length, before, 'a call Maya placed is already the reminder or welfare entry');
-  care.timerFired(id); const t = wa.activityOf(id).entries.find((x) => x.type === 'reminder' && x.where === 'app'); assert.deepEqual([t.channel, t.status, t.label, t.words], ['call', 'delivered', 'Delivered', null]); assert.match(t.note, /set themselves/);
   // chat: two messages close together are one entry
   queue.length = 0; queue.push(PLAIN); await chat.sendText(id, 'I made soup today, secret-words-here', null, { source: 'app' }); await chat.sendText(id, 'and bread', null, { source: 'app' });
   let chats = wa.activityOf(id).entries.filter((x) => x.type === 'chat'); assert.equal(chats.length, 1); assert.equal(chats[0].label, '2 messages'); assert.equal(chats[0].words, null);
   care.get(id).callLog.find((x) => x.kind === 'chat').endedAt -= 11 * 60000; await chat.sendText(id, 'again', null, { source: 'app' }); assert.equal(wa.activityOf(id).entries.filter((x) => x.type === 'chat').length, 2, 'more than 10 minutes later: a new entry');
   await chat.sendText(id, 'from whatsapp', null, { source: 'whatsapp' }); assert.equal(wa.activityOf(id).entries.filter((x) => x.type === 'chat').length, 2, 'a WhatsApp reply answers its check or reminder: no entry of its own');
-  assert.doesNotMatch(JSON.stringify(wa.activityOf(id)), /secret-words-here|soup|bread/, 'no word anyone said is in Activity'); care.flush(); assert.ok(JSON.parse(fs.readFileSync(path.join(process.env.MAYA_CARE_DIR, `${id}.json`), 'utf8')).callLog.length >= 6, 'kept on disk');
+  assert.doesNotMatch(JSON.stringify(wa.activityOf(id)), /secret-words-here|soup|bread/, 'no word anyone said is in Activity'); care.flush(); assert.ok(JSON.parse(fs.readFileSync(path.join(process.env.MAYA_CARE_DIR, `${id}.json`), 'utf8')).callLog.length >= 5, 'kept on disk');
   assert.equal(wa.activityOf(id).summary.answered, 0, 'calls and chats are not counted as answered deliveries');
 });
 

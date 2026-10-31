@@ -104,7 +104,7 @@ test('unclear time: ONE short question, nothing saved; a second miss drops it (n
   const d = await say('In the evening.'); has(d, 'setrem-confirm'); assert.match(d.text, /8:00 PM/);
   // no thing to remember: asked, not invented
   setrem.reset(id); const e = await say('Remind me every hour.'); has(e, 'setrem-ask-detail'); assert.match(e.text, /What should I remind you about\?/);
-  setrem.reset(id); const f = await say('Remind me every 2 hours to drink water.'); has(f, 'setrem-ask-detail'); assert.match(f.text, /every hour, every day or every week/);
+  setrem.reset(id); const f = await say('Remind me every 100 hours to drink water.'); has(f, 'setrem-ask-detail'); assert.match(f.text, /every few hours \(up to 72\)/);
 });
 
 test('a no, a change and an unclear answer: "no" saves nothing; a correction is said back again; an answer that is neither yes nor no is asked once more, then dropped', async () => {
@@ -166,19 +166,16 @@ test('delivery in the app: a text is a notice, a voice note is Maya\'s voice in 
   const ring = app3.ev.find(([k]) => k === 'incoming'); assert.ok(ring, 'the app rings'); assert.equal(ring[1].kind, 'reminder'); assert.match(JSON.stringify(ring[1]), /your reminder/i); assert.doesNotMatch(JSON.stringify(ring[1]), /from your family/); assert.equal(calls().length + sent().length, 0); app3.detach();
 });
 
-test('never switched on its own: a voice note that cannot be made is NOT sent as a text; a window that is shut is NOT turned into a call; the app being closed is NOT turned into WhatsApp; an unlinked WhatsApp is NOT turned into the app', async () => {
+test('the TYPE is never switched on its own (a voice note is never a text, a call is never a message); a failed WhatsApp send falls to the app as the SAME type, and an app that cannot take it says so plainly', async () => {
   quiet(); const a = linked(true); const keep = chat.deps.speak; chat.deps.speak = async () => { throw new Error('voice is down'); };
   try { care.addSeniorReminder(a.id, { task: 'voice one', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'voice', channel: 'whatsapp', origin: 'whatsapp' }); care.tick(Date.now() + 5000); await settle(); } finally { chat.deps.speak = keep; }
-  assert.equal(sent().length, 0, 'no text instead of the voice note'); assert.equal(care.get(a.id).reminders[0].last.state, 'wa_failed'); assert.equal(ent(a.id).find((e) => e.status === 'failed').label, 'Not sent');
-  quiet(); const b = linked(false); care.addSeniorReminder(b.id, { task: 'window one', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'text', channel: 'whatsapp', origin: 'whatsapp' }); care.tick(Date.now() + 5000); await settleT();
-  assert.equal(calls().length, 0, 'a shut window does not become a call'); assert.equal(sent().length, 0); assert.equal(care.get(b.id).reminders[0].last.state, 'wa_failed');
-  quiet(); const c = linked(true); care.addSeniorReminder(c.id, { task: 'closed app', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'call', channel: 'app', origin: 'call' }); care.tick(Date.now() + 5000); await settleT();
-  assert.equal(calls().length + sent().length, 0, 'a closed app does not become a WhatsApp call or message'); assert.equal(care.get(c.id).reminders[0].last.state, 'app_failed');
+  assert.equal(sent().length, 0, 'no text instead of the voice note, on WhatsApp'); const la = care.get(a.id).reminders[0].last;
+  assert.equal(la.state, 'app_failed', 'the app could not make the voice note either: said plainly, never sent as a text'); assert.equal(la.fellBack.from, 'whatsapp'); assert.match(la.fellBack.why, /voice note/);
+  quiet(); const c = person(); care.addSeniorReminder(c, { task: 'closed app', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'call', channel: 'app', origin: 'call' }); care.tick(Date.now() + 5000); await settleT();
+  assert.equal(calls().length + sent().length, 0, 'a closed app with no WhatsApp: nothing else is rung or sent'); assert.equal(care.get(c).reminders[0].last.state, 'app_failed');
   quiet(); const d = linked(true); const app = openApp(d.id); const kp = chat.deps.speak; chat.deps.speak = async () => { throw new Error('voice is down'); };
   try { care.addSeniorReminder(d.id, { task: 'app voice', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'voice', channel: 'app', origin: 'app' }); care.tick(Date.now() + 5000); await settle(); } finally { chat.deps.speak = kp; }
   assert.ok(!app.ev.some(([k]) => k === 'notice'), 'no text notice instead of the voice note'); assert.equal(care.get(d.id).reminders[0].last.state, 'app_failed'); app.detach();
-  quiet(); const e = person(); care.addSeniorReminder(e, { task: 'no wa', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'text', channel: 'whatsapp', origin: 'call' }); const ap = openApp(e); care.tick(Date.now() + 5000); await settle();
-  assert.ok(!ap.ev.some(([k]) => k === 'incoming' || k === 'notice'), 'WhatsApp unavailable does not become the app'); assert.equal(care.get(e).reminders[0].last.state, 'wa_failed'); ap.detach();
 });
 
 test('a senior-set text or voice note gets no second "nudge" message and never tells the family their words; a live call does not turn a text into speech', async () => {
@@ -205,12 +202,14 @@ test('quiet hours hold a senior-set reminder on every channel; released, it goes
   care.tick(morning.getTime()); await settle(); assert.equal(sent().length, 1, 'released at 07:00'); void r;
 });
 
-test('a call: the short in-call timer is unchanged; a longer one, or a repeat, is a FUTURE reminder (no timer, they may hang up); the written chat has no timers and sets future reminders', async () => {
+test('there is NO in-call timer: every ask on a call, 30 seconds or 5 minutes or an hour or every hour, is a future reminder; the written chat does the same', async () => {
   quiet(); const { id } = linked(true); const c = new Call({ send() {}, close() {}, onmessage: null, onclose: null }, 'k'); clearInterval(c.endTimer); c.profile = memory.load(id);
-  const t = c.careNotes('Remind me in 5 minutes to take my medicine.'); assert.equal(c.timers.length, 1, 'a short ask is still the in-call timer'); assert.match(t, /A timer is set for it right now/); for (const x of c.timers) clearTimeout(x.handle); c.timers = [];
-  const L = c.careNotes('Remind me in 2 hours to take my medicine.'); assert.equal(c.timers.length, 0, 'not a timer'); assert.match(L, /So, in 2 hours, I will remind you to take your medicine/);
-  setrem.reset(id); const R = c.careNotes('Remind me in 5 minutes to rest, every hour.'); assert.equal(c.timers.length, 0); assert.match(R, /every hour, starting in 5 minutes/);
+  assert.equal(c.timers, undefined, 'the call has no timers list at all'); assert.equal(typeof c.setTimerFromWords, 'undefined'); assert.equal(typeof c.fireTimer, 'undefined');
+  for (const [say, expect] of [['Remind me in 30 seconds to take my medicine.', /So, in 30 seconds, I will remind you to take your medicine/], ['Remind me in 5 minutes to take my medicine.', /So, in 5 minutes, I will remind you to take your medicine/], ['Remind me in 2 hours to take my medicine.', /So, in 2 hours, I will remind you/], ['Remind me in 5 minutes to rest, every hour.', /every hour, starting in 5 minutes/]]) {
+    setrem.reset(id); const n = c.careNotes(say); assert.match(n, expect, say); assert.doesNotMatch(n, /timer|stay on the call/i, 'nothing about a timer or staying on the call'); assert.equal(mine(id).length, 0, 'said back first, nothing saved');
+  }
   setrem.reset(id); const ch = talker(id, 'whatsapp'); const w = await ch('Remind me in 30 seconds to take my medicine.'); has(w, 'setrem-confirm'); assert.doesNotMatch(w.text, /cannot set one/);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'); assert.doesNotMatch(src, /parseTimer|fireTimer|setTimerFromWords|timerOpenFact/, 'the timer code is gone');
 });
 
 test('"remind me next time I call" is still the next-call reminder, not this', async () => {
@@ -227,7 +226,7 @@ test('shown to the family: Family > Reminders lists it with its channel, deliver
     assert.match(e.note, /Set by talking to Maya, every hour/); care.tick(Date.now() + 3600000 + 5000); await settle();
     assert.ok(ent(id).every((x) => x.words === null), 'no entry carries their words'); assert.ok(JSON.stringify(wa.activityOf(id)).indexOf('tulips') === -1);
   } finally { console.log = l0; }
-  assert.doesNotMatch(logs.join('\n'), /tulips/, 'the words are never logged'); assert.ok(logs.some((l) => /^setrem \{"event":"saved","repeat":"hourly","deliver":"voice","channel":"whatsapp","origin":"call"\}$/.test(l)), logs.join(' | '));
+  assert.doesNotMatch(logs.join('\n'), /tulips/, 'the words are never logged'); assert.ok(logs.some((l) => /^setrem \{"event":"saved","repeat":"hourly","every":1,"deliver":"voice","channel":"whatsapp","origin":"call"\}$/.test(l)), logs.join(' | '));
 });
 
 test('nothing invented: the said-back sentence and the saved reminder hold only their words; a task that is too long is asked shorter; a clock time with no time zone is not guessed; the limit of open reminders holds', async () => {

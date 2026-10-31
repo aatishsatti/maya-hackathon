@@ -1,6 +1,7 @@
 // "Let my family know" must be a request TO MAYA. The person's own plans and reminders ("remind me to call my sister", "I have to call my daughter") are not, and used to
 // send the family a real note (care.familyAsk). The sentences below exist only in this test file.
 const test = require('node:test');
+const setrem = require('../setrem');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -58,7 +59,7 @@ test('refusals: "do not tell my family" is still a no; "I don\'t want to call my
 test('a reminder turn creates NO family notification and no "note was sent" fact; a genuine request creates exactly one, and only once per call', () => {
   const c = bareCall(); const id = c.profile.id;
   for (const t of ['Can you remind me in 30 seconds that I have to call my sister.', 'remind me to call my son tonight', 'I need to call my daughter later']) { const note = c.careNotes(t); assert.doesNotMatch(note, /let their family know|gentle note/, t); }
-  assert.equal(c.timers.length, 1, 'the 30 second reminder was still set as a timer'); for (const t of c.timers) clearTimeout(t.handle);
+  assert.equal(c.timers, undefined, 'there is no in-call timer any more: it was a future reminder (setrem.js)'); setrem.reset();
   assert.equal(familyNotes(id).length, 0, 'no family notification from reminders or plans'); assert.equal(c.familyAsked, undefined); assert.ok(!c.familyDeclined);
   const note = c.careNotes('Please let my daughter know I fell'); assert.match(note, /they asked you to let their family know, and the app has sent their family a gentle note/); assert.equal(familyNotes(id).length, 1);
   c.careNotes('And tell my son too, please'); assert.equal(familyNotes(id).length, 1, 'once per call');

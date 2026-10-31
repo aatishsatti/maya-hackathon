@@ -14,6 +14,7 @@ const MIN = 60000, HOUR = 3600000, DAY = 86400000;
 const TTL_MS = 10 * MIN;            // an open set-up conversation is forgotten after this long without an answer
 const MAX_OPEN = 10;                // reminders a senior can have set by talking at once (a loop must stop somewhere; the family can manage more)
 const MAX_AHEAD_MS = 60 * DAY;
+const EVERY_MAX = { hourly: 72, daily: 60, weekly: 12 };   // the most they can ask for: every 72 hours, every 60 days, every 12 weeks
 const NUMW = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, ninety: 90 };
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const num = (w) => (/^\d+(\.\d+)?$/.test(w) ? Number(w) : NUMW[String(w).toLowerCase()] || null);
@@ -44,13 +45,16 @@ function readTime(text, { bare = false } = {}) {
   let s = ` ${norm(text).toLowerCase()} `;
   const o = { repeat: null, rel: null, clock: null, day: null, weekday: null, daypart: null, unsupported: null };
   const cut = (re, fn) => { s = s.replace(re, (...m) => { fn(m); return ' '; }); };
-  cut(/\bevery\s+other\s+\w+/g, () => { o.unsupported = 'every other'; });
-  cut(/\bevery\s+(\d+|two|three|four|five|six|eight|ten|twelve)\s+(hours?|days?|weeks?|minutes?|mins?)\b/g, (m) => { o.unsupported = `every ${m[1]} ${m[2]}`; });
+  // "every 2 hours", "every 3 days", "every other week", "every two weeks": N of hours / days / weeks (limits in EVERY_MAX); minutes are not offered
+  const unitOf = (u) => (/^h/.test(u) ? 'hourly' : /^d/.test(u) ? 'daily' : /^w/.test(u) ? 'weekly' : null);
+  const setEvery = (n, u) => { const r = unitOf(u); if (!r) { o.unsupported = `every ${n} ${u}`; return; } if (!Number.isInteger(n) || n < 1 || n > EVERY_MAX[r]) { o.unsupported = `every ${n} ${u}`; return; } o.repeat = r; o.every = n; };
+  cut(/\bevery\s+other\s+(hour|day|week)\b/g, (m) => setEvery(2, m[1]));
+  cut(/\bevery\s+(\d+|[a-z]+)\s+(hours?|hrs?|days?|weeks?|minutes?|mins?)\b/g, (m) => { const n = num(m[1]); if (n) setEvery(n, m[2]); else o.unsupported = `every ${m[1]} ${m[2]}`; });
   cut(/\b(?:every|each)\s+(?:single\s+)?(?:minute|min)\b/g, () => { o.unsupported = 'every minute'; });
-  cut(/\b(?:every|each)\s+(?:single\s+)?hour\b|\bhourly\b|\bonce an hour\b|\bevery 1 hour\b/g, () => { o.repeat = 'hourly'; });
-  cut(/\b(?:every|each)\s+(?:day|morning|afternoon|evening|night)\b|\bdaily\b|\bonce a day\b|\bevery\s+single\s+day\b/g, (m) => { o.repeat = 'daily'; const dp = /morning|afternoon|evening|night/.exec(m[0]); if (dp) o.daypart = dp[0]; });
-  cut(new RegExp(`\\bevery\\s+(${WEEKDAYS.join('|')})s?\\b`, 'g'), (m) => { o.repeat = 'weekly'; o.weekday = WEEKDAYS.indexOf(m[1]); });
-  cut(/\b(?:every|each)\s+week\b|\bweekly\b|\bonce a week\b/g, () => { o.repeat = o.repeat || 'weekly'; });
+  cut(/\b(?:every|each)\s+(?:single\s+)?hour\b|\bhourly\b|\bonce an hour\b/g, () => { o.repeat = 'hourly'; o.every = 1; });
+  cut(/\b(?:every|each)\s+(?:day|morning|afternoon|evening|night)\b|\bdaily\b|\bonce a day\b|\bevery\s+single\s+day\b/g, (m) => { o.repeat = 'daily'; o.every = 1; const dp = /morning|afternoon|evening|night/.exec(m[0]); if (dp) o.daypart = dp[0]; });
+  cut(new RegExp(`\\bevery\\s+(${WEEKDAYS.join('|')})s?\\b`, 'g'), (m) => { o.repeat = 'weekly'; o.every = 1; o.weekday = WEEKDAYS.indexOf(m[1]); });
+  cut(/\b(?:every|each)\s+week\b|\bweekly\b|\bonce a week\b/g, () => { o.repeat = o.repeat || 'weekly'; o.every = o.every || 1; });
   // "in 30 minutes", "in an hour", "in half an hour", "in two hours", "in an hour and a half"
   cut(/\b(?:in|after|within)\s+(half an hour|half hour|an hour and a half|(\d+(?:\.\d+)?|[a-z]+)(?:\s+and a half)?\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?))\b/g, (m) => {
     if (/^half/.test(m[1])) { o.rel = 30 * MIN; return; }
@@ -135,7 +139,7 @@ function readDelivery(rest) {
 // A whole request. Returns { task, repeat, dueAt, deliver, channel, ask:[...what is missing], unsupported, noTz, ambiguous }.
 function parseRequest(text, { now = Date.now(), tz = null, bare = false, base = null } = {}) {
   const { found, rest } = readTime(text, { bare });
-  const spec = base ? { ...base } : { task: '', repeat: 'none', dueAt: null, deliver: null, channel: null, relMs: null, clock: null, weekday: null, startWords: null };
+  const spec = base ? { ...base } : { task: '', repeat: 'none', every: 1, dueAt: null, deliver: null, channel: null, relMs: null, clock: null, weekday: null, startWords: null };
   const td = takeDelivery(rest);
   let task = readTask(td.rest);
   const dl = { deliver: td.deliver, channel: td.channel };
@@ -147,7 +151,7 @@ function parseRequest(text, { now = Date.now(), tz = null, bare = false, base = 
     if (!onlyDelivery && !FILLER_TASK.test(task) && task.length >= 3) spec.task = task;
   }
   if (found.unsupported) spec.unsupported = found.unsupported; else if (found.repeat || found.rel || found.clock || found.day || found.weekday != null) spec.unsupported = null;
-  if (found.repeat) spec.repeat = found.repeat;
+  if (found.repeat) { spec.repeat = found.repeat; spec.every = found.every || 1; }
   if (found.rel != null) spec.relMs = found.rel;
   if (found.clock) spec.clock = { ...found.clock, daypart: found.daypart };
   if (found.day) spec.day = found.day;
@@ -183,7 +187,7 @@ function settle(spec, { now, tz }) {
   }
   if (rc && rc.ambiguous) { spec.ambiguous = rc; spec.ask.push('ambiguous'); return spec; }
   if (rc && rc.bad) { spec.ask.push('time'); spec.clock = null; return spec; }
-  if (spec.repeat === 'hourly') { spec.dueAt = now + HOUR; spec.startsInHour = true; return spec; }
+  if (spec.repeat === 'hourly') { spec.dueAt = now + (spec.every || 1) * HOUR; spec.startsInHour = true; return spec; }
   spec.ask.push('time');
   return spec;
 }
@@ -214,12 +218,14 @@ function dayWords(ts, tz, now) {
 }
 function whenWords(spec, { tz, now = Date.now() }) {
   const wd = (i) => `${WEEKDAYS[i][0].toUpperCase()}${WEEKDAYS[i].slice(1)}`;
+  const k = spec.every || 1;
   if (spec.repeat === 'hourly') {
-    if (spec.startsInHour && spec.relMs == null && !spec.clock) return 'every hour, starting in one hour';
-    return spec.relMs != null ? `every hour, starting in ${dur(spec.relMs)}` : `every hour, starting at ${clockWords(spec.dueAt, tz)} ${dayWords(spec.dueAt, tz, now)}`;
+    const every = k === 1 ? 'every hour' : `every ${k} hours`;
+    if (spec.startsInHour && spec.relMs == null && !spec.clock) return `${every}, starting in ${k === 1 ? 'one hour' : `${k} hours`}`;
+    return spec.relMs != null ? `${every}, starting in ${dur(spec.relMs)}` : `${every}, starting at ${clockWords(spec.dueAt, tz)} ${dayWords(spec.dueAt, tz, now)}`;
   }
-  if (spec.repeat === 'daily') return `every day at ${clockWords(spec.dueAt, tz)}`;
-  if (spec.repeat === 'weekly') return `every ${wd(partsIn(spec.dueAt, tz).wd)} at ${clockWords(spec.dueAt, tz)}`;
+  if (spec.repeat === 'daily') return `${k === 1 ? 'every day' : `every ${k} days`} at ${clockWords(spec.dueAt, tz)}`;
+  if (spec.repeat === 'weekly') return `${k === 1 ? 'every' : `every ${k} weeks, starting`} ${k === 1 ? wd(partsIn(spec.dueAt, tz).wd) : `on ${wd(partsIn(spec.dueAt, tz).wd)}`} at ${clockWords(spec.dueAt, tz)}`;
   if (spec.relMs != null) return `in ${dur(spec.relMs)}`;
   return `${dayWords(spec.dueAt, tz, now)} at ${clockWords(spec.dueAt, tz)}`;
 }
@@ -250,7 +256,7 @@ const sayNo = (t) => NO.test(t) && !/\b(?:yes|yeah|yep|yup)\b/i.test(t);
 const QUESTION = {
   task: 'What should I remind you about?',
   time: 'When should I remind you?',
-  repeat: 'I can remind you every hour, every day or every week. Which would you like?',
+  repeat: 'I can remind you every few hours (up to 72), every few days (up to 60) or every few weeks (up to 12). How often would you like?',
   shorter: 'Could you say what to remind you about a bit shorter?',
 };
 function questionFor(spec) {
@@ -316,11 +322,11 @@ function save(id, st, ctx) {
   const spec = st.spec, care = require('./care');
   states.delete(id);
   try {
-    care.addSeniorReminder(id, { task: spec.task, dueAt: spec.dueAt, repeat: spec.repeat, deliver: spec.deliver, channel: spec.channel, origin: st.origin });
+    care.addSeniorReminder(id, { task: spec.task, dueAt: spec.dueAt, repeat: spec.repeat, every: spec.every, deliver: spec.deliver, channel: spec.channel, origin: st.origin });
   } catch (e) {
     return note('setrem-not-saved', `The reminder could NOT be saved (${e.status === 409 ? 'they already have as many reminders set by talking as can be kept' : 'a problem on your side'}). Tell them kindly in one short sentence that you could not set it, and that their family can add reminders. Do not say it is set. ${COMMON}`);
   }
-  console.log('setrem', JSON.stringify({ event: 'saved', repeat: spec.repeat, deliver: spec.deliver, channel: spec.channel, origin: st.origin }));   // kinds only: never the task
+  console.log('setrem', JSON.stringify({ event: 'saved', repeat: spec.repeat, every: spec.every || 1, deliver: spec.deliver, channel: spec.channel, origin: st.origin }));   // kinds only: never the task
   const stay = st.origin === 'call' ? ' They do NOT need to stay on the call: you will reach them at the time even after they hang up, so they can hang up whenever they like.' : '';
   return note('setrem-saved', `The reminder is now SAVED (it is a real future reminder, not a timer): "${savedText(spec, ctx)}" Tell them in one short sentence that it is set, naming how often or when, how you will reach them and where, in fresh words.${stay} Promise nothing else, and do not offer more. ${COMMON.replace(' Do not say anything is saved or set unless this fact says it is.', '')}`);
 }
@@ -340,7 +346,7 @@ function answer(id, st, heard, ctx) {
       // a correction: "no, at 9" / "make it every day": the new words replace the old ones, and it is said back again
       if (st.corrections >= 3) { states.delete(id); return cancelNote('The details kept changing.'); }
       st.corrections += 1;
-      const fresh = { ...spec, repeat: 'none', relMs: null, clock: null, day: null, weekday: null, daypart: null, unsupported: null, startsInHour: false };
+      const fresh = { ...spec, repeat: 'none', every: 1, relMs: null, clock: null, day: null, weekday: null, daypart: null, unsupported: null, startsInHour: false };
       st.spec = parseRequest(heard, { ...ctx, base: { ...fresh, task: spec.task } });
       if (!st.spec.task) st.spec.task = spec.task;
       st.asks = 0;
@@ -388,4 +394,4 @@ function step(id, heard, { origin, tz = null, now = Date.now(), waLinked = false
 const reset = (id) => { if (id) states.delete(id); else states.clear(); };
 const pending = (id) => { const s = states.get(id); return s ? { stage: s.stage, origin: s.origin, spec: s.spec } : null; };
 
-module.exports = { step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };
+module.exports = { EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };

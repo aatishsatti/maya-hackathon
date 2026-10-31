@@ -93,6 +93,7 @@ function link(profileId, phone, optIn) {
   const old = all[profileId] || {};
   all[profileId] = { phone: d, optIn: true, optInAt: Date.now(), optOutAt: null, lastInboundAt: old.phone === d ? old.lastInboundAt || null : null, seen: old.phone === d ? old.seen || [] : [], sent: old.phone === d ? old.sent || [] : [] };
   writeLinks(all);
+  try { require('./tz').learnFromPhone(require('./care'), profileId, d); } catch { /* the zone stays unknown: the dashboard can ask */ }   // a one-zone country's code gives the zone
   return view(profileId);
 }
 function unlink(profileId) { const all = readLinks(); if (!all[profileId]) return false; delete all[profileId]; writeLinks(all); return true; }
@@ -330,7 +331,7 @@ async function sendReminder(profileId, { task, nudge = false, deliver = null, by
   try { const wamid = await sendTextTo(l.phone, w.text); return wamid ? { ok: true, via: 'text', wamid, voiceUnavailable: voiceFailed } : { ok: false, reason: 'no_id' }; }
   catch (e) { return { ok: false, reason: 'meta_error', error: { code: e.code || null, title: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } }; }
 }
-require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, callRoute: (profileId) => { const l = linkOf(profileId); return { permission: !(l && l.noCallPermission), windowOpen: Boolean(l && l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS) }; }, send: sendReminder, placeCall: (profileId, rid, dueAt, instead) => placeCall(profileId, 'reminder', { rid, dueAt, ...(instead ? { instead } : {}) }) });
+require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, callRoute: (profileId) => { const l = linkOf(profileId); return { permission: !(l && l.noCallPermission), windowOpen: Boolean(l && l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS) }; }, send: sendReminder, invite: (profileId) => sendOut(profileId, { kind: 'text', useTemplate: true, who: 'maya' }), placeCall: (profileId, rid, dueAt, instead) => placeCall(profileId, 'reminder', { rid, dueAt, ...(instead ? { instead } : {}) }) });
 
 // ---- Maya's words must be true about WhatsApp ----
 // A text door cannot ring a phone or hold a live WhatsApp call. A reply that promises one is replaced by the plain truth.
@@ -452,6 +453,7 @@ async function onMessage(msg) {
     }
     x.seen = [...(x.seen || []), msg.id].slice(-SEEN_KEEP);
   });
+  if (!(msg.type === 'text' && msg.text && STOP.test(String(msg.text.body)))) { try { require('./care').waWindowOpened(l.profileId); } catch (e) { note(`a reminder waiting behind the invitation could not be sent: ${String(e.message).slice(0, 80)}`); } }   // the 24 hour window is open again: a reminder that waited behind the invitation goes now
   note(`received a ${typeName(msg.type)} from number ending ${end(msg.from)}${msg.type === 'interactive' ? ` (interactive type ${/^[a-z_]{1,40}$/.test(String(msg.interactive && msg.interactive.type)) ? msg.interactive.type : 'unknown'})` : ''}`); // the interactive type is an enum (button_reply, call_permission_reply ...), never the person's words
   if (msg.type === 'text' && msg.text && typeof msg.text.body === 'string') { await onText(l, msg); note(`replied to number ending ${end(msg.from)}`); return 'text'; }
   if (msg.type === 'audio') { const out = await onAudio(l, msg); note(`answered a voice note from number ending ${end(msg.from)} (${out})`); return out; }
@@ -551,6 +553,7 @@ async function onCalls(value) {
 // (a reminder or message they typed); the person's own words are never kept here. ----
 const OCC = { calling: ['sent', 'Calling now', 1], answered: ['delivered', 'Picked up', 2], done: ['answered', 'Answered', 4], no_reply: ['noreply', "Hasn't replied yet", 2], unanswered: ['unreached', "Couldn't reach", 0], declined: ['noreply', 'Declined', 2], missed: ['missed', 'Missed', 0],
   app_sending: ['sent', 'Sending', 1], app_sent: ['sent', 'Sent', 1], app_delivered: ['delivered', 'Delivered', 2], app_read: ['read', 'Seen', 3], app_done: ['answered', 'Answered', 4], app_missed: ['missed', 'Missed', 2], app_failed: ['failed', 'Not sent', 0],
+  wa_invite_sending: ['sent', 'Sending invitation', 1], wa_invited: ['sent', 'Invitation sent, waiting for their reply', 1],
   wa_sending: ['sent', 'Sending', 1], wa_sent: ['sent', 'Sent', 1], wa_delivered: ['delivered', 'Delivered', 2], wa_read: ['read', 'Read', 3], wa_missed: ['missed', 'Missed', 2], wa_failed: ['failed', 'Not sent', 0] };   // [status, label, rank]: rank 1 left Maya, 2 arrived / picked up, 3 read, 4 answered
 const OUTMSG = { sending: ['sent', 'Sending', 1], sent: ['sent', 'Sent', 1], delivered: ['delivered', 'Delivered', 2], read: ['read', 'Read', 3], failed: ['failed', 'Not sent', 0] };
 const NOTE_LABEL = { Sent: ['sent', 'Sent', 1], Delivered: ['delivered', 'Delivered', 2], Seen: ['read', 'Read', 3], Played: ['read', 'Read', 3], Replied: ['answered', 'Answered', 4], "Hasn't replied yet": ['noreply', "Hasn't replied yet", 2], 'Seen · Not replied yet': ['noreply', "Hasn't replied yet", 3],
@@ -575,8 +578,11 @@ function activityOf(profileId) {
       const channel = x.channel === 'app' ? (x.via === 'voice' || x.via === 'text' ? x.via : 'call') : x.channel === 'whatsapp' ? (x.via === 'voice' ? 'voice' : x.via === 'text' ? 'text' : planned === 'voice' ? 'voice' : 'text') : paused ? (planned === 'voice' ? 'voice' : 'text') : (r.deliver === 'text' || r.deliver === 'voice') && x.state === 'wa_failed' ? r.deliver : 'call';   // a Paused one shows the channel that was asked for: nothing went on any
       const note = paused ? (x.pausedBy === 'window' ? `The 24 hour window was closed and the call could not be placed (${(x.error && x.error.title) || 'no reason given'}): nothing was sent.` : `The 24 hour window is closed and calls are paused (${PAUSED_WHY[x.pausedBy] || 'calls are paused'}): nothing was sent.`) : x.pausedBy ? 'Calls were paused, so it went as a message.' : x.instead === 'window' ? 'The 24 hour window was closed, so Maya called instead.' : null;
       const where = x.channel === 'app' ? 'app' : x.channel === 'whatsapp' ? 'whatsapp' : (x.where || 'whatsapp');
-      const note2 = note || (x.voiceUnavailable && x.channel === 'app' ? 'Her voice was not available, so it went as a text.' : x.reason === 'push_failed' ? 'The app was closed and the push to the phone did not go (no phone registered, push not set up, or the push was refused).' : x.reason === 'app_closed' ? 'The app was closed, and a closed phone cannot be rung yet.' : null);
-      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, where, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.by === 'senior' ? null : r.task, ...(note2 || r.by === 'senior' ? { note: [r.by === 'senior' ? seniorNote(r) : '', note2].filter(Boolean).join(' ') } : {}) });
+      const inviteNote = x.state === 'wa_invited' ? "WhatsApp's 24 hour window was closed, so the approved invitation message was sent first. The reminder follows when they reply; if they do not reply soon, the Maya app delivers it." : x.repliedToInvite ? 'It was sent after they replied to the invitation.' : null;
+      const fb = x.fellBack ? `WhatsApp could not deliver it (${x.fellBack.why || 'no reason given'}), so it went to the Maya app instead.` : null;
+      const nf = !fb && x.state === 'wa_failed' && x.reason && !paused ? `Not sent: ${care.waWhy(x.reason)}.` : null;
+      const note2 = fb || note || nf || (x.voiceUnavailable && x.channel === 'app' ? 'Her voice was not available, so it went as a text.' : x.reason === 'push_failed' ? 'The app was closed and the push to the phone did not go (no phone registered, push not set up, or the push was refused).' : x.reason === 'app_closed' ? 'The app was closed, and a closed phone cannot be rung yet.' : null);
+      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, where, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.by === 'senior' ? null : r.task, ...(note2 || inviteNote || r.by === 'senior' ? { note: [r.by === 'senior' ? seniorNote(r) : '', inviteNote, note2].filter(Boolean).join(' ') } : {}) });
       if (x.app) {   // "both": the same reminder also went to the app, with its own state
         const [as, al, ar] = OCC[x.app.state] || ['sent', String(x.app.state), 1];
         push({ id: `r:${r.id}:${k}:${x.dueAt}:app`, type, where: 'app', channel: x.app.via === 'voice' ? 'voice' : 'text', status: as, label: al, rank: ar, at: x.app.sentAt || x.app.startedAt || x.dueAt, words: r.by === 'senior' ? null : r.task, ...(x.app.voiceUnavailable ? { note: 'Her voice was not available, so it went as a text.' } : {}) });
@@ -632,8 +638,8 @@ function pausedFallback(kind, profileId, l, spec, block, why) {
   if (spec && spec.message) {   // a family MESSAGE chosen as a call: the same words as a text, inside the window
     return sendOut(profileId, { kind: 'text', text: spec.task, who: 'family' }).then(() => { note(`message call to number ending ${tail} not placed (${said}); the message was sent as a text instead`); return result(); }, (e) => fail(`${why} The message could not be sent as a text either: ${e.message}`, e.status || 502));
   }
-  { const rr = spec && spec.rid && care.findReminder(profileId, spec.rid); if (rr && rr.strict) return fail(`${why} It was set to arrive as a call, so it was not sent as a message instead.`, 429); }   // a reminder the senior chose as a call is never turned into a text
-  try { care.reminderViaMessage(profileId, { ...spec, pausedBy: block }); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
+  if (spec && spec.rid && care.cfg.waFallback) return fail(`${why} A call stays a call: it was not turned into a message. The Maya app takes it instead, and the family sees why.`, 429);   // care.js failWA rings the app
+  try { care.reminderViaMessage(profileId, { ...spec, pausedBy: block }); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }   // only the dashboard's own test button (a typed test, no saved reminder) still goes as a message
   note(`reminder call to number ending ${tail} not placed (${said}); the reminder was sent as a message instead`);
   return Promise.resolve(result());
 }

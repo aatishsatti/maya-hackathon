@@ -7,6 +7,7 @@ import '../services/api.dart';
 import '../services/store.dart';
 import '../theme.dart';
 import '../widgets/delivery_picker.dart';
+import '../widgets/whatsapp_rules.dart';
 import '../widgets/pill.dart';
 import 'common.dart';
 import 'family_data.dart';
@@ -27,8 +28,32 @@ class _SetupTabState extends State<SetupTab> {
 
   FamilyData get d => widget.data;
 
+  final _tz = TextEditingController();
+
+  // The time zone is found automatically (their phone, then their connection, then their number's country). It is asked for here ONLY when none of those could tell.
+  List<Widget> _timeZone(BuildContext context) {
+    final q = d.care['quiet'] is Map ? d.care['quiet'] as Map : const {};
+    final tz = q['tz'] as String?;
+    const src = {'device': 'from their phone', 'ip': 'from their internet connection', 'phone': "from their phone number's country", 'manual': 'set by you'};
+    if (tz != null) return [sectionLabel('Time zone'), Text('$tz (found ${src[q['tzSource']] ?? 'automatically'})', style: const TextStyle(fontSize: 15))];
+    return [
+      sectionLabel('Time zone'),
+      const Text('It could not be worked out automatically. Please enter theirs, so "at 8" and quiet hours use their own time.', style: TextStyle(fontSize: 14, color: kSoft)),
+      const SizedBox(height: 6),
+      TextField(controller: _tz, decoration: const InputDecoration(labelText: 'For example Europe/London')),
+      const SizedBox(height: 6),
+      OutlinedButton(
+        onPressed: () async {
+          if (await act(context, () => Api.postJson('/api/care/${d.profileId}/timezone', {'tz': _tz.text.trim()}), done: 'Time zone saved.')) d.refresh(quiet: true);
+        },
+        child: const Text('Save time zone'),
+      ),
+    ];
+  }
+
   @override
   void dispose() {
+    _tz.dispose();
     _phone.dispose();
     super.dispose();
   }
@@ -90,6 +115,8 @@ class _SetupTabState extends State<SetupTab> {
           if (v != null && await act(context, () => Api.postJson('/api/care/${d.profileId}/delivery', {'channel': v}))) d.refresh(quiet: true);
         },
       ),
+      WhatsappRules(rules: WhatsappRules.from(d.care['whatsappRules'])),
+      ..._timeZone(context),
       sectionLabel('Mode'),
       RadioGroup<String>(
         groupValue: d.mode,
