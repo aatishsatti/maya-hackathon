@@ -1149,7 +1149,7 @@ class FakeCall {
   end() { if (this.closed) return; this.closed = true; if (this.awaitAck) care.reminderNoAck(this.pid, this.awaitAck); if (this.welfare) care.callEnded(this.pid, this, 'left'); }
 }
 const remOf = (id) => care.get(id).reminders[0];
-const reminderReset = () => { outReset(); starts.length = 0; script = 'ack'; heardFrames = 0; wa.deps.prefetchLine = async () => null; wa.deps.newCall = (socket) => new FakeCall(socket); wa.deps.callTailMs = 50; };
+const reminderReset = () => { outReset(); starts.length = 0; script = 'ack'; heardFrames = 0; wa.deps.prefetchLine = async () => null; wa.deps.prefetchWelfare = async () => null; wa.deps.newCall = (socket) => new FakeCall(socket); wa.deps.callTailMs = 50; };
 const driveAnswered = async (phone, conn) => { const dev = await fakeDevice(conn.session.sdp); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outAnswer(phone, dev.answer)); await wa.handleWebhook(outStatus(phone, 'ACCEPTED')); return dev; };
 
 test('C2 answered and acknowledged: the Call claims the ring with the reminder, the reminder is Done, one connect and one terminate, the answered call is counted; logs hold no words', async () => {
@@ -1571,4 +1571,34 @@ test('pre-ring: it starts when the call is requested (before WhatsApp answers), 
   reminderReset(); wa.deps.testRingCapMs = 200; const b = linked(); let sig2 = null; wa.deps.prefetchLine = (pid, rid, tz, signal) => { sig2 = signal; return new Promise(() => {}); };
   await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeReminderCall(b.id, { task: 'unanswered' }); await wa.handleWebhook(outStatus(b.phone, 'RINGING')); await waitFor(() => actions().includes('terminate')); await sleepMs(100); });
   assert.equal(sig2.aborted, true, 'unanswered: the pending Spark request is aborted'); wa.deps.prefetchLine = async () => null;
+});
+
+// ---- part 1: the welfare opener is written while the phone rings, the same scratch Call as for reminders ----
+test('welfare pre-ring: the opener is written ahead by a scratch Call that changes nothing; the real greeting uses it; a failed prefetch writes it now; the timing line says which', async () => {
+  voiceReset(); const { id } = inWindow(); const tg = (x) => `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} ${x}`;
+  const before = { calls: care.get(id).callCount, seen: care.get(id).lastActivity.maya, live: care.liveCalls.has(id), lines: JSON.stringify(care.recentLines(id, 'greeting')) };
+  reset(tg('This is a welfare check from Maya. How are you today?')); const pre = await callMod.prefetchWelfareLine(id, 'Europe/London', new AbortController().signal);
+  assert.equal(pre.kind, 'welfare'); assert.equal(pre.line.said, 'This is a welfare check from Maya. How are you today?'); assert.equal(pre.line.tries, 1); assert.ok(pre.ms >= 0);
+  assert.deepEqual({ calls: care.get(id).callCount, seen: care.get(id).lastActivity.maya, live: care.liveCalls.has(id), lines: JSON.stringify(care.recentLines(id, 'greeting')) }, before, 'a line written for a call nobody may answer leaves no trace');
+  assert.match(asked.at(-1).roster, /welfare check/, 'Spark was told it is a welfare check (the same fact as at pick-up)'); assert.match(asked.at(-1).roster, /Invent nothing/);
+  assert.equal(await callMod.prefetchWelfareLine('00000000', null, new AbortController().signal), null);
+  const mk = (prefetched) => { const { call } = outCall(id); call.outreach = { kind: 'welfare' }; call.prefetched = prefetched; call.speakReply = async () => {}; let written = 0; call.dynamicLine = async () => { written++; return { full: 'x', said: 'Written now.', tries: 2 }; }; return { call, count: () => written }; };
+  const a = mk(Promise.resolve(pre)); await a.call.greet(12); assert.equal(a.count(), 0, 'no second Spark request'); assert.equal(a.call.greetTiming.prefetched, true); assert.ok(a.call.history.some((m) => m.content === pre.line.said)); assert.equal(a.call.awaitAck, null, 'a welfare call has no acknowledgement');
+  const b = mk(Promise.resolve({ kind: 'reminder', rid: 'x', line: pre.line })); await b.call.greet(12); assert.equal(b.count(), 1, 'a line for another kind of call is not used');
+  const logs = []; const l0 = console.log; console.log = (...x) => logs.push(x.join(' ')); let c; try { c = mk(Promise.reject(new Error('Spark was down'))); await c.call.greet(12); } finally { console.log = l0; } assert.equal(c.count(), 1); assert.ok(logs.some((m) => /greeting prefetch failed/.test(m)));
+});
+
+test('welfare pre-ring: it starts when the call is requested, nothing is claimed while it rings (Calling now), the Call gets it at pick-up, an unanswered call aborts it', async () => {
+  reminderReset(); const { id, phone } = inWindow(); const seen = { posts: -1, signal: null }; let resolveLine;
+  wa.deps.prefetchWelfare = (pid, tz, signal) => { seen.posts = callPosts().length; seen.signal = signal; return new Promise((res) => { resolveLine = () => res({ kind: 'welfare', line: { full: 'f', said: 'Ahead.', tries: 1 }, ms: 5 }); }); };
+  let dev, fake = null; wa.deps.newCall = (socket) => { fake = new FakeCall(socket); return fake; };
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
+    await wa.placeWelfareCall(id); assert.equal(seen.posts, 0, 'asked for BEFORE the connect goes to WhatsApp'); resolveLine(); await wa.handleWebhook(outStatus(phone, 'RINGING')); await sleepMs(50);
+    assert.equal(labelOf(id), 'Calling now', 'nothing was claimed while it rang'); assert.equal(care.liveCalls.has(id), false); assert.equal(starts.length, 0);
+    dev = await driveAnswered(phone, callPosts().find((b) => b.action === 'connect')); await waitFor(() => starts.length === 1); assert.equal((await fake.prefetched).line.said, 'Ahead.'); await waitFor(() => actions().includes('terminate')); await waitFor(() => wa.view(id).testCall.state === 'finished');
+  });
+  try { assert.equal(seen.signal.aborted, false); } finally { await dev.peer.close(); }
+  reminderReset(); wa.deps.testRingCapMs = 200; const b = inWindow(); let sig2 = null; wa.deps.prefetchWelfare = (pid, tz, signal) => { sig2 = signal; return new Promise(() => {}); };
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeWelfareCall(b.id); await wa.handleWebhook(outStatus(b.phone, 'RINGING')); await waitFor(() => actions().includes('terminate')); await sleepMs(100); });
+  assert.equal(sig2.aborted, true); wa.deps.prefetchWelfare = async () => null;
 });

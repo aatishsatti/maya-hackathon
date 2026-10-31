@@ -59,7 +59,7 @@ const MAX_INBOUND_IMAGE = 8 * 1024 * 1024; // the same ceiling as a photo sent i
 const MAX_INBOUND_AUDIO = 2 * 1024 * 1024; // a long monologue is not worth a minute of Transcribe; ~2 MB of Opus is several minutes
 
 // Network edge, replaceable in tests.
-const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithBridge(o), newCall: (socket, apiKey) => new (require('./call').Call)(socket, apiKey), callTailMs: undefined, callCapMs: undefined, callOut: (o) => require('./wacall').callOut(o), testRingCapMs: undefined, testTailMs: undefined, testCooldownMs: undefined, greetingTimeoutMs: undefined, prefetchLine: (...a) => require('./call').prefetchReminderLine(...a) };
+const deps = { fetch: (...a) => globalThis.fetch(...a), answerCall: (o) => require('./wacall').answerWithBridge(o), newCall: (socket, apiKey) => new (require('./call').Call)(socket, apiKey), callTailMs: undefined, callCapMs: undefined, callOut: (o) => require('./wacall').callOut(o), testRingCapMs: undefined, testTailMs: undefined, testCooldownMs: undefined, greetingTimeoutMs: undefined, prefetchLine: (...a) => require('./call').prefetchReminderLine(...a), prefetchWelfare: (...a) => require('./call').prefetchWelfareLine(...a) };
 
 const configured = () => Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID);
 
@@ -650,7 +650,7 @@ function placeCall(profileId, kind, spec) {
     sig.on('status', (s) => { if (label[s]) setTest(profileId, label[s]); if (s === 'ACCEPTED' && !connected) { connected = true; noteConnected(profileId); } });
     const tzOf = () => (care.get(profileId) || {}).tz || null;
     Promise.resolve().then(() => deps.callOut({ sig, place, terminate, log, speak: (t) => chat.deps.speak(t), ringCapMs: deps.testRingCapMs, tailMs: deps.testTailMs,
-      ...((rc || wc) ? { bridge: { ...(rc ? { prefetch: (signal) => deps.prefetchLine(profileId, rc.rid, tzOf(), signal) } : {}), newCall: deps.newCall, apiKey: process.env.META_API_KEY, profileId, tz: tzOf(), outreachId: (rc || wc).outreachId, reason: wc ? 'welfare' : 'reminder', capMs: deps.callCapMs, greetingTimeoutMs: deps.greetingTimeoutMs } } : {}) }))
+      ...((rc || wc) ? { bridge: { prefetch: rc ? (signal) => deps.prefetchLine(profileId, rc.rid, tzOf(), signal) : (signal) => deps.prefetchWelfare(profileId, tzOf(), signal), newCall: deps.newCall, apiKey: process.env.META_API_KEY, profileId, tz: tzOf(), outreachId: (rc || wc).outreachId, reason: wc ? 'welfare' : 'reminder', capMs: deps.callCapMs, greetingTimeoutMs: deps.greetingTimeoutMs } } : {}) }))
       .then((r) => {
         const missed = /^no answer/.test(r) || r === 'rejected';
         if (missed) noteMissed(profileId);

@@ -1496,10 +1496,12 @@ class Call {
     let line;
     const greetAt = Date.now();
     const rem = this.outreach && this.outreach.kind === 'reminder' ? care.findReminder(this.profile.id, this.outreach.reminderId) : null;
-    let pre = null;   // the first line of a reminder call, written while the phone rang (prefetchReminderLine): used when it is for THIS reminder, otherwise written now as before
-    if (rem && this.prefetched) { try { pre = await this.prefetched; } catch { console.log('greeting prefetch failed', JSON.stringify({ fallback: 'written now' })); } if (pre && pre.rid !== rem.id) pre = null; }
+    let pre = null;   // the first line of a reminder or welfare call, written while the phone rang (prefetchReminderLine / prefetchWelfareLine): used when it is for THIS call, otherwise written now as before
+    const welfareOut = Boolean(this.outreach && this.outreach.kind === 'welfare');
+    if ((rem || welfareOut) && this.prefetched) { try { pre = await this.prefetched; } catch { console.log('greeting prefetch failed', JSON.stringify({ fallback: 'written now' })); } if (pre && (rem ? pre.rid !== rem.id : pre.kind !== 'welfare')) pre = null; }
     try {
-      if (pre) { line = pre.line; this.awaitTask = pre.awaitTask; this.reminderFacts = pre.reminderFacts; }
+      if (pre && rem) { line = pre.line; this.awaitTask = pre.awaitTask; this.reminderFacts = pre.reminderFacts; }
+      else if (pre) line = pre.line;
       else if (rem) line = await this.reminderLine(rem, this.abort.signal);
       else line = await this.dynamicLine({ pool: 'greeting', signal: this.abort.signal, what: this.greetingNote(hour), sentences: 2 });
     } catch (e) {
@@ -2113,4 +2115,14 @@ async function prefetchReminderLine(profileId, rid, tz, signal) {
   return { rid, line, awaitTask: c.awaitTask, reminderFacts: c.reminderFacts, ms: Date.now() - t0 };
 }
 
-module.exports = { prefetchReminderLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+// The same for the welfare opener: the scratch Call is told it is a welfare call (that is all greetingNote reads in that branch) and writes the same two-sentence opener.
+async function prefetchWelfareLine(profileId, tz, signal) {
+  const profile = memory.load(profileId);
+  if (!profile) return null;
+  const c = new Call({ send() {}, close() {}, onmessage: null, onclose: null, outbound: true }, 'k'); clearInterval(c.endTimer);
+  c.profile = profile; c.outreach = { kind: 'welfare' }; try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); c.tz = tz; } catch { c.tz = null; }
+  const t0 = Date.now(), line = await c.dynamicLine({ pool: 'greeting', signal, what: c.greetingNote(null), sentences: 2 });
+  return { kind: 'welfare', line, ms: Date.now() - t0 };
+}
+
+module.exports = { prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
