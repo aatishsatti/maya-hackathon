@@ -1256,6 +1256,8 @@ const outCall = (id, outbound = true) => { const rec = { sent: [], closed: [] };
 test('C2 end of a call Maya placed: "no / that\'s all" after her question, or any short goodbye, ends it; a real answer, a question or a thank-you does not', () => {
   const E = callMod.outboundEnd;
   for (const t of ['No.', 'No thanks', 'No, thank you.', 'Nothing', "That's all", 'Nope', "I'm fine", 'Not really, thank you', 'No questions']) assert.equal(E(t, true), 'nomore', t);
+  for (const t of ['No thanks, got it, all set then.', 'No, I am fine, thank you very much.', "Nothing, that's all I needed.", 'Nope, all good here.']) assert.equal(E(t, true), 'nomore', t);   // the live phrase that Spark answered with "you can hang up now"
+  for (const t of ['No, but who wrote this?', 'No, wait, one thing', 'No thanks. Actually, can you tell me the time?', 'Nothing about that, but how is the weather?', 'No, why do you ask?']) assert.equal(E(t, true), null, t);
   for (const t of ['No.', 'Nothing', "That's all"]) assert.equal(E(t, false), null, `${t} without her question does not end the call`);
   for (const t of ['Bye', 'Goodbye Maya', 'Good night', 'Okay, bye bye', 'Thank you, goodbye', 'Talk to you later', 'Take care']) { assert.equal(E(t, false), 'bye', t); assert.equal(E(t, true), 'bye', t); }
   for (const t of ['Yes, one thing', 'Who wrote that message?', 'No, wait, I wanted to ask about my daughter', 'Thank you', 'Okay', "Goodbye is a word I don't like to hear when you have so much to tell me about the garden"]) assert.equal(E(t, true), null, t);
@@ -1307,4 +1309,10 @@ test('P1 greeting timing: dynamicLine reports how many Spark calls a line took (
   const line = logs.filter((m) => /step by step/.test(m)); assert.equal(line.length, 1, 'logged once, on the first chunk');
   assert.match(line[0], /the Call started 120 ms after its start message, Spark wrote the line in 3100 ms in 3 tries, the first voice chunk came \d{3} ms after the line was written/); assert.doesNotMatch(line[0], /secret|BAD|Fine/);
   clearCalls();
+});
+
+test('C2 a goodbye that Spark writes herself on a call Maya placed ("You can hang up now.") is recognised, so the hang-up follows in code; ordinary talk is not', () => {
+  const F = callMod.sayingFarewell;
+  for (const t of ['Have a quiet rest of your night. You can hang up now.', 'Goodbye for now.', 'Bye-bye, take care.', 'Alright, I will let you go.', 'Talk to you soon.', 'Good night.', 'Take care.', "I'm hanging up now."]) assert.equal(F(t), true, t);
+  for (const t of ['It is a good night for stargazing, is it clear where you are?', 'Take care of your knee on the stairs, did it hurt today?', 'I will stay on the line with you.', 'That sounds like a lovely walk.', 'Did your daughter say goodbye to you at the door?']) assert.equal(F(t), false, t);   // including a question that merely contains the word
 });

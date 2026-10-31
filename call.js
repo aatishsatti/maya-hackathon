@@ -87,7 +87,15 @@ const plainWords = (t) => String(t || '').toLowerCase().replace(/[^a-z' ]/g, ' '
 const NO_MORE = /^(no|nope|nah|no thanks|no thank you|nothing|nothing else|nothing more|that'?s all|that is all|that'?s it|i'?m fine|i am fine|all good|i'?m good|not really|no questions|none|i don'?t have any|no i don'?t|no i'?m fine)( thanks| thank you| dear| maya)?$/;
 const BYE_WORDS = /\b(good ?bye|bye( bye)?|good ?night|see you|talk (to you )?later|take care|i have to go|i must go|got to go|gotta go)\b/;
 const saysBye = (t) => { const w = plainWords(t); return w.split(' ').length <= 8 && BYE_WORDS.test(w); };
-const outboundEnd = (heard, asked) => saysBye(heard) ? 'bye' : asked && NO_MORE.test(plainWords(heard)) ? 'nomore' : null;   // what their words say about ending a call Maya placed
+// After her question, a natural "no" is more than the bare words ("No thanks, got it, all set then."): it BEGINS like a no, is short, and asks or adds nothing (no question word, no "but", "wait", "actually", "one thing").
+const NO_START = /^(no|nope|nah|nothing|none|not really|that'?s all|that is all|that'?s it|i'?m (fine|good|all set)|i am (fine|good|all set)|all (good|set))\b/;
+const MORE_COMING = /\b(who|what|why|how|when|where|which|can you|could you|would you|will you|do you|did you|are you|is it|is there|tell me|but|wait|actually|one thing|one more|also|however)\b/;
+const noMore = (heard) => { const w = plainWords(heard); return NO_MORE.test(w) || (w.split(' ').length <= 12 && NO_START.test(w) && !MORE_COMING.test(w) && !/\?/.test(String(heard))); };
+const outboundEnd = (heard, asked) => saysBye(heard) ? 'bye' : asked && noMore(heard) ? 'nomore' : null;
+// A goodbye Spark wrote herself ("...You can hang up now.", "Goodbye", "Good night."): on a call she placed it is followed by the hang-up in code (the feel tag describes the PERSON's words, not hers, so it cannot say this).
+const FAREWELL_SAID = /\b(good ?bye|bye( bye|-bye)?|hang up|hanging up|let you go|talk (to you )?(soon|later)|speak (to you )?soon)\b|\b(good night|take care)\W*$/i;
+const sayingFarewell = (text) => { const t = String(text || '').trim(); return !/\?\W*$/.test(t) && FAREWELL_SAID.test(t); };   // a reply that ends in a question is never a goodbye   // what their words say about ending a call Maya placed
+const OUTBOUND_NOTE = ' You placed this phone call yourself. Never tell them to hang up and never say goodbye on your own: the app ends the call when they say goodbye or have nothing more to ask. Just answer what they said.';
 const firstSilenceWait = () => SILENCE_FIRST_MIN_MS + Math.floor(Math.random() * (SILENCE_FIRST_MAX_MS - SILENCE_FIRST_MIN_MS + 1));
 // A greeting shortens ("Hi Mike") once a known profile has had this many calls; first calls keep the warm greeting.
 const SHORT_GREETING_AFTER_CALLS = 1;
@@ -1670,7 +1678,7 @@ class Call {
     } else {
       this.scamReply = scamTurn.scam ? scamTurn.scam.level : null; this.officialNow = scamTurn.official && scamTurn.askFor === null ? scamTurn.official : null; this.scamAskFor = 'askFor' in scamTurn ? scamTurn.askFor : scamTurn.scam && !scamTurn.told && ['warn', 'pause'].includes(scamTurn.scam.level) ? scamTurn.scam : null;
       this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
-      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
+      rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}${this.ws.outbound ? OUTBOUND_NOTE : ''}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
     this.scamOwed = scamTurn && scamTurn.scam && scamTurn.scam.level !== 'none' ? scamTurn.scam : null;
     try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent, onDone: this.askQuestion ? () => { this.askQuestion = false; this.askAnyQuestions(); } : null }); }
@@ -2061,7 +2069,7 @@ class Call {
       if (this.safety && /\bsafe\b/i.test(all) && isQuestion(all)) care.safeAsked(this.profile.id);
       if (this.safety && isQuestion(all)) this.noteSafetyAsked(all);
     }
-    const farewell = Boolean(this.ws.outbound && feel && feel.intent === 'farewell' && !this.safety && !this.health);   // a goodbye she says is followed by the hang-up, in code
+    const farewell = Boolean(this.ws.outbound && !this.safety && !this.health && said.length && sayingFarewell(said.join(' ')));   // a goodbye she says is followed by the hang-up, in code
     if (hangup) this.hangUp(); else if (bye || farewell) this.hangUp({ quiet: false }); else if (onDone) setImmediate(onDone); else this.armSilence();
     if (timing) {
       timing.feel = feel;
@@ -2083,4 +2091,4 @@ class Call {
   }
 }
 
-module.exports = { outboundEnd, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, restatedTimer, explicitFamilyRequest, ownPlan, timerOpenFact, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, parseTimer, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
