@@ -661,7 +661,7 @@ class Call {
       this.noVoice = m.noVoice === true;
       this.fakeAudio = this.noVoice && m.fakeAudio === true;   // only ever together with noVoice
       if (this.noVoice) console.log(this.fakeAudio ? 'call noVoice+fakeAudio: ElevenLabs is skipped; a synthetic voice is used' : 'call noVoice: ElevenLabs is skipped for this call');
-      this.starting = true;
+      this.starting = true; this.startAt = Date.now();   // the start message arrived (greeting timing log)
       // Maya rang them and they pressed Accept: the id must match a live ring for THIS profile, else it is an ordinary call.
       if ((m.reason === 'callback' || m.reason === 'reminder') && typeof m.outreachId === 'string') this.outreach = care.claim(this.profile.id, m.outreachId);
       // Words a crashed or unfinished earlier call left behind are filed first, so this call knows them.
@@ -1378,7 +1378,9 @@ class Call {
     const ask = [{ role: 'user', content: '(Write your short line now.)' }];
     let full;
     let said;
+    let tries = 0;   // Spark calls this line took (every rewrite is another call): reported with the greeting timing
     for (let attempt = 0; attempt < 4; attempt++) {
+      tries = attempt + 1;
       full = await sparkStream(ask, this.roster(note), signal, () => {});
       said = sentences === 1 ? firstSentence(stripTags(full)) : firstSentences(stripTags(full), sentences);
       if (/good night/i.test(said) && pool === 'greeting') { note += ' "Good night" is only a goodbye. Use "Hello" or "Good evening".'; continue; }
@@ -1392,7 +1394,7 @@ class Call {
       note += ` ${bad}`;
     }
     if (pool === 'greeting') said = said.replace(/good night/gi, 'Good evening').replace(HEARD_YOU, (m) => (/voice/i.test(m) ? 'to talk to you' : 'to talk to you')); // last-resort guards: never a hello, never claims to have heard them
-    return { full, said };
+    return { full, said, tries };
   }
 
   async quietLine(stage, signal) {
@@ -1480,6 +1482,7 @@ class Call {
     this.responding = true;
     this.send({ type: 'thinking' });
     let line;
+    const greetAt = Date.now();
     const rem = this.outreach && this.outreach.kind === 'reminder' ? care.findReminder(this.profile.id, this.outreach.reminderId) : null;
     try {
       if (rem) line = await this.reminderLine(rem, this.abort.signal);
@@ -1489,6 +1492,7 @@ class Call {
       return this.fatal(e.message);
     }
     if (myGen !== this.gen || this.closed) return;
+    this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: Date.now() - greetAt, tries: line.tries || 1, lineAt: Date.now() };   // milliseconds and a count, never a word (wabridge logs it)
     care.addLine(this.profile.id, rem ? 'reminder' : 'greeting', line.said);
     this.history.push({ role: 'assistant', content: line.said });
     this.mirror('maya', line.said);

@@ -72,7 +72,7 @@ class PhoneBridge {
     else if (m.type === 'error') { this.error = String(m.message || 'unknown').replace(/\s+/g, ' ').slice(0, 160); this.log(`the call brain reported an error: ${this.error}`); }
   }
   onVoice(buf) {
-    if (!this.accepted) { this.held.push(buf); this.greetingReady(); return; }
+    if (!this.accepted) { this.held.push(buf); if (!this.voiceLogged) { this.voiceLogged = true; const t = this.call && this.call.greetTiming; if (t) this.log(`her first words, step by step: the Call started ${t.startMs} ms after its start message, Spark wrote the line in ${t.sparkMs} ms in ${t.tries} ${t.tries === 1 ? 'try' : 'tries'}, the first voice chunk came ${Date.now() - t.lineAt} ms after the line was written`); } this.greetingReady(); return; }
     this.play(buf);
   }
   play(buf) {

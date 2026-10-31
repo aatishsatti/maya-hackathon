@@ -1294,3 +1294,17 @@ test('C2 after the reminder she asks the fixed question, then waits; silence end
   call.pending = []; call.fireClose(); assert.deepEqual(said, [[callMod.BYE_TIMEOUT, true, false]]); assert.equal(call.closing, null);
   said.length = 0; call.closing = null; call.fireClose(); assert.deepEqual(said, [], 'nothing was asked, nothing ends');
 });
+
+// ---- P1 (log only): where the pickup gap goes. The Call notes its start, Spark time and number of tries; the bridge logs them with the first voice chunk. Milliseconds and a count, never a word. ----
+test('P1 greeting timing: dynamicLine reports how many Spark calls a line took (a rewrite is another call), and the bridge logs the split with no words', async () => {
+  voiceReset(); const { id } = linked(); const { call } = outCall(id); const sig = new AbortController().signal; const t = (x) => `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} ${x}`;
+  reset(t('Fine first line.')); assert.equal((await call.dynamicLine({ pool: 'p1a', what: 'say a line', signal: sig })).tries, 1);
+  reset(t('BAD secret words here.'), t('BAD secret words here.'), t('Fine third line.')); const l3 = await call.dynamicLine({ pool: 'p1b', what: 'say a line', signal: sig, check: (s) => (/BAD/.test(s) ? 'Not that.' : null) });
+  assert.equal(l3.tries, 3); assert.equal(l3.said, 'Fine third line.');
+  const logs = []; const fake = { greetTiming: { startMs: 120, sparkMs: 3100, tries: 3, lineAt: Date.now() - 400 }, closed: false, end() {} };
+  const b = new wabridge.PhoneBridge({ newCall: () => fake, apiKey: 'k', profileId: id, tz: null, log: (m) => logs.push(m), speak: async () => Buffer.alloc(2), outbound: true });
+  b.onVoice(Buffer.alloc(960)); b.onVoice(Buffer.alloc(960)); b.mic.stop('x'); b.finish('x');
+  const line = logs.filter((m) => /step by step/.test(m)); assert.equal(line.length, 1, 'logged once, on the first chunk');
+  assert.match(line[0], /the Call started 120 ms after its start message, Spark wrote the line in 3100 ms in 3 tries, the first voice chunk came \d{3} ms after the line was written/); assert.doesNotMatch(line[0], /secret|BAD|Fine/);
+  clearCalls();
+});
