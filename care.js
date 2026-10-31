@@ -268,7 +268,7 @@ function attachSenior(id, res, tz) {
   const p = get(id);
   if (tz) p.tz = tz;
   // A family message sent while the app was closed arrives when it opens.
-  for (const n of p.notifications) if (n.to === 'senior' && (n.kind === 'family_message' || (n.kind === 'reminder' && n.app)) && n.status === 'sent' && Date.now() - n.times.sent < (n.kind === 'reminder' ? 60 : 24 * 60) * MIN) send(res, 'notice', { notifId: n.id, kind: n.kind, text: n.text });
+  for (const n of p.notifications) if (n.to === 'senior' && (n.kind === 'family_message' || (n.kind === 'reminder' && n.app)) && n.status === 'sent' && Date.now() - n.times.sent < (n.kind === 'reminder' ? 60 : 24 * 60) * MIN) send(res, 'notice', { notifId: n.id, kind: n.kind, text: n.text, ...(n.by ? { by: n.by } : {}) });
   return () => { const set = seniorClients.get(id); if (set) { set.delete(res); if (!set.size) seniorClients.delete(id); } };
 }
 function attachFamily(res) { familyClients.add(res); return () => familyClients.delete(res); }
@@ -368,17 +368,18 @@ const activeByProfile = new Map();   // profileId -> outreach
 
 const safetyFlag = (p) => p.flags.find((x) => x.status === 'active' && x.safety);
 
+const ringText = (p, reminderId) => { const r = reminderId && p.reminders.find((x) => x.id === reminderId); return r && r.by === 'senior' ? 'Maya is calling with your reminder.' : 'Maya is calling with a reminder from your family.'; };   // a reminder they set by talking is theirs, not the family's
 function startOutreach(id, { kind, reminderId = null, talked = false, delayMs = null, safety = false }) {
   const p = get(id);
   if (!p || liveCalls.has(id)) return null;
   const cur = activeByProfile.get(id);
   if (cur) {
     // One sequence at a time, no spam: a second call-back is ignored; a reminder takes over a call-back in progress.
-    if (kind === 'reminder' && cur.kind === 'callback') { cur.kind = 'reminder'; cur.reminderId = reminderId; cur.notif.kind = 'reminder'; cur.notif.text = 'Maya is calling with a reminder from your family.'; return cur; }
+    if (kind === 'reminder' && cur.kind === 'callback') { cur.kind = 'reminder'; cur.reminderId = reminderId; cur.notif.kind = 'reminder'; cur.notif.text = ringText(p, reminderId); return cur; }
     return null;
   }
   const o = { id: uid(), profileId: id, kind, reminderId, talked, safety, attempts: 0, state: 'pending', timer: null, notif: null, startedAt: Date.now() };
-  o.notif = makeNotif(p, { to: 'senior', kind, text: kind === 'reminder' ? 'Maya is calling with a reminder from your family.' : 'Maya is calling to check on you.', ref: o.id, incident: safety && safetyFlag(p) ? safetyFlag(p).id : null });
+  o.notif = makeNotif(p, { to: 'senior', kind, text: kind === 'reminder' ? ringText(p, reminderId) : 'Maya is calling to check on you.', ref: o.id, incident: safety && safetyFlag(p) ? safetyFlag(p).id : null });
   outreaches.set(o.id, o);
   activeByProfile.set(id, o);
   if (kind === 'callback') trendEvent(id, { kind: 'callback' });   // a call-back was needed (Maya hung up after silence)
@@ -932,9 +933,9 @@ function appFacts(id, now = Date.now(), { family = true } = {}) {
 }
 
 // ---------------------------------------------------------------- reminders (information only, as the family wrote them)
-const PERIOD = { daily: 24 * 60 * MIN, weekly: 7 * 24 * 60 * MIN };
+const PERIOD = { hourly: 60 * MIN, daily: 24 * 60 * MIN, weekly: 7 * 24 * 60 * MIN };   // hourly: only a reminder the senior set by talking (setrem.js) uses it
 const DELIVER = ['call', 'text', 'voice'];   // the per-reminder picker; none = the old default (voice or text per person)
-function addReminder(id, { task, dueAt, repeat, deliver, channel }) {
+function addReminder(id, { task, dueAt, repeat, deliver, channel }, internal = {}) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   task = clip(task, 80);
@@ -943,12 +944,24 @@ function addReminder(id, { task, dueAt, repeat, deliver, channel }) {
   if (!Number.isFinite(dueAt) || dueAt < Date.now() - 60000) throw Object.assign(new Error('Please choose a time that has not passed.'), { status: 400 });
   repeat = repeat || 'none';
   if (repeat !== 'none' && !PERIOD[repeat]) throw Object.assign(new Error('Repeat must be none, daily or weekly.'), { status: 400 });
+  if (repeat === 'hourly' && internal.by !== 'senior') throw Object.assign(new Error('Repeat must be none, daily or weekly.'), { status: 400 });   // the family page offers none / daily / weekly
   if (deliver != null && deliver !== '' && !DELIVER.includes(deliver)) throw Object.assign(new Error('Delivery must be call, text or voice note.'), { status: 400 });
   if (channel != null && channel !== '' && !CHANNELS.includes(channel)) throw Object.assign(new Error('Channel must be WhatsApp, the app or both.'), { status: 400 });
-  const r = { id: uid(), task, dueAt, repeat, active: null, last: null, created: Date.now(), ...(deliver ? { deliver } : {}), ...(channel ? { channel } : {}) };
+  const r = { id: uid(), task, dueAt, repeat, active: null, last: null, created: Date.now(), ...(deliver ? { deliver } : {}), ...(channel ? { channel } : {}), ...(internal.by === 'senior' ? { by: 'senior', strict: true, origin: internal.origin || null } : {}) };
   p.reminders.push(r);
   save(id);
+  pushFamily('refresh', { id });
   return r;
+}
+// A reminder the senior set by talking (setrem.js): a real future reminder. 'strict' = at due time it goes EXACTLY as chosen (this delivery type, on this channel) and is never switched on its own:
+// no text instead of a voice note, no WhatsApp instead of the app, no call instead of a message. If that way cannot work, the entry says Not sent; nothing else is tried.
+const SENIOR_MAX_ITEMS = 10;
+const seniorSetCount = (id) => { const p = get(id); return p ? p.reminders.filter((r) => r.by === 'senior' && (r.dueAt != null || r.active)).length : 0; };
+function addSeniorReminder(id, { task, dueAt, repeat, deliver, channel, origin }) {
+  if (!DELIVER.includes(deliver)) throw Object.assign(new Error('Delivery must be call, text or voice note.'), { status: 400 });
+  if (channel !== 'whatsapp' && channel !== 'app') throw Object.assign(new Error('Channel must be WhatsApp or the app.'), { status: 400 });
+  if (seniorSetCount(id) >= SENIOR_MAX_ITEMS) throw Object.assign(new Error('Too many reminders set by talking.'), { status: 409 });
+  return addReminder(id, { task, dueAt, repeat, deliver, channel }, { by: 'senior', origin });
 }
 function deleteReminder(id, rid) {
   const p = get(id);
@@ -1019,7 +1032,7 @@ function reminderFor(id, { rid, task, message }) {
 }
 function reminderCallStart(id, spec) {
   const { p, r } = reminderFor(id, spec); const now = Date.now(), dueAt = spec.dueAt || r.dueAt || now;
-  const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: 'Maya is calling with a reminder from your family.', ref: null });
+  const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: ringText(p, r.id), ref: null });
   const o = { id: uid(), profileId: id, kind: 'reminder', reminderId: r.id, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
   n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
   r.active = { dueAt, state: 'calling', attempts: 1, outreachId: o.id, notifId: n.id, ...(spec.instead ? { instead: spec.instead } : {}) };
@@ -1104,8 +1117,8 @@ function reminderViaMessage(id, spec) {
 function fireReminder(p, r, now) {
   const live = liveCalls.get(p.id);
   const occ = { dueAt: r.dueAt, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app' };
-  if (live) {
-    // Already talking: say it in the call instead of ringing.
+  if (live && (!r.strict || r.deliver === 'call')) {
+    // Already talking: say it in the call instead of ringing. (A reminder the senior set to arrive as a text or a voice note is NOT turned into a spoken line: it goes the way they chose.)
     const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: 'Maya reminded you in your call.', ref: null });
     occ.notifId = n.id; advance(p, n, 'delivered');
     r.active = occ;
@@ -1115,6 +1128,10 @@ function fireReminder(p, r, now) {
     if (chan === 'app' || chan === 'both') return fireReminderApp(p, r, now, chan);
     const done = fireReminderWA(p, r, now);
     if (done !== null) return done;
+    if (r.strict) {   // chosen on WhatsApp, but WhatsApp is not available: nothing else is tried
+      const dueAt0 = r.dueAt; advanceDue(r, now); r.active = { dueAt: dueAt0, attempts: 0, channel: 'whatsapp' };
+      finishOccurrence(p, r.id, 'wa_failed', { reason: 'not_linked' }); waLog({ event: 'not sent', reason: 'not_linked' }); pushFamily('refresh', { id: p.id }); return true;
+    }
     // no WhatsApp number linked: the old way, Maya rings the app
     r.active = occ;
     const o = startOutreach(p.id, { kind: 'reminder', reminderId: r.id });
@@ -1138,7 +1155,10 @@ function fireReminderWA(p, r, now, onFail) {
     });
     return true;
   }
-  if (reminderSender && reminderSender.channelFor(p.id) === 'whatsapp') return fireReminderWhatsApp(p, r, now);
+  if (reminderSender && reminderSender.channelFor(p.id) === 'whatsapp') {
+    if (r.strict && r.deliver === 'call') { const dueAt0 = r.dueAt; advanceDue(r, now); r.active = { dueAt: dueAt0, attempts: 0, channel: 'whatsapp' }; finishOccurrence(p, r.id, 'wa_failed', { reason: 'call_not_placed' }); pushFamily('refresh', { id: p.id }); return true; }   // chosen as a call: never sent as a message instead
+    return fireReminderWhatsApp(p, r, now);
+  }
   return null;
 }
 
@@ -1167,10 +1187,10 @@ function fireReminderApp(p, r, now, chan) {
     const route = waLinked && reminderSender.callRoute ? reminderSender.callRoute(id) : { permission: false, windowOpen: false };
     let first = 'app', why = chan === 'both' ? (waLinked ? (!route.permission ? 'no call permission' : !route.windowOpen ? 'window shut' : 'app open') : 'no whatsapp') : 'app';
     if (chan === 'both' && waLinked && route.permission && route.windowOpen && !appOpen(id)) first = 'whatsapp';
-    if (chan !== 'both') first = appOpen(id) || pushReady(id) ? 'app' : 'whatsapp';
+    if (chan !== 'both') first = appOpen(id) || pushReady(id) || r.strict ? 'app' : 'whatsapp';
     waLog({ event: 'call route', channel: chan, first, why: chan === 'both' ? why : 'app' });
     if (first === 'app' && ringApp()) return true;
-    const mayWA = waLinked && (chan !== 'both' || (first === 'whatsapp') || (route.permission && route.windowOpen));   // rules 1 and 2: WhatsApp is not tried at all
+    const mayWA = !r.strict && waLinked && (chan !== 'both' || (first === 'whatsapp') || (route.permission && route.windowOpen));   // a reminder the senior chose for the app never falls to WhatsApp   // rules 1 and 2: WhatsApp is not tried at all
     if (mayWA) {
       const onFail = chan === 'both' && first === 'whatsapp' ? (q) => { const rr = q.reminders.find((x) => x.id === r.id); if (!rr || !appOpen(id)) return false; rr.active = { dueAt: dueAt0, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app' }; const o = startOutreach(id, { kind: 'reminder', reminderId: rr.id }); if (!o) { rr.active = null; return false; } rr.active.outreachId = o.id; rr.active.notifId = o.notif.id; save(id); pushFamily('refresh', { id }); return true; } : null;
       const done = fireReminderWA(p, r, now, onFail); if (done !== null) return done;
@@ -1187,10 +1207,10 @@ function fireReminderApp(p, r, now, chan) {
   const holder = part || occ;
   if (part) r.active.app = part; else { r.active = occ; advanceDue(r, now); }
   flushOne(id);   // on disk BEFORE anything is shown: a restart can never deliver this twice
-  const rid = r.id, words = require('./whatsapp').reminderWords(r.task, false);
+  const rid = r.id, words = require('./whatsapp').reminderWords(r.task, false, r.by);
   const asText = (voiceFailed) => {
-    const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: words.text, ref: null }); n.app = true; holder.notifId = n.id;
-    const reached = pushSenior(id, 'notice', { notifId: n.id, kind: 'reminder', text: words.text });
+    const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: words.text, ref: null }); n.app = true; if (r.by === 'senior') n.by = 'senior'; holder.notifId = n.id;
+    const reached = pushSenior(id, 'notice', { notifId: n.id, kind: 'reminder', text: words.text, ...(n.by ? { by: n.by } : {}) });
     holder.state = 'app_sent'; holder.sentAt = Date.now(); holder.via = 'text'; if (voiceFailed) holder.voiceUnavailable = true;
     save(id); pushFamily('refresh', { id }); waLog({ event: 'app sent', via: 'text', reached: reached > 0, voiceUnavailable: Boolean(voiceFailed) });
   };
@@ -1199,7 +1219,10 @@ function fireReminderApp(p, r, now, chan) {
     Promise.resolve().then(() => require('./chat').deliverVoiceNote(id, words.spoken, words.text)).then((res) => {
       holder.state = res.reached > 0 ? 'app_delivered' : 'app_sent'; holder.sentAt = Date.now(); if (res.reached > 0) holder.deliveredAt = Date.now(); holder.messageId = res.message && res.message.id;
       save(id); pushFamily('refresh', { id }); waLog({ event: 'app sent', via: 'voice', reached: res.reached > 0 });
-    }, (e) => { console.log('reminder', JSON.stringify({ event: 'app voice failed', then: 'text' })); asText(true); });
+    }, (e) => {
+      if (r.strict) { console.log('reminder', JSON.stringify({ event: 'app voice failed', then: 'nothing' })); finishOccurrence(p, rid, 'app_failed', { reason: 'voice_failed', channel: 'app', via: 'voice' }); pushFamily('refresh', { id }); return; }   // chosen as a voice note: never turned into a text on its own
+      console.log('reminder', JSON.stringify({ event: 'app voice failed', then: 'text' })); asText(true);
+    });
   }
   save(id);
   return true;
@@ -1242,6 +1265,7 @@ function appTick(p, r, now) {
 // webhooks, never guessed) -> done (they replied) | wa_missed (no reply by waMissMs) ; or wa_failed (not sent / WhatsApp failed it). Nothing is hidden.
 let reminderSender = null;   // { channelFor(profileId) -> 'whatsapp' | null, send(profileId, { task, nudge }) -> Promise<{ ok, via, wamid, voiceUnavailable, reason, error }> }
 function setReminderSender(sender) { reminderSender = sender; }
+const whatsappLinked = (id) => Boolean(reminderSender && reminderSender.channelFor(id) === 'whatsapp');   // is WhatsApp set up for this person (setrem.js asks before it offers it)
 const WA_OPEN = new Set(['wa_sent', 'wa_delivered', 'wa_read']);
 const WA_RANK = { wa_sent: 1, wa_delivered: 2, wa_read: 3 };
 const waLog = (o) => console.log('reminder', JSON.stringify(o));   // counts and kinds only: never the task, never a number
@@ -1253,7 +1277,7 @@ function fireReminderWhatsApp(p, r, now) {
   advanceDue(r, now);
   flushOne(p.id);   // on disk BEFORE the network call: a restart in the middle can never send this reminder twice
   const id = p.id, rid = r.id, key = occ.key, task = r.task;
-  Promise.resolve().then(() => reminderSender.send(id, { task, nudge: false, deliver: r.deliver }))
+  Promise.resolve().then(() => reminderSender.send(id, { task, nudge: false, deliver: r.deliver, ...(r.strict ? { by: 'senior', strict: true } : {}) }))
     .then((res) => reminderSent(id, rid, key, res), (e) => reminderSent(id, rid, key, { ok: false, reason: 'error', error: { title: String((e && e.message) || 'error').slice(0, 120) } }));
   return true;
 }
@@ -1270,7 +1294,7 @@ function reminderSent(id, rid, key, res) {
   }
   const reason = (res && res.reason) || 'error', error = (res && res.error) || null;
   if (reason === 'window_closed' && inQuiet(id, a.startedAt || Date.now())) { finishOccurrence(p, rid, 'wa_failed', { reason: 'window_closed_quiet', error }); waLog({ event: 'not sent', reason: 'window_closed_quiet' }); escalate(p, r, 'failed'); pushFamily('refresh', { id }); return true; }   // the window is closed and it is night: Maya never rings in quiet hours as a rescue
-  if (reason === 'window_closed' && !a.noCall && reminderSender && reminderSender.placeCall && reminderSender.channelFor(id) === 'whatsapp') {
+  if (reason === 'window_closed' && !a.noCall && !r.strict && reminderSender && reminderSender.placeCall && reminderSender.channelFor(id) === 'whatsapp') {
     // The 24 h window is closed, so a text or voice note cannot go: try a CALL for this round (a rescue, not a change of the pick: the next time it is due the pick is tried first again). The occurrence
     // that was started is taken back; the call makes its own. If the call cannot be placed either, the entry says Paused with the exact reason and nothing was sent.
     const dueAt = a.dueAt; p.notifications = p.notifications.filter((n) => n.id !== a.notifId); r.active = null; save(id); waLog({ event: 'window closed', then: 'call' });
@@ -1327,12 +1351,12 @@ function reminderContext(id, now = Date.now()) {
   if (!p) return out;
   const mins = (t) => Math.max(0, Math.round((now - (t || now)) / MIN));
   const waiting = waitingWhatsApp(p, now);
-  if (waiting.length) { const a = waiting[0].active; out.waiting = { id: waiting[0].id, task: waiting[0].task, minutesAgo: mins(a.sentAt || a.startedAt), via: a.via === 'voice' ? 'voice' : 'text', nudged: Boolean(a.nudged), others: waiting.length - 1 }; }
+  if (waiting.length) { const a = waiting[0].active; out.waiting = { id: waiting[0].id, ...(waiting[0].by ? { by: waiting[0].by } : {}), task: waiting[0].task, minutesAgo: mins(a.sentAt || a.startedAt), via: a.via === 'voice' ? 'voice' : 'text', nudged: Boolean(a.nudged), others: waiting.length - 1 }; }
   const done = (state, windowMs) => p.reminders.filter((r) => r.last && r.last.channel === 'whatsapp' && r.last.state === state && now - r.last.at <= windowMs).sort((x, y) => y.last.at - x.last.at)[0];
   const ans = done('done', cfg.waAnsweredCtxMs);
-  if (ans) out.answered = { id: ans.id, task: ans.task, minutesAgo: mins(ans.last.at), sentMinutesAgo: mins(ans.last.sentAt || ans.last.dueAt), thisMessage: Boolean(p.lastAck && p.lastAck.fresh && p.lastAck.rid === ans.id && now - p.lastAck.at <= cfg.waThisMessageMs) };
+  if (ans) out.answered = { id: ans.id, ...(ans.by ? { by: ans.by } : {}), task: ans.task, minutesAgo: mins(ans.last.at), sentMinutesAgo: mins(ans.last.sentAt || ans.last.dueAt), thisMessage: Boolean(p.lastAck && p.lastAck.fresh && p.lastAck.rid === ans.id && now - p.lastAck.at <= cfg.waThisMessageMs) };
   const miss = done('wa_missed', cfg.waMissedCtxMs);
-  if (miss) out.missed = { id: miss.id, task: miss.task, minutesAgo: mins(miss.last.at) };
+  if (miss) out.missed = { id: miss.id, ...(miss.by ? { by: miss.by } : {}), task: miss.task, minutesAgo: mins(miss.last.at) };
   return out;
 }
 
@@ -1368,7 +1392,7 @@ function reminderAckWhatsApp(id, ack = true, now = Date.now()) {
 //   standard: nothing more.  cautious: a gentle note to the family.  ultra: an alert.  Recent activity on WhatsApp / the app means they are fine (assess: Green).
 //   Quiet hours (22:00-07:00 in their time zone, when it is known): the note waits until they end. A reminder itself is not held: the family chose its time.
 function escalate(p, r, why, now = Date.now()) {
-  if (!r.last || p.mode === 'standard') return;
+  if (!r.last || p.mode === 'standard' || r.by === 'senior') return;   // a reminder the senior set for themselves never sends their own words to the family (the entry still says Missed / Not sent)
   if (assess(p, { now }).level === 'green') { r.last.escalate = { skipped: 'green' }; save(p.id); return; }
   if (p.tz && inQuietHours(now, p.tz)) { r.last.escalate = { pending: true, why }; save(p.id); return; }
   sendEscalation(p, r, why);
@@ -1393,7 +1417,7 @@ function waTick(p, r, now) {
     } else if (WA_OPEN.has(a.state)) {
       if (now >= a.missAt) {
         finishOccurrence(p, r.id, 'wa_missed', {}); waLog({ event: 'missed' }); escalate(p, r, 'missed', now); pushFamily('refresh', { id: p.id });
-      } else if (!a.nudged && now >= a.nudgeAt && !quiet) {
+      } else if (!a.nudged && now >= a.nudgeAt && !quiet && !r.strict) {   // one delivery, exactly as chosen: a senior-set reminder is never followed by a second message
         a.nudged = true; a.attempts = 2; save(p.id);
         const id = p.id, task = r.task, deliver = r.deliver;
         Promise.resolve().then(() => reminderSender.send(id, { task, nudge: true, deliver })).then((res) => waLog({ event: res && res.ok && res.wamid ? 'nudge sent' : 'nudge not sent', reason: res && res.reason ? res.reason : undefined }), () => waLog({ event: 'nudge not sent', reason: 'error' }));
@@ -1593,7 +1617,7 @@ function view(id) {
   if (!p) return null;
   const seen = lastSeen(p);
   const fl = (f) => ({ ...f, name: nameOf(id), timeline: timeline(p, f) });
-  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, channel: r.channel || null, msg: Boolean(r.msg), held: Boolean(r.held),
+  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, channel: r.channel || null, msg: Boolean(r.msg), held: Boolean(r.held), by: r.by || null, origin: r.origin || null,
     active: r.active && { ...r.active, label: occLabel(r.active) },
     last: r.last && { ...r.last, label: occLabel(r.last) } });
   return {
@@ -1618,6 +1642,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, timerFired, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareScheduleStart, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, addSeniorReminder, seniorSetCount, whatsappLinked, timerFired, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareScheduleStart, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

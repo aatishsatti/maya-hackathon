@@ -291,6 +291,7 @@
       const head = el('div', 'item-head'); head.append(el('span', 'grow', r.task));
       if (r.deliver) head.append(el('span', 'pill pill-plain', ACT_CHAN[r.deliver] || r.deliver));   // this reminder's own pick
       if (r.channel) head.append(el('span', 'pill pill-plain', ACT_WHERE[r.channel] || r.channel));
+      if (r.by === 'senior') head.append(el('span', 'pill pill-plain', 'Set by talking'));   // they asked Maya for it themselves, on a call or in a chat
       if (r.held) head.append(el('span', 'pill pill-wait', 'Held for quiet hours'));
       const tag = cur && REM_PILL[cur.state];
       if (tag) head.append(el('span', `pill ${tag[0]}`, tag[1]));

@@ -291,14 +291,15 @@ function onStatus(st) {
 // (the default) or as text, per person. The words are the family's own task and nothing of Maya's: no advice, no dose, no extra. Only a result WITH a WhatsApp message id is "sent".
 const REMINDER_CAP = 30;   // reminder messages per person per rolling 24 h (a loop or a flood must stop somewhere)
 const endPunct = (t) => String(t || '').trim().replace(/[\s.!?,;:]+$/, '');
-function reminderWords(task, nudge) {
+function reminderWords(task, nudge, by = null) {
+  if (by === 'senior') { const w = require('./setrem').deliveryWords(task); return { text: w, spoken: w }; }   // their own reminder: never "from your family", and no second "reply when you have seen this"
   const { isFamilyMessage, stripAddressee } = require('./call');
   const message = isFamilyMessage(task), shown = endPunct(message ? task : stripAddressee(task));
   const what = message ? 'message' : 'reminder';
   if (nudge) return { text: `Just checking that you saw this ${what} from your family: ${shown}. Reply when you have seen it.`, spoken: `Just checking that you saw this ${what} from your family: ${shown}. Reply when you have seen it.` };
   return { text: `A ${what} from your family: ${shown}. Reply when you have seen this.`, spoken: `A ${what} from your family: ${shown}. Reply when you have seen this.` };
 }
-async function sendReminder(profileId, { task, nudge = false, deliver = null } = {}) {
+async function sendReminder(profileId, { task, nudge = false, deliver = null, by = null, strict = false } = {}) {
   if (!configured()) return { ok: false, reason: 'not_configured' };
   const l = linkOf(profileId);
   if (!l || !l.optIn) return { ok: false, reason: 'not_linked' };
@@ -307,7 +308,7 @@ async function sendReminder(profileId, { task, nudge = false, deliver = null } =
   const today = (l.remSent || []).filter((t) => now - t < WINDOW_MS);
   if (today.length >= REMINDER_CAP) return { ok: false, reason: 'daily_cap' };
   update(profileId, (x) => { x.remSent = [...today, now]; });   // the slot is taken BEFORE the network call
-  const w = reminderWords(task, nudge);
+  const w = reminderWords(task, nudge, by);
   const care = require('./care'); let voiceFailed = false;
   const pref = deliver === 'text' || deliver === 'voice' ? deliver : (((care.get(profileId) || {}).delivery || {}).reminders === 'text' ? 'text' : 'voice');   // this reminder's own pick wins over the person-wide switch
   if (pref !== 'text') {
@@ -321,7 +322,10 @@ async function sendReminder(profileId, { task, nudge = false, deliver = null } =
       stage = 'upload'; const mediaId = await uploadAudio(ogg);
       stage = 'send'; const wamid = await sendUploadedAudio(l.phone, mediaId);
       return wamid ? { ok: true, via: 'voice', wamid } : { ok: false, reason: 'no_id' };
-    } catch (e) { voiceFailed = true; console.log('reminder', JSON.stringify({ event: 'voice failed', stage, code: Number(e && e.code) || null, then: 'text' })); }
+    } catch (e) {
+      if (strict) { console.log('reminder', JSON.stringify({ event: 'voice failed', stage, code: Number(e && e.code) || null, then: 'nothing' })); return { ok: false, reason: 'voice_failed', error: { title: `The voice note could not be sent (${stage})` } }; }   // chosen as a voice note: never turned into a text on its own
+      voiceFailed = true; console.log('reminder', JSON.stringify({ event: 'voice failed', stage, code: Number(e && e.code) || null, then: 'text' }));
+    }
   }
   try { const wamid = await sendTextTo(l.phone, w.text); return wamid ? { ok: true, via: 'text', wamid, voiceUnavailable: voiceFailed } : { ok: false, reason: 'no_id' }; }
   catch (e) { return { ok: false, reason: 'meta_error', error: { code: e.code || null, title: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } }; }
@@ -552,6 +556,8 @@ const OUTMSG = { sending: ['sent', 'Sending', 1], sent: ['sent', 'Sent', 1], del
 const NOTE_LABEL = { Sent: ['sent', 'Sent', 1], Delivered: ['delivered', 'Delivered', 2], Seen: ['read', 'Read', 3], Played: ['read', 'Read', 3], Replied: ['answered', 'Answered', 4], "Hasn't replied yet": ['noreply', "Hasn't replied yet", 2], 'Seen · Not replied yet': ['noreply', "Hasn't replied yet", 3],
   'Calling now': ['sent', 'Calling now', 1], 'Picked up, waiting for a reply': ['delivered', 'Picked up', 2], "Couldn't reach senior": ['unreached', "Couldn't reach", 0], Paused: ['paused', 'Paused', 0] };
 const ACTIVITY_DAYS = 30, ACTIVITY_MAX = 300;
+const REPEAT_WORDS = { hourly: 'every hour', daily: 'every day', weekly: 'every week' };
+const seniorNote = (r, scheduled = false) => `Set by ${scheduled ? 'talking to Maya' : 'talking to Maya'}${REPEAT_WORDS[r.repeat] ? `, ${REPEAT_WORDS[r.repeat]}` : ''}. Their words are not shown here.`;   // times, counts and a label only
 const PAUSED_WHY = { misses: '2 calls in a row were not answered', meta: 'WhatsApp refused the call' };
 function activityOf(profileId) {
   const care = require('./care'), p = care.get(profileId), l = linkOf(profileId), now = Date.now(), out = [];
@@ -561,7 +567,7 @@ function activityOf(profileId) {
   for (const r of p.reminders || []) {
     const CH = ['whatsapp', 'app', 'both'], chan = CH.includes(r.channel) ? r.channel : p.delivery && CH.includes(p.delivery.channel) ? p.delivery.channel : 'whatsapp';
     const type = r.msg ? 'message' : 'reminder', planned = r.deliver || (waOn || chan === 'app' ? pref : 'call');
-    if (r.dueAt && !r.active) push({ id: `r:${r.id}:s`, type, where: chan, channel: planned, status: 'scheduled', label: r.held ? 'Held' : 'Scheduled', rank: 0, at: r.dueAt, words: r.task, ...(r.held ? { note: `Held for quiet hours (${String(care.cfg.quietStart).padStart(2, '0')}:00 to ${String(care.cfg.quietEnd).padStart(2, '0')}:00): it will go at ${String(care.cfg.quietEnd).padStart(2, '0')}:00.` } : {}) });
+    if (r.dueAt && !r.active) push({ id: `r:${r.id}:s`, type, where: chan, channel: planned, status: 'scheduled', label: r.held ? 'Held' : 'Scheduled', rank: 0, at: r.dueAt, words: r.by === 'senior' ? null : r.task, ...(r.by === 'senior' ? { note: seniorNote(r, true) } : {}), ...(r.held && r.by !== 'senior' ? { note: `Held for quiet hours (${String(care.cfg.quietStart).padStart(2, '0')}:00 to ${String(care.cfg.quietEnd).padStart(2, '0')}:00): it will go at ${String(care.cfg.quietEnd).padStart(2, '0')}:00.` } : {}) });
     for (const [k, x] of [['a', r.active], ['l', r.last]]) {
       if (!x) continue;
       const [status0, label0, rank0] = OCC[x.state] || ['sent', String(x.state), 1];
@@ -570,10 +576,10 @@ function activityOf(profileId) {
       const note = paused ? (x.pausedBy === 'window' ? `The 24 hour window was closed and the call could not be placed (${(x.error && x.error.title) || 'no reason given'}): nothing was sent.` : `The 24 hour window is closed and calls are paused (${PAUSED_WHY[x.pausedBy] || 'calls are paused'}): nothing was sent.`) : x.pausedBy ? 'Calls were paused, so it went as a message.' : x.instead === 'window' ? 'The 24 hour window was closed, so Maya called instead.' : null;
       const where = x.channel === 'app' ? 'app' : x.channel === 'whatsapp' ? 'whatsapp' : (x.where || 'whatsapp');
       const note2 = note || (x.voiceUnavailable && x.channel === 'app' ? 'Her voice was not available, so it went as a text.' : x.reason === 'push_failed' ? 'The app was closed and the push to the phone did not go (no phone registered, push not set up, or the push was refused).' : x.reason === 'app_closed' ? 'The app was closed, and a closed phone cannot be rung yet.' : null);
-      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, where, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.task, ...(note2 ? { note: note2 } : {}) });
+      push({ id: `r:${r.id}:${k}:${x.dueAt}`, type, where, channel, status: paused ? 'paused' : status0, label: paused ? 'Paused' : label0, rank: paused ? 0 : rank0, at: x.sentAt || x.startedAt || x.at || x.dueAt, words: r.by === 'senior' ? null : r.task, ...(note2 || r.by === 'senior' ? { note: [r.by === 'senior' ? seniorNote(r) : '', note2].filter(Boolean).join(' ') } : {}) });
       if (x.app) {   // "both": the same reminder also went to the app, with its own state
         const [as, al, ar] = OCC[x.app.state] || ['sent', String(x.app.state), 1];
-        push({ id: `r:${r.id}:${k}:${x.dueAt}:app`, type, where: 'app', channel: x.app.via === 'voice' ? 'voice' : 'text', status: as, label: al, rank: ar, at: x.app.sentAt || x.app.startedAt || x.dueAt, words: r.task, ...(x.app.voiceUnavailable ? { note: 'Her voice was not available, so it went as a text.' } : {}) });
+        push({ id: `r:${r.id}:${k}:${x.dueAt}:app`, type, where: 'app', channel: x.app.via === 'voice' ? 'voice' : 'text', status: as, label: al, rank: ar, at: x.app.sentAt || x.app.startedAt || x.dueAt, words: r.by === 'senior' ? null : r.task, ...(x.app.voiceUnavailable ? { note: 'Her voice was not available, so it went as a text.' } : {}) });
       }
     }
   }
@@ -626,6 +632,7 @@ function pausedFallback(kind, profileId, l, spec, block, why) {
   if (spec && spec.message) {   // a family MESSAGE chosen as a call: the same words as a text, inside the window
     return sendOut(profileId, { kind: 'text', text: spec.task, who: 'family' }).then(() => { note(`message call to number ending ${tail} not placed (${said}); the message was sent as a text instead`); return result(); }, (e) => fail(`${why} The message could not be sent as a text either: ${e.message}`, e.status || 502));
   }
+  { const rr = spec && spec.rid && care.findReminder(profileId, spec.rid); if (rr && rr.strict) return fail(`${why} It was set to arrive as a call, so it was not sent as a message instead.`, 429); }   // a reminder the senior chose as a call is never turned into a text
   try { care.reminderViaMessage(profileId, { ...spec, pausedBy: block }); } catch (e) { return fail(`${why} The reminder could not be sent as a message either: ${e.message}`, e.status || 502); }
   note(`reminder call to number ending ${tail} not placed (${said}); the reminder was sent as a message instead`);
   return Promise.resolve(result());

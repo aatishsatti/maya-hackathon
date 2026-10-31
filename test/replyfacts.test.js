@@ -24,7 +24,7 @@ test('the labels name what the turn gave Spark: a timer request, a repeat of it,
   c.careNotes('Remind me in 30 seconds that I have to take it.'); assert.deepEqual(c.factLabels, ['timer-already-set']);
   c.careNotes('Can I hang up now?'); assert.deepEqual(c.factLabels, ['timer-open']);
   dropTimers(c); c.careNotes('Tell me a story.'); assert.deepEqual(c.factLabels, [], 'no facts, no labels');
-  c.careNotes('Remind me in 5 hours to rest.'); assert.deepEqual(c.factLabels, ['timer-too-long']);
+  c.careNotes('Remind me in 5 hours to rest.'); assert.deepEqual(c.factLabels, ['setrem-confirm'], 'longer than a call timer: a future reminder (setrem.js)');
 });
 
 test('family labels: a reminder to call someone is NOT family-ask (the Call 3 failure, now visible); a real request is; a refusal is family-declined', () => {
@@ -36,7 +36,7 @@ test('family labels: a reminder to call someone is NOT family-ask (the Call 3 fa
 
 test('the written chat (which borrows careNotes) gets labels too, and they are names, not text', () => {
   const s = new ChatSession(memory.load(memory.createProfile(`Chat${letters(n++)}`, 'female').id), null);
-  s.careNotes('Remind me in 5 minutes to call my sister.'); assert.deepEqual(s.factLabels, ['timer-unavailable-in-chat']);
+  s.careNotes('Remind me in 5 minutes to call my sister.'); assert.deepEqual(s.factLabels, ['setrem-confirm'], 'the chat has no timers: a future reminder, said back first');
   for (const l of s.factLabels) assert.match(l, /^[a-z-]+$/);
 });
 

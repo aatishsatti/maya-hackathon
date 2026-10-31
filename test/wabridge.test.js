@@ -321,8 +321,8 @@ test('while a timer is pending, the next turn carries the standing fact (the sam
 });
 
 test('the written chat is unchanged (it cannot set a timer, and so has no standing fact); a timer that is too long says so', () => {
-  const c = quietCall(false); c.noTimers = true; const note = c.careNotes('Remind me in 5 minutes to call my sister.'); assert.match(note, /you cannot set one/); assert.doesNotMatch(note, /reminder timer|stay on the call/); assert.equal(c.timers.length, 0);
-  const d = quietCall(true); assert.match(d.careNotes('Remind me in 5 hours to rest.'), /too long or unclear/); assert.doesNotMatch(d.careNotes('Okay.'), /reminder timer/);
+  const c = quietCall(false); c.noTimers = true; c.channel = 'chat'; const note = c.careNotes('Remind me in 5 minutes to call my sister.'); assert.match(note, /Nothing is saved yet/); assert.doesNotMatch(note, /reminder timer|stay on the call/); assert.equal(c.timers.length, 0);
+  const d = quietCall(true); assert.match(d.careNotes('Remind me in 5 hours to rest.'), /So, in 5 hours, I will remind you to rest/); assert.doesNotMatch(d.careNotes('Okay.'), /reminder timer/);
 });
 
 test('the written chat (chat.js borrows careNotes and has no timers list) still works and has no timer fact', () => {

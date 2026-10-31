@@ -42,6 +42,7 @@ http.Client fakeServer() => MockClient((req) async {
           'reminders': [
             {'id': 'r1', 'task': 'Take your tablets', 'dueAt': DateTime.now().add(const Duration(hours: 2)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'call', 'channel': 'both', 'held': false, 'msg': false, 'active': null, 'last': null},
             for (var i = 0; i < 8; i++) {'id': 'f$i', 'task': 'Old reminder $i', 'dueAt': null, 'repeat': 'none', 'held': false, 'msg': false, 'active': null, 'last': {'state': 'done', 'at': 1700000000000 + i * 1000, 'label': 'Done, senior replied'}},
+            {'id': 'r9', 'task': 'Stretch my legs', 'dueAt': DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch, 'repeat': 'hourly', 'deliver': 'voice', 'channel': 'whatsapp', 'by': 'senior', 'held': false, 'msg': false, 'active': null, 'last': null},
             {'id': 'r2', 'task': 'Drink water', 'dueAt': DateTime.now().add(const Duration(minutes: 5)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'text', 'channel': 'app', 'held': false, 'msg': false, 'active': null, 'last': null},
           ],
           'alerts': [],
@@ -202,6 +203,21 @@ void main() {
       expect(find.text('Maya app'), findsWidgets);
       expect(find.text('WhatsApp + app'), findsWidgets);
       expect(find.text('Text'), findsWidgets);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('a reminder the person set by talking to Maya says so, with its channel, delivery type and repeat', (t) async {
+      await phone(t, 360, 700);
+      await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Reminders').last);
+      await t.pump(const Duration(milliseconds: 400));
+      await t.pump(const Duration(milliseconds: 400));
+      expect(t.takeException(), isNull);
+      expect(find.text('Stretch my legs'), findsOneWidget);
+      expect(find.text('Set by talking'), findsOneWidget, reason: 'only the one they set themselves');
+      expect(find.textContaining('repeats hourly'), findsOneWidget);
+      expect(find.text('Voice note'), findsWidgets);
       await t.pumpWidget(const SizedBox());
     });
 

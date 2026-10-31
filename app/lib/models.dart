@@ -55,11 +55,11 @@ class ActivityEntry {
 class Reminder {
   final String id, task, repeat;
   final int? dueAt;
-  final String? deliver, channel;
+  final String? deliver, channel, by;
   final bool held, msg, finished;
   final String? stateLabel;
   final int? lastAt;
-  const Reminder({required this.id, required this.task, required this.repeat, this.dueAt, this.deliver, this.channel, this.held = false, this.msg = false, this.stateLabel, this.finished = false, this.lastAt});
+  const Reminder({required this.id, required this.task, required this.repeat, this.dueAt, this.deliver, this.channel, this.by, this.held = false, this.msg = false, this.stateLabel, this.finished = false, this.lastAt});
 
   static Reminder? from(dynamic j) {
     if (j is! Map || j['id'] is! String) return null;
@@ -71,6 +71,7 @@ class Reminder {
       dueAt: j['dueAt'] is num ? (j['dueAt'] as num).toInt() : null,
       deliver: j['deliver'] is String ? j['deliver'] as String : null,
       channel: j['channel'] is String ? j['channel'] as String : null,
+      by: j['by'] is String ? j['by'] as String : null,   // 'senior': the person set it by talking to Maya
       finished: j['active'] == null && j['dueAt'] == null,
       lastAt: j['last'] is Map && (j['last'] as Map)['at'] is num ? ((j['last'] as Map)['at'] as num).toInt() : null,
       held: j['held'] == true,

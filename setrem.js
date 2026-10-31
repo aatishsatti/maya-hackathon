@@ -1,0 +1,391 @@
+// Call-set FUTURE reminders: a senior says it in plain words ("remind me in 1 hour to take my medicine", "remind me every hour to ...", "every morning at 8 remind me to ...")
+// on a call, on WhatsApp or in the app chat, and Maya sets it up. CODE owns every step; Spark only puts the facts into words (the same rule as the rest of the care layer):
+//   1. understand  : what, when and how often. Anything unclear is ONE short question, never a guess; a second miss drops it (nothing saved).
+//   2. confirm     : the plain-words sentence is said back BEFORE anything is saved ("So, every hour, I will remind you to ... Is that right?"). Only a yes goes on.
+//   3. delivery    : call, text or voice note (asked unless they already said it).
+//   4. channel     : the door they asked on is the default (WhatsApp -> WhatsApp, app -> app). On a CALL there is no default: they pick the app or WhatsApp. A different channel they name wins.
+//   5. save        : care.addReminder with by:'senior' (the reminder is "strict": at due time it goes EXACTLY that way, on that channel, never changed on its own; see care.js / whatsapp.js).
+// Never invented: the task is the senior's own words (pronouns turned to "you" only when spoken back), no medicine, dose, condition or time is ever added.
+// This is a FUTURE reminder, not the in-call timer (call.js parseTimer, up to 30 minutes, only while the call stays open). The senior hangs up after setting it.
+// Nothing here is written to a log with words: counts and labels only.
+'use strict';
+
+const MIN = 60000, HOUR = 3600000, DAY = 86400000;
+const TTL_MS = 10 * MIN;            // an open set-up conversation is forgotten after this long without an answer
+const MAX_OPEN = 10;                // reminders a senior can have set by talking at once (a loop must stop somewhere; the family can manage more)
+const MAX_AHEAD_MS = 60 * DAY;
+const NUMW = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, ninety: 90 };
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const num = (w) => (/^\d+(\.\d+)?$/.test(w) ? Number(w) : NUMW[String(w).toLowerCase()] || null);
+
+// ---------------------------------------------------------------- time zones (Intl only)
+function partsIn(ts, tz) {
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'long' }).formatToParts(new Date(ts));
+  const g = (t) => f.find((x) => x.type === t).value;
+  return { y: Number(g('year')), m: Number(g('month')), d: Number(g('day')), h: Number(g('hour')) % 24, mi: Number(g('minute')), wd: WEEKDAYS.indexOf(g('weekday').toLowerCase()) };
+}
+function zonedEpoch(y, m, d, h, mi, tz) {   // local wall time in tz -> epoch ms
+  const guess = Date.UTC(y, m - 1, d, h, mi);
+  const off = (ts) => { const p = partsIn(ts, tz); return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi) - ts; };
+  let t = guess - off(guess); t = guess - off(t);
+  return t;
+}
+const validTz = (tz) => { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return Boolean(tz); } catch { return false; } };
+
+// ---------------------------------------------------------------- reading the words
+const IS_REQUEST = /\bremind me\b|\bset (?:me )?(?:up )?(?:a|an|another|the|some)?\s*(?:daily |hourly |new )?(?:reminder|alarm)s?\b|\b(?:i (?:need|want|would like)|can i (?:get|have)|could i have) (?:a |an )?(?:daily |hourly )?reminder\b/i;   // a QUESTION about reminders ("any reminders for me?") is not a request
+const NOT_A_SETUP = /\b(?:next time|when i (?:call|ring|phone) (?:you )?again|the next call)\b/i;   // "remind me next time I call" is the next-call reminder (recall.js), not this
+const isRequest = (text) => IS_REQUEST.test(String(text || '')) && !NOT_A_SETUP.test(String(text || ''));
+
+const norm = (s) => String(s || '').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
+
+// Time words. Returns what was found and the text with those words blanked out (what is left is the task and the delivery words).
+function readTime(text, { bare = false } = {}) {
+  let s = ` ${norm(text).toLowerCase()} `;
+  const o = { repeat: null, rel: null, clock: null, day: null, weekday: null, daypart: null, unsupported: null };
+  const cut = (re, fn) => { s = s.replace(re, (...m) => { fn(m); return ' '; }); };
+  cut(/\bevery\s+other\s+\w+/g, () => { o.unsupported = 'every other'; });
+  cut(/\bevery\s+(\d+|two|three|four|five|six|eight|ten|twelve)\s+(hours?|days?|weeks?|minutes?|mins?)\b/g, (m) => { o.unsupported = `every ${m[1]} ${m[2]}`; });
+  cut(/\b(?:every|each)\s+(?:single\s+)?(?:minute|min)\b/g, () => { o.unsupported = 'every minute'; });
+  cut(/\b(?:every|each)\s+(?:single\s+)?hour\b|\bhourly\b|\bonce an hour\b|\bevery 1 hour\b/g, () => { o.repeat = 'hourly'; });
+  cut(/\b(?:every|each)\s+(?:day|morning|afternoon|evening|night)\b|\bdaily\b|\bonce a day\b|\bevery\s+single\s+day\b/g, (m) => { o.repeat = 'daily'; const dp = /morning|afternoon|evening|night/.exec(m[0]); if (dp) o.daypart = dp[0]; });
+  cut(new RegExp(`\\bevery\\s+(${WEEKDAYS.join('|')})s?\\b`, 'g'), (m) => { o.repeat = 'weekly'; o.weekday = WEEKDAYS.indexOf(m[1]); });
+  cut(/\b(?:every|each)\s+week\b|\bweekly\b|\bonce a week\b/g, () => { o.repeat = o.repeat || 'weekly'; });
+  // "in 30 minutes", "in an hour", "in half an hour", "in two hours", "in an hour and a half"
+  cut(/\b(?:in|after|within)\s+(half an hour|half hour|an hour and a half|(\d+(?:\.\d+)?|[a-z]+)(?:\s+and a half)?\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?))\b/g, (m) => {
+    if (/^half/.test(m[1])) { o.rel = 30 * MIN; return; }
+    if (/^an hour and a half/.test(m[1])) { o.rel = 90 * MIN; return; }
+    const n = num(m[2]); if (!n) return;
+    const u = /^d/.test(m[3]) ? DAY : /^h/.test(m[3]) ? HOUR : /^s/.test(m[3]) ? 1000 : MIN;
+    o.rel = Math.round((/and a half/.test(m[1]) ? n + 0.5 : n) * u);
+  });
+  cut(/\b(noon|midday)\b/g, () => { o.clock = { h: 12, mi: 0, ap: 'pm', fixed: true }; });
+  cut(/\bmidnight\b/g, () => { o.clock = { h: 0, mi: 0, ap: 'am', fixed: true }; });
+  const clock = (m) => { o.clock = { h: Number(m[1]), mi: m[2] ? Number(m[2]) : 0, ap: m[3] ? m[3][0] + 'm' : null }; };
+  if (!o.clock) cut(/\b(?:at|around|by|for|@)\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?(?![\d:])/, clock);
+  if (!o.clock) cut(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])/, clock);
+  if (!o.clock) cut(/\b(\d{1,2}):(\d{2})\b()/, clock);
+  if (!o.clock && bare) cut(/^\s*(?:it'?s |make it |let'?s say |say )?(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?\s*(?:o'?clock)?\s*(?=$|[\s,.]|in the|at night)/, clock);
+  cut(/\b(today|tomorrow|tonight|this morning|this afternoon|this evening)\b/g, (m) => {
+    o.day = m[1] === 'tomorrow' ? 'tomorrow' : 'today';
+    const dp = /morning|afternoon|evening|night/.exec(m[1]); if (dp) o.daypart = dp[0];
+  });
+  cut(new RegExp(`\\b(?:on |next |this )?(${WEEKDAYS.join('|')})\\b`, 'g'), (m) => { if (o.weekday == null) o.weekday = WEEKDAYS.indexOf(m[1]); });
+  cut(/\b(?:in the |at )?(morning|afternoon|evening|night)\b/g, (m) => { o.daypart = o.daypart || m[1]; });
+  return { found: o, rest: norm(s) };
+}
+
+// The clock time, resolved to 24 h, or why it cannot be. Never guessed: "at 8" with nothing else says whether it is morning or evening is a question.
+function resolveClock(c, daypart) {
+  if (!c) return { ok: false };
+  let { h, mi, ap } = c;
+  if (!(h >= 0 && h <= 23 && mi >= 0 && mi <= 59)) return { ok: false, bad: true };
+  if (c.fixed) return { ok: true, h, mi };
+  if (ap === 'pm') { if (h > 12) return { ok: false, bad: true }; if (h < 12) h += 12; }
+  else if (ap === 'am') { if (h > 12) return { ok: false, bad: true }; if (h === 12) h = 0; }
+  else if (h >= 13 || h === 0) { /* 24 hour clock: clear */ }
+  else if (daypart === 'morning') { if (h === 12) h = 0; }
+  else if (daypart === 'afternoon' || daypart === 'evening' || daypart === 'night') { if (h < 12) h += 12; }
+  else return { ok: false, ambiguous: true, h: c.h, mi };
+  return { ok: true, h, mi };
+}
+
+const FILLER_TASK = /^(?:it|that|this|something|stuff|things?|a thing|me|you|please|thanks?|ok(?:ay)?|yes|no)$/i;
+// What to remind them of: the words after the LAST "remind me" / "reminder", with the time words already blanked out. Their own words, pronouns untouched.
+function readTask(rest) {
+  let t = rest;
+  const idx = [...t.matchAll(/\bremind(?:er)?s?(?:\s+me)?\b/gi)];
+  if (idx.length) { const last = idx[idx.length - 1]; t = t.slice(last.index + last[0].length); }
+  else t = t.replace(/^.*?\bset (?:me )?(?:a|an|another|the|some)?\s*(?:daily |hourly )?(?:reminder|alarm)s?\b/i, '');
+  t = t.replace(/^[\s,.:;-]+/, '').replace(/^(?:please\s+|and\s+|also\s+)+/i, '').replace(/^(?:to|that|about|of|for)\s+/i, '');
+  t = t.replace(/^(?:i|we)\s+(?:need|have|has|must|should|want|ought|got)\s+to\s+/i, '').replace(/^(?:i|we)\s+(?:need|have|has|must|should|got)\s+(?=\S)/i, (m) => m);
+  t = t.replace(/\b(?:please|thanks|thank you)\b[\s.!?,]*$/i, '').replace(/\s+(?:and|then|so)\s*$/i, '').replace(/[\s.!?,;:]+$/g, '').replace(/\s+/g, ' ').trim();
+  return t;
+}
+
+// Delivery words in a first sentence, only in the shapes that cannot be part of the task ("on WhatsApp", "in the app", "by text", "as a voice note", "call me ..."): blanked out and returned.
+// "remind me to call my sister" keeps its "call": a bare verb is never taken as the delivery here.
+function takeDelivery(rest) {
+  let s = ` ${rest} `, deliver = null, channel = null;
+  const cut = (re, fn) => { s = s.replace(re, (...m) => { fn(m); return ' '; }); };
+  cut(/\b(?:on|via|through|using|over)\s+(?:whats ?app|what'?s ?app)\b/gi, () => { channel = 'whatsapp'; });
+  cut(/\b(?:in|on|via|through|using)\s+(?:the\s+|your\s+)?(?:maya\s+)?app\b/gi, () => { channel = 'app'; });
+  cut(/\b(?:by|via|with|as|using|in)\s+(?:a\s+)?(?:voice (?:note|message|memo)|voice)\b/gi, () => { deliver = 'voice'; });
+  cut(/\b(?:by|via|with|as|using|in)\s+(?:a\s+)?(?:text(?: message)?|message|sms)\b/gi, () => { deliver = 'text'; });
+  cut(/\b(?:by|via|with|as|using|in)\s+(?:a\s+)?(?:phone\s+|voice\s+)?call\b/gi, () => { deliver = 'call'; });
+  cut(/\bsend me (?:a )?(?:voice (?:note|message|memo))\b/gi, () => { deliver = 'voice'; });
+  cut(/\bsend me (?:a )?(?:text(?: message)?|message)\b/gi, () => { deliver = 'text'; });
+  cut(/\b(?:give me a (?:phone )?call|(?:call|ring|phone) me)\b/gi, () => { deliver = 'call'; });
+  cut(/\b(?:text|message) me\b/gi, () => { deliver = 'text'; });
+  return { rest: norm(s), deliver, channel };
+}
+// How they want it delivered / where. Looked for in the words that are NOT the task, so "remind me to call my sister" never means a call.
+function readDelivery(rest) {
+  const s = ` ${norm(rest).toLowerCase()} `;
+  let deliver = null, channel = null;
+  if (/\bvoice (?:note|message|memo)s?\b|\bvoice\b|\baudio\b|\brecording\b|\bsay it\b|\bspeak\b/.test(s) && !/\bvoice call\b/.test(s)) deliver = 'voice';
+  if (/\b(?:call|ring|phone) me\b|\bgive me a (?:call|ring)\b|\bby (?:a )?(?:phone )?call\b|\bwith a (?:phone )?call\b|\bvoice call\b|\ba (?:phone )?call\b|^ ?(?:a )?(?:phone )?call ?$|\bcall\b|\bring\b|\bphone\b/.test(s)) deliver = 'call';
+  else if (!deliver && /\btext(?:ing)?\b|\bwritten\b|\bwriting\b|\bwrite\b|\bmessage me\b|\bsms\b|\ba message\b|\bmessage\b/.test(s)) deliver = 'text';
+  if (/\bwhats ?app\b|\bwhat'?s app\b/.test(s)) channel = 'whatsapp';
+  else if (/\b(?:the |your |maya )?(?:maya )?app\b|\bin app\b/.test(s)) channel = 'app';
+  return { deliver, channel };
+}
+
+// ---------------------------------------------------------------- the reminder, from words
+// A whole request. Returns { task, repeat, dueAt, deliver, channel, ask:[...what is missing], unsupported, noTz, ambiguous }.
+function parseRequest(text, { now = Date.now(), tz = null, bare = false, base = null } = {}) {
+  const { found, rest } = readTime(text, { bare });
+  const spec = base ? { ...base } : { task: '', repeat: 'none', dueAt: null, deliver: null, channel: null, relMs: null, clock: null, weekday: null, startWords: null };
+  const td = takeDelivery(rest);
+  let task = readTask(td.rest);
+  const dl = { deliver: td.deliver, channel: td.channel };
+  if (dl.deliver) spec.deliver = dl.deliver;
+  if (dl.channel) spec.channel = dl.channel;
+  // the task: delivery words that were the whole answer ("by text") are not a task
+  if (task && !(base && base.task)) {
+    const t2 = readDelivery(task); const onlyDelivery = (t2.deliver || t2.channel) && norm(task).split(' ').length <= 4 && !isRequest(text) && !bareTaskLooksReal(task);
+    if (!onlyDelivery && !FILLER_TASK.test(task) && task.length >= 3) spec.task = task;
+  }
+  if (found.unsupported) spec.unsupported = found.unsupported; else if (found.repeat || found.rel || found.clock || found.day || found.weekday != null) spec.unsupported = null;
+  if (found.repeat) spec.repeat = found.repeat;
+  if (found.rel != null) spec.relMs = found.rel;
+  if (found.clock) spec.clock = { ...found.clock, daypart: found.daypart };
+  if (found.day) spec.day = found.day;
+  if (found.weekday != null) spec.weekday = found.weekday;
+  if (found.daypart && spec.clock && !spec.clock.daypart) spec.clock.daypart = found.daypart;
+  if (found.daypart) spec.daypart = found.daypart;
+  return settle(spec, { now, tz });
+}
+const bareTaskLooksReal = (t) => /\b(?:take|drink|eat|call|check|water|feed|walk|pills?|medic\w*|tablets?|insulin)\b/i.test(t);
+
+// Work out the first due time and what is still missing. Pure.
+function settle(spec, { now, tz }) {
+  spec.ask = []; spec.noTz = false; spec.ambiguous = null; spec.dueAt = null;
+  if (!spec.task) spec.ask.push('task');
+  if (spec.task && spec.task.length > 80) { spec.task = ''; spec.ask.push('shorter'); }
+  if (spec.unsupported) { spec.ask.push('repeat'); return spec; }
+  const rc = spec.clock ? resolveClock(spec.clock, spec.clock.daypart || spec.daypart) : null;
+  if (spec.relMs != null && spec.relMs >= 10000 && spec.relMs <= MAX_AHEAD_MS) { spec.dueAt = now + spec.relMs; return spec; }
+  if (spec.relMs != null) { spec.ask.push('time'); return spec; }
+  if (rc && rc.ok) {
+    if (!validTz(tz)) { spec.noTz = true; return spec; }
+    const lp = partsIn(now, tz);
+    const at = (addDays) => { const dt = new Date(Date.UTC(lp.y, lp.m - 1, lp.d + addDays)); return zonedEpoch(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate(), rc.h, rc.mi, tz); };
+    let add = 0;
+    if (spec.weekday != null) { add = (spec.weekday - lp.wd + 7) % 7; if (add === 0 && at(0) <= now) add = 7; }
+    else if (spec.day === 'tomorrow') add = 1;
+    else if (spec.day === 'today') add = 0;
+    else add = at(0) > now + 30000 ? 0 : 1;
+    const t = at(add);
+    if (t <= now + 10000 || t - now > MAX_AHEAD_MS) { spec.ask.push('time'); return spec; }
+    spec.dueAt = t;
+    return spec;
+  }
+  if (rc && rc.ambiguous) { spec.ambiguous = rc; spec.ask.push('ambiguous'); return spec; }
+  if (rc && rc.bad) { spec.ask.push('time'); spec.clock = null; return spec; }
+  if (spec.repeat === 'hourly') { spec.dueAt = now + HOUR; spec.startsInHour = true; return spec; }
+  spec.ask.push('time');
+  return spec;
+}
+
+// ---------------------------------------------------------------- saying it back (plain words)
+// "I" -> "you" and "my" -> "your" for what is SAID back; the stored task stays exactly as they said it.
+function second(task) {
+  return String(task || '')
+    .replace(/\bI am\b/gi, 'you are').replace(/\bI'm\b/gi, "you're").replace(/\bI've\b/gi, "you've").replace(/\bI'll\b/gi, "you'll").replace(/\bI'd\b/gi, "you'd")
+    .replace(/\bmyself\b/gi, 'yourself').replace(/\bmine\b/gi, 'yours').replace(/\bmy\b/gi, 'your').replace(/\bme\b/gi, 'you').replace(/\bI\b/g, 'you').trim();
+}
+const VERBS = new Set(['take', 'call', 'drink', 'eat', 'check', 'go', 'walk', 'water', 'feed', 'lock', 'turn', 'put', 'bring', 'pick', 'buy', 'get', 'do', 'stretch', 'exercise', 'rest', 'sleep', 'wash', 'clean', 'cook', 'pay', 'write', 'read', 'wake', 'stand', 'sit', 'move', 'use', 'wear', 'open', 'close', 'charge', 'text', 'message', 'phone', 'ring', 'visit', 'meet', 'see', 'say', 'tell', 'ask', 'remember', 'make', 'keep', 'stop', 'start', 'finish', 'send', 'give', 'try', 'change', 'apply', 'measure', 'test', 'brush', 'shower', 'bathe', 'have', 'stay', 'relax', 'breathe', 'pray', 'fill', 'order', 'book', 'bring', 'switch', 'unplug', 'rinse', 'refill', 'log', 'record', 'weigh', 'sign', 'return', 'look', 'be', 'let', 'wait', 'prepare', 'pack', 'set', 'tidy', 'water', 'mail', 'post', 'email', 'attend', 'join', 'listen', 'watch', 'play', 'cut']);
+const toOrAbout = (task) => (VERBS.has(String(task).trim().split(/\s+/)[0].toLowerCase()) ? 'to' : 'about');
+
+const dur = (ms) => {
+  if (ms % DAY === 0) { const n = ms / DAY; return `${n} ${n === 1 ? 'day' : 'days'}`; }
+  const h = Math.floor(ms / HOUR), m = Math.round((ms % HOUR) / MIN);
+  if (h && m) return `${h} ${h === 1 ? 'hour' : 'hours'} and ${m} ${m === 1 ? 'minute' : 'minutes'}`;
+  if (h) return `${h} ${h === 1 ? 'hour' : 'hours'}`;
+  if (ms < 90 * 1000) { const s = Math.max(1, Math.round(ms / 1000)); return `${s} ${s === 1 ? 'second' : 'seconds'}`; }
+  return `${m} ${m === 1 ? 'minute' : 'minutes'}`;
+};
+const clockWords = (ts, tz) => new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+function dayWords(ts, tz, now) {
+  const a = partsIn(ts, tz), b = partsIn(now, tz);
+  const n = Math.round((Date.UTC(a.y, a.m - 1, a.d) - Date.UTC(b.y, b.m - 1, b.d)) / DAY);
+  return n === 0 ? 'today' : n === 1 ? 'tomorrow' : `on ${WEEKDAYS[a.wd][0].toUpperCase()}${WEEKDAYS[a.wd].slice(1)}`;
+}
+function whenWords(spec, { tz, now = Date.now() }) {
+  const wd = (i) => `${WEEKDAYS[i][0].toUpperCase()}${WEEKDAYS[i].slice(1)}`;
+  if (spec.repeat === 'hourly') {
+    if (spec.startsInHour && spec.relMs == null && !spec.clock) return 'every hour, starting in one hour';
+    return spec.relMs != null ? `every hour, starting in ${dur(spec.relMs)}` : `every hour, starting at ${clockWords(spec.dueAt, tz)} ${dayWords(spec.dueAt, tz, now)}`;
+  }
+  if (spec.repeat === 'daily') return `every day at ${clockWords(spec.dueAt, tz)}`;
+  if (spec.repeat === 'weekly') return `every ${wd(partsIn(spec.dueAt, tz).wd)} at ${clockWords(spec.dueAt, tz)}`;
+  if (spec.relMs != null) return `in ${dur(spec.relMs)}`;
+  return `${dayWords(spec.dueAt, tz, now)} at ${clockWords(spec.dueAt, tz)}`;
+}
+const VERB_PHRASE = { call: 'call you', text: 'send you a text', voice: 'send you a voice note' };
+const WHERE_WORDS = { whatsapp: 'on WhatsApp', app: 'in the Maya app' };
+// The sentence Maya says back before anything is saved. When the way and the place are already known they are in it.
+function confirmText(spec, ctx) {
+  const when = whenWords(spec, ctx), what = `${toOrAbout(spec.task)} ${second(spec.task)}`;
+  const how = spec.deliver ? `${VERB_PHRASE[spec.deliver]}${spec.channel ? ` ${WHERE_WORDS[spec.channel]}` : ''} and remind you` : 'remind you';
+  return `So, ${when}, I will ${how} ${what}. Is that right?`;
+}
+const savedText = (spec, ctx) => {
+  const when = whenWords(spec, ctx), what = `${toOrAbout(spec.task)} ${second(spec.task)}`;
+  const how = `${VERB_PHRASE[spec.deliver]} ${WHERE_WORDS[spec.channel]} and remind you`;
+  return `${when[0].toUpperCase()}${when.slice(1)}, I will ${how} ${what}.`;
+};
+// What a delivered text or voice note says (whatsapp.js reminderWords, care.js): it is THEIR reminder, never "from your family".
+const deliveryWords = (task) => { const w = `Your reminder: ${second(String(task || '').replace(/[\s.!?,;:]+$/, ''))}.`; return w; };
+
+// ---------------------------------------------------------------- the conversation (per person, in memory only)
+const states = new Map();   // profileId -> { stage, spec, origin, asks, unclear, at }
+const YES = /\b(?:yes|yeah|yep|yup|yea|ya|correct|right|exactly|sure|ok(?:ay)?|please do|go ahead|do it|sounds good|that'?s right|that is right|that'?s correct|that is correct|perfect|good)\b/i;
+const NO = /\b(?:no|nope|nah|wrong|not right|cancel|never ?mind|forget it|don'?t|do not|stop|not that)\b/i;
+const CANCEL = /\b(?:cancel|never ?mind|forget it|forget about it|don'?t (?:set|bother)|do not (?:set|bother)|stop)\b/i;
+const sayYes = (t) => YES.test(t) && !NO.test(t);
+const sayNo = (t) => NO.test(t) && !/\b(?:yes|yeah|yep|yup)\b/i.test(t);
+
+const QUESTION = {
+  task: 'What should I remind you about?',
+  time: 'When should I remind you?',
+  repeat: 'I can remind you every hour, every day or every week. Which would you like?',
+  shorter: 'Could you say what to remind you about a bit shorter?',
+};
+function questionFor(spec) {
+  const a = spec.ask, parts = [];
+  if (a.includes('ambiguous')) { const h = spec.ambiguous.h, mi = spec.ambiguous.mi ? `:${String(spec.ambiguous.mi).padStart(2, '0')}` : ''; parts.push(`Is that ${h}${mi} in the morning or in the evening?`); }
+  const needTask = a.includes('task') || a.includes('shorter'), needTime = a.includes('time');
+  if (a.includes('repeat')) return QUESTION.repeat;
+  if (a.includes('shorter')) return QUESTION.shorter;
+  if (needTask && needTime) return 'What should I remind you about, and when?';
+  if (needTask) return QUESTION.task;
+  if (needTime) return spec.repeat === 'daily' ? 'What time should I remind you each day?' : spec.repeat === 'weekly' ? 'What time should I remind you on that day?' : QUESTION.time;
+  return parts[0] || QUESTION.time;
+}
+
+const COMMON = 'Use ONLY the details in this fact: add no medicine, no dose, no reason, no advice and nothing you were not told. At most two short sentences, in fresh warm words. Do not say anything is saved or set unless this fact says it is.';
+const note = (label, text) => ({ label, text: `FACT: ${text}` });
+const cancelNote = (why) => { return note('setrem-dropped', `${why} NOTHING was saved and no reminder was set. Tell them so gently in one short sentence, and that they can ask again whenever they like. Do not ask anything more about it. ${COMMON}`); };
+
+function deliveryQuestionNote() {
+  return note('setrem-ask-delivery', `They said yes to the reminder (nothing is saved yet). Now ask how they want it: you can call them, send a text, or send a voice note. Ask exactly that, as ONE short question: "Would you like me to call you, send you a text, or send you a voice note?" ${COMMON}`);
+}
+function channelQuestionNote(noWa) {
+  return note('setrem-ask-channel', noWa
+    ? `WhatsApp is not set up for them, so it cannot go there (nothing is saved yet). Ask as ONE short question whether the Maya app is fine: "Is the Maya app okay for that?" ${COMMON}`
+    : `Nothing is saved yet. They asked for this in a call, so ask where it should come to them, as ONE short question: "Should that be in the Maya app, or on WhatsApp?" ${COMMON}`);
+}
+
+function begin(id, heard, ctx) {
+  const spec = parseRequest(heard, ctx);
+  if (ctx.skipEmpty && spec.ask.includes('task') && spec.ask.includes('time')) return null;   // "you remind me" in a call that already has a timer running: talk, not a request
+  const st = { stage: 'clarify', spec, origin: ctx.origin, asks: 0, unclear: 0, corrections: 0, at: ctx.now };
+  states.set(id, st);
+  return progress(id, st, ctx);
+}
+
+// After the words are understood: ask the ONE question, or say it back for a yes.
+function progress(id, st, ctx) {
+  const spec = st.spec;
+  if (spec.noTz) { states.delete(id); return note('setrem-no-time-zone', `They asked for a reminder at a clock time, but you do not know what time it is where they are, so you cannot set it right now (nothing was saved). Say that kindly in one short sentence and offer one that does not need the clock, like "in an hour". ${COMMON}`); }
+  if (spec.ask.length) {
+    if (st.asks >= 1) { states.delete(id); return cancelNote('You asked one question and the answer still did not make the reminder clear enough to set it without guessing.'); }
+    st.asks += 1; st.stage = 'clarify';
+    const q = questionFor(spec);
+    return note('setrem-ask-detail', `They asked you to set a reminder but part of it is not clear, and you must not guess. Ask them ONE short question and nothing else: "${q}" ${COMMON}`);
+  }
+  st.stage = 'confirm'; st.unclear = 0;
+  return note('setrem-confirm', `They asked you to set a reminder. Nothing is saved yet. Say it back to them in fresh warm words, keeping EVERY detail exactly (how often, when, and what): "${confirmText(spec, ctx)}" End by asking if that is right, then wait for their yes or no. Do not say it is set. ${COMMON}`);
+}
+
+function afterYes(id, st, ctx) {
+  const spec = st.spec;
+  if (!spec.deliver) { st.stage = 'delivery'; st.unclear = 0; return deliveryQuestionNote(); }
+  return needChannel(id, st, ctx);
+}
+function needChannel(id, st, ctx) {
+  const spec = st.spec;
+  if (!spec.channel && st.origin !== 'call') spec.channel = st.origin;   // asked on WhatsApp -> WhatsApp; asked in the app -> the app
+  if (spec.channel === 'whatsapp' && !ctx.waLinked) { spec.channel = null; st.noWa = true; }
+  if (!spec.channel) { st.stage = 'channel'; st.unclear = 0; return channelQuestionNote(st.noWa); }
+  return save(id, st, ctx);
+}
+function save(id, st, ctx) {
+  const spec = st.spec, care = require('./care');
+  states.delete(id);
+  try {
+    care.addSeniorReminder(id, { task: spec.task, dueAt: spec.dueAt, repeat: spec.repeat, deliver: spec.deliver, channel: spec.channel, origin: st.origin });
+  } catch (e) {
+    return note('setrem-not-saved', `The reminder could NOT be saved (${e.status === 409 ? 'they already have as many reminders set by talking as can be kept' : 'a problem on your side'}). Tell them kindly in one short sentence that you could not set it, and that their family can add reminders. Do not say it is set. ${COMMON}`);
+  }
+  console.log('setrem', JSON.stringify({ event: 'saved', repeat: spec.repeat, deliver: spec.deliver, channel: spec.channel, origin: st.origin }));   // kinds only: never the task
+  const stay = st.origin === 'call' ? ' They do NOT need to stay on the call: you will reach them at the time even after they hang up, so they can hang up whenever they like.' : '';
+  return note('setrem-saved', `The reminder is now SAVED (it is a real future reminder, not a timer): "${savedText(spec, ctx)}" Tell them in one short sentence that it is set, naming how often or when, how you will reach them and where, in fresh words.${stay} Promise nothing else, and do not offer more. ${COMMON.replace(' Do not say anything is saved or set unless this fact says it is.', '')}`);
+}
+
+// The next thing they said, while a set-up is open. Returns a note or null when the words are not part of it.
+function answer(id, st, heard, ctx) {
+  const spec = st.spec;
+  if (st.stage === 'clarify') {
+    if (CANCEL.test(heard)) { states.delete(id); return cancelNote('They said never mind.'); }
+    const next = parseRequest(heard, { ...ctx, bare: true, base: spec });
+    st.spec = next;
+    return progress(id, st, ctx);
+  }
+  if (st.stage === 'confirm') {
+    const asNew = readTime(heard, { bare: false }).found; const changed = asNew.repeat || asNew.rel != null || asNew.clock || asNew.weekday != null || asNew.unsupported || (asNew.day && (sayNo(heard) || /\b(?:make it|change|instead|rather|actually)\b/i.test(heard)));   // a bare "today" in some other sentence is not a change
+    if (changed && !(sayYes(heard) && !changed)) {
+      // a correction: "no, at 9" / "make it every day": the new words replace the old ones, and it is said back again
+      if (st.corrections >= 3) { states.delete(id); return cancelNote('The details kept changing.'); }
+      st.corrections += 1;
+      const fresh = { ...spec, repeat: 'none', relMs: null, clock: null, day: null, weekday: null, daypart: null, unsupported: null, startsInHour: false };
+      st.spec = parseRequest(heard, { ...ctx, base: { ...fresh, task: spec.task } });
+      if (!st.spec.task) st.spec.task = spec.task;
+      st.asks = 0;
+      return progress(id, st, ctx);
+    }
+    if (sayNo(heard) || CANCEL.test(heard)) { states.delete(id); return cancelNote('They said no to it.'); }
+    if (sayYes(heard)) return afterYes(id, st, ctx);
+    st.unclear += 1;
+    if (st.unclear >= 2) { states.delete(id); return cancelNote('They did not say yes.'); }
+    return note('setrem-confirm-again', `You asked whether the reminder is right and they did not answer yes or no. Nothing is saved. Ask just once more, briefly: "${confirmText(spec, ctx)}" ${COMMON}`);
+  }
+  if (st.stage === 'delivery' || st.stage === 'channel') {
+    if (CANCEL.test(heard) || (sayNo(heard) && st.stage === 'delivery')) { states.delete(id); return cancelNote('They said no to it.'); }
+    const dl = readDelivery(heard);
+    if (st.stage === 'delivery') {
+      if (dl.deliver) spec.deliver = dl.deliver;
+      if (dl.channel) spec.channel = dl.channel;
+      if (!spec.deliver) { st.unclear += 1; if (st.unclear >= 2) { states.delete(id); return cancelNote('They did not say how they want it.'); } return deliveryQuestionNote(); }
+      return needChannel(id, st, ctx);
+    }
+    // channel stage
+    if (dl.channel) spec.channel = dl.channel;
+    else if (st.noWa && sayYes(heard)) spec.channel = 'app';
+    if (!spec.channel) { st.unclear += 1; if (st.unclear >= 2) { states.delete(id); return cancelNote('They did not say where.'); } return channelQuestionNote(st.noWa); }
+    if (spec.channel === 'whatsapp' && !ctx.waLinked) { spec.channel = null; st.noWa = true; st.unclear += 1; if (st.unclear >= 2) { states.delete(id); return cancelNote('WhatsApp is not set up for them.'); } return channelQuestionNote(true); }
+    return save(id, st, ctx);
+  }
+  return null;
+}
+
+// Called for every thing the person says (call.js careNotes, which the written chat shares). origin: 'call' | 'whatsapp' | 'app'. Returns { label, text } (a FACT for Spark) or null.
+function step(id, heard, { origin, tz = null, now = Date.now(), waLinked = false, skipEmpty = false } = {}) {
+  heard = norm(heard);
+  if (!heard) return null;
+  const ctx = { origin, tz: validTz(tz) ? tz : null, now, waLinked, skipEmpty };
+  let st = states.get(id);
+  if (st && (now - st.at > TTL_MS || st.origin !== origin)) { states.delete(id); st = null; }
+  if (st && isRequest(heard) && st.stage !== 'clarify') { const fresh = parseRequest(heard, ctx); if (fresh.task && (fresh.dueAt || fresh.ask.length)) { states.delete(id); st = null; } }
+  if (st) { st.at = now; return answer(id, st, heard, ctx); }
+  if (!isRequest(heard)) return null;
+  if (require('./care').seniorSetCount(id) >= MAX_OPEN) return note('setrem-full', `They asked for a reminder, but they already have as many reminders set by talking as can be kept (${MAX_OPEN}). Say so kindly in one short sentence and that their family can add or change reminders. Nothing was saved. ${COMMON}`);
+  return begin(id, heard, ctx);
+}
+
+const reset = (id) => { if (id) states.delete(id); else states.clear(); };
+const pending = (id) => { const s = states.get(id); return s ? { stage: s.stage, origin: s.origin, spec: s.spec } : null; };
+
+module.exports = { step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };

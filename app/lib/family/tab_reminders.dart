@@ -63,6 +63,7 @@ class _RemindersTabState extends State<RemindersTab> {
                           Wrap(spacing: 6, runSpacing: 4, children: [
                             if (r.channel != null) Pill(_whereLabel[r.channel] ?? r.channel!),
                             if (r.deliver != null) Pill(_howLabel[r.deliver] ?? r.deliver!),
+                            if (r.by == 'senior') const Pill('Set by talking'),
                             if (r.held) const Pill('Held for quiet hours', tone: kToneWait),
                             if (r.stateLabel != null) Pill(r.stateLabel!, tone: kToneInfo),
                           ]),

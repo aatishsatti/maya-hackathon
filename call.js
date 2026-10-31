@@ -17,6 +17,7 @@ const beat = require('./beat');
 const recall = require('./recall');
 const memory = require('./memory');
 const care = require('./care');
+const setrem = require('./setrem');   // reminders the senior sets by talking (future reminders, not the in-call timer)
 
 // Seniors pause mid-thought. Meta has no endpointing settings, so after Meta says a turn is
 // complete we wait before answering: short if it ended like a sentence, long if it trailed off.
@@ -125,8 +126,8 @@ function reminderFacts(ctx) {
   if (!ctx) return null;
   const pick = ctx.answered && ctx.answered.thisMessage ? ['reminder-answered-now', ctx.answered] : ctx.waiting ? ['reminder-waiting', ctx.waiting] : ctx.answered ? ['reminder-answered-earlier', ctx.answered] : ctx.missed ? ['reminder-missed', ctx.missed] : null;
   if (!pick) return null;
-  const [label, r] = pick, msg = isFamilyMessage(r.task);
-  const what = msg ? `a message from their family: ${quoteTask(r.task)}` : `a reminder from their family: ${quoteTask(stripAddressee(r.task))}`;
+  const [label, r] = pick, msg = !r.by && isFamilyMessage(r.task);
+  const what = r.by === 'senior' ? `a reminder they asked you for themselves: ${quoteTask(setrem.second(r.task))}` : msg ? `a message from their family: ${quoteTask(r.task)}` : `a reminder from their family: ${quoteTask(stripAddressee(r.task))}`;
   const only = 'Use only the family\'s own words; add no advice, no dose, no reason and no medicine of your own. Answer in the language they used.';
   const never = 'Never say it is done unless they said they did it ("okay" or "I saw it" means they saw it or agreed, not that it is done); never invent that they took, did or finished anything.';
   if (label === 'reminder-answered-now') return { label, text: `FACT: ${agoWords(r.sentMinutesAgo)} you sent them ${what}, and THIS message from them answers it: it is marked answered. Reply to what they actually said in a few words, using only what they said (for example that they will do it, or that they saw it). ${never} If they sound annoyed or push back, take it lightly and kindly: do not argue, do not explain, do not repeat the task, do not remind them again and do not ask about it again. ${only}` };
@@ -1526,10 +1527,11 @@ class Call {
   async reminderLine(rem, signal, { inCall = false } = {}) {
     const task = rem.task;
     const name = this.profile.name;
-    const message = isFamilyMessage(task);
+    const bySenior = rem.by === 'senior';   // a reminder they set by talking: their own words, never "from the family"
+    const message = !bySenior && isFamilyMessage(task);
     // The name is used SPARINGLY (about one reminder in four), never as a template: she already knows who she is talking to.
     const useName = Math.random() < this.nameChance;
-    const shownTask = message ? task : stripAddressee(task); // "Take you back meds mom": "mom" is how the family addresses her, not part of the task
+    const shownTask = message ? task : bySenior ? setrem.second(task) : stripAddressee(task); // "Take you back meds mom": "mom" is how the family addresses her, not part of the task
     const ADVICE = /\b(should|must|need to|recommend|advise|dose|dosage|doctor|mg|milligram|tablets?|pills? (with|before|after)|with food|empty stomach)\b/i;
     const nameRe = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
     // Code only guards the rules; the natural wording is Spark's. Task: reminder first, name second. Message: delivered as
@@ -1548,16 +1550,18 @@ class Call {
       return null;
     };
     const lead = inCall ? 'You are already talking, so say it as a short natural interruption.' : 'You just connected the call yourself to give it.';
-    const what = message
+    const what = bySenior
+      ? `A reminder they asked you to give them themselves is due now. They asked you to remind them of: "${shownTask}" (already worded for you to say to them). ${lead} Say it the way a caring companion would, in ONE short warm sentence, with the reminder FIRST. ${useName ? `You may add their name, ${name}, once at the end.` : 'Do not use their name.'} Never "please", never an order, and never say it is from their family: it is the reminder they asked you for. Use ONLY their words for what and which: never fill in which medicine it is or what it is for, never add a dose, advice or anything about health. If it is truly unclear use their exact words. No greeting, no small talk.`
+      : message
       ? `Their family left a message for them, written as: "${task}". ${lead} Deliver it AS A MESSAGE from the family, in ONE or at most two short warm sentences, keeping who is speaking and who is addressed: if the text says who it is from (for example "your daughter"), say so, then give the message in natural words as that family member would say it to them, using what they call them in the message (for example "Mom"). Example of style only: "Your daughter left a message for you: 'Mom, call me whenever you want.'". Do NOT begin with "Please", do NOT use their first name, do not turn it into an instruction from you, do not invent who it is from, no dose, advice or anything about health. No greeting, no small talk.`
       : `A reminder their family set up is due now. The family wrote it as: "${shownTask}". ${lead} Understand what the family means and say it the way a caring companion would say it aloud, in ONE short warm sentence, with the reminder FIRST. ${useName ? `You may add their name, ${name}, once at the end.` : 'Do not use their name.'} Never "please", never an order or an instruction from you: say what it is time for. Examples (for style only): "meds" becomes "It's time for your medicine${useName ? `, ${name}` : ''}."; "form" becomes "It's time to fill that form."; "take some sleep and meds" becomes "It's time to take a rest and take your medicine."; "take your back meds mom" becomes "It's time for your back medicine.". Use ONLY the family's words for what and which: never fill in which medicine it is or what it is for from your notes, from memory or from earlier reminders. If they wrote only "meds", "medicine" or "tablets", say just "your medicine", nothing more specific. Keep the same task: never invent a different one, never add a dose, advice, instruction or anything about health. If the family's words are truly unclear and you cannot tell what is meant, use their exact words instead of guessing. No greeting, no small talk.`;
     const line = await this.dynamicLine({ pool: 'reminder', signal, what, check });
     if (check(line.said)) { // last resort after retries: plainly, in the family's own words
-      const said = message ? `A message from your family: ${task}` : `Reminder: ${shownTask}.`;
+      const said = message ? `A message from your family: ${task}` : bySenior ? `Your reminder: ${shownTask}.` : `Reminder: ${shownTask}.`;
       return { full: said, said };
     }
     this.awaitTask = message ? 'the message from their family' : shownTask;
-    this.reminderFacts = { task, turns: 4 }; // what the family wrote is ALL she knows about it, for the next few turns
+    this.reminderFacts = { task, turns: 4, ...(rem.by ? { by: rem.by } : {}) }; // what the family wrote is ALL she knows about it, for the next few turns
     return line;
   }
 
@@ -1745,7 +1749,8 @@ class Call {
     }
     if (this.reminderFacts && this.reminderFacts.turns > 0) {
       this.reminderFacts.turns -= 1;
-      note('family-written-reminder', `REMINDER FACTS: the family wrote exactly "${this.reminderFacts.task}" and that is ALL you know about it. Never name, guess or hint at which medicine it is, what it is for, a dose, or any health condition unless those words are in what they wrote; never take it from your notes, memory or earlier reminders. If they ask which one, what for or how much, answer honestly in fresh words: their family only wrote "${this.reminderFacts.task}" and did not say which, so they should please check with their family or their medicine box, because you do not want to guess. Do not advise.`);
+      const bySr = this.reminderFacts.by === 'senior';
+      note('family-written-reminder', `REMINDER FACTS: ${bySr ? 'they asked you to remind them of exactly' : 'the family wrote exactly'} "${this.reminderFacts.task}" and that is ALL you know about it. Never name, guess or hint at which medicine it is, what it is for, a dose, or any health condition unless those words are in what they wrote; never take it from your notes, memory or earlier reminders. If they ask which one, what for or how much, answer honestly in fresh words: ${bySr ? 'they only told you' : 'their family only wrote'} "${this.reminderFacts.task}" and did not say which, so they should please check with their family or their medicine box, because you do not want to guess. Do not advise.`);
     }
     if (this.reminderPending) {
       const r = this.reminderPending;
@@ -1765,7 +1770,17 @@ class Call {
     }
     // "Remind me next time I call to ...": not a timer. Code files a next-call reminder now (recall.js, memory.js); Spark is told as a fact. Said again as
     // "not done yet / still to do" about a reminder shown in THIS call, it comes due again next call.
-    const nextTask = parseTimer(heard) ? '' : recall.parseNextCallReminder(heard);
+    // A FUTURE reminder set by talking (setrem.js): understood, said back, only saved after a yes, then asked how and where. The short in-call timer ("remind me in 5 minutes", up to
+    // 30 minutes, only while the call stays open) stays as it was on a call; the written chat has no timers, so there every "remind me" is a future reminder.
+    const origin = this.channel === 'chat' ? (care.turnChannel(id) === 'whatsapp' ? 'whatsapp' : 'app') : 'call';
+    const tmq = parseTimer(heard), shortTimer = origin === 'call' && tmq && tmq.seconds > 0 && tmq.seconds <= TIMER_MAX_SECONDS && !setrem.readTime(heard).found.repeat && !setrem.pending(id);
+    let sr = null;
+    if (!shortTimer && !(recall.parseNextCallReminder(heard) && !setrem.pending(id))) {
+      const p0 = care.get(id);
+      sr = setrem.step(id, heard, { origin, tz: (p0 && p0.tz) || this.tz, waLinked: care.whatsappLinked(id), skipEmpty: Boolean(this.timers && this.timers.length) });
+      if (sr) note(sr.label, sr.text);
+    }
+    const nextTask = sr || parseTimer(heard) ? '' : recall.parseNextCallReminder(heard);
     if (nextTask) {
       const r = memory.addReminder(id, nextTask, this.callId);
       if (r.status === 'added' || r.status === 'duplicate') note('next-call-reminder-added', 'FACT: they asked you to remind them, the next time they talk with you, of something they told you. The app keeps it and will bring it to you at the start of their next call. In one short sentence, in fresh words, confirm you will remind them then. Do not say you cannot do it, do not set a time, promise nothing else, and add no advice.');
@@ -1773,7 +1788,7 @@ class Call {
     } else if (recall.STILL_TO_DO.test(heard) && memory.reopenReminders(id, this.callId)) {
       note('reminder-still-to-do', 'FACT: they said the thing you just reminded them of is still to do. The app will remind them again the next time they call. Take it kindly in one short sentence, no advice, and do not remind them again in this call.');
     }
-    const tm = parseTimer(heard);
+    const tm = sr ? null : parseTimer(heard);
     let timerSet = false;
     if (tm && this.noTimers) {
       note('timer-unavailable-in-chat', 'They asked for a timer. In this written chat you cannot set one; say kindly that you can only remind them during a voice call, and that their family can set reminders. Promise nothing else.');
