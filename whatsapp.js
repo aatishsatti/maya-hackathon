@@ -669,9 +669,9 @@ function placeCall(profileId, kind, spec) {
       .finally(() => { callBusy = false; if (cur.id) liveEnds.delete(cur.id); outboundNow.cur = null; });
   });
 }
-// The scheduled welfare checks do exactly what the picker does (placeWelfare); this tells care.js when a schedule may run at all: linked, opted in, and inside the 24 h window.
+// The scheduled welfare checks do exactly what the picker does (placeWelfare); this tells care.js when a schedule may run at all: linked and opted in; for a text or a voice note also inside the 24 h window (a call is not window-gated).
 require('./care').setWelfareSender({
-  blocked: (profileId) => { const l = linkOf(profileId); if (!configured() || !l || !l.optIn) return 'WhatsApp is not linked for them.'; if (!(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) return 'They have not written to Maya in the last 24 hours, so no check goes out. Start the schedule again after they write.'; return null; },
+  blocked: (profileId, via) => { const l = linkOf(profileId); if (!configured() || !l || !l.optIn) return 'WhatsApp is not linked for them.'; if (via !== 'call' && !(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS)) return `They have not written to Maya in the last 24 hours, and WhatsApp only allows a ${via === 'voice' ? 'voice note' : 'text'} inside that window, so no check goes out. Start the schedule again after they write, or schedule calls (a call does not need it).`; return null; },
   fire: (profileId, via) => placeWelfare(profileId, via),
 });
 const placeTestCall = (profileId) => placeCall(profileId, 'test');

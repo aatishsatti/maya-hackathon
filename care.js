@@ -1206,7 +1206,7 @@ function waTick(p, r, now) {
 let ticker = null;
 // ---- scheduled welfare checks (Step 2): one schedule per person, every N minutes for up to 24 hours, by call, text or voice note. The family starts and stops it; it fires from tick() ----
 // The schedule only ever DOES a welfare check the way the welfare picker does (whatsapp.js placeWelfare): every limit, every fallback and every activity entry are that code's. What it adds: it never runs
-// without a window (they have written to Maya in the last 24 hours), it is recorded as fired BEFORE the network call (a restart can never fire a check twice), it pauses itself when a check cannot go out as asked
+// a window for a TEXT or a VOICE NOTE (WhatsApp only allows those inside the 24 hours after they last wrote; a CALL needs only their call permission, so a silent senior is still checked), it is recorded as fired BEFORE the network call (a restart can never fire a check twice), it pauses itself when a check cannot go out as asked
 // (WhatsApp's refusal, the 2-unanswered pause, an error) instead of texting every interval, and it ends after 24 hours. "Every day" needs an approved WhatsApp template and is not available.
 const SCHEDULE_VIA = ['call', 'text', 'voice'], SCHEDULE_MIN = 5, SCHEDULE_MAX = 720, SCHEDULE_MS = 24 * 3600000;
 let welfareSender = null;   // { blocked(profileId) -> reason | null, fire(profileId, via) -> Promise<result> } (whatsapp.js registers it)
@@ -1222,7 +1222,7 @@ function welfareScheduleStart(id, { everyMin, via } = {}) {
   if (!Number.isInteger(n) || n < SCHEDULE_MIN || n > SCHEDULE_MAX) throw Object.assign(new Error(`Choose how often: every hour, 2 hours, 3 hours, or between ${SCHEDULE_MIN} and ${SCHEDULE_MAX} minutes. A daily check needs WhatsApp's approved message template, which is not available yet.`), { status: 400 });
   if (!SCHEDULE_VIA.includes(via)) throw Object.assign(new Error('Choose a call, a text or a voice note.'), { status: 400 });
   if (!welfareSender) throw Object.assign(new Error('WhatsApp is not set up on this server.'), { status: 503 });
-  const why = welfareSender.blocked(id); if (why) throw Object.assign(new Error(`${why} Nothing was scheduled.`), { status: 429 });
+  const why = welfareSender.blocked(id, via); if (why) throw Object.assign(new Error(`${why} Nothing was scheduled.`), { status: 429 });
   const now = Date.now();
   p.welfareSchedule = { everyMin: n, via, startedAt: now, until: now + SCHEDULE_MS, next: now + n * 60000, fired: 0, status: 'running', note: null };
   save(id); pushFamily('refresh', { id });
@@ -1247,7 +1247,7 @@ function welfareTick(p, now) {
   if (now < s.next || !welfareSender) return;
   const id = p.id, via = s.via;
   s.next = now + s.everyMin * 60000; s.fired += 1; flushOne(id);   // recorded on disk BEFORE anything is sent
-  const why = welfareSender.blocked(id);
+  const why = welfareSender.blocked(id, via);
   if (why) { welfareSchedulePause(id, why); return; }
   console.log('welfare schedule', JSON.stringify({ event: 'check', via, fired: s.fired }));
   Promise.resolve().then(() => welfareSender.fire(id, via)).then((res) => {

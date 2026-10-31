@@ -200,7 +200,7 @@
     $('schedCustom').hidden = $('schedEvery').value !== 'custom';
     if (!Number.isInteger(n) || n < 5 || n > 720) { $('schedPlan').textContent = 'Choose between 5 and 720 minutes.'; return; }
     const count = Math.max(1, Math.floor(24 * 60 / n)), what = via === 'call' ? 'calls' : via === 'voice' ? 'voice notes' : 'texts';
-    $('schedPlan').textContent = `Up to ${count} ${what} in the next 24 hours, one every ${EVERY_TEXT(n)}. ${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}It also pauses by itself after 2 unanswered calls in a row, and when they have not written to Maya in the last 24 hours. Every check shows in Activity. You can stop it any time.`;
+    $('schedPlan').textContent = `Up to ${count} ${what} in the next 24 hours, one every ${EVERY_TEXT(n)}. ${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}It also pauses by itself after 2 unanswered calls in a row${via === 'call' ? '' : ', and when they have not written to Maya in the last 24 hours (WhatsApp only allows a text or voice note inside that window; a call does not need it)'}. Every check shows in Activity. You can stop it any time.`;
   }
   function renderSchedule(s) {
     const live = Boolean(s && s.status === 'running');
