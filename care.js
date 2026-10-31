@@ -15,6 +15,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const memory = require('./memory');
 const trends = require('./trends');
+const push = require('./push');
 
 const DIR = process.env.MAYA_CARE_DIR || path.join(__dirname, 'data', 'care'); // env override is for tests
 fs.mkdirSync(DIR, { recursive: true });
@@ -396,6 +397,7 @@ function ring(o) {
   console.log('care ring', JSON.stringify({ profile: o.profileId, kind: o.kind, attempt: o.attempts, appOpen: reached > 0 }));
   save(p.id);
   o.timer = setTimeout(() => ringTimeout(o), cfg.ringMs);
+  if (reached === 0 && o.kind === 'reminder') ringByPush(o);   // the app is closed: one push to the phone, which shows the native incoming call screen
 }
 
 function ringTimeout(o) {
@@ -411,10 +413,65 @@ function ringTimeout(o) {
 
 function closeOutreach(o, state) {
   clearTimeout(o.timer);
+  if (o.pushed && o.state === 'ringing') pushEnd(o);
   o.state = state;
   outreaches.delete(o.id);
   if (activeByProfile.get(o.profileId) === o) activeByProfile.delete(o.profileId);
   pushSenior(o.profileId, 'incomingEnd', { outreachId: o.id });
+}
+
+// ---------------------------------------------------------------- ringing a CLOSED app (push.js: iOS VoIP push -> CallKit, Android FCM -> incoming call notification)
+// Devices are kept per profile (platform + the push token Apple / Google gave the phone). A token is never shown in a view, a log or the family page.
+const DEVICE_PLATFORMS = ['ios', 'android'];
+function registerDevice(id, { platform, token }) {
+  const p = get(id); if (!p) { const e = new Error('Not found'); e.status = 404; throw e; }
+  if (!DEVICE_PLATFORMS.includes(platform)) { const e = new Error('The platform must be ios or android.'); e.status = 400; throw e; }
+  if (typeof token !== 'string' || !/^[\w:\-.]{16,4096}$/.test(token)) { const e = new Error('That is not a push token.'); e.status = 400; throw e; }
+  p.devices = (p.devices || []).filter((d) => d.token !== token && d.platform !== platform);   // one phone per platform: the newest registration wins
+  p.devices.push({ platform, token, at: Date.now() });
+  save(id); console.log('push', JSON.stringify({ event: 'device registered', platform }));
+  return { ok: true, ready: push.configured(platform) };
+}
+function removeDevice(id, token) {
+  const p = get(id); if (!p) return false;
+  const n = (p.devices || []).length; p.devices = (p.devices || []).filter((d) => d.token !== token);
+  if (p.devices.length !== n) save(id);
+  return p.devices.length !== n;
+}
+// A phone that can be pushed: registered AND the server has that platform's keys.
+const pushReady = (id) => { const p = get(id); return Boolean(p && (p.devices || []).some((d) => push.configured(d.platform))); };
+
+function ringByPush(o) {
+  const p = get(o.profileId), attempt = o.attempts;
+  const all = (p && p.devices) || [], devs = all.filter((d) => push.configured(d.platform));
+  if (!devs.length) { console.log('push', JSON.stringify({ event: 'not tried', reason: all.length ? 'not_configured' : 'no_device' })); return; }   // nothing to push to: the ring goes on as it always did (retries, then unanswered)
+  o.pushed = true;
+  const payload = { type: 'incoming', outreachId: o.id, kind: o.kind, ringMs: cfg.ringMs };
+  Promise.all(devs.map((d) => push.send(d, payload).then((r) => ({ d, r })))).then((rs) => {
+    for (const { d, r } of rs) if (r.gone) removeDevice(o.profileId, d.token);   // the phone no longer has the app: forget it
+    if (!rs.some((x) => x.r.ok)) pushFailed(o, attempt, (rs[0] && rs[0].r.reason) || 'failed');
+  });
+}
+function pushEnd(o) {   // Android only: a data message that takes the ring down. (An iOS VoIP push must always show a call, so none is sent; CallKit stops by itself after the ring time.)
+  const p = get(o.profileId);
+  for (const d of (p && p.devices) || []) if (d.platform === 'android' && push.configured('android')) push.send(d, { type: 'end', outreachId: o.id });
+}
+// The push did not go. If the app has opened meanwhile it is ringing there anyway. Otherwise the ring is taken back and the reminder falls to WhatsApp under the same rules as before, or says plainly it could not ring.
+function pushFailed(o, attempt, reason) {
+  if (outreaches.get(o.id) !== o || o.state !== 'ringing' || o.attempts !== attempt || appOpen(o.profileId)) return;
+  const p = get(o.profileId), r = o.reminderId && p.reminders.find((x) => x.id === o.reminderId), a = r && r.active;
+  console.log('reminder', JSON.stringify({ event: 'push failed', reason, then: 'fallback' }));
+  o.pushed = false; closeOutreach(o, 'failed');
+  if (!r || !a) { save(p.id); return; }
+  const dueAt = a.dueAt, id = p.id, chan = effectiveChannel(p, r);
+  const waLinked = Boolean(reminderSender && reminderSender.channelFor(id) === 'whatsapp');
+  const route = waLinked && reminderSender.callRoute ? reminderSender.callRoute(id) : { permission: false, windowOpen: false };
+  const mayWA = waLinked && reminderSender.placeCall && (chan !== 'both' || (route.permission && route.windowOpen));   // 'Both' rules 1 and 2: WhatsApp is not tried when permission is missing or the window is shut
+  if (!mayWA) { finishOccurrence(p, r.id, 'app_failed', { reason: 'push_failed', channel: 'app', via: 'call', dueAt }); waLog({ event: 'not sent', reason: 'push_failed', whatsapp: waLinked ? 'ruled out' : 'not linked' }); pushFamily('refresh', { id }); return; }
+  r.active = null; waLog({ event: 'push failed', then: 'whatsapp call' });
+  Promise.resolve().then(() => reminderSender.placeCall(id, r.id, dueAt)).then(() => pushFamily('refresh', { id }), (e) => {
+    const q = get(id); if (q) { finishOccurrence(q, r.id, 'wa_failed', { reason: 'call_not_placed', error: { title: String((e && e.message) || 'error').slice(0, 120) } }); waLog({ event: 'not sent', reason: 'call_not_placed' }); pushFamily('refresh', { id }); }
+  });
 }
 
 // Senior pressed Accept (the call socket 'start' carries the outreach id).
@@ -1098,7 +1155,7 @@ function fireReminderApp(p, r, now, chan) {
     // One live call only, never two rings. 'both' picks in order: (1) no WhatsApp call permission -> the app; (2) the window is shut (they have not written for 24 h) -> the app;
     // (3) otherwise by last activity: app open -> the app, else WhatsApp; and if the first pick cannot ring, the other one is tried. 'app' always rings the app, falling back to WhatsApp as before.
     const ringApp = () => {
-      if (!appOpen(id)) return false;
+      if (!appOpen(id) && !pushReady(id)) return false;   // open: it rings in the app; closed: a push rings the phone (a registered phone and the server's push keys)
       const occ = { dueAt: r.dueAt, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app' };
       r.active = occ;
       const o = startOutreach(id, { kind: 'reminder', reminderId: r.id });
@@ -1110,7 +1167,7 @@ function fireReminderApp(p, r, now, chan) {
     const route = waLinked && reminderSender.callRoute ? reminderSender.callRoute(id) : { permission: false, windowOpen: false };
     let first = 'app', why = chan === 'both' ? (waLinked ? (!route.permission ? 'no call permission' : !route.windowOpen ? 'window shut' : 'app open') : 'no whatsapp') : 'app';
     if (chan === 'both' && waLinked && route.permission && route.windowOpen && !appOpen(id)) first = 'whatsapp';
-    if (chan !== 'both') first = appOpen(id) ? 'app' : 'whatsapp';
+    if (chan !== 'both') first = appOpen(id) || pushReady(id) ? 'app' : 'whatsapp';
     waLog({ event: 'call route', channel: chan, first, why: chan === 'both' ? why : 'app' });
     if (first === 'app' && ringApp()) return true;
     const mayWA = waLinked && (chan !== 'both' || (first === 'whatsapp') || (route.permission && route.windowOpen));   // rules 1 and 2: WhatsApp is not tried at all
@@ -1458,7 +1515,7 @@ function waLabel(o) {
     case 'app_delivered': return o.via === 'voice' ? 'Voice note arrived in the app, not played yet' : 'Shown in the app, not closed yet';
     case 'app_read': return o.via === 'voice' ? 'Voice note seen in the app, no reply yet' : 'Seen in the app, no reply yet';
     case 'app_missed': return `Missed: not seen in the app within ${Math.round(cfg.waMissMs / MIN)} minutes`;
-    case 'app_failed': return o.reason === 'app_closed' ? 'Not sent: the app was closed, so Maya could not ring it' : 'Not sent in the app';
+    case 'app_failed': return o.reason === 'push_failed' ? 'Not sent: the app was closed and the push to the phone did not go' : o.reason === 'app_closed' ? 'Not sent: the app was closed, so Maya could not ring it' : 'Not sent in the app';
     case 'wa_sending': return 'Sending on WhatsApp';
     case 'wa_sent': return o.via === 'voice' ? 'Sent as a voice note. WhatsApp accepted it.' : o.voiceUnavailable ? 'Sent as text (voice unavailable). WhatsApp accepted it.' : 'Sent as text. WhatsApp accepted it.';
     case 'wa_delivered': return 'Delivered to their phone, not read yet';
@@ -1553,6 +1610,7 @@ function view(id) {
 function overview() { return memory.listProfiles().map((x) => { const v = view(x.id); return { id: x.id, name: x.name, mode: v.mode, flags: v.flags.filter((f) => f.status === 'active').length + v.scams.filter((x) => x.status === 'active' && x.level === 'flag').length, alerts: v.alerts.filter((f) => f.status === 'active').length + v.scams.filter((x) => x.status === 'active' && x.level === 'alert').length }; }); }
 
 module.exports = {
+  registerDevice, removeDevice, pushReady,
   cfg, MODES, get, remove, start, stop, tick,
   trendEvent, trendTurn, trendView, localParts,
   linesWithin, touch, lastSeen, callStarted, callEnded, callCount, liveCalls, liveChats, pushSenior, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,

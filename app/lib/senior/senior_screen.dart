@@ -11,6 +11,7 @@ import '../models.dart';
 import '../services/api.dart';
 import '../services/call_session.dart';
 import '../services/events.dart';
+import '../services/native_call.dart';
 import '../services/store.dart';
 import '../services/tz.dart';
 import '../theme.dart';
@@ -45,6 +46,8 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   Map<String, dynamic>? _notice; // a note from the family
   Timer? _ringTimer;
   bool _inCall = false;
+  StreamSubscription<String>? _nativeAccept, _nativeEnd;
+  CallSession? _live; // the call on screen, so the system call screen's hang-up can end it
 
   @override
   void initState() {
@@ -57,6 +60,8 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _eventSub?.cancel();
+    _nativeAccept?.cancel();
+    _nativeEnd?.cancel();
     _events?.stop();
     _ringTimer?.cancel();
     _recTimer?.cancel();
@@ -84,12 +89,24 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     if (id != null) _attach(id);
   }
 
+  // A ring that reached a CLOSED phone (a push -> the system call screen): Accept joins the same live call as an in-app Accept.
+  void _listenNative(String id) {
+    _nativeAccept ??= NativeCall.instance.accepted.listen((oid) {
+      if (!mounted || _inCall) return;
+      _dropIncoming();
+      _startCall(reason: 'reminder', outreachId: oid);
+    });
+    _nativeEnd ??= NativeCall.instance.ended.listen((_) => _live?.hangUp());
+    NativeCall.instance.start(id);
+  }
+
   void _attach(String id) {
     _eventSub?.cancel();
     _events?.stop();
     final ev = _events = SeniorEvents(id);
     _eventSub = ev.stream.listen(_onEvent);
     ev.start();
+    _listenNative(id);
     _loadThread();
   }
 
@@ -119,6 +136,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
       case 'incoming':
         Api.postJson('/api/care/$id/notifications/${e.data['notifId']}/delivered').catchError((_) => null);
         if (_inCall) return; // never ring over a live call
+        NativeCall.instance.dismiss('${e.data['outreachId']}'); // the app is open: it rings here, not on the system call screen too
         setState(() => _incoming = e.data);
         _ringTimer?.cancel();
         _ringTimer = Timer.periodic(const Duration(milliseconds: 1400), (_) {
@@ -182,13 +200,16 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     final id = _pid;
     if (id == null || !mounted || _inCall) return;
     _inCall = true;
+    final session = _live = CallSession(profileId: id, reason: reason, outreachId: outreachId);
     await Navigator.of(context).push(PageRouteBuilder<void>(
       transitionDuration: const Duration(milliseconds: 240),
       reverseTransitionDuration: const Duration(milliseconds: 200),
-      pageBuilder: (_, _, _) => CallScreen(session: CallSession(profileId: id, reason: reason, outreachId: outreachId)),
+      pageBuilder: (_, _, _) => CallScreen(session: session),
       transitionsBuilder: (_, a, _, child) => FadeTransition(opacity: a, child: child),
     ));
     _inCall = false;
+    _live = null;
+    if (outreachId != null) NativeCall.instance.callEnded(outreachId);
     if (mounted) _loadThread();
   }
 

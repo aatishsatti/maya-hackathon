@@ -44,6 +44,14 @@ kotlin {
     }
 }
 
+// Firebase Cloud Messaging rings a closed phone. The keys file (google-services.json, from the Firebase console) is NOT in this repository: without it the plugin is not applied,
+// no token is issued, and the server falls back to WhatsApp under its rules. Put the file in android/app/ to turn it on.
+if (file("google-services.json").exists()) apply(plugin = "com.google.gms.google-services")
+
+dependencies {
+    implementation("com.google.firebase:firebase-messaging:24.1.0")
+}
+
 flutter {
     source = "../.."
 }
