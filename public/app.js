@@ -132,10 +132,13 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   const statusEl = $('status');
   const captionEl = $('caption');
   const errorEl = $('error');
-  const callBtn = $('callBtn');
+  const callBtn = $('callBtn');       // the big Call button on the home page
+  const callBtns = [callBtn, $('callBtnHead')];   // and the small phone icon in the chat header: both start a call, or return to one that is live
   const modeNote = $('modeNote');
 
   let call = null;   // active call, or null
+  const SPEAKER_OFF_GAIN = 0.35;
+  let speakerOn = true;  // Speaker is on by default, like the phone app
   let mode = 'mock'; // from /api/config
   let gen = 0;       // bumped on every start/end; stale async work checks it
 
@@ -194,8 +197,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   }
 
   function setLive(live) {
-    callBtn.dataset.live = String(live);
-    callBtn.textContent = live ? 'End Call' : 'Call Maya';
+    for (const b of callBtns) { b.dataset.live = String(live); b.setAttribute('aria-label', live ? 'Back to call' : 'Call Maya'); }
+    $('callBtnText').textContent = live ? 'Back to call' : 'Call Maya';
     if (window.mayaProfile) window.mayaProfile.setLive(live);
   }
 
@@ -571,7 +574,9 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     c.attempt = 0; c.lostAt = 0; c.lastRx = Date.now();
     openSocket(c, myGen, false);
     c.master = c.ctx.createGain(); // Maya's voice goes through this so her volume can dip instantly
-    c.master.connect(c.ctx.destination);
+    c.out = c.ctx.createGain();    // then through this: the Speaker button (a browser cannot choose the earpiece, so Speaker off is a quieter voice)
+    c.out.gain.value = speakerOn ? 1 : SPEAKER_OFF_GAIN;
+    c.master.connect(c.out); c.out.connect(c.ctx.destination);
     c.playAnalyser = c.ctx.createAnalyser(); // reads Maya's playback loudness for the orb; its output goes nowhere
     c.playAnalyser.fftSize = 1024;
     c.playBuf = new Float32Array(c.playAnalyser.fftSize);
@@ -716,12 +721,14 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (!errorMsg) captionEl.textContent = '';
   }
 
-  callBtn.addEventListener('click', () => {
-    if (callBtn.dataset.live === 'true') endCall();
+  // A live call is never ended by the Call button: it brings the call page back (the red End call pill ends it). Otherwise it starts one.
+  for (const b of callBtns) b.addEventListener('click', () => {
+    if (call) callState.expand();
     else startCall();
   });
   window.addEventListener('pagehide', () => endCall());
   window.mayaEndCall = () => endCall();
+  window.mayaSpeaker = (on) => { if (typeof on === 'boolean') { speakerOn = on; if (call && call.out) call.out.gain.setTargetAtTime(on ? 1 : SPEAKER_OFF_GAIN, call.ctx.currentTime, 0.02); } return speakerOn; };
   window.mayaStartCall = (opts) => { if (!call) startCall(opts); };
   window.mayaInCall = () => Boolean(call);
   window.mayaCallState = callState; // minimize() / expand() / mute() / unmute(); read .state, .chatVisible, .orb, .typedReply, .voiceNoteReply

@@ -5,21 +5,21 @@
 (() => {
   'use strict';
   const $ = (id) => document.getElementById(id);
-  const thread = $('thread'), busyEl = $('busy'), msgIn = $('msgIn'), sendBtn = $('sendBtn'), recBtn = $('recBtn'), recLabel = $('recLabel');
-  const photoBtn = $('photoBtn'), photoIn = $('photoIn'), recBar = $('recBar'), recTime = $('recTime');
-  const muteBtn = $('muteBtn'), cutBtn = $('cutBtn'), orb = $('orb'), mutedTag = $('mutedTag'), voiceRule = $('voiceRule');
-  const screen = $('callScreen'), chatEl = $('chat'), preview = $('photoPreview'), previewImg = $('previewImg');
+  const thread = $('thread'), busyEl = $('busy'), msgIn = $('msgIn'), mainBtn = $('mainBtn'), attachBtn = $('attachBtn');
+  const photoIn = $('photoIn'), camIn = $('camIn'), pdfIn = $('pdfIn'), recBar = $('recBar'), recTime = $('recTime'), recWave = $('recWave'), writeRow = $('writeRow');
+  const muteBtn = $('muteBtn'), cutBtn = $('cutBtn'), speakerBtn = $('speakerBtn'), mutedTag = $('mutedTag'), voiceRule = $('voiceRule');
+  const chatEl = $('pageChat'), preview = $('photoPreview'), previewImg = $('previewImg'), sheet = $('attachSheet');
   const cs = () => window.mayaCallState;
   const MAX_RECORD_S = 120;
   const MAX_PHOTO_SIDE = 1600;
   const MAX_BOX_PX = () => Math.max(56, Math.min(150, Math.round(window.innerHeight * 0.25)));
+  const MAX_PDF_BYTES = 8 * 1024 * 1024;   // the server's own limit
 
   let working = false;     // a send is in flight
   let recording = null;    // { rec, timer, startedAt }
   let player = null;       // { audio, btn } the voice note playing now
 
   // ---- thread ----
-  const clock = (at) => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
   const PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
@@ -29,22 +29,32 @@
   function clearEmpty() { const e = thread.querySelector('.empty'); if (e) e.remove(); }
   function showEmpty() {
     if (thread.children.length) return;
-    thread.append(el('p', 'empty', 'Say hello to Maya. You can type, record a voice note, send a photo, or call her.'));
+    thread.append(el('p', 'empty', 'Say hello to Maya. You can type, record a voice note, or call her.'));
   }
 
-  // One voice-note bubble: tap play to hear it, tap again to pause. While a call is live, Maya's own voice notes cannot be
-  // played (cs().voiceNoteReply === 'text-only'): two Mayas must never talk at once. The senior's own recording is theirs and plays.
+  // One voice-note bubble, like the phone app's: a round play button, a waveform you can touch to move along the sound, and how long it is. Tap play to hear it,
+  // tap again to pause. While a call is live, Maya's own voice notes cannot be played (cs().voiceNoteReply === 'text-only'): two Mayas must never talk at once.
+  // The senior's own recording is theirs and plays. The bar heights are a fixed pattern for each note (not the real sound).
+  const BARS = 34;
+  const seeded = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return () => { h = (Math.imul(h, 1664525) + 1013904223) >>> 0; return h / 4294967296; }; };
   function voiceBubble(m) {
-    const b = el('div', 'bubble voice');
+    const b = el('div', 'voice-row');
     const btn = el('button', 'play'); btn.type = 'button'; btn.innerHTML = PLAY;
     btn.setAttribute('aria-label', m.role === 'maya' ? "Play Maya's voice note" : 'Play your voice note');
-    const meta = el('div', 'vmeta'), bar = el('div', 'vbar'), fill = el('i'), dur = el('span', 'vdur', 'Voice note');
-    bar.append(fill); meta.append(bar, dur); b.append(btn, meta);
+    const wave = el('div', 'wave'), dur = el('span', 'vdur', ''), rnd = seeded(m.mediaUrl || m.id || 'note'), bars = [];
+    wave.setAttribute('role', 'slider'); wave.setAttribute('aria-label', 'Voice note position'); wave.tabIndex = 0;
+    for (let i = 0; i < BARS; i++) {
+      const env = 0.35 + 0.65 * Math.sin(Math.PI * (i + 0.5) / BARS), h = Math.max(0.12, (0.18 + 0.72 * rnd()) * env);
+      const bar = el('i'); bar.style.height = `${Math.round(h * 100)}%`; bars.push(bar); wave.append(bar);
+    }
+    b.append(btn, wave, dur);
     const audio = new Audio(m.mediaUrl);
     audio.preload = 'metadata';
-    audio.addEventListener('loadedmetadata', () => { if (isFinite(audio.duration)) dur.textContent = mmss(audio.duration); });
-    audio.addEventListener('timeupdate', () => { if (audio.duration) fill.style.width = `${(audio.currentTime / audio.duration) * 100}%`; });
-    const reset = () => { btn.innerHTML = PLAY; btn.setAttribute('aria-label', btn.getAttribute('aria-label').replace('Pause', 'Play')); fill.style.width = '0'; if (player && player.audio === audio) player = null; };
+    const paint = () => { const p = audio.duration ? audio.currentTime / audio.duration : 0; bars.forEach((x, i) => x.classList.toggle('heard', (i + 0.5) / BARS <= p && (p > 0))); wave.setAttribute('aria-valuenow', String(Math.round(p * 100))); };
+    const shown = () => { dur.textContent = isFinite(audio.duration) ? mmss(!audio.paused || audio.currentTime > 0 ? audio.currentTime : audio.duration) : ''; };
+    audio.addEventListener('loadedmetadata', shown);
+    audio.addEventListener('timeupdate', () => { paint(); shown(); });
+    const reset = () => { btn.innerHTML = PLAY; btn.setAttribute('aria-label', btn.getAttribute('aria-label').replace('Pause', 'Play')); audio.currentTime = 0; paint(); shown(); if (player && player.audio === audio) player = null; };
     audio.addEventListener('ended', reset);
     audio.addEventListener('error', () => { btn.disabled = true; dur.textContent = 'Could not load this voice note'; });
     btn.addEventListener('click', () => {
@@ -54,6 +64,9 @@
       btn.innerHTML = PAUSE;
       audio.play().catch(() => { btn.innerHTML = PLAY; showNotice('The voice note could not be played on this device.'); });
     });
+    const seek = (clientX) => { const r = wave.getBoundingClientRect(); if (audio.duration && r.width) { audio.currentTime = audio.duration * Math.min(1, Math.max(0, (clientX - r.left) / r.width)); paint(); shown(); } };
+    wave.addEventListener('click', (e) => seek(e.clientX));
+    wave.addEventListener('keydown', (e) => { if (!audio.duration) return; if (e.key === 'ArrowRight') audio.currentTime = Math.min(audio.duration, audio.currentTime + 5); else if (e.key === 'ArrowLeft') audio.currentTime = Math.max(0, audio.currentTime - 5); else return; e.preventDefault(); paint(); shown(); });
     btn.addEventListener('pause-all', () => { audio.pause(); btn.innerHTML = PLAY; });
     b.dataset.maya = m.role === 'maya' ? '1' : '';
     return b;
@@ -73,24 +86,26 @@
     return wrap;
   }
 
+  const FILE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm-1 7V3.500L18.500 9H13Z"/></svg>';
   function render(m, { pending = false } = {}) {
     const row = el('div', `msg ${m.role === 'maya' ? 'maya' : 'senior'}${pending ? ' pending' : ''}`);
     row.dataset.id = m.id || '';
-    row.append(el('span', 'who', m.role === 'maya' ? 'Maya' : 'You'));
+    const b = el('div', m.kind === 'voice' ? 'bubble voice' : 'bubble');
+    if (m.kind === 'file') {
+      // a document the person sent: the name, with its icon
+      const f = el('div', 'file-row'), ic = el('span', 'file-ico'); ic.innerHTML = FILE_ICON; f.append(ic, el('span', 'file-name', m.text)); b.append(f);
+    } else if (m.text) b.append(el('p', 'btext', m.text));
     if (m.kind === 'voice') {
-      row.append(voiceBubble(m));
-      if (m.text) row.append(el('p', 'vtext', m.text));
+      if (m.mediaUrl) b.append(voiceBubble(m));
+      else { const p = el('div', 'voice-row idle'); p.append(el('span', 'play ghost'), el('span', 'vdur', pending ? 'Sending' : 'Voice note')); b.append(p); }
     } else if (m.kind === 'image') {
-      const b = el('div', 'bubble photo'), img = el('img'); img.src = m.mediaUrl; img.alt = 'The photo you sent';
+      const img = el('img', 'photo'); img.src = m.mediaUrl; img.alt = 'The photo you sent';
       img.addEventListener('load', scrollDown);
-      b.append(img); row.append(b);
-      if (m.text) row.append(el('p', 'caption-line', m.text));
-    } else {
-      row.append(el('div', 'bubble', m.text));
+      b.append(img);
     }
+    row.append(b);
     if (m.voiceError) row.append(el('p', 'voice-fail', m.voiceError));
     if (Array.isArray(m.sources) && m.sources.length) row.append(sourceBox(m.sources));
-    if (!pending && m.at) row.append(el('span', 'time', clock(m.at)));
     syncVoiceRule();
     return row;
   }
@@ -207,7 +222,9 @@
   }
 
   // ---- recording ----
+  // Tap the blue microphone once to start; the box becomes a blue bar (a bin, a picture button, the live waveform, the time, a white arrow). Tap the white arrow to send.
   const MIC_ERROR = 'Maya could not use the microphone. Please allow microphone access and try again.';
+  const levels = [];
   async function startRecording() {
     if (recording || working) return;
     if (!navigator.mediaDevices || !window.MediaRecorder) { showNotice('This browser cannot record a voice note here. Try Chrome or Safari on localhost or https.'); return; }
@@ -215,28 +232,61 @@
     let rec;
     try { rec = await window.mayaChat.startRecording(); } catch { showNotice(MIC_ERROR); return; }
     const startedAt = Date.now();
-    recording = { rec, startedAt, timer: setInterval(tickRecording, 250) };
-    recBar.hidden = false; tickRecording(); syncControls(); scrollDown();
+    levels.length = 0;
+    recording = { rec, startedAt, timer: setInterval(tickRecording, 90) };
+    recBar.hidden = false; writeRow.hidden = true; tickRecording(); syncControls(); scrollDown();
+  }
+  function drawWave() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1), w = recWave.clientWidth, h = recWave.clientHeight;
+    if (!w || !h) return;
+    if (recWave.width !== Math.round(w * dpr)) { recWave.width = Math.round(w * dpr); recWave.height = Math.round(h * dpr); }
+    const g = recWave.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    const bw = 3, gap = 3, n = Math.floor(w / (bw + gap)), mid = h / 2;
+    g.lineWidth = bw; g.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      const k = levels.length - n + i, has = k >= 0 && k < levels.length, bh = 4 + (has ? levels[k] : 0) * (h - 4), x = i * (bw + gap) + bw / 2;   // the newest sound is at the right edge
+      g.strokeStyle = `rgba(255,255,255,${has ? 0.95 : 0.35})`; g.beginPath(); g.moveTo(x, mid - bh / 2); g.lineTo(x, mid + bh / 2); g.stroke();
+    }
   }
   function tickRecording() {
     if (!recording) return;
     const s = (Date.now() - recording.startedAt) / 1000;
-    recTime.textContent = `Recording ${mmss(s)}`;
+    levels.push(recording.rec.level ? recording.rec.level() : 0); if (levels.length > 200) levels.shift();
+    recTime.textContent = mmss(s); drawWave();
     if (s >= MAX_RECORD_S) stopRecording(true);
   }
-  function endRecordingUi() { clearInterval(recording.timer); recording = null; recBar.hidden = true; syncControls(); }
+  function endRecordingUi() { clearInterval(recording.timer); recording = null; recBar.hidden = true; writeRow.hidden = false; syncControls(); }
   async function stopRecording(send) {
     if (!recording) return;
     const { rec, startedAt } = recording;
     endRecordingUi();
     if (!send) { rec.cancel(); return; }
-    if (Date.now() - startedAt < 600) { rec.cancel(); showNotice('That was very short. Tap Voice, say something, then tap Stop.'); return; }
+    if (Date.now() - startedAt < 600) { rec.cancel(); showNotice('That was very short. Tap the microphone, say something, then tap the white arrow.'); return; }
     setBusy('Getting your voice note ready…');
     let wav;
     try { wav = await rec.stop(); } catch { setBusy(''); showNotice('Your voice note could not be read. Please try recording it again.'); return; }
     setBusy('');
     await sendWav(wav);
   }
+
+  // ---- a PDF (a letter, a bill, a message): its words are read on the server, checked for a scam, and answered in simple words ----
+  async function sendPdf(file) {
+    if (!file) return;
+    clearNotices();
+    if (!/pdf/i.test(file.type) && !/\.pdf$/i.test(file.name || '')) { showNotice('That file is not a PDF. Please pick a PDF, or send a photo of the page.'); return; }
+    if (file.size > MAX_PDF_BYTES) { showNotice('That PDF is too big for Maya (8 MB at most). Please send a photo of the page instead.'); return; }
+    const pending = append({ role: 'senior', kind: 'file', text: file.name || 'Document.pdf' }, { pending: true });
+    setBusy('Maya is reading your document…');
+    try {
+      const r = await window.mayaChat.sendPdf(file);
+      pending.remove();
+      for (const m of r.messages) append(m);
+    } catch (e) { pending.remove(); showNotice(e.message); } finally { setBusy(''); pdfIn.value = ''; }
+  }
+
+  // ---- the sheet behind the paperclip ----
+  function openSheet() { if (attachBtn.disabled) return; sheet.hidden = false; $('aImage').focus({ preventScroll: true }); }
+  function closeSheet() { sheet.hidden = true; }
 
   // ---- controls ----
   function autosize() { msgIn.style.height = 'auto'; msgIn.style.height = `${Math.min(msgIn.scrollHeight, MAX_BOX_PX())}px`; }
@@ -248,32 +298,34 @@
     thread.querySelectorAll('.bubble.voice .play').forEach((b) => { b.disabled = live; b.title = live ? 'Voice notes can be played after the call.' : ''; });
     if (live) stopAllAudio();
   }
+  function syncMain() {
+    const hasText = msgIn.value.trim().length > 0;
+    mainBtn.dataset.mode = hasText ? 'send' : 'mic';
+    mainBtn.setAttribute('aria-label', hasText ? 'Send' : 'Record a voice note');
+  }
   function syncControls() {
     const hasProfile = Boolean(window.mayaProfile && window.mayaProfile.id);
     const recOn = Boolean(recording);
     const prev = Boolean(picked);
-    sendBtn.disabled = !hasProfile || working || recOn;
+    mainBtn.disabled = !hasProfile || working || prev;
     msgIn.disabled = !hasProfile || recOn;
-    photoBtn.disabled = !hasProfile || working || recOn || prev;
-    recBtn.disabled = !hasProfile || (working && !recOn) || prev;
-    recBtn.dataset.on = String(recOn);
-    recLabel.textContent = recOn ? 'Stop' : 'Voice';
-    recBtn.setAttribute('aria-label', recOn ? 'Stop and send the voice note' : 'Record a voice note');
+    attachBtn.disabled = !hasProfile || working || recOn || prev;
+    $('recGallery').disabled = !hasProfile || working || prev;
+    syncMain();
   }
   function syncCall() {
     const c = cs();
     if (!c) return;
     const muted = c.muted;
     muteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
-    muteBtn.title = muted ? 'Unmute' : 'Mute';
     muteBtn.setAttribute('aria-pressed', String(muted));
+    muteBtn.classList.toggle('on', muted);
+    $('muteLabel').textContent = muted ? 'Unmute' : 'Mute';
     mutedTag.hidden = !(c.live && muted);
-    orb.title = c.live && c.view === 'minimized' ? 'Tap to make the call bigger' : '';
-    if (c.live && c.view === 'minimized') { orb.setAttribute('role', 'button'); orb.tabIndex = 0; } else { orb.setAttribute('role', 'img'); orb.removeAttribute('tabindex'); }
-    if (c.live && c.view === 'full' && recording) stopRecording(false);
-    if (c.live && picked) closePreview(); // a call starting drops a photo that was waiting // the chat is hidden: a half-made voice note is dropped
+    if (c.live && c.view === 'full' && recording) stopRecording(false);   // the chat is out of sight: a half-made voice note is dropped
+    if (c.live && c.view === 'full' && picked) closePreview();           // a call starting drops a photo that was waiting
+    if (c.live && c.view === 'full') closeSheet();
     syncVoiceRule();
-    lastChange = Date.now();
     restoreScroll();
   }
 
@@ -295,50 +347,37 @@
     put(); requestAnimationFrame(put);
   }
 
-  let lastChange = 0;
-  // Full screen: a tap anywhere except the orb shrinks the call to the small orb and brings the chat up. The tap that
-  // started the call, and taps on the orb itself, do nothing.
-  document.addEventListener('click', (e) => { // the whole page, so a click beside the column on a wide screen counts too
-    const c = cs();
-    if (!c || !c.live || c.view !== 'full') return;
-    if (Date.now() - lastChange < 500) return;
-    if (e.target.closest('#orb, #callBtn, #inbox')) return; // the orb itself, the Call button, and a ring or message card do nothing here
-    c.minimize();
-  });
-  // Small orb: tap it to grow back to the big orb (a muted call stays muted).
-  function expandFromOrb() { if (Date.now() - lastChange < 500) return; const c = cs(); // a pull that just minimized the call must not count as a tap on the small orb
-    if (c && c.live && c.view === 'minimized') c.expand(); }
-  orb.addEventListener('click', expandFromOrb);
-  orb.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expandFromOrb(); } });
+  // Call page buttons. Mute keeps its state; Speaker is on by default (a browser cannot pick the earpiece, so off is a quieter voice); End call ends it.
   muteBtn.addEventListener('click', () => { const c = cs(); if (!c || !c.live) return; if (c.muted) c.unmute(); else c.mute(); syncCall(); });
-  $('expandBtn').addEventListener('click', () => { const c = cs(); if (c && c.live && c.view === 'minimized') c.expand(); });
   cutBtn.addEventListener('click', () => { if (window.mayaEndCall) window.mayaEndCall(); });
-
-  // Words on a call (status text and captions): OFF by default, remembered per person. Aa in the call strip and in the header.
-  const capKey = () => `mayaCaptions:${(window.mayaProfile && window.mayaProfile.id) || ''}`;
-  const capGet = () => { try { return localStorage.getItem(capKey()) === 'on'; } catch { return false; } };
-  function capApply() {
-    const on = capGet();
-    document.body.dataset.captions = on ? 'on' : 'off';
-    for (const b of [$('capBtn'), $('capBtnTop')]) { b.setAttribute('aria-pressed', String(on)); b.setAttribute('aria-label', on ? 'Hide words' : 'Show words'); b.title = on ? 'Hide words' : 'Show words'; }
-  }
-  function capToggle() { try { localStorage.setItem(capKey(), capGet() ? 'off' : 'on'); } catch { /* private window: it just will not be remembered */ } capApply(); }
-  $('capBtn').addEventListener('click', capToggle);
-  $('capBtnTop').addEventListener('click', capToggle);
-  window.addEventListener('maya-profile', capApply);
-  capApply();
+  speakerBtn.addEventListener('click', () => {
+    const on = !(speakerBtn.getAttribute('aria-pressed') === 'true');
+    if (window.mayaSpeaker) window.mayaSpeaker(on);
+    speakerBtn.setAttribute('aria-pressed', String(on)); speakerBtn.classList.toggle('on', on);
+  });
   window.addEventListener('maya-callstate', syncCall);
+  window.addEventListener('maya-page', () => { restoreScroll(); scrollDown(); });
 
   $('composer').addEventListener('submit', (e) => { e.preventDefault(); sendText(); });
-  msgIn.addEventListener('input', autosize);
+  msgIn.addEventListener('input', () => { autosize(); syncMain(); });
   msgIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); } });
-  recBtn.addEventListener('click', () => { if (recording) stopRecording(true); else startRecording(); });
+  // One blue button: an arrow once there is something to write, otherwise the microphone (tap to record, tap the white arrow to send).
+  mainBtn.addEventListener('click', () => { if (msgIn.value.trim()) sendText(); else startRecording(); });
   $('recCancel').addEventListener('click', () => stopRecording(false));
-  photoBtn.addEventListener('click', () => photoIn.click());
+  $('recSend').addEventListener('click', () => stopRecording(true));
+  $('recGallery').addEventListener('click', () => photoIn.click());
+  attachBtn.addEventListener('click', openSheet);
+  $('aCancel').addEventListener('click', closeSheet);
+  sheet.addEventListener('click', (e) => { if (e.target === sheet) closeSheet(); });
+  $('aImage').addEventListener('click', () => { closeSheet(); photoIn.click(); });
+  $('aPdf').addEventListener('click', () => { closeSheet(); pdfIn.click(); });
+  $('aCamera').addEventListener('click', () => { closeSheet(); camIn.click(); });
   photoIn.addEventListener('change', () => pickPhoto(photoIn.files && photoIn.files[0]));
+  camIn.addEventListener('change', () => { const f = camIn.files && camIn.files[0]; camIn.value = ''; pickPhoto(f); });
+  pdfIn.addEventListener('change', () => sendPdf(pdfIn.files && pdfIn.files[0]));
   $('previewSend').addEventListener('click', sendPicked);
   $('previewCancel').addEventListener('click', closePreview);
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && picked) closePreview(); });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!sheet.hidden) closeSheet(); else if (picked) closePreview(); } });
 
   // Maya's own unprompted line (the family has seen the worry): it joins the thread as her message.
   window.addEventListener('maya-chat-message', (e) => { if (e.detail) append(e.detail); });

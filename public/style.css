@@ -1,363 +1,283 @@
-/* Senior app. One centred column, one big button. Pure white and neutral grey; the terracotta Call button and the orb glow are the only warm colours. */
+/* Maya on the web, senior side. The same design as the phone app: transparent, see-through pages, one page at a time, trust blue and teal, a system font, muted neutrals.
+   No pink, no purple, no cards stacked on cards. One centred column about 500px wide, full height; on a phone browser it is the whole screen. */
 :root {
-  --bg: #ffffff;
-  --ink: #1a1a1a;
+  --ink: #111111;
   --soft: #666666;
   --line: #e5e5e5;
-  --btn: #bf5530;       /* call: warm terracotta */
-  --btn-ink: #fff;
-  --end: #9c2f27;       /* end call and errors: brick */
-  --focus: #1a1a1a;
+  --trust: #4d63d8;
+  --trust-deep: #3f54c8;
+  --trust-soft: #e8ecfb;
+  --teal: #17b3a8;
+  --call: #14463c;          /* the big Call button, as in the app */
+  --accept: #2e9c86;
+  --decline: #c0392b;
+  --alert: #b3261e;
+  --bubble-in: #f2f6fd;     /* Maya: a light blue-white */
+  --bubble-in-line: #e4eaf7;
+  --bubble-out: #e9f7ec;    /* the person: a light green tint */
+  --bubble-out-line: #d9eedd;
+  --chat-top: #f8f9fe;
+  --chat-bottom: #ecEFfb;
+  --edge: #e2e7f6;
+  --room: #e6eaf6;          /* what shows beside the column on a wide screen */
+  --call-bg:
+    radial-gradient(60% 40% at 100% 62%, rgba(156, 115, 82, 0.50), transparent 70%),
+    radial-gradient(60% 40% at 0% 100%, rgba(234, 219, 200, 0.55), transparent 70%),
+    radial-gradient(60% 40% at 0% 0%, rgba(70, 90, 104, 0.50), transparent 70%),
+    radial-gradient(45% 30% at 100% 14%, rgba(62, 122, 140, 0.30), transparent 70%),
+    linear-gradient(180deg, #5e6f7a 0%, #7d8d93 45%, #b4a794 82%, #cdbba6 100%);
 }
 
 * { box-sizing: border-box; }
-
-html, body { margin: 0; background: var(--bg); color: var(--ink); }
-
+html, body { margin: 0; height: 100%; background: var(--room); color: var(--ink); }
 body {
   font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  font-size: 20px;
-  line-height: 1.4;
+  font-size: 18px;
+  line-height: 1.35;
   -webkit-text-size-adjust: 100%;
+  overflow: hidden;
 }
-
 [hidden] { display: none !important; }
+button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visible, .wave:focus-visible { outline: 3px solid var(--trust); outline-offset: 2px; }
+svg { fill: currentColor; }
 
-/* The column: about 500px wide, full height. */
-.call {
+/* ---------------------------------------------------------------------------------------------------------
+   The column: about 500px wide, the full height of the screen. Never stretched across a wide screen.
+   --------------------------------------------------------------------------------------------------------- */
+.shell {
+  position: relative;
+  z-index: 1;
   width: 100%;
   max-width: 500px;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh; height: var(--app-h, 100dvh);
   margin: 0 auto;
-  padding: 24px 24px 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--chat-top), var(--chat-bottom));
+  display: flex; flex-direction: column;
 }
+@media (min-width: 540px) { .shell { box-shadow: 0 0 0 1px #d8def2; } }
+body[data-page='call'] .shell { background: transparent; }
 
-/* Call screen never scrolls as a page: the stage gives way, the button stays where the thumb is. */
-.call.screen { height: 100vh; height: var(--app-h, 100dvh); overflow: hidden; padding: 12px 16px 0; align-items: stretch; text-align: left; }
+/* the see-through backdrop behind the call page and the incoming-call page (clipped to the column) */
+.backdrop { position: fixed; z-index: 0; top: 0; bottom: 0; left: 50%; width: min(100%, 500px); transform: translateX(-50%); background: var(--call-bg); opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+.backdrop i { display: none; }
+body[data-page='call'] .backdrop { opacity: 1; }
 
-h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.04em; }
-.top { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 6px; min-height: 40px; }
-.top-links { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.top-links .link-btn { font-size: 15px; padding: 8px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62vw; }
+.page { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+body[data-page='home'] .home, body[data-page='chat'] .chat-page, body[data-page='call'] .call-page { display: flex; }
 
-.stage {
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
-  display: none;              /* only on a call: see body[data-call-layout] below */
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-}
+.title { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -0.4px; color: var(--ink); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* ---------------------------------------------------------------------------------------------------------
-   Orb. Drawn on a canvas by orb.js (frosted dome, warm glow moving inside, nothing outside it). The shape is fixed: the canvas
-   is exactly this box, so there is no room for the dome to stretch, and it never does.
+   Home: the big Call button in the middle, one way into the chat, the Family link. Nothing scrolls.
    --------------------------------------------------------------------------------------------------------- */
-.orb {
-  --size: clamp(150px, min(64vw, 34dvh), 250px);
-  position: relative;
-  width: var(--size);
-  height: var(--size);
-  flex: none;
-  will-change: transform;
+.home .head { flex: none; height: 60px; display: flex; align-items: center; justify-content: center; padding: 0 16px; }
+.home-mid { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.call-big {
+  --s: clamp(150px, min(62vw, 34vh), 250px);
+  position: relative; width: var(--s); height: var(--s); border-radius: 50%; border: 0; background: var(--call); color: #fff;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: calc(var(--s) * 0.04);
+  font-size: clamp(16px, calc(var(--s) * 0.12), 22px); font-weight: 700;
+  transition: transform 0.12s ease;
 }
-.orb canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: block; }
-body[data-call-layout='big'] .orb { touch-action: none; cursor: grab; -webkit-user-select: none; user-select: none; }
-
-.status { flex: none; margin: 22px 0 6px; font-size: 24px; font-weight: 600; min-height: 1.4em; }
-.caption {
-  margin: 0;
-  max-width: 100%;
-  color: var(--soft);
-  font-size: 19px;
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 7.5em;     /* long replies scroll inside the caption, they never push the button */
-  overflow-y: auto;
-  overscroll-behavior: contain;
+.call-big:active { transform: scale(0.94); }
+.call-big svg { width: calc(var(--s) * 0.34); height: calc(var(--s) * 0.34); }
+.call-big .ring { position: absolute; inset: 0; border-radius: 50%; border: 3px solid rgba(20, 70, 60, 0.28); animation: pulse 2.2s ease-out infinite; pointer-events: none; }
+@keyframes pulse { from { transform: scale(1); opacity: 1; } to { transform: scale(1.24); opacity: 0; } }
+.chat-entry {
+  flex: none; margin: 4px 24px 10px; height: 64px; border-radius: 32px; background: #fff; border: 1.4px solid var(--edge);
+  display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 19px; font-weight: 700; color: var(--ink);
 }
+.chat-entry .ico { position: relative; display: inline-flex; color: var(--trust); }
+.chat-entry .ico svg { width: 26px; height: 26px; }
+.dot { position: absolute; right: -3px; top: -3px; width: 11px; height: 11px; border-radius: 50%; background: var(--trust); border: 2px solid #fff; box-sizing: content-box; }
+.foot { flex: none; min-height: 56px; display: flex; align-items: center; justify-content: center; gap: 22px; flex-wrap: wrap; padding: 0 16px; }
+.chat-page .foot { min-height: 44px; }
+.family-link, .link-btn { font-size: 15px; font-weight: 700; color: var(--soft); text-decoration: none; background: none; border: 0; padding: 10px 6px; min-height: 44px; display: inline-flex; align-items: center; }
+.family-link.soft, .link-btn { font-weight: 500; font-size: 14px; }
+.family-link:hover, .link-btn:hover { color: var(--ink); }
+.error { margin: 4px 24px; color: var(--alert); font-size: 15px; text-align: center; }
 
-.error {
-  margin: 12px 0 0;
-  max-width: 100%;
-  padding: 12px 16px;
-  border: 1.5px solid var(--end);
-  border-radius: 14px;
-  background: #fff;
-  color: var(--end);
-  font-size: 17px;
-  font-weight: 600;
-  max-height: 9em;
-  overflow-y: auto;
+/* while a call is set aside: a small bar at the top, one tap back to the call */
+.back-bar {
+  flex: none; margin: 2px 14px 8px; height: 52px; padding: 0 18px; border: 0; border-radius: 26px; color: #fff;
+  background: linear-gradient(90deg, var(--trust), var(--trust-deep)); box-shadow: 0 6px 16px rgba(77, 99, 216, 0.2);
+  display: flex; align-items: center; gap: 10px; text-align: left;
 }
-
-.call-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 64px;
-  padding: 10px 14px;
-  border: 0;
-  border-radius: 18px;
-  background: var(--btn);
-  color: var(--btn-ink);
-  font: inherit;
-  font-size: 26px;
-  font-weight: 700;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition: background-color 0.2s ease;
-}
-.call-btn:hover { background: #ac4a28; }
-.call-btn:focus-visible { outline: 4px solid var(--focus); outline-offset: 3px; }
-.call-btn:disabled { opacity: 0.6; cursor: default; }
-
-.mode-note { margin: 6px 0 0; font-size: 14px; color: var(--soft); text-align: center; }
-
-.link-btn {
-  font: inherit;
-  font-size: 15px;
-  background: none;
-  border: none;
-  padding: 8px 4px;
-  color: var(--soft);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-.link-btn:hover { color: var(--ink); }
-.link-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+.back-bar svg { width: 22px; height: 22px; flex: none; }
+.back-bar b { font-size: 18px; font-weight: 700; }
+.back-bar span { margin-left: auto; font-size: 14px; opacity: 0.85; white-space: nowrap; }
 
 /* ---------------------------------------------------------------------------------------------------------
-   Screens. body[data-call-layout] comes from the call state (app.js):
-     none  no call: the chat fills the screen, the Call button is pinned at the bottom
-     big   call, full: only the big orb, centred (no chat)
-     small call, minimized or muted: small orb, Mute + Cut Call, the chat below it
+   Chat: a voice-note messenger. Maya's messages pale blue on the left, the person's pale green on the right.
    --------------------------------------------------------------------------------------------------------- */
-.chat { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; width: 100%; }
-/* Big orb: the orb and the call buttons (Mute, Cut Call, Aa) under it, nothing else: no thread, no type box. */
-body[data-call-layout='big'] .chat { display: none; }
-body[data-call-layout='big'] .expand { display: none; }
-body[data-call-layout='big'] .stage, body[data-call-layout='small'] .stage { display: flex; }
-body[data-call-layout='big'] .top-links { visibility: hidden; }
-body[data-call-layout='small'] .top-links { display: none; }
-
-body[data-call-layout='big'] .stage { flex: 1 1 auto; }
-body[data-call-layout='big'] .orb { --size: clamp(190px, min(70vw, 42dvh), 340px); }
-/* Minimized: the call is a small floating widget (orb + Mute / Expand / Cut / Aa as one piece). It is out of the page flow, so the chat
-   fills the screen; orb.js places it (bottom-right above the composer by default) and lets a finger drag it anywhere on screen. */
-body[data-call-layout='small'] .stage {
-  position: fixed; left: 0; top: 0; z-index: 5; width: max-content; max-width: calc(100vw - 16px); flex: none; padding: 8px; gap: 6px;
-  background: #fff; border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
-  transform: translate(var(--wx, 0px), var(--wy, 0px)); touch-action: none; -webkit-user-select: none; user-select: none; cursor: grab;
-  animation: widget-in 0.35s ease-out both;
-}
-body[data-call-layout='small'] .stage.dragging { cursor: grabbing; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2); }
-@keyframes widget-in { from { opacity: 0; } }
-body[data-call-layout='small'] .orb { --size: 56px; cursor: pointer; }
-body[data-call-layout='small'] .status { margin: 2px 0 0; font-size: 12px; font-weight: 600; min-height: 0; max-width: 150px; text-align: center; line-height: 1.25; }
-body[data-call-layout='small'] .caption, body[data-call-layout='small'] .full-hint { display: none; }
-.orb[data-muted='true'] { filter: grayscale(0.9); opacity: 0.55; }
-.muted-tag { margin: 6px 0 0; font-size: 18px; font-weight: 700; color: var(--end); }
-.full-hint { margin: 18px 0 0; font-size: 16px; color: var(--soft); }
-/* No words on a call by default: just the orb. The words stay in the page for screen readers (visually hidden, not removed).
-   The Aa button (per person, remembered) puts status and captions back under the orb. */
-body:not([data-captions='on']) .status, body:not([data-captions='on']) .caption, body:not([data-captions='on']) .muted-tag, body:not([data-captions='on']) .full-hint {
-  position: absolute; width: 1px; height: 1px; min-height: 0; max-height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
-}
-body[data-call-layout='small'] .muted-tag { font-size: 12px; margin-top: 0; max-width: 150px; text-align: center; }
-
-.call-controls { display: none; width: 100%; gap: 14px; margin-top: 10px; justify-content: center; align-items: center; }
-body[data-call-layout='big'] .call-controls { display: flex; }
-body[data-call-layout='small'] .call-controls { display: flex; width: auto; gap: 6px; margin-top: 0; }
-/* Small round icon buttons, like a chat app's call bar: quiet, not toy-coloured. */
-.strip-btn {
-  flex: none; width: 44px; height: 44px; padding: 0; border-radius: 50%; display: grid; place-items: center;
-  border: 1.5px solid var(--line); background: #fff; color: var(--ink); font: inherit; font-size: 15px; font-weight: 600; letter-spacing: -0.02em;
-  cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, opacity 0.25s ease;
-}
-.strip-btn svg { width: 22px; height: 22px; fill: currentColor; }
-.strip-btn:hover { background: #f2f2f2; }
-.strip-btn:focus-visible, .cap-top:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-.strip-btn .i-mic-off { display: none; }
-.strip-btn .slash { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
-.strip-btn.mute[aria-pressed='true'] { background: var(--ink); border-color: var(--ink); color: #fff; }
-.strip-btn.mute[aria-pressed='true'] .i-mic { display: none; }
-.strip-btn.mute[aria-pressed='true'] .i-mic-off { display: block; }
-.strip-btn.cut { background: var(--end); border-color: var(--end); color: #fff; }
-.strip-btn.cut:hover { background: #862820; }
-.strip-btn.cut svg { transform: rotate(0deg); }
-.strip-btn.cap[aria-pressed='true'], .cap-top[aria-pressed='true'] { background: var(--ink); border-color: var(--ink); color: #fff; }
-.cap-top { flex: none; width: 34px; height: 34px; padding: 0; border-radius: 50%; border: 1.5px solid var(--line); background: #fff; color: var(--soft); font: inherit; font-size: 13px; font-weight: 600; letter-spacing: -0.02em; cursor: pointer; }
-body[data-call-layout='big'] .cap-top { visibility: hidden; }
-.ctl-btn {
-  flex: 1 1 0; min-width: 0; min-height: 60px; padding: 8px 12px; border-radius: 16px; font: inherit; font-size: 24px; font-weight: 700;
-  cursor: pointer; border: 2px solid var(--ink); background: #fff; color: var(--ink); -webkit-tap-highlight-color: transparent;
-}
-.ctl-btn:focus-visible { outline: 4px solid var(--focus); outline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) { body[data-call-layout='small'] .stage { animation: none; } }
-body[data-call-layout='small'] .strip-btn { width: 32px; height: 32px; font-size: 12px; }
-body[data-call-layout='small'] .strip-btn svg { width: 17px; height: 17px; }
-body[data-call-layout='small'] #callBtn { display: none; }
-
-/* The thread: Maya on the left, the person on the right, big readable text. */
-.thread {
-  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 0 10px;
-  display: flex; flex-direction: column; gap: 12px; scroll-behavior: auto;
-}
-.msg { display: flex; flex-direction: column; max-width: 86%; }
-.msg.maya { align-self: flex-start; align-items: flex-start; }
-.msg.senior { align-self: flex-end; align-items: flex-end; }
-.who { font-size: 14px; color: var(--soft); margin: 0 6px 2px; }
-.bubble { padding: 12px 16px; border-radius: 20px; font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; white-space: pre-wrap; text-align: left; }
-.msg.maya .bubble { background: #fff; border: 1.5px solid var(--line); border-bottom-left-radius: 6px; }
-.msg.senior .bubble { background: #f2f2f2; border-bottom-right-radius: 6px; }
-.msg.pending .bubble { opacity: 0.6; }
-.msg .time { font-size: 13px; color: var(--soft); margin: 2px 6px 0; }
+.chat-head { flex: none; height: 64px; display: grid; grid-template-columns: 58px 1fr 64px; align-items: center; padding: 0 6px; }
+.icon-btn { width: 48px; height: 48px; border-radius: 50%; border: 0; display: inline-flex; align-items: center; justify-content: center; background: none; }
+.icon-btn svg { width: 24px; height: 24px; }
+.icon-btn.plain { width: 52px; height: 52px; color: var(--ink); }
+.icon-btn.soft { background: var(--trust-soft); border: 1px solid #d7def7; color: var(--trust); justify-self: end; margin-right: 10px; }
+.thread { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 16px; display: flex; flex-direction: column; }
+.empty { margin: auto; padding: 0 12px; text-align: center; color: var(--soft); font-size: 17px; line-height: 1.4; }
+.msg { display: flex; flex-direction: column; margin: 6px 0; animation: arrive 0.22s ease-out; }
+.msg.maya { align-items: flex-start; }
+.msg.senior { align-items: flex-end; }
+.msg.pending { opacity: 0.65; }
+@keyframes arrive { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.bubble { max-width: 80%; padding: 12px 16px; border-radius: 18px; border: 1px solid var(--bubble-in-line); background: var(--bubble-in); font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
+.msg.senior .bubble { background: var(--bubble-out); border-color: var(--bubble-out-line); }
+.bubble.voice { width: 80%; }
+.btext { margin: 0; white-space: pre-wrap; }
+.bubble .photo { display: block; width: 100%; max-height: 220px; object-fit: cover; border-radius: 12px; margin-top: 8px; }
+.bubble .btext + .photo, .bubble .btext + .voice-row { margin-top: 8px; }
+.bubble > .photo:first-child { margin-top: 0; }
+.voice-row { display: flex; align-items: center; gap: 12px; }
+.play { flex: none; width: 48px; height: 48px; border-radius: 50%; border: 0; background: #fff; color: var(--trust); display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.play svg { width: 28px; height: 28px; }
+.play:disabled { color: rgba(77, 99, 216, 0.4); cursor: default; }
+.play.ghost { color: rgba(77, 99, 216, 0.4); }
+.wave { flex: 1 1 auto; min-width: 0; height: 40px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+.wave i { display: block; width: 3px; border-radius: 2px; background: rgba(77, 99, 216, 0.34); }
+.wave i.heard { background: var(--trust); }
+.vdur { flex: none; min-width: 34px; font-size: 14px; font-weight: 500; color: var(--soft); font-variant-numeric: tabular-nums; }
+.voice-row.idle .vdur { min-width: 0; }
+.file-row { display: flex; align-items: center; gap: 12px; }
+.file-ico { flex: none; width: 44px; height: 44px; border-radius: 50%; background: #fff; color: var(--trust); display: inline-flex; align-items: center; justify-content: center; }
+.file-ico svg { width: 24px; height: 24px; }
+.file-name { font-size: 17px; font-weight: 500; line-height: 1.3; overflow-wrap: anywhere; }
+.voice-fail { margin: 4px 6px 0; font-size: 13px; color: var(--alert); }
+.notice { margin: 8px 4px; padding: 10px 14px; border-radius: 14px; background: #fff; border: 1px solid var(--edge); color: var(--alert); font-size: 15px; }
 .msg .sources { margin: 2px 6px 0; max-width: 100%; }
-.msg .eye { min-width: 44px; min-height: 44px; font-size: 22px; line-height: 1; background: transparent; border: 1.5px solid var(--line); border-radius: 22px; cursor: pointer; }
+.msg .eye { min-width: 44px; min-height: 44px; font-size: 22px; line-height: 1; background: transparent; border: 1.5px solid var(--line); border-radius: 22px; }
 .msg .source-list { margin-top: 6px; }
-.msg .source { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; margin-bottom: 6px; border: 1.5px solid var(--line); border-radius: 14px; font-size: 16px; color: var(--soft); overflow-wrap: anywhere; }
+.msg .source { display: flex; flex-direction: column; margin-bottom: 8px; font-size: 14px; color: var(--soft); }
 .msg .source-title { font-weight: 600; }
-.msg .vtext { margin: 4px 6px 0; font-size: 17px; color: var(--soft); text-align: left; overflow-wrap: anywhere; }
-.msg .voice-fail { margin: 4px 6px 0; font-size: 16px; font-weight: 600; color: var(--end); }
-.bubble.voice { display: flex; align-items: center; gap: 12px; min-width: min(260px, 70vw); white-space: normal; }
-.play { flex: none; width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--btn); color: #fff; cursor: pointer; display: grid; place-items: center; }
-.play svg { width: 26px; height: 26px; fill: currentColor; }
-.play:disabled { background: #d9d9d9; cursor: default; }
-.play:focus-visible { outline: 4px solid var(--focus); outline-offset: 3px; }
-.vmeta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.vbar { height: 8px; border-radius: 4px; background: rgba(26, 26, 26, 0.14); overflow: hidden; }
-.vbar i { display: block; height: 100%; width: 0; background: var(--btn); }
-.vdur { font-size: 15px; color: var(--soft); }
-.bubble.photo { padding: 6px; background: #f2f2f2; }
-.bubble.photo img { display: block; max-width: 100%; width: 260px; max-height: 320px; object-fit: cover; border-radius: 14px; }
-.msg .caption-line { margin: 4px 6px 0; font-size: 20px; text-align: left; overflow-wrap: anywhere; }
-.empty { margin: auto; padding: 16px; text-align: center; color: var(--soft); font-size: 20px; }
-.notice { align-self: center; max-width: 94%; padding: 12px 16px; border: 1.5px solid var(--end); border-radius: 14px; background: #fff; color: var(--end); font-size: 18px; font-weight: 600; text-align: left; overflow-wrap: anywhere; }
-.busy { margin: 0; padding: 4px 8px; font-size: 18px; color: var(--soft); text-align: center; }
-.chat .error { margin: 6px 0; }
+.busy, .mode-note, .voice-rule { flex: none; margin: 4px 16px; text-align: center; font-size: 15px; color: var(--soft); }
 
-/* Photo preview: replaces the thread and the composer until Send or Cancel. */
-.photo-preview { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 6px 0 max(12px, env(safe-area-inset-bottom)); }
-.chat[data-preview='true'] .thread, .chat[data-preview='true'] .composer, .chat[data-preview='true'] .voice-rule, .chat[data-preview='true'] .rec-bar, .chat[data-preview='true'] .busy { display: none; }
-.preview-img { flex: 1 1 auto; min-height: 0; display: grid; place-items: center; border-radius: 18px; background: #f2f2f2; overflow: hidden; }
-.preview-img img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
-.preview-ask { flex: none; margin: 0; text-align: center; font-size: 22px; font-weight: 600; }
-.preview-row { flex: none; display: flex; gap: 12px; }
-.preview-row .ctl-btn { min-height: 64px; }
-.ctl-btn.send { background: var(--btn); border-color: var(--btn); color: #fff; }
+/* the box at the bottom */
+.composer { flex: none; padding: 6px 14px 8px; }
+.write-row { display: flex; align-items: flex-end; gap: 10px; }
+.box { flex: 1 1 auto; min-width: 0; min-height: 56px; display: flex; align-items: flex-end; background: #fff; border: 1.2px solid var(--edge); border-radius: 28px; padding: 0 18px 0 4px; }
+.clip { flex: none; width: 48px; height: 52px; border: 0; background: none; color: var(--trust); display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.clip svg { width: 26px; height: 26px; }
+.clip:disabled { opacity: 0.4; }
+#msgIn { flex: 1 1 auto; min-width: 0; height: 56px; resize: none; border: 0; background: transparent; font: inherit; font-size: 18.5px; line-height: 1.3; color: var(--ink); padding: 15px 0; overflow-y: auto; }
+#msgIn::placeholder { color: #8a8f9c; }
+#msgIn:focus-visible { outline: none; }
+.box:focus-within { border-color: var(--trust); }
+.main-btn { flex: none; width: 58px; height: 58px; border-radius: 50%; border: 0; background: var(--trust); color: #fff; display: inline-flex; align-items: center; justify-content: center; padding: 0; box-shadow: 0 6px 18px rgba(77, 99, 216, 0.2); }
+.main-btn svg { width: 28px; height: 28px; }
+.main-btn .i-up { display: none; }
+.main-btn[data-mode='send'] .i-mic { display: none; }
+.main-btn[data-mode='send'] .i-up { display: block; }
+.main-btn:disabled { opacity: 0.5; }
+.rec-bar { height: 64px; padding: 7px 8px; border-radius: 32px; background: linear-gradient(90deg, var(--trust), var(--trust-deep)); box-shadow: 0 8px 22px rgba(77, 99, 216, 0.2); display: flex; align-items: center; gap: 4px; color: #fff; animation: arrive 0.22s ease-out; }
+.rec-ico { flex: none; width: 46px; height: 48px; border: 0; background: none; color: rgba(255, 255, 255, 0.78); display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.rec-ico svg { width: 26px; height: 26px; }
+.rec-wave { flex: 1 1 auto; min-width: 0; height: 36px; }
+.rec-time { flex: none; margin: 0 8px; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rec-send { flex: none; width: 50px; height: 50px; border-radius: 50%; border: 0; background: #fff; color: var(--trust); display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.rec-send svg { width: 24px; height: 24px; }
 
-/* Recording bar and the call rule. */
-.rec-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; padding: 8px 12px; margin: 4px 0; border-radius: 14px; background: #fdecea; color: var(--end); font-size: 17px; }
-.rec-time { font-weight: 700; }
-.rec-help { flex: 1 1 140px; }
-.voice-rule { margin: 4px 0; font-size: 15px; color: var(--soft); text-align: center; }
+/* a photo waiting to be sent */
+.photo-preview { flex: none; margin: 6px 14px; padding: 12px; border-radius: 20px; background: #fff; border: 1px solid var(--edge); text-align: center; }
+.preview-img { max-height: 32vh; overflow: hidden; border-radius: 12px; }
+.preview-img img { display: block; max-width: 100%; max-height: 32vh; margin: 0 auto; }
+.preview-ask { margin: 10px 0; font-weight: 700; }
+.preview-row { display: flex; gap: 10px; }
+.ctl-btn { flex: 1 1 0; min-height: 52px; border-radius: 26px; border: 1.5px solid var(--edge); background: #fff; font-weight: 700; font-size: 17px; }
+.ctl-btn.send { background: var(--trust); border-color: var(--trust); color: #fff; }
 
-/* The composer is pinned at the bottom: text row, then Voice / Photo / Call. */
-.composer { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 8px 0 max(12px, env(safe-area-inset-bottom)); background: var(--bg); border-top: 1.5px solid var(--line); }
-.type-row { display: flex; gap: 10px; align-items: flex-end; }
-.type-row textarea {
-  flex: 1 1 auto; min-width: 0; font: inherit; font-size: 20px; line-height: 1.3; padding: 12px 14px; min-height: 56px; max-height: 8.5em; resize: none;
-  border: 1.5px solid var(--line); border-radius: 16px; background: #fff; color: var(--ink);
-}
-.type-row textarea:focus { outline: 3px solid var(--focus); outline-offset: 1px; }
-.send-btn { flex: none; min-height: 56px; padding: 0 20px; border: 0; border-radius: 16px; background: var(--ink); color: #fff; font: inherit; font-size: 20px; font-weight: 700; cursor: pointer; }
-.send-btn:disabled, .act-btn:disabled { opacity: 0.5; cursor: default; }
-.send-btn:focus-visible, .act-btn:focus-visible { outline: 4px solid var(--focus); outline-offset: 3px; }
-.action-row { display: flex; gap: 10px; align-items: stretch; }
-.act-btn {
-  flex: none; width: 76px; min-height: 64px; padding: 6px 4px; border: 1.5px solid var(--line); border-radius: 18px; background: #fff; color: var(--ink);
-  font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-}
-.act-btn svg { flex: none; width: 26px; height: 26px; fill: currentColor; }
-.act-btn[data-on='true'] { background: var(--end); border-color: var(--end); color: #fff; }
+/* the sheet behind the paperclip */
+.sheet-back { position: absolute; z-index: 30; inset: 0; background: rgba(17, 17, 17, 0.35); display: flex; align-items: flex-end; }
+.sheet { width: 100%; max-height: 92%; overflow-y: auto; background: #fff; border-radius: 28px 28px 0 0; padding: 8px 20px 18px; animation: rise 0.22s ease-out; }
+@keyframes rise { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.grab { width: 36px; height: 4px; border-radius: 2px; background: #d6dae6; margin: 0 auto 14px; }
+.sheet h2 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
+.sheet-sub { margin: 4px 0 16px; font-size: 16px; color: var(--soft); line-height: 1.35; }
+.tile { width: 100%; min-height: 72px; margin-bottom: 10px; padding: 10px 16px; border-radius: 20px; border: 1px solid #dde3f8; background: rgba(232, 236, 251, 0.6); display: flex; align-items: center; gap: 14px; text-align: left; }
+.ti { flex: none; width: 52px; height: 52px; border-radius: 50%; background: #fff; color: var(--trust); display: inline-flex; align-items: center; justify-content: center; }
+.ti svg { width: 28px; height: 28px; }
+.tt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.tt b { font-size: 19px; font-weight: 700; }
+.tt small { font-size: 15px; color: var(--soft); }
+.chev { flex: none; width: 24px; height: 24px; color: var(--soft); }
+.sheet-cancel { display: block; margin: 6px auto 0; padding: 10px 24px; border: 0; background: none; font-size: 17px; font-weight: 600; color: var(--soft); }
 
-/* Short screens (small phones, landscape): smaller orb and tighter text so the caption scrolls inside its own box. */
-@media (max-height: 680px) {
-  .status { margin-top: 12px; font-size: 20px; }
-  .caption { font-size: 17px; max-height: 4.6em; }
-  .call-btn { min-height: 58px; font-size: 24px; }
-  .act-btn { min-height: 58px; }
-  body[data-call-layout='small'] .orb { --size: 48px; }
-  body[data-call-layout='small'] .strip-btn { width: 30px; height: 30px; }
-  .ctl-btn { min-height: 54px; font-size: 22px; }
+/* ---------------------------------------------------------------------------------------------------------
+   Call: one see-through page. Words at the top, the particle orb in the middle, Mute and Speaker floating,
+   a red End call pill beneath. Nothing is a card.
+   --------------------------------------------------------------------------------------------------------- */
+.call-page { color: #fff; padding: 0 24px 22px; }
+.words { flex: none; padding-top: 34px; min-height: 190px; }
+.status { margin: 0 0 10px; font-size: 15px; color: rgba(255, 255, 255, 0.82); }
+.maya-line { margin: 0; font-size: 28px; line-height: 1.22; font-weight: 400; letter-spacing: -0.3px; display: -webkit-box; -webkit-line-clamp: 4; line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.you-line { margin: 12px 0 0; font-size: 19px; line-height: 1.3; color: rgba(255, 255, 255, 0.76); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.orb-wrap { flex: 1 1 0; min-height: 0; padding: 8px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.orb { flex: 0 1 auto; height: 100%; max-height: 340px; aspect-ratio: 1 / 1; max-width: 100%; min-height: 0; transition: opacity 0.3s ease; }
+.orb canvas { display: block; width: 100%; height: 100%; }
+.orb[data-muted='true'] { opacity: 0.5; }
+.muted-tag { margin: 8px 0 0; font-size: 15px; color: rgba(255, 255, 255, 0.85); }
+.to-chat {
+  flex: none; align-self: center; min-height: 50px; min-width: 220px; margin-bottom: 24px; padding: 10px 22px; border-radius: 30px; color: #fff;
+  background: rgba(255, 255, 255, 0.18); border: 1.2px solid rgba(255, 255, 255, 0.55); display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-size: 17px; font-weight: 500;
 }
-/* Very short screens (an open phone keyboard, landscape): everything stays reachable. The call becomes one row (small orb,
-   Mute, Cut Call), the header and extra text go, and the thread keeps whatever room is left and scrolls. */
-@media (max-height: 480px) {
-  .call.screen { padding-top: 6px; }
-  .top { min-height: 32px; padding-bottom: 2px; }
-  .voice-rule, .busy { font-size: 14px; padding: 2px 8px; }
-  .type-row textarea { min-height: 48px; padding: 8px 12px; }
-  .send-btn { min-height: 48px; }
-  .composer { gap: 6px; padding-top: 6px; }
-  .act-btn { min-height: 52px; flex-direction: row; gap: 6px; width: auto; padding: 4px 10px; }
-  .act-btn svg { width: 22px; height: 22px; }
-  .call-btn { min-height: 52px; font-size: 22px; }
-  .rec-help { display: none; }
-  .preview-ask { font-size: 18px; }
-  .preview-row .ctl-btn { min-height: 52px; font-size: 20px; }
-  body[data-call-layout='big'] .orb { --size: clamp(96px, 46dvh, 340px); }
-  body[data-call-layout='big'] .status { margin-top: 8px; font-size: 18px; }
-  body[data-call-layout='big'] .caption { max-height: 2.6em; font-size: 15px; }
-  body[data-call-layout='big'] .full-hint { margin-top: 6px; font-size: 14px; }
-  body[data-call-layout='small'] .top { display: none; }
-  body[data-call-layout='small'] .muted-tag { display: none; }
-}
-@media (max-height: 340px) {
-  .top { display: none; }
-  .msg .time, .who { display: none; }
-  .bubble { font-size: 19px; padding: 8px 12px; }
-}
-@media (max-width: 380px) {
-  .bubble { font-size: 21px; }
-  .act-btn { width: 66px; }
-  .call-btn { font-size: 22px; }
-  .send-btn { padding: 0 14px; }
-}
+.to-chat svg { width: 22px; height: 22px; }
+.call-controls { flex: none; display: flex; flex-direction: column; align-items: center; gap: 22px; }
+.two { width: 100%; max-width: 360px; display: flex; justify-content: space-between; }
+.round { width: 84px; background: none; border: 0; color: #fff; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0; font-size: 14px; font-weight: 500; }
+.round svg { box-sizing: content-box; width: 28px; height: 28px; padding: 18px; border-radius: 50%; background: rgba(255, 255, 255, 0.2); border: 1.2px solid rgba(255, 255, 255, 0.5); }
+.round.on svg, .round[aria-pressed='true'] svg { background: #fff; color: #2d3b45; }
+.round .i-mic-off { display: none; }
+.round[aria-pressed='true'] .i-mic { display: none; }
+.round[aria-pressed='true'] .i-mic-off { display: block; }
+.i-mic-off .slash { stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; fill: none; }
+.end-pill { min-height: 56px; padding: 0 34px; border: 0; border-radius: 28px; background: var(--decline); color: #fff; display: inline-flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 700; }
+.end-pill svg { width: 26px; height: 26px; }
 
-
-/* Profile picker (family setup). Its own page scroll; the call screen stays one big button. */
-.picker { padding-bottom: 32px; }
-.picker h1 { font-size: 30px; margin-bottom: 20px; letter-spacing: 0; }
-.picker .pick-title { margin: 0 0 16px; color: var(--soft); }
-.profile-list { display: flex; flex-direction: column; gap: 12px; width: 100%; }
-.profile-row { display: flex; gap: 8px; align-items: stretch; }
-.profile-row .pick-btn { flex: 1; min-width: 0; }
-.pick-btn {
-  font: inherit; font-size: 24px; font-weight: 600; padding: 16px; min-height: 64px;
-  border-radius: 18px; border: 1.5px solid var(--line); background: #fff; color: var(--ink); cursor: pointer;
+/* ---------------------------------------------------------------------------------------------------------
+   The ring and the family's messages (inbox.js). A ring is a whole page on the same backdrop: "Maya is calling" large,
+   one line for why, Decline (red) on the left and Accept (green) on the right, big.
+   --------------------------------------------------------------------------------------------------------- */
+.inbox { position: fixed; z-index: 50; top: 10px; left: 0; right: 0; margin: 0 auto; width: min(calc(100% - 20px), 480px); display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.inbox > * { pointer-events: auto; }
+.inbox-card { padding: 14px 16px; border-radius: 20px; background: #fff; border: 1px solid var(--edge); box-shadow: 0 10px 28px rgba(40, 50, 90, 0.18); }
+.inbox-card p { margin: 0 0 10px; font-size: 17px; line-height: 1.35; }
+.inbox-row { display: flex; gap: 10px; justify-content: flex-end; }
+.inbox-btn { min-height: 48px; padding: 0 22px; border-radius: 24px; border: 1.5px solid var(--edge); background: #fff; font-size: 16px; font-weight: 700; }
+.inbox-hint { display: block; margin: -4px 0 10px; font-size: 13px; color: var(--soft); }
+.inbox-card.incoming {
+  position: fixed; z-index: 60; top: 0; bottom: 0; left: 50%; width: min(100%, 500px); transform: translateX(-50%); margin: 0;
+  border: 0; border-radius: 0; box-shadow: none; background: var(--call-bg); color: #fff; padding: 60px 28px 44px;
+  display: flex; flex-direction: column; text-align: left;
 }
-.pick-btn:hover, .pick-btn:focus-visible { border-color: var(--btn); background: #f2f2f2; }
-.pick-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-.del-btn {
-  font: inherit; font-size: 15px; padding: 0 14px; border-radius: 18px; border: 1.5px solid var(--line);
-  background: #fff; color: var(--end); cursor: pointer;
-}
-.add-form { display: flex; flex-direction: column; gap: 14px; width: 100%; text-align: left; margin-top: 16px; }
-.add-form input[type=text] { font: inherit; width: 100%; padding: 12px; border: 1.5px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); }
-.add-form input[type=text]:focus { outline: 3px solid var(--focus); outline-offset: 1px; }
-.add-form fieldset { border: 1.5px solid var(--line); border-radius: 12px; }
-.add-form legend { font-size: 15px; color: var(--soft); }
-.add-form fieldset label { display: block; padding: 6px 0; }
-.add-form .pick-btn { background: var(--btn); border-color: var(--btn); color: #fff; }
-.add-form .pick-btn:disabled { opacity: 0.6; }
+.inbox-card.incoming .inbox-head { margin: auto 0 0; padding-top: 12vh; font-size: 40px; line-height: 1.05; font-weight: 300; letter-spacing: -1px; }
+.inbox-card.incoming p { margin: 14px 0 0; font-size: 20px; line-height: 1.35; font-weight: 400; color: rgba(255, 255, 255, 0.86); }
+.inbox-card.incoming .inbox-hint { margin: 10px 0 0; color: rgba(255, 255, 255, 0.8); }
+.inbox-card.incoming .inbox-row { margin-top: auto; padding-top: 14vh; justify-content: space-evenly; gap: 16px; }
+.inbox-card.incoming .inbox-btn { min-height: 0; padding: 0; border: 0; background: none; color: #fff; font-size: 18px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.inbox-card.incoming .inbox-btn::before { content: ''; width: 92px; height: 92px; border-radius: 50%; background-color: var(--decline); background-repeat: no-repeat; background-position: center; background-size: 42px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M12 9c-2.6 0-5 .6-7.3 1.8a1.6 1.6 0 0 0-.8 1.9l.6 1.8c.2.7 1 1.1 1.7.9l2.4-.8c.5-.2.8-.6.8-1.1v-1.2a9 9 0 0 1 5.2 0v1.2c0 .5.3.9.8 1.1l2.4.8c.7.2 1.5-.2 1.7-.9l.6-1.8a1.6 1.6 0 0 0-.8-1.9C17 9.6 14.6 9 12 9Z'/%3E%3C/svg%3E"); }
+.inbox-card.incoming .inbox-btn.accept::before { background-color: var(--accept); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.250.2 2.450.57 3.600a1 1 0 0 1-.25 1Z'/%3E%3C/svg%3E"); }
+/* a ring is the whole page: whatever is behind it is out of sight */
+body[data-ringing='true'] .shell, body[data-ringing='true'] .backdrop { visibility: hidden; }
 
-/* Incoming ring / family message cards (inbox.js). Fixed at the top so they never sit on the call button. */
-.inbox { position: fixed; left: 0; right: 0; top: 0; z-index: 10; display: flex; flex-direction: column; gap: 10px; align-items: center; padding: max(12px, env(safe-area-inset-top)) 12px 12px; pointer-events: none; }
-.inbox-card { pointer-events: auto; width: 100%; max-width: 476px; background: #fff; border: 1.5px solid var(--line); border-radius: 22px; padding: 18px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14); text-align: center; animation: inbox-in 0.4s ease-out; max-height: calc(100dvh - 24px); overflow-y: auto; }
-.inbox-card p { margin: 0 0 14px; font-size: 22px; font-weight: 600; }
-.inbox-row { display: flex; gap: 12px; }
-.inbox-btn { flex: 1; font: inherit; font-size: 22px; font-weight: 700; min-height: 64px; border-radius: 16px; border: 1.5px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
-.inbox-btn.accept { background: var(--btn); border-color: var(--btn); color: #fff; }
-.inbox-btn:focus-visible { outline: 4px solid var(--focus); outline-offset: 2px; }
-.inbox-hint { display: block; margin: -6px 0 10px; font-size: 15px; color: var(--soft); }
-@keyframes inbox-in { from { opacity: 0; transform: translateY(-12px); } }
-@media (prefers-reduced-motion: reduce) { .inbox-card { animation: none; } }
+/* ---------------------------------------------------------------------------------------------------------
+   Who is Maya talking with (the family sets this up once)
+   --------------------------------------------------------------------------------------------------------- */
+.picker { padding: 28px 24px; align-items: center; text-align: center; overflow-y: auto; }
+.brand { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+.pick-title { margin: 14px 0 18px; color: var(--soft); }
+.profile-list { width: 100%; display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.profile-row { display: flex; gap: 8px; }
+.pick-btn { flex: 1 1 auto; min-height: 60px; border-radius: 30px; border: 1.4px solid var(--edge); background: #fff; font-size: 20px; font-weight: 700; }
+.del-btn { min-height: 60px; padding: 0 16px; border-radius: 30px; border: 1.4px solid var(--edge); background: #fff; color: var(--soft); font-size: 15px; }
+.add-form { width: 100%; display: flex; flex-direction: column; gap: 12px; text-align: left; font-size: 17px; }
+.add-form input[type='text'] { display: block; width: 100%; margin-top: 6px; min-height: 52px; padding: 0 16px; border-radius: 26px; border: 1.2px solid var(--edge); font: inherit; background: #fff; }
+.add-form fieldset { border: 1.2px solid var(--edge); border-radius: 18px; background: #fff; display: flex; flex-direction: column; gap: 8px; }
+.add-form legend { font-size: 14px; color: var(--soft); padding: 0 6px; }
+.add-form button.pick-btn { background: var(--trust); border-color: var(--trust); color: #fff; }
+
+@media (prefers-reduced-motion: reduce) {
+  .call-big .ring { animation: none; opacity: 0; }
+  .msg, .rec-bar, .sheet { animation: none; }
+}

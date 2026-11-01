@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
   <title>Maya Family</title>
   <link rel="stylesheet" href="family.css">
 </head>
 <body>
 <header class="bar">
   <div class="bar-in">
-    <div class="brand">Maya <span>Family</span></div>
+    <div class="brand"><span id="famOrb" class="fam-orb" aria-hidden="true"></span>Maya <span>Family</span></div>
     <div id="whoBox" class="who" hidden>
       <label for="who">Switch person</label>
       <select id="who"></select>
@@ -205,5 +206,6 @@
 </main>
 <p style="text-align:center;font-size:14px;margin:12px"><a href="/privacy">Privacy</a></p>
 <script src="family.js"></script>
+<script src="orb.js"></script>
 </body>
 </html>

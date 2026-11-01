@@ -1,137 +1,72 @@
-// The orb's physics and mood rules (pure maths in public/orb.js). No browser here; the browser checks drive the real thing.
+// The orb's rules (pure maths in public/orb.js) and the senior page's structure. No browser here; headless Chrome drives the real thing.
+// The orb is the phone app's particle sphere (app/lib/widgets/orb.dart) drawn on a canvas.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { MayaOrbMath: M } = require('../public/orb.js');
+const { MayaParticles: P } = require('../public/orb.js');
+const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8');
 
-function run(target, from, p, seconds, fps = 60) {
-  const st = { x: from, v: 0 }, out = [];
-  for (let i = 0; i < seconds * fps; i++) { M.step(st, target, 1 / fps, p); out.push(st.x); }
-  return out;
-}
-
-test('spring: release springs back with one tiny overshoot, then settles (no snap, no shake)', () => {
-  const xs = run(0, 100, M.SPRING, 2);
-  const lowest = Math.min(...xs);
-  assert.ok(lowest < 0 && lowest > -12, `one small overshoot: ${lowest.toFixed(2)}`);           // about 7% of the pull
-  const afterLowest = xs.slice(xs.indexOf(lowest));
-  assert.ok(Math.max(...afterLowest) < 0.6, `a second bounce stays under a pixel: ${Math.max(...afterLowest).toFixed(2)}`); // from a 100 px pull
-  assert.ok(Math.abs(xs[xs.length - 1]) < 0.01, 'settled');
-  assert.ok(xs.findIndex((x) => Math.abs(x) < 1) / 60 < 1.1, 'settles within about a second');
-  assert.ok(xs[1] < 100 && xs[0] > xs[5], 'moves smoothly from the first frame (no snap)');
+test('particles: 3400 points on a sphere, the same every time, each with its own rhythm', () => {
+  const c = P.cloud(), d = P.cloud();
+  assert.equal(c.n, 3400);
+  for (let i = 0; i < c.n; i += 97) { assert.ok(Math.abs(Math.hypot(c.x[i], c.y[i], c.z[i]) - 1) < 1e-4, 'on the unit sphere'); assert.equal(c.f1[i], d.f1[i]); }
+  assert.ok(new Set(Array.from(c.f1.slice(0, 200)).map((v) => v.toFixed(3))).size > 150, 'rhythms differ');
 });
-
-test('spring: same motion at 30, 60 and 144 fps (stable, frame-rate independent)', () => {
-  const at = (fps) => run(0, 100, M.SPRING, 0.5, fps).pop();
-  assert.ok(Math.abs(at(30) - at(60)) < 0.6 && Math.abs(at(144) - at(60)) < 0.6);
-  assert.ok(Number.isFinite(run(0, 100, M.SPRING, 1, 5).pop()), 'a very slow frame rate does not blow up');
+test('resting movement: speaking and thinking move more than listening, which moves more than connecting; you speaking answers just as strongly; never still', () => {
+  assert.ok(P.rest('speaking') > P.rest('listening') && P.rest('listening') > P.rest('idle'));
+  assert.ok(P.rest('thinking') >= P.rest('listening'));
+  assert.ok(P.rest('listening', true) >= P.rest('speaking'));
+  for (const s of ['idle', 'listening', 'thinking', 'speaking']) assert.ok(P.rest(s) > 0, `${s} is never still`);
 });
-
-test('spring: following a finger has only a tiny lag and does not overshoot much', () => {
-  const xs = run(60, 0, M.FOLLOW, 1);
-  assert.ok(xs[2] > 0 && xs[2] < 60, 'lags a little');
-  assert.ok(Math.max(...xs) < 60 * 1.12, 'little overshoot');
-  assert.ok(Math.abs(xs.pop() - 60) < 0.5);
+test('sound drives it: louder = more movement, capped at 1, never negative; quick to rise, slower to settle', () => {
+  assert.ok(P.target(0.16, 0.8) > P.target(0.16, 0.2) && P.target(0.16, 0.2) > P.target(0.16, 0));
+  assert.equal(P.target(0.3, 5), 1); assert.equal(P.target(0.3, -2), 0.3);
+  const up = P.ease(0.2, 1) - 0.2, down = 1 - P.ease(1, 0.2);
+  assert.ok(up > down, 'rises faster than it falls');
+  assert.ok(Math.abs(P.ease(0.2, 1, 3) - P.ease(P.ease(P.ease(0.2, 1), 1), 1)) < 1e-9, 'three frames at once equals three frames in a row');
 });
-
-test('spring: gliding between big and small settles without a big bounce', () => {
-  const xs = run(1, 3.2, M.GLIDE, 1.5);
-  assert.ok(Math.min(...xs) > 0.9 && Math.abs(xs.pop() - 1) < 0.01);
+test('colours: cool only (teal to trust blue), no pink, no purple, no warm colour', () => {
+  assert.equal(P.RAMP.length, 4);
+  for (const hex of P.RAMP) { const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)); assert.ok(b > r && b >= g - 40 || g > r, hex); assert.ok(r < 0x70, 'low red: nothing pink or warm'); }
 });
-
-test('pull: the threshold is 80 px or 40 percent of the orb, whichever is larger, in any direction', () => {
-  const S = 273;
-  assert.equal(M.travel(30, 40), 50);
-  assert.equal(M.shouldMinimize(30, S), false);
-  assert.equal(M.shouldMinimize(M.pullThreshold(S) - 1, S), false);
-  assert.equal(M.shouldMinimize(M.pullThreshold(S), S), true);
-  assert.equal(M.pullThreshold(150), 80, 'a small orb still needs a deliberate pull');
-  assert.equal(M.pullThreshold(273), Math.max(80, 0.4 * 273));
-  assert.ok(M.pullThreshold(340) > M.pullThreshold(190), 'scales with the orb');
-  assert.equal(M.shouldMinimize(M.travel(60, 60), 150), true, 'sideways and down together counts');
-});
-
-test('inner energy: louder = quicker and bigger flow, quiet = slow, silence = slow breathing, never negative or runaway', () => {
-  assert.equal(M.energy(0), 0);
-  assert.ok(M.energy(0.1) < M.energy(0.3) && M.energy(0.3) < M.energy(0.5));
-  assert.equal(M.energy(5), 1, 'capped');
-  assert.ok(M.flowRate(1) > 3 * M.flowRate(0), 'loud flows several times quicker than silent');
-  assert.ok(M.flowRate(0) > 0.15 && M.flowRate(0) < 0.5, 'silence still breathes slowly');
-  assert.ok(M.flowRate(0.5, 1) > M.flowRate(0.5, 0.5), 'the swell rate adds a little');
-});
-
-test('moods: who gets which colour (Maya orange, person blue-green, thinking lilac, resting dim dot)', () => {
-  const m = (o) => M.mood({ quietMs: 0, who: 'none', ...o });
-  assert.equal(m({ state: 'speaking', who: 'maya' }), 'maya');
-  assert.equal(m({ state: 'listening', who: 'senior' }), 'senior');
-  assert.equal(m({ state: 'thinking' }), 'thinking');
-  assert.equal(m({ state: 'listening' }), 'warm');
-  assert.equal(m({ state: 'listening', quietMs: 5999 }), 'warm');
-  assert.equal(m({ state: 'listening', quietMs: 6000 }), 'rest');
-  assert.equal(m({ state: 'listening', who: 'senior', quietMs: 60000 }), 'senior', 'someone talking is never "resting"');
-  const warm = M.MOODS.maya.mid, teal = M.MOODS.senior.mid, lilac = M.MOODS.thinking.mid;
-  assert.ok(warm[0] > 230 && warm[2] < 90, 'Maya is orange');
-  assert.ok(teal[2] > teal[0] + 80 && teal[1] > teal[0] + 60, 'the person is blue-green');
-  assert.ok(lilac[2] > lilac[1] + 40 && lilac[0] > lilac[1] + 20, 'thinking is lilac');
-  assert.ok(M.MOODS.rest.size < 0.3 * M.MOODS.maya.size, 'resting is a small dim dot');
-});
-
-test('orb.js: nothing is drawn outside the dome (no shadow, no blur, no outer glow, no rings beyond the shell)', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'orb.js'), 'utf8');
-  assert.ok(!/shadowBlur|shadowColor|\.filter\s*=|ctx\.filter/.test(src));
-  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
-  const orbCss = css.slice(css.indexOf('/* ---------------------------------------------------------------------------------------------------------\n   Orb.'), css.indexOf('.status {'));
-  assert.ok(!/box-shadow|drop-shadow|outline/.test(orbCss));
-});
-
-test('orb.js: no video, no image files as the orb; reference pictures are not app assets', () => {
+test('orb.js: nothing is drawn outside the particles (no shadow, no blur, no glow, no rings); no image or video as the orb', () => {
+  const src = read('orb.js');
+  assert.ok(!/shadowBlur|shadowColor|\.filter\s*=|ctx\.filter|createRadialGradient/.test(src));
   const pub = fs.readdirSync(path.join(__dirname, '..', 'public'));
   assert.ok(!pub.some((f) => /\.(mp4|webm|mov|png|jpe?g|gif|webp)$/i.test(f)), pub.join(','));
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  assert.ok(!/<video/.test(html));
-  assert.ok(!/id="orb"[^]*?<\/div>/.exec(html)[0].includes('<img'), 'the orb box holds no picture');
+  const html = read('index.html');
+  assert.ok(!/<video/.test(html) && !/id="orb"[^]*?<\/div>/.exec(html)[0].includes('<img'));
+  assert.match(html, /id="orb"[^>]*>\s*<canvas>/);
 });
-
-test('orb.js: the shape never moves (no morph, stretch, squash, lean, size breathing; one fixed outline path)', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'orb.js'), 'utf8');
-  const code = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n').replace(/\/\/.*$/gm, '');
-  assert.ok(!/stretch|squash|rubber|morph|wobble|\blean\b|breathe\s*[=*]|g\.transform\(/.test(code), 'no deformation code is left');
-  assert.equal((code.match(/g\.scale\(/g) || []).length, 2, 'only the dome unit scale and a glow blob (inside the clip) use scale');
-  assert.ok(/const SHAPE = \(\(\) =>/.test(code), 'one outline, built once');
-  assert.ok(!/function silhouette/.test(code));
+test('senior page: one page at a time (home, chat, call); no card stacks, no pink, no purple, no gradient of purple', () => {
+  const css = read('style.css'), html = read('index.html');
+  for (const id of ['pageHome', 'pageChat', 'pageCall']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(css, /body\[data-page='call'\] \.call-page \{ display: flex; \}/);
+  assert.ok(!/#(?:ff[0-9a-f]{2}[89a-f][0-9a-f]|e91e63|9c27b0|8e24aa|7b1fa2|6a1b9a)/i.test(css), 'no pink or purple');
+  assert.match(css, /max-width: 500px/, 'a centred column about 500px wide, never stretched');
 });
-
-test('index/css: no words on a call by default; icon strip has at most mute, expand, cut (+ Aa); no big buttons in the strip', () => {
-  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
-  assert.ok(/body:not\(\[data-captions='on'\]\) \.status/.test(css));
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  const strip = html.slice(html.indexOf('id="callControls"'), html.indexOf('</section>', html.indexOf('id="callControls"')));
-  assert.equal((strip.match(/<button /g) || []).length, 4, 'mute, expand, cut, Aa');
-  assert.ok(!/>\s*(Mute|Cut Call|Unmute)\s*</.test(strip), 'icons, not words');
+test('call page: Mute left, Speaker right, a red End call pill beneath, "Go back to chat" in words above them with room to spare', () => {
+  const html = read('index.html');
+  const call = html.slice(html.indexOf('id="pageCall"'), html.indexOf('id="attachSheet"'));
+  assert.ok(call.indexOf('id="muteBtn"') < call.indexOf('id="speakerBtn"') && call.indexOf('id="speakerBtn"') < call.indexOf('id="cutBtn"'));
+  assert.match(call, /Go back to chat/); assert.match(call, />End call</);
+  assert.match(read('style.css'), /\.to-chat \{[^}]*margin-bottom: 24px/);
 });
-
-test('widget: always clamped inside the screen with an 8px margin; first sits bottom-right above the composer', () => {
-  const c = (x, y) => M.clampWidget(x, y, 150, 100, 390, 844);
-  assert.deepEqual(c(-500, -500), { x: 8, y: 8 }, 'top-left stop');
-  assert.deepEqual(c(9999, 9999), { x: 390 - 150 - 8, y: 844 - 100 - 8 }, 'bottom-right stop');
-  assert.deepEqual(c(100, 300), { x: 100, y: 300 }, 'inside: untouched');
-  assert.deepEqual(M.clampWidget(0, 0, 500, 500, 360, 300), { x: 8, y: 8 }, 'too big for the screen: sits at the margin, never negative');
-  const d = M.defaultWidget(150, 100, 390, 844, 700);
-  assert.deepEqual(d, { x: 390 - 150 - 12, y: 700 - 100 - 8 }, 'bottom-right, 8 px above the composer');
-  assert.ok(d.x + 150 <= 390 - 8 && d.y + 100 <= 844 - 8);
-  assert.deepEqual(M.defaultWidget(150, 100, 390, 844, 0), M.clampWidget(390 - 162, 844 - 108, 150, 100, 390, 844), 'no composer: bottom of the screen');
+test('chat page: paperclip sheet with Attach image / Attach file (PDF) / Take photo, "Write to Maya", recording bar with bin, gallery, wave, time and send', () => {
+  const html = read('index.html');
+  for (const t of ['Attach image', 'Attach file (PDF)', 'Take photo', 'Write to Maya', 'Back to call', 'Chat with Maya', 'Go back to chat']) assert.ok(html.includes(t), t);
+  for (const id of ['recCancel', 'recGallery', 'recWave', 'recTime', 'recSend']) assert.match(html, new RegExp(`id="${id}"`));
 });
-
-test('widget: almost no movement is a tap (expands); more is a drag (never expands, mutes or cuts)', () => {
-  assert.equal(M.isTap(0), true);
-  assert.equal(M.isTap(M.TAP_PX), true);
-  assert.equal(M.isTap(M.TAP_PX + 0.5), false);
-  assert.equal(M.TAP_PX, 8);
+test('home page: the Call button is on home and in the chat header only', () => {
+  const html = read('index.html');
+  assert.equal((html.match(/id="callBtn"/g) || []).length, 1); assert.equal((html.match(/id="callBtnHead"/g) || []).length, 1);
+  assert.ok(html.indexOf('id="callBtn"') < html.indexOf('id="pageChat"') && html.indexOf('id="callBtnHead"') > html.indexOf('id="pageChat"') && html.indexOf('id="callBtnHead"') < html.indexOf('id="pageCall"'));
 });
-
-test('big orb page: buttons only (call buttons shown, chat and expand hidden)', () => {
-  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
-  assert.match(css, /body\[data-call-layout='big'\] \.chat \{ display: none; \}/);
-  assert.match(css, /body\[data-call-layout='big'\] \.call-controls \{ display: flex; \}/);
+test('incoming ring: "Maya is calling", one line from the call kind only, Decline on the left and Accept on the right', () => {
+  const js = read('inbox.js'), css = read('style.css');
+  assert.match(js, /'incoming', 'Maya is calling'/);
+  assert.ok(js.indexOf("label: 'Decline'") < js.indexOf("label: 'Accept'"), 'Decline first (left), Accept second (right)');
+  for (const k of ['welfare', 'reminder', 'callback']) assert.match(js, new RegExp(`${k}: '`));
+  assert.match(css, /\.inbox-btn\.accept::before \{ background-color: var\(--accept\)/);
 });

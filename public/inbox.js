@@ -89,11 +89,22 @@
   for (const ev of ['pointerdown', 'keydown', 'touchstart', 'click']) window.addEventListener(ev, () => { audio(); if (ring.key && !ring.sounding) startLoop(); }, { passive: true });
   window.mayaInbox = { ring: () => ({ key: ring.key, sounding: ring.sounding, blocked: ring.blocked }) };
 
-  function card(key, text, buttons, cls) {
+  const ringing = (on) => { if (document.body) document.body.dataset.ringing = String(on); };   // the page behind the card hides while a ring is on screen
+  // Why Maya is calling, from the KIND of call only (never any private words).
+  const WHY = {
+    welfare: 'A welfare check: she would like to hear how you are.',
+    reminder: 'A reminder from your family.',
+    callback: 'A quick check-in: she is calling you back.',
+  };
+  const whyOf = (kind) => WHY[kind] || 'A check-in: she would like to hear how you are.';
+
+  // head: set for a ring. "Maya is calling" is then large at the top of a whole page, with one line under it for why (text), and Decline (left) and Accept (right) below.
+  function card(key, text, buttons, cls, head) {
     drop(key);
     const el = document.createElement('div');
     el.className = `inbox-card ${cls || ''}`;
     el.setAttribute('role', 'alert');
+    if (head) { const h = document.createElement('h2'); h.className = 'inbox-head'; h.textContent = head; el.append(h); }
     const p = document.createElement('p');
     p.textContent = text;
     const row = document.createElement('div');
@@ -108,8 +119,9 @@
     inbox.append(el);
     cards.set(key, el);
     el.querySelector('button').focus({ preventScroll: true });
+    if (cls === 'incoming') ringing(true);
   }
-  function drop(key) { if (ring.key === key) stopRing(); const el = cards.get(key); if (el) { el.remove(); cards.delete(key); } }
+  function drop(key) { if (ring.key === key) stopRing(); const el = cards.get(key); if (el) { el.remove(); cards.delete(key); } if (![...cards.keys()].some((k) => k.startsWith('o'))) ringing(false); }
   const seen = (nid) => post(`/api/care/${pid}/notifications/${nid}/seen`);
 
   function connect() {
@@ -123,10 +135,10 @@
       post(`/api/care/${id}/notifications/${d.notifId}/delivered`);
       if (window.mayaInCall && window.mayaInCall()) return; // never ring over a live call
       for (const k of [...cards.keys()]) if (k.startsWith('o')) drop(k); // one ring at a time
-      card(`o${d.outreachId}`, `${d.text}`, [
-        { label: 'Accept', cls: 'inbox-btn accept', run: () => { seen(d.notifId); window.mayaStartCall({ reason: d.kind, outreachId: d.outreachId }); } },
+      card(`o${d.outreachId}`, whyOf(d.kind), [
         { label: 'Decline', cls: 'inbox-btn decline', run: () => post(`/api/care/${id}/outreach/${d.outreachId}/decline`) },
-      ], 'incoming');
+        { label: 'Accept', cls: 'inbox-btn accept', run: () => { seen(d.notifId); window.mayaStartCall({ reason: d.kind, outreachId: d.outreachId }); } },
+      ], 'incoming', 'Maya is calling');
       startRing(`o${d.outreachId}`);
     });
     // Maya's own unprompted chat message (the family's Seen, said in her words) goes to the chat thread (chat-ui.js).

@@ -79,7 +79,6 @@ test('wiring: lead-in never plays for safety, health, a pending worry or care no
   assert.match(app, /if \(ev\.lead\) \{ setState\('thinking'\)/);
   assert.match(app, /orb\.dataset\.state === 'speaking' \|\| c\.leadActive\) feedChunk/, 'audio is not dropped while a lead-in plays in the thinking state');
   assert.match(app, /c\.leadActive = Boolean\(ev\.lead\)/);
-  const { MayaOrbMath: M } = require('../public/orb.js');
-  assert.ok(M.THINKING_ENERGY >= 0.3 && M.THINKING_ENERGY < 0.7, 'visibly moving, calmer than speech');
-  assert.ok(M.flowRate(M.THINKING_ENERGY) > 2 * M.flowRate(0), 'thinking flows clearly faster than silence');
+  const { MayaParticles: P } = require('../public/orb.js');
+  assert.ok(P.rest('thinking') >= 0.3 && P.rest('thinking') < 0.7, 'thinking is visibly moving, calmer than the loudest speech');
 });

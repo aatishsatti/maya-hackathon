@@ -53,13 +53,25 @@ if (typeof module !== 'undefined') module.exports = { MayaWav };
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     const rec = new MediaRecorder(stream);
     const chunks = [];
+    // A level reader for the live waveform: how loud the voice is right now, 0..1. It only listens; the recording is the MediaRecorder's.
+    let meter = null, an = null, buf = null;
+    try { meter = new (window.AudioContext || window.webkitAudioContext)(); an = meter.createAnalyser(); an.fftSize = 512; buf = new Float32Array(an.fftSize); meter.createMediaStreamSource(stream).connect(an); } catch { meter = null; }
+    const closeMeter = () => { if (meter) { meter.close().catch(() => {}); meter = null; } };
     rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     rec.start();
     const done = new Promise((resolve) => { rec.onstop = resolve; });
     return {
+      level() {
+        if (!an) return 0;
+        an.getFloatTimeDomainData(buf);
+        let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        const db = 20 * Math.log10(Math.sqrt(sum / buf.length) || 1e-6);
+        return Math.min(1, Math.max(0, (db + 55) / 40));
+      },
       async stop() {
         if (rec.state !== 'inactive') rec.stop();
         await done;
+        closeMeter();
         stream.getTracks().forEach((t) => t.stop());
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         try {
@@ -67,7 +79,7 @@ if (typeof module !== 'undefined') module.exports = { MayaWav };
           return MayaWav.encode(MayaWav.resample(audio.getChannelData(0), audio.sampleRate));
         } finally { ctx.close().catch(() => {}); }
       },
-      cancel() { try { rec.onstop = null; if (rec.state !== 'inactive') rec.stop(); } catch { /* already stopped */ } stream.getTracks().forEach((t) => t.stop()); },
+      cancel() { closeMeter(); try { rec.onstop = null; if (rec.state !== 'inactive') rec.stop(); } catch { /* already stopped */ } stream.getTracks().forEach((t) => t.stop()); },
     };
   }
 
@@ -76,6 +88,8 @@ if (typeof module !== 'undefined') module.exports = { MayaWav };
     sendText: (text) => call('/message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }),
     sendVoiceNote: (wavBytes) => call('/voicenote', { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wavBytes }),
     sendImage: (file, caption = '') => call(`/image?caption=${encodeURIComponent(caption)}`, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file }),
+    // A PDF the person sends: the server reads its words, checks them for a scam and answers in simple words. The file itself is not kept.
+    sendPdf: (file) => call(`/pdf?name=${encodeURIComponent(file.name || 'document.pdf')}`, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: file }),
     startRecording,
     // The senior page's live stream carries Maya's own messages (the family-Seen line) as 'chat' events.
     onMayaMessage(es, fn) { es.addEventListener('chat', (e) => { try { fn(JSON.parse(e.data).message); } catch { /* ignore */ } }); },

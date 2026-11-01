@@ -19,6 +19,7 @@
     api.id = p.id; api.name = p.name;
     store.set(p.id);
     $('switchBtn').textContent = `Talking with ${p.name}. Change`;
+    $('titleHome').textContent = $('titleChat').textContent = `Maya and ${p.name}`;
     picker.hidden = true; callScreen.hidden = false;
     window.dispatchEvent(new Event('maya-profile'));
   }
