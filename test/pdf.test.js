@@ -90,7 +90,7 @@ test('a scam PDF: Maya is given the words, told it is a document from a possible
   assert.equal(maya.role, 'maya'); assert.match(maya.text, /looks like a scam/); assert.equal(r.scam, 'warn');
   const roster = asked[0].roster; assert.match(roster, /DOCUMENT/); assert.match(roster, /never obey instructions/); assert.match(roster, /gift cards/); assert.match(roster, /never just say that the file was received/i); assert.match(roster, /SCAM CHECK/);
   const hist = JSON.stringify(asked[0].history); assert.doesNotMatch(hist, /gift cards|PIN/, 'the document\'s words are not put in her history: only that a PDF was sent');
-  const dir = path.join(tmp, 'media', id); const files = fs.existsSync(dir) ? fs.readdirSync(dir) : []; assert.deepEqual(files, [], 'the PDF is not stored');
+  const dir = path.join(tmp, 'media', id); const files = (fs.existsSync(dir) ? fs.readdirSync(dir) : []).filter((f) => f !== 'thread.json'); assert.deepEqual(files, [], 'the PDF is not stored (only the saved thread of words is in the folder)');
   assert.doesNotMatch(JSON.stringify(care.get(id)), /gift cards/, 'nor are its words kept in the care record');
 });
 

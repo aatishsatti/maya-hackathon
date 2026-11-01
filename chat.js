@@ -74,6 +74,26 @@ function readMedia(profileId, name) {
   try { return { data: fs.readFileSync(path.join(MEDIA_DIR(), profileId, name)), type: MEDIA_TYPES[name.split('.')[1]] }; } catch { return null; }
 }
 
+// The written thread is KEPT, per person, on the same disk as the photos and voice notes (MEDIA_DIR/<profile id>/thread.json): every message is written the moment it is added, so a restart,
+// a deploy, the app closing, the 10-minute idle filing or the phone linking the same person again all find it again. One file per person, never shared. The newest MAX_THREAD stay; the oldest
+// drop from the file too. Idle filing only files the words into memory: it never deletes this. Deleting the person (forget) removes it with their photos and voice notes.
+const threadFile = (profileId) => path.join(MEDIA_DIR(), profileId, 'thread.json');
+function loadThread(profileId) {
+  if (!/^[a-f0-9]{8}$/.test(profileId)) return [];
+  try {
+    const t = JSON.parse(fs.readFileSync(threadFile(profileId), 'utf8'));
+    return Array.isArray(t) ? t.filter((m) => m && typeof m === 'object' && m.role && m.kind).slice(-MAX_THREAD) : [];
+  } catch { return []; }   // no file yet, or one that cannot be read: an empty thread, never a crash
+}
+function saveThread(profileId, thread) {
+  if (!/^[a-f0-9]{8}$/.test(profileId)) return;
+  try {
+    fs.mkdirSync(path.join(MEDIA_DIR(), profileId), { recursive: true });
+    const tmp = `${threadFile(profileId)}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(thread)); fs.renameSync(tmp, threadFile(profileId));   // whole file or nothing
+  } catch (e) { console.log('chat', JSON.stringify({ event: 'thread not saved', reason: String((e && e.message) || e).slice(0, 80) })); }   // never the words
+}
+
 class ChatError extends Error { constructor(message, status = 502) { super(message); this.status = status; } }
 
 class ChatSession {
@@ -85,7 +105,7 @@ class ChatSession {
     this.names = new Map();
     this.seen = new Set();
     this.history = [];
-    this.thread = [];            // what the app shows; memory only, never written to disk
+    this.thread = loadThread(profile.id);   // what the app shows: the saved thread of this person (written to disk at every message), empty for a new person
     this.queue = Promise.resolve();
     this.idleTimer = null;
     this.started = false;
@@ -104,6 +124,7 @@ class ChatSession {
     const m = { id: crypto.randomBytes(4).toString('hex'), at: Date.now(), ...msg };
     this.thread.push(m);
     if (this.thread.length > MAX_THREAD) this.thread.shift();
+    saveThread(this.profile.id, this.thread);
     return m;
   }
 
@@ -273,7 +294,7 @@ function session(profileId, tz) {
   return s;
 }
 
-// What was SPOKEN on a call joins the same written thread (memory only, like the rest of it), so minimising the call shows the whole
+// What was SPOKEN on a call joins the same written thread (saved to disk like every message), so minimising the call shows the whole
 // conversation in the chat and nothing said aloud disappears. Pushed to the open app as a normal chat message. Never throws into a call.
 function mirrorSpoken(profileId, role, text) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
@@ -659,4 +680,4 @@ function forget(profileId) {
 // Test and shutdown helper: files every open chat into memory now.
 function endAll() { for (const [id, s] of sessions) { sessions.delete(id); s.finish(); } }
 
-module.exports = { continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deliverText, deps, sendText, sendVoiceNote, sendImage, sendPdf, pdfText, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
+module.exports = { loadThread, threadFile, continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deliverText, deps, sendText, sendVoiceNote, sendImage, sendPdf, pdfText, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
