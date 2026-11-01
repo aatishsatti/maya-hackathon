@@ -35,6 +35,8 @@
             </intent-filter>
         </activity>
         <receiver android:name=".DeclineReceiver" android:exported="false"/>
+        <receiver android:name=".AckReceiver" android:exported="false"/>
+        <receiver android:name=".ReplyReceiver" android:exported="false"/>
         <service android:name=".MayaMessagingService" android:exported="false">
             <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT"/></intent-filter>
         </service>

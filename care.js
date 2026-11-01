@@ -1380,6 +1380,12 @@ function welfareReplyApp(id) {
   if (!n) return false;
   advance(p, n, 'replied'); pushFamily('refresh', { id }); return true;
 }
+// A button on a closed-app notification: "Got it" on a reminder, "I'm okay" on a welfare check. It does what answering in the chat does (the same two functions), without the app being open. Returns whether anything was waiting.
+function notificationAck(id, what) {
+  if (what === 'reminder') return reminderAckApp(id);
+  if (what === 'welfare') return welfareReplyApp(id);
+  throw Object.assign(new Error('Unknown answer'), { status: 400 });
+}
 // A welfare entry that WhatsApp could not carry out, kept as the record of what happened to its half of a "Both" check.
 const welfareFailed = (id, channel, via, why) => welfareEntry(id, { channel, via, failed: true, why });
 // WhatsApp's own failed attempt that the app then covered: the paused / failed rows it wrote for this attempt are dropped, because the app entry carries the reason (no silent Paused beside it).
@@ -1817,6 +1823,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

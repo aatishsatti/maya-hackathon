@@ -229,3 +229,14 @@ test('The dashboards: a "Where it goes" picker (App / WhatsApp / Both) for welfa
   assert.equal(fs.existsSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_message.dart')), false); assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'dashboard.dart'), 'utf8'), /MessageTab|'Message'/);
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'); assert.doesNotMatch(server, /b === 'send'|b === 'messages'/); assert.equal(typeof wa.placeMessageCall, 'undefined'); assert.equal(typeof care.sendMessage, 'undefined');
 });
+
+test('Notification buttons: "I\'m okay" answers a waiting welfare check and "Got it" answers a waiting reminder, the same as writing in the chat; nothing waiting is a plain no; anything else is refused', async () => {
+  quiet(); const { id } = linked(true); const app = openApp(id); await chan.run(id, { via: 'text', channel: 'app' });
+  assert.equal(welfare(id)[0].status, 'sent');
+  assert.equal(care.notificationAck(id, 'welfare'), true); assert.deepEqual([welfare(id)[0].status, welfare(id)[0].label], ['answered', 'Answered']);
+  assert.equal(care.notificationAck(id, 'welfare'), false, 'a second tap finds nothing waiting');
+  app.detach(); const r = person(); const app2 = openApp(r); add(r, { channel: 'app', deliver: 'text' }); await fire(); app2.detach();
+  assert.equal(care.notificationAck(r, 'reminder'), true, 'Got it marks the app reminder answered'); assert.equal(care.notificationAck(r, 'reminder'), false);
+  assert.throws(() => care.notificationAck(id, 'call'), /Unknown answer/);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'); assert.match(server, /b === 'ack'.*notificationAck/); quiet();
+});

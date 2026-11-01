@@ -110,6 +110,7 @@ async function handleCare(req, res, url) {
     if (b === 'reminders' && !c) return sendJson(res, 200, { reminder: care.addReminder(a, body) });
     if (b === 'activity') return sendJson(res, 200, { ok: care.touch(a, 'app', Date.now(), /^[\w/+\-]{1,60}$/.test(body.tz || '') ? body.tz : null) });
     if (b === 'device') return sendJson(res, 200, care.registerDevice(a, body));   // the phone's push token (so Maya can ring it when the app is closed); never returned, never logged
+    if (b === 'ack') return care.notificationAck(a, body.what) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Nothing waiting' });   // the notification buttons Got it / I'm okay
     if (b === 'outreach' && c && d === 'decline') return care.decline(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
     if (b === 'notifications' && c && d === 'whatsapp') return care.whatsappStatus(a, c, body.status) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); // mock entry for WhatsApp receipts until Feature 6
     if (b === 'notifications' && c && d) return care.markNotif(a, c, d) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
