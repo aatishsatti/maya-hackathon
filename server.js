@@ -216,7 +216,9 @@ async function handleWhatsapp(req, res, url) {
 }
 
 // ---- Family accounts (accounts.js). The family door: a username and password, in the app and on the web. MAYA_FAMILY_LOGIN=on makes the family-only routes need it. ----
-const familyLoginOn = () => process.env.MAYA_FAMILY_LOGIN === 'on';
+// The lock is ON by default on a real (hosted) server: nobody can list people or open a dashboard without a family login, and a family sees only its own people. 'off' (or mock mode, local development and the tests)
+// leaves it open. MAYA_FAMILY_LOGIN=on forces it on anywhere.
+const familyLoginOn = () => process.env.MAYA_FAMILY_LOGIN === 'on' || (MODE === 'real' && process.env.MAYA_FAMILY_LOGIN !== 'off');
 const secureReq = (req) => (req.headers['x-forwarded-proto'] || '').split(',')[0] === 'https';
 // The signed-in family for this request (a username) or null.
 const familyOf = (req) => accounts.fromRequest(req);

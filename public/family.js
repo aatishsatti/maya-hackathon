@@ -625,9 +625,22 @@
       const me = ses && ses.username ? await fetch('/api/family/me').then((r) => (r.ok ? r.json() : null)) : null;
       const ps = me ? me.seniors : people;
       box.replaceChildren(...(ps || []).map((p) => { const b = el('button', `btn big${p.id === id ? ' on' : ''}`, p.name); b.type = 'button'; b.addEventListener('click', () => { $('who').value = p.id; pick(p.id); closeModal(); }); return b; }));
+      showLink();
     } catch { box.replaceChildren(el('div', 'empty', 'Could not load the family.')); }
   }
-  if ($('logoutBtn2').addEventListener) $('logoutBtn2').addEventListener('click', () => fetch('/api/family/logout', { method: 'POST' }).finally(() => location.replace('/login.html')));
+  const logout = () => fetch('/api/family/logout', { method: 'POST' }).finally(() => location.replace('/login.html'));
+  if ($('logoutBtn2').addEventListener) $('logoutBtn2').addEventListener('click', logout);
+  if ($('logoutTop').addEventListener) $('logoutTop').addEventListener('click', logout);
+  // The link and the code for the person on screen: Copy link, Copy code, and Share (the phone's own share sheet where the browser has one).
+  function showLink() {
+    const p = (people || []).find((x) => x.id === id); $('linkBox').hidden = !p; if (!p) return;
+    const url = `${location.origin}/s/${p.id}`;
+    $('linkTitle').textContent = `${p.name}'s link and code`; $('linkUrl').value = url; $('linkCode').value = p.id; $('linkNote').textContent = '';
+    const copy = async (text, what) => { try { await navigator.clipboard.writeText(text); $('linkNote').textContent = `${what} copied.`; } catch { $('linkNote').textContent = 'Select it and copy it by hand.'; } };
+    $('linkCopy').onclick = () => copy(url, 'The link'); $('codeCopy').onclick = () => copy(p.id, 'The code');
+    $('linkShare').hidden = !navigator.share;
+    $('linkShare').onclick = () => navigator.share({ title: 'Maya', text: `Open Maya on your phone: ${url} (or type the code ${p.id})`, url }).catch(() => {});
+  }
 
 
   // ---- edit a reminder: a tap on it opens its sheet (change it, or stop it after a confirm) ----
@@ -718,7 +731,7 @@
   api('/api/profiles').then((b) => {
     const ps = b.profiles || [];
     people = ps;
-    if (!ps.length) { showErr('No one is set up yet. Add a person on the main page first.'); return; }
+    if (!ps.length) { location.replace('/login.html#add'); return; }   // a new family: add the first family member
     $('who').replaceChildren(...ps.map((p) => { const o = el('option', null, p.name); o.value = p.id; return o; }));
     const saved = ps.find((p) => p.id === store.get());
     $('who').value = (saved || ps[0]).id;

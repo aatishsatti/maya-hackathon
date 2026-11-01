@@ -40,10 +40,13 @@
       const r = await api('/api/family/seniors', 'POST', { name: $('sName').value, phone: $('sPhone').value.trim() || undefined, tz: $('sTz').value, mode: $('sMode').value, consent: $('sConsent').checked });
       $('doneTitle').textContent = `${r.profile.name} is added`; $('seniorLink').value = r.link;
       $('waNote').hidden = !r.whatsapp; $('waNote').textContent = r.whatsapp ? `WhatsApp was not linked: ${r.whatsapp}` : '';
-      localStorage.setItem('mayaFamilySenior', r.profile.id); show('done');
+      $('seniorCode').value = r.profile.id; $('shareBtn').hidden = !navigator.share; localStorage.setItem('mayaFamilySenior', r.profile.id); show('done');
     } catch (ex) { err(ex.message); }
   });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('seniorLink').value); $('copyBtn').textContent = 'Copied'; } catch { $('seniorLink').select(); } });
+  $('copyCode').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('seniorCode').value); $('copyCode').textContent = 'Copied'; } catch { $('seniorCode').select(); } });
+  $('shareBtn').addEventListener('click', () => navigator.share({ title: 'Maya', text: `Open Maya on your phone: ${$('seniorLink').value} (or type the code ${$('seniorCode').value})`, url: $('seniorLink').value }).catch(() => {}));
+  if (location.hash === '#signup') setMode('signup');
   $('another').addEventListener('click', () => { $('addForm').reset(); $('sTz').value = mine; show('add'); });
   $('toDash').addEventListener('click', () => location.replace('/family.html'));
   // Already logged in: straight to the dashboard (or to adding the first family member).

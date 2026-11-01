@@ -12,23 +12,21 @@
   <!-- One calm, see-through backdrop behind the call page and the incoming-call page. -->
   <div class="backdrop" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i></div>
 
-  <main id="picker" class="shell picker" hidden>
+  <!-- The start screen: shown ONLY when this browser has no senior linked. The same three doors as the app. There is no list of people anywhere. -->
+  <main id="start" class="shell picker" hidden>
     <h1 class="brand">Maya</h1>
-    <p class="pick-title">Who is Maya talking with?</p>
-    <div id="profileList" class="profile-list"></div>
-    <button id="addBtn" class="link-btn" type="button">+ Add a person</button>
-    <form id="addForm" class="add-form" hidden>
-      <label>Name <input id="nameIn" type="text" maxlength="30" autocomplete="off" required></label>
-      <fieldset>
-        <legend>Gender (only for how Maya refers to them)</legend>
-        <label><input type="radio" name="gender" value="female" required> Female</label>
-        <label><input type="radio" name="gender" value="male"> Male</label>
-        <label><input type="radio" name="gender" value="prefer-not"> Prefer not to say</label>
-      </fieldset>
-      <button id="saveBtn" class="pick-btn" type="submit">Save</button>
-      <button id="cancelBtn" class="link-btn" type="button">Cancel</button>
+    <p class="pick-title">Your friendly companion, made by the Maya team.</p>
+    <div class="start-doors">
+      <a id="doorLogin" class="pick-btn door-btn primary" href="/login.html">Log in</a>
+      <a id="doorSignup" class="pick-btn door-btn" href="/login.html#signup">Sign up</a>
+      <button id="doorCode" class="pick-btn door-btn" type="button">Enter code</button>
+    </div>
+    <p class="start-note">Log in or sign up is for the family. If your family sent you a link or a code, tap Enter code.</p>
+    <form id="codeForm" class="add-form" hidden>
+      <label>The code, or the whole link <input id="codeIn" type="text" maxlength="120" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
+      <button id="codeGo" class="pick-btn door-btn primary" type="submit">Open my chat</button>
     </form>
-    <p id="pickError" class="error" role="alert" hidden></p>
+    <p id="startError" class="error" role="alert" hidden></p>
   </main>
 
   <main id="callScreen" class="shell" hidden>
@@ -36,7 +34,7 @@
     <!-- CHAT: like a voice-note messenger. The small phone icon in the header is the second place to call. -->
     <section id="pageChat" class="page chat-page" aria-label="Maya chat">
       <header class="chat-head">
-        <span aria-hidden="true"></span>
+        <button id="menuBtn" class="icon-btn soft menu-btn" type="button" aria-label="Menu" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/></svg></button>
         <h1 id="titleChat" class="title">Maya</h1>
         <button id="callBtnHead" class="icon-btn soft" type="button" aria-label="Call Maya" data-live="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.250.2 2.450.57 3.600a1 1 0 0 1-.25 1Z"/></svg></button>
       </header>
@@ -144,6 +142,14 @@
         <button id="aCancel" class="sheet-cancel" type="button">Cancel</button>
       </div>
     </div>
+
+    <!-- The menu: one sheet over the chat (never a new page, never the family dashboard). Filled by menu.js. -->
+    <div id="menuSheet" class="sheet-back" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="menuTitle">
+        <div class="grab" aria-hidden="true"></div>
+        <div id="menuBody"></div>
+      </div>
+    </div>
   </main>
 
   <div id="inbox" class="inbox" aria-live="polite"></div>
@@ -154,5 +160,6 @@
   <script src="orb.js"></script>
   <script src="chat-ui.js"></script>
   <script src="shell.js"></script>
+  <script src="menu.js"></script>
 </body>
 </html>

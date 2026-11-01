@@ -13,6 +13,7 @@
   <div class="brand"><span id="famOrb" class="fam-orb" aria-hidden="true"></span><span>Maya</span></div>
   <div id="whoBox" class="who" hidden><label for="who" class="sr">Switch person</label><select id="who"></select></div>
   <span id="presence" class="sr"></span>
+  <div class="top-actions"><a id="addTop" class="btn small" href="/login.html#add">Add a family member</a><button id="logoutTop" class="btn small" type="button">Log out</button></div>
 </div></header>
 <main class="dash">
   <p id="err" class="err" role="alert" hidden></p>
@@ -176,6 +177,14 @@
     <div class="modal" id="mFamily" hidden role="dialog" aria-modal="true" aria-labelledby="mFamilyT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mFamilyT">Family Members</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
       
       <div id="famList" class="stack"></div>
+      <div id="linkBox" class="panel" hidden>
+        <div class="sec-head"><h2 id="linkTitle">Their link</h2></div>
+        <p class="hint">Open this link on their phone, or type the code on the start screen. It takes them straight to the chat: no login and no password.</p>
+        <div class="linkrow"><input id="linkUrl" type="text" readonly aria-label="The link for their phone"><button id="linkCopy" class="btn" type="button">Copy link</button></div>
+        <div class="linkrow"><input id="linkCode" type="text" readonly aria-label="The code for their phone"><button id="codeCopy" class="btn" type="button">Copy code</button></div>
+        <button id="linkShare" class="btn primary" type="button" hidden>Share</button>
+        <p id="linkNote" class="hint" role="status"></p>
+      </div>
       <div class="wa-actions"><a class="btn primary" href="/login.html#add">Add a family member</a><button id="logoutBtn2" class="btn" type="button">Log out</button></div>
     </div></div></div>
     <div class="modal" id="mSet" hidden role="dialog" aria-modal="true" aria-labelledby="mSetT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mSetT">Settings</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
