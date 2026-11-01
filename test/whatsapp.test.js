@@ -1856,3 +1856,25 @@ test('schedule buttons: Running shows Stop only, Paused shows Restart only, othe
   assert.match(js, /\$\('schedStart'\)\.hidden = live; \$\('schedStop'\)\.hidden = !live;/); assert.match(js, /st === 'Paused' \? 'Restart' : 'Start'/);
   const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_welfare.dart'), 'utf8'); assert.match(dart, /if \(running\)\s+SizedBox\([^\n]*schedStop[\s\S]*?else\s+SizedBox\([^\n]*paused \? 'schedRestart' : 'schedStart'[\s\S]*?'Restart'/); assert.ok(dart.indexOf("Key('schedStatus')") < dart.indexOf('DropdownButtonFormField<String>'), 'status above the pickers'); assert.ok(dart.includes("'Running' : paused ? 'Paused' : 'Stopped'"));
 });
+
+test('reminder ack (Both channel): "Okay" / "Got it" / "Okay I\'ll take it" / "Done" answer the WhatsApp row AND the app row together; Reminders list and Activity both say Answered; Maya replies Got it in the same turn; no duplicate row', async () => {
+  for (const words of ['Okay.', 'Got it', "Okay I'll take it", 'Done']) {
+    voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(`${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} Got it. A drink of water sounds good.`);
+    const dueAt = Date.now() + 5000; care.addReminder(id, { task: 'Drink water', dueAt, repeat: 'none', channel: 'both', deliver: 'text' });
+    care.tick(dueAt); await settle(); const a = rem(id).active; assert.equal(a.state, 'wa_sent'); await wa.handleWebhook(statusIn(a.wamid, 'delivered')); a.app.state = 'app_delivered'; clearCalls();
+    await wa.handleWebhook(incoming(phone, words)); await settle();
+    assert.equal(stateOf(id), 'done', words); assert.equal(rem(id).last.app.state, 'app_done', 'the app half is answered with it');
+    const acts = wa.activityOf(id).entries.filter((e) => e.type === 'reminder'); assert.equal(acts.length, 2, 'one row per channel, no extra'); assert.ok(acts.every((e) => e.status === 'answered' && e.label === 'Answered'), JSON.stringify(acts.map((e) => [e.where, e.status])));
+    const v = care.view(id).reminders[0]; assert.equal(v.last.label, 'Done, senior replied'); assert.equal(v.active, null);
+    assert.ok(sent().some((m) => m.type === 'text' && /Got it/.test(m.text.body)), 'Maya\'s Got it reply went out for the same message');
+  }
+  voiceReset(); clearCalls();
+});
+
+test('reminder ack (WhatsApp only, custom reminder): "Okay" -> Activity Answered + Reminders Answered + Maya Got it reply, one entry', async () => {
+  voiceReset(); const { id, phone } = remindProfile({ delivery: 'text' }); reset(`${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} Got it. A drink of water sounds good.`);
+  const dueAt = Date.now() + 5000; care.addReminder(id, { task: 'Drink water', dueAt, repeat: 'none', channel: 'whatsapp' }); care.tick(dueAt); await settle(); await wa.handleWebhook(statusIn(rem(id).active.wamid, 'delivered')); clearCalls();
+  await wa.handleWebhook(incoming(phone, 'Okay.')); await settle();
+  const acts = wa.activityOf(id).entries.filter((e) => e.type === 'reminder'); assert.equal(acts.length, 1); assert.equal(acts[0].status, 'answered'); assert.equal(care.view(id).reminders[0].last.label, 'Done, senior replied'); assert.ok(sent().some((m) => /Got it/.test(m.text && m.text.body)));
+  voiceReset(); clearCalls();
+});

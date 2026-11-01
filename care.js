@@ -999,6 +999,8 @@ function finishOccurrence(p, rid, state, extra = {}) {
   const r = p.reminders.find((x) => x.id === rid);
   if (!r) return;
   const act = r.active || { dueAt: r.dueAt, attempts: 0 };
+  // 'Both': one answer answers the reminder everywhere. The app half of the same occurrence (Delivered / Seen) becomes Answered with it, so neither the Reminders list nor Activity keeps a stale "Delivered" row.
+  if (state === 'done' && act.app && APP_OPEN.has(act.app.state)) act.app.state = 'app_done';
   const wa = act.channel === 'whatsapp' || act.channel === 'app' ? { channel: act.channel, ...(act.app ? { app: act.app } : {}), notifId: act.notifId || null, via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged), ...(act.template ? { template: true } : {}), ...(act.pausedBy ? { pausedBy: act.pausedBy } : {}) } : {};
   r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...(act.instead ? { instead: act.instead } : {}), ...(act.fellBack ? { fellBack: act.fellBack } : {}), ...(act.alsoTried ? { alsoTried: act.alsoTried } : {}), ...extra };
   r.active = null;
