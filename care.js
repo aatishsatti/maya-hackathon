@@ -1635,19 +1635,19 @@ function welfareScheduleStart(id, { everyMin, every, unit, via, channel } = {}) 
 function welfareScheduleStop(id, note = 'Stopped by you.') {
   const p = get(id); const s = p && p.welfareSchedule;
   if (!s || s.status === 'ended') return false;
-  s.status = 'ended'; s.note = note; save(id); pushFamily('refresh', { id });
+  s.status = 'ended'; s.note = note; s.statusAt = Date.now(); save(id); pushFamily('refresh', { id });
   return true;
 }
 function welfareSchedulePause(id, why, code = null) {
   const p = get(id); const s = p && p.welfareSchedule;
   if (!s || s.status !== 'running') return;
-  s.status = 'paused'; s.note = String(why || 'A check could not be sent.').slice(0, 300); if (code) s.pauseCode = code; else delete s.pauseCode; save(id); pushFamily('refresh', { id });
+  s.status = 'paused'; s.statusAt = Date.now(); s.note = String(why || 'A check could not be sent.').slice(0, 300); if (code) s.pauseCode = code; else delete s.pauseCode; save(id); pushFamily('refresh', { id });
   console.log('welfare schedule', JSON.stringify({ event: 'paused', fired: s.fired }));   // counts only
 }
 function welfareTick(p, now) {
   const s = p.welfareSchedule;
   if (!s || s.status !== 'running') return;
-  if (now >= s.until) { s.status = 'ended'; s.note = s.until - s.startedAt > SCHEDULE_MS ? 'The schedule has run its 90 days.' : 'The 24 hours are over.'; save(p.id); pushFamily('refresh', { id: p.id }); return; }
+  if (now >= s.until) { s.status = 'ended'; s.statusAt = Date.now(); s.note = s.until - s.startedAt > SCHEDULE_MS ? 'The schedule has run its 90 days.' : 'The 24 hours are over.'; save(p.id); pushFamily('refresh', { id: p.id }); return; }
   if (now < s.next || !welfareSender) return;
   if (inQuiet(p.id, now)) { if (!s.held) { s.held = true; save(p.id); pushFamily('refresh', { id: p.id }); console.log('welfare schedule', JSON.stringify({ event: 'held for quiet hours' })); } return; }   // the check is due but it is night: it goes when the quiet hours end
   s.held = false;

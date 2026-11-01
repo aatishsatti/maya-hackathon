@@ -111,11 +111,18 @@ class _WelfareTabState extends State<WelfareTab> {
     final planned = n >= 5 && n <= 120960 ? ((n >= 1440 ? 90 * 1440 : 24 * 60) ~/ n).clamp(1, 288) : 0;
     final paused = s != null && s['status'] == 'paused';
     final stateWord = running ? 'Running' : paused ? 'Paused' : 'Stopped';
-    final nextText = running ? (s['held'] == true ? 'next check at ${q != null ? hh(q['end'] as num) : '07'}:00 (quiet hours)' : 'next check about ${clock((s['next'] as num).toInt())}') : paused ? '${s['note'] ?? ''}' : '';
+    // always a date AND a time: "Tue 3 Nov, 9:00 am"
+    String dt(num ms) {
+      final d0 = DateTime.fromMillisecondsSinceEpoch(ms.toInt());
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return '${days[d0.weekday - 1]} ${d0.day} ${months[d0.month - 1]}, ${clock(ms.toInt())}';
+    }
+    final nextText = running ? (s['held'] == true ? 'Next check: ${dt(s['next'] as num)} (held for quiet hours)' : 'Next check: ${dt(s['next'] as num)}') : s != null ? 'since ${dt((s['statusAt'] ?? s['startedAt'] ?? DateTime.now().millisecondsSinceEpoch) as num)}${s['note'] != null && '${s['note']}'.isNotEmpty ? '. ${s['note']}' : ''}' : '';
     final line = s == null
         ? 'No schedule is running.'
         : s['status'] == 'running'
-            ? '${s['held'] == true ? 'Held for quiet hours: the next check goes at ${q != null ? hh(q['end'] as num) : '07'}:00. ' : ''}Running: a check-in by ${s['via'] == 'call' ? 'call' : s['via'] == 'voice' ? 'voice note' : 'text'}${s['channel'] == 'app' ? ' in the Maya app' : s['channel'] == 'both' ? ' on WhatsApp and in the app' : s['channel'] == 'whatsapp' ? ' on WhatsApp' : ''} every ${_everyText((s['everyMin'] as num).toInt())}, ${s['fired']} sent so far of about ${s['planned']}. Next about ${clock((s['next'] as num).toInt())}.'
+            ? '${s['held'] == true ? 'Held for quiet hours: the next check is ${dt(s['next'] as num)}. ' : ''}Running: a check-in by ${s['via'] == 'call' ? 'call' : s['via'] == 'voice' ? 'voice note' : 'text'}${s['channel'] == 'app' ? ' in the Maya app' : s['channel'] == 'both' ? ' on WhatsApp and in the app' : s['channel'] == 'whatsapp' ? ' on WhatsApp' : ''} every ${_everyText((s['everyMin'] as num).toInt())}, ${s['fired']} sent so far of about ${s['planned']}. Next check: ${dt(s['next'] as num)}.'
             : '${s['status'] == 'paused' ? 'Paused' : 'Ended'}: ${s['note'] ?? ''}';
     return LayoutBuilder(builder: (context, box) {
       return SingleChildScrollView(
@@ -123,7 +130,7 @@ class _WelfareTabState extends State<WelfareTab> {
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: box.maxHeight - 20),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            sectionLabel('Check in with ${d.name} now'),
+            sectionLabel('Check In With Them: ${d.name}'),
             const Text('Maya says it is a welfare check and asks how they are. As a call she then talks with them; as a text or voice note she sends the same short words.', style: TextStyle(fontSize: 14, color: kSoft)),
             const SizedBox(height: 8),
             DeliveryPicker(value: _via, onChanged: (v) => setState(() => _via = v ?? 'call')),

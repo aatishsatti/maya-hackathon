@@ -163,7 +163,7 @@ void main() {
       expect(find.text('7'), findsOneWidget); // the server's own count, not invented
       expect(find.text('Take your tablets'), findsOneWidget);
       expect(find.text('Read'), findsWidgets);
-      for (final tab in const ['Activity', 'Reminders', 'Welfare', 'Setup']) {
+      for (final tab in const ['Activity', 'Reminders', 'Check In', 'Setup']) {
         expect(find.text(tab), findsWidgets);
       }
       expect(find.text('Message'), findsNothing, reason: 'Send a message is gone: no Message tab');
@@ -176,7 +176,7 @@ void main() {
       await phone(t, 360, 700);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Welfare').last);
+      await t.tap(find.text('Check In').last);
       await t.pump(const Duration(milliseconds: 400));
       expect(find.byType(DeliveryPicker), findsWidgets);
       for (final o in const ['Call', 'Text', 'Voice note']) {
@@ -237,7 +237,7 @@ void main() {
       await phone(t, 360, 800);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Welfare').last);
+      await t.tap(find.text('Check In').last);
       await t.pump(const Duration(milliseconds: 400));
       await t.pump(const Duration(milliseconds: 400));
       await t.scrollUntilVisible(find.text('Every day'), 200, scrollable: find.byType(Scrollable).last);

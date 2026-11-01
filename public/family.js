@@ -148,18 +148,19 @@
 
   // Reminder state -> short pill. Done and Missed are the two the family cares about; the full sentence stays below it.
   // ---- Activity: counts, a paged list grouped by day, filtered by type. Everything shown comes from the server's activity list (the family's own reminder words, never the person's). ----
-  const ACT_TYPE = { reminder: 'Reminder', welfare: 'Welfare check', call: 'Call with Maya', chat: 'Chat' };
+  const ACT_TYPE = { reminder: 'Reminder', welfare: 'Check-in', call: 'Call with Maya', chat: 'Chat' };
   const ACT_WHERE = { app: 'App', whatsapp: 'WhatsApp', both: 'App + WhatsApp' };
   const ACT_CHAN = { call: 'Call', text: 'Text', voice: 'Voice note' };
   const ACT_PILL = { scheduled: 'pill-plain', sent: 'pill-info', delivered: 'pill-info', read: 'pill-info', answered: 'pill-ok', noreply: 'pill-wait', completed: 'pill-ok', unreached: 'pill-miss', missed: 'pill-miss', paused: 'pill-wait', failed: 'pill-miss' };
   const ACT_ICON = { reminder: '\u25F7', welfare: '\u2661', message: '\u2709', call: '\u260E', chat: '\u270E' };   // plain type glyphs in a circle: a clock, a heart, an envelope (no pictures, no markup insertion)
-  const ACT_FILTERS = [['all', 'All'], ['reminder', 'Reminders'], ['welfare', 'Welfare'], ['call', 'Calls']];
+  const ACT_FILTERS = [['all', 'All'], ['reminder', 'Reminders'], ['welfare', 'Check-ins'], ['call', 'Calls']];
   const ACT_CARDS = [['sent', 'Sent'], ['delivered', 'Delivered'], ['read', 'Read'], ['answered', 'Answered'], ['missed', 'Missed']];
   const ACT_PAGE = 8;
   const act = { entries: [], summary: null, filter: 'all', page: 0 };
   const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   function dayGroup(at, now = new Date()) { const s = dayStart(now), day = 86400000; return at >= s + day ? 'Upcoming' : at >= s ? 'Today' : at >= s - day ? 'Yesterday' : 'Earlier'; }
   const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const dateTime = (ms) => new Date(ms).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });   // always a date AND a time: "Tue 3 Nov, 9:00 am"
   const clockOf = (e, group) => (group === 'Earlier' || group === 'Upcoming' ? new Date(e.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : clock(e.at));
   function actRow(e, group) {
     const row = el('div', 'act-row'), icon = el('span', 'act-icon', ACT_ICON[e.type] || '');
@@ -217,10 +218,10 @@
   }
   function renderSchedule(s) {
     const live = Boolean(s && s.status === 'running');
-    $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' && s.held ? `Held for quiet hours: the next check goes at ${quiet ? hh(quiet.end) : '07'}:00. Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'}${whereText(s)} every ${EVERY_TEXT(s.everyMin)}, ${s.fired} sent so far of about ${s.planned}. Ends ${t(s.until)}.` : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'}${whereText(s)} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next about ${clock(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
+    $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' && s.held ? `Held for quiet hours: the next check is ${dateTime(s.next)}. Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'}${whereText(s)} every ${EVERY_TEXT(s.everyMin)}, ${s.fired} sent so far of about ${s.planned}. Ends ${t(s.until)}.` : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'}${whereText(s)} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next check: ${dateTime(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
     // Running / Paused / Stopped + the next check at the top; Running shows Stop only, Paused shows Restart only, otherwise Start only.
     const st = !s ? 'Stopped' : s.status === 'running' ? 'Running' : s.status === 'paused' ? 'Paused' : 'Stopped';
-    $('schedState').textContent = st; $('schedNext').textContent = live ? (s.held ? `· next check at ${quiet ? hh(quiet.end) : '07'}:00 (quiet hours)` : `· next check about ${clock(s.next)}`) : st === 'Paused' ? `· ${s.note || ''}` : '';
+    $('schedState').textContent = st; $('schedNext').textContent = live ? (s.held ? `· Next check: ${dateTime(s.next)} (held for quiet hours)` : `· Next check: ${dateTime(s.next)}`) : s ? `· since ${dateTime(s.statusAt || s.startedAt)}${s.note ? `. ${s.note}` : ''}` : '';
     $('schedStart').hidden = live; $('schedStop').hidden = !live; $('schedStart').textContent = st === 'Paused' ? 'Restart' : 'Start'; $('schedStart').disabled = false; $('schedStop').disabled = false;
   }
   $('at').addEventListener('input', remQuietWarn); $('at').addEventListener('change', remQuietWarn);

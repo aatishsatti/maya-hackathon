@@ -1428,7 +1428,7 @@ test('Step 1 welfare: the Call gets the welfare-check fact (a welfare check, how
   voiceReset(); const { id } = linked(); const { call } = outCall(id); call.outreach = { kind: 'welfare' }; call.shortGreeting = false;
   const note = call.greetingNote(14);
   assert.match(note, /welfare check/); assert.match(note, /see how they are/); assert.match(note, /Their family asked you to call and check in on them/); assert.match(note, /Invent nothing: no condition, no news, no weather, no time of day/); assert.match(note, /No medicine, no dose, no advice/);
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waWelfareCall"[^>]*>Check in with them now \(test\)</); assert.match(html, /<h3 class="wa-sub" id="welfareHead">Check in with them \(test\)<\/h3>/);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waWelfareCall"[^>]*>Check in with them now \(test\)</); assert.match(html, /<h3 class="wa-sub" id="welfareHead">Check In With Them<\/h3>/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /b === 'welfare-call'\) \{/);
 });
 
@@ -1482,12 +1482,12 @@ test('activity page: summary cards, day groups (Today / Yesterday / Earlier), fi
   const els = actPage({ entries, summary: { sent: 15, delivered: 4, read: 1, answered: 1, missed: 1 } }); await new Promise((r) => setTimeout(r, 30));
   const cards = els.actSummary.children.map((c) => c.text().replace(/\s+/g, ' ').trim()); assert.deepEqual(cards, ['15 Sent', '4 Delivered', '1 Read', '1 Answered', '1 Missed']);
   const list = () => els.actList.children.map((c) => c.text().replace(/\s+/g, ' ').trim());
-  const first = list(); assert.equal(first[0], 'Today'); assert.match(first[1], /Take your tablets.*Voice note.*Read/); assert.match(first[2], /Welfare check.*Call.*Answered/); assert.ok(first.includes('Yesterday')); assert.ok(first.includes('Earlier'));
+  const first = list(); assert.equal(first[0], 'Today'); assert.match(first[1], /Take your tablets.*Voice note.*Read/); assert.match(first[2], /Check-in.*Call.*Answered/); assert.ok(first.includes('Yesterday')); assert.ok(first.includes('Earlier'));
   assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 8, 'eight rows a page'); assert.equal(els.actPager.hidden, false); assert.match(els.actPage.textContent, /Page 1 of 2/); assert.equal(els.actNewer.disabled, true);
   els.actOlder.handlers.click(); assert.match(els.actPage.textContent, /Page 2 of 2/); assert.equal(els.actOlder.disabled, true); assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 8, 'the other eight');
-  const welfare = els.actFilters.children.find((b) => b.textContent === 'Welfare'); welfare.handlers.click();
-  assert.deepEqual(list().map((t) => t.replace(/\s+/g, ' ')).filter((t) => /Welfare check/.test(t)).length, 1); assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 1); assert.equal(els.actPager.hidden, true);
-  els.actFilters.children.find((b) => b.textContent === 'Reminders').handlers.click(); assert.ok(list().every((t) => !/Welfare check/.test(t)));
+  const welfare = els.actFilters.children.find((b) => b.textContent === 'Check-ins'); welfare.handlers.click();
+  assert.deepEqual(list().map((t) => t.replace(/\s+/g, ' ')).filter((t) => /Check-in/.test(t)).length, 1); assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 1); assert.equal(els.actPager.hidden, true);
+  els.actFilters.children.find((b) => b.textContent === 'Reminders').handlers.click(); assert.ok(list().every((t) => !/Check-in/.test(t)));
   assert.equal(els.actFilters.children.length, 4, 'All, Reminders, Welfare, Calls: no Messages filter'); assert.ok(els.actFilters.children.some((b) => /chip on/.test(b.className)));
 });
 
@@ -1690,7 +1690,7 @@ const navPage = (stored = {}) => {
 test('navigation: the four jump links (WhatsApp, Reminders, Welfare, Activity) point at real sections; there is no Send message tab; the bar is sticky and scrolls sideways on a phone; no new section was added', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'), css = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.css'), 'utf8');
   const nav = html.slice(html.indexOf('<nav id="tabs"'), html.indexOf('</nav>')); const targets = [...nav.matchAll(/<a class="tab" href="#(\w+)">([^<]+)<\/a>/g)].map((m) => [m[1], m[2]]);
-  assert.deepEqual(targets, [['waPanel', 'WhatsApp'], ['remPanel', 'Reminders'], ['welfareHead', 'Welfare'], ['activityPanel', 'Activity']]); for (const [t] of targets) assert.match(html, new RegExp(`id="${t}"`), `the section ${t} exists`);
+  assert.deepEqual(targets, [['waPanel', 'WhatsApp'], ['remPanel', 'Reminders'], ['welfareHead', 'Check In With Them'], ['activityPanel', 'Activity']]); for (const [t] of targets) assert.match(html, new RegExp(`id="${t}"`), `the section ${t} exists`);
   assert.match(css, /\.tabs \{[^}]*position: sticky[^}]*top: 0[^}]*overflow-x: auto/); assert.match(css, /\.tab \{[^}]*min-height: 44px/); assert.match(css, /\.panel\.collapsed > :not\(\.sec-head\) \{ display: none; \}/); assert.match(css, /scroll-margin-top/); assert.equal((html.match(/<section/g) || []).length, 7, 'no new section: the same page, easier to move around');
 });
 test('navigation: every panel gets a Hide / Show button that folds it and is remembered on this device; a jump opens a folded panel; a hidden target (not linked yet) falls back to the WhatsApp panel', () => {
@@ -1800,7 +1800,7 @@ test('quiet hours: the dashboard warns when a reminder time falls in their quiet
   const tz = nightTz(); const mk = (q) => { const els = actPage({ entries: [], summary: null }); return els; };
   const { id } = inWindow(); care.get(id).tz = tz; assert.deepEqual(care.view(id).quiet, { start: 22, end: 7, tz }); care.get(id).tz = null; assert.deepEqual(care.view(id).quiet, { start: 22, end: 7, tz: null });
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'), html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
-  assert.match(src, /That time is in their quiet hours \(\$\{hh\(quiet\.start\)\}:00 to \$\{hh\(quiet\.end\)\}:00\)\. The reminder is kept and will be held until/); assert.match(src, /Held for quiet hours: the next check goes at/); assert.match(src, /is held until \$\{hh\(quiet\.end\)\}:00/); assert.match(html, /id="remQuietWarn"[^>]*hidden/);
+  assert.match(src, /That time is in their quiet hours \(\$\{hh\(quiet\.start\)\}:00 to \$\{hh\(quiet\.end\)\}:00\)\. The reminder is kept and will be held until/); assert.match(src, /Held for quiet hours: the next check is/); assert.match(src, /is held until \$\{hh\(quiet\.end\)\}:00/); assert.match(html, /id="remQuietWarn"[^>]*hidden/);
   // the page logic, run for real: the same hour test as the server
   const vmSrc = src.match(/const inQuietAt = [^\n]+/)[0]; const run = (quiet, ms) => vm.runInNewContext(`let quiet = ${JSON.stringify(quiet)}; ${vmSrc}; inQuietAt(${ms})`, { Intl, Number, Date });
   const night = Date.now(), day = Date.now() + 9 * 3600000; assert.equal(run({ start: 22, end: 7, tz }, night), true); assert.equal(run({ start: 22, end: 7, tz }, day), false); assert.equal(run({ start: 22, end: 7, tz: null }, night), false); assert.equal(run(null, night), false);
