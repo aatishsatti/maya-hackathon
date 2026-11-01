@@ -12,6 +12,7 @@ import 'package:maya_app/main.dart';
 import 'package:maya_app/models.dart';
 import 'package:maya_app/services/api.dart';
 import 'package:maya_app/senior/call_screen.dart';
+import 'package:maya_app/senior/senior_screen.dart';
 import 'package:maya_app/senior/chat_view.dart';
 import 'package:maya_app/services/audio_route.dart';
 import 'package:maya_app/services/call_session.dart';
@@ -364,6 +365,49 @@ void main() {
       for (final name in const ['xyz.luan/audioplayers', 'xyz.luan/audioplayers.global']) {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(MethodChannel(name), null);
       }
+    });
+
+    testWidgets('the incoming-call page: "Maya is calling" in large type, one line for why from the kind of call only, Accept and Decline on the same see-through page (no card)', (t) async {
+      await phone(t, 390, 844);
+      for (final c in const [('welfare', 'A welfare check'), ('reminder', 'A reminder from your family'), ('callback', 'A quick check-in'), ('', 'A check-in')]) {
+        var accepted = 0, declined = 0;
+        await t.pumpWidget(MaterialApp(home: Scaffold(body: Stack(children: [IncomingCallCard(kind: c.$1, onAccept: () => accepted++, onDecline: () => declined++)]))));
+        await t.pump(const Duration(milliseconds: 300));
+        expect(find.text('Maya is calling'), findsOneWidget);
+        expect(find.textContaining(c.$2), findsOneWidget, reason: 'the line for "${c.$1}"');
+        expect(find.byType(Card), findsNothing);
+        expect(find.byType(CallBackdrop), findsOneWidget);
+        expect(t.getSize(find.byIcon(Icons.call)).width, greaterThanOrEqualTo(40));
+        await t.tap(find.byIcon(Icons.call));
+        await t.tap(find.byIcon(Icons.call_end));
+        expect([accepted, declined], [1, 1]);
+        await t.pumpWidget(const SizedBox());
+      }
+    });
+
+    testWidgets('the chat box: write or record in one chat; a microphone while the box is empty, an arrow once there is text', (t) async {
+      await phone(t, 390, 844);
+      await t.pumpWidget(const MayaApp());
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.bySemanticsLabel('Record a voice note'), findsOneWidget);
+      expect(find.byIcon(Icons.mic), findsOneWidget);
+      await t.enterText(find.byType(TextField), 'Hello Maya');
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.bySemanticsLabel('Send'), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_upward), findsOneWidget);
+      expect(find.bySemanticsLabel('Record a voice note'), findsNothing);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('a voice note in the chat: a play button, a waveform you can slide along, and the room for its length', (t) async {
+      await phone(t, 390, 844);
+      await t.pumpWidget(const MaterialApp(home: Scaffold(body: Padding(padding: EdgeInsets.all(16), child: VoiceBubble(url: 'http://127.0.0.1:1/a.wav')))));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+      expect(find.bySemanticsLabel('Play the voice note'), findsOneWidget);
+      expect(find.bySemanticsLabel('Voice note position'), findsOneWidget);
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox());
     });
 
     testWidgets('the dashboard keeps its header, cards and tabs on a small phone; only the activity list scrolls', (t) async {

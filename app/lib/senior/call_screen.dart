@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -10,16 +11,11 @@ import '../services/call_session.dart';
 import '../widgets/orb.dart';
 import '../widgets/pressable.dart';
 
-// The call page: a calm native screen in two separate pieces.
-//   1. The talking area, a large rounded card on a soft blurred warm backdrop. Maya's line is large, yours is smaller just beneath it. The orb sits low and centred.
-//   2. The control deck, a shadowed card of its own, with the only controls on the page: Mute on the left, Speaker on the right, and End call as a red pill centred under them on the orb's axis.
-// System font, muted neutrals. No navigation, nothing else.
-const Color _page = Color(0xFFEFECE8);
-const Color _deck = Color(0xFFFBFAF8);
-const Color _ink = Color(0xFF26231F);
-const Color _quiet = Color(0xFF6E6860);
-const Color _button = Color(0xFFEAE6E0);
-const Color _end = Color(0xFFB83A2E);
+// The call page: ONE page. A soft blurred, see-through backdrop fills the whole screen; on it, from the top: the status and the words (Maya's line large, yours smaller beneath),
+// the particle orb in the middle, and at the bottom the only controls: Mute on the left, Speaker on the right, End call as a red pill centred under them on the orb's axis.
+// No cards, no navigation. System font.
+const Color _quiet = Color(0xFFFFFFFF);
+const Color _end = Color(0xFFC0392B);
 const Color _textOnCard = Colors.white;
 
 /// The call. One screen, never scrolls.
@@ -111,78 +107,67 @@ class _CallScreenState extends State<CallScreen> {
         if (!didPop) s.hangUp();
       },
       child: Scaffold(
-        backgroundColor: _page,
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        backgroundColor: Colors.transparent,
+        body: Stack(fit: StackFit.expand, children: [
+          const CallBackdrop(),
+          SafeArea(
             child: Column(children: [
-              Expanded(child: _TalkingArea(status: _status, maya: failed ? s.endMessage! : _maya, you: failed ? '' : _you, orb: s.orb, youSpeaking: _youSpeaking, ended: s.ended)),
-              const SizedBox(height: 14),
-              _Deck(s: s, failed: failed),
+              // the words, at the top
+              Expanded(flex: 5, child: _Words(status: _status, maya: failed ? s.endMessage! : _maya, you: failed ? '' : _you)),
+              // the orb, in the middle of the page
+              Expanded(
+                flex: 6,
+                child: LayoutBuilder(builder: (context, box) {
+                  final size = math.min(box.maxWidth * 0.8, box.maxHeight);
+                  return Center(child: MayaOrb(state: s.orb, size: size, youSpeaking: _youSpeaking));
+                }),
+              ),
+              // the controls, at the bottom, on the same page
+              Padding(padding: const EdgeInsets.fromLTRB(24, 4, 24, 20), child: _Controls(s: s, failed: failed)),
             ]),
           ),
-        ),
+        ]),
       ),
     );
   }
 }
 
-/// The talking area: a soft blurred warm backdrop, Maya's line large where the eye lands, yours smaller beneath it, the orb low and centred.
-class _TalkingArea extends StatelessWidget {
+/// Maya's line large where the eye lands, yours smaller beneath it, a small status line above. The size follows the room, so four lines of hers and two of yours always fit.
+class _Words extends StatelessWidget {
   final String status, maya, you;
-  final OrbState orb;
-  final bool youSpeaking, ended;
-  const _TalkingArea({required this.status, required this.maya, required this.you, required this.orb, required this.youSpeaking, required this.ended});
+  const _Words({required this.status, required this.maya, required this.you});
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(38),
-      child: Stack(fit: StackFit.expand, children: [
-        const _WarmBackdrop(),
-        LayoutBuilder(builder: (context, box) {
-          final orbSize = (box.maxHeight * 0.24).clamp(56.0, 124.0);
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(26, 0, 26, 22),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // The text block takes all the room above the orb. Its size follows that room, so four lines of Maya's and two of yours always fit and are never cut.
-              Expanded(
-                child: LayoutBuilder(builder: (context, tb) {
-                  final big = (tb.maxHeight / 7.4).clamp(15.0, 36.0);
-                  return Align(
-                    alignment: const Alignment(-1, 0.12),
-                    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      // the small line, then Maya's line large, then yours smaller: the place a first line is read
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
-                        layoutBuilder: _leftStack,
-                        child: Text(status, key: ValueKey(status), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: (big * 0.5).clamp(12.0, 18.0), color: _textOnCard.withValues(alpha: 0.82), fontWeight: FontWeight.w400)),
-                      ),
-                      SizedBox(height: big * 0.28),
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
-                        layoutBuilder: _leftStack,
-                        child: Text(maya, key: ValueKey(maya), maxLines: 4, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: big, height: 1.1, color: _textOnCard, fontWeight: FontWeight.w300, letterSpacing: -0.6)),
-                      ),
-                      if (you.isNotEmpty) ...[
-                        SizedBox(height: big * 0.36),
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 220),
-                          layoutBuilder: _leftStack,
-                          child: Text(you, key: ValueKey(you), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: (big * 0.56).clamp(13.0, 21.0), height: 1.25, color: _textOnCard.withValues(alpha: 0.74), fontWeight: FontWeight.w400)),
-                        ),
-                      ],
-                    ]),
-                  );
-                }),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 8, 28, 0),
+      child: LayoutBuilder(builder: (context, tb) {
+        final big = (tb.maxHeight / 7.4).clamp(15.0, 34.0);
+        return Align(
+          alignment: Alignment.bottomLeft,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              layoutBuilder: _leftStack,
+              child: Text(status, key: ValueKey(status), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: (big * 0.5).clamp(12.0, 18.0), color: _textOnCard.withValues(alpha: 0.84), fontWeight: FontWeight.w400)),
+            ),
+            SizedBox(height: big * 0.28),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              layoutBuilder: _leftStack,
+              child: Text(maya, key: ValueKey(maya), maxLines: 4, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: big, height: 1.1, color: _textOnCard, fontWeight: FontWeight.w300, letterSpacing: -0.6)),
+            ),
+            if (you.isNotEmpty) ...[
+              SizedBox(height: big * 0.36),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                layoutBuilder: _leftStack,
+                child: Text(you, key: ValueKey(you), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: (big * 0.56).clamp(13.0, 20.0), height: 1.25, color: _textOnCard.withValues(alpha: 0.76), fontWeight: FontWeight.w400)),
               ),
-              const SizedBox(height: 14),
-              // the orb: centred on the page's axis, animation only inside it
-              Center(child: MayaOrb(state: orb, size: orbSize, youSpeaking: youSpeaking)),
-            ]),
-          );
-        }),
-      ]),
+            ],
+          ]),
+        );
+      }),
     );
   }
 }
@@ -190,71 +175,63 @@ class _TalkingArea extends StatelessWidget {
 // Cross-fading lines stay on the left edge (the default stack would centre them).
 Widget _leftStack(Widget? current, List<Widget> previous) => Stack(alignment: Alignment.topLeft, children: [...previous, ?current]);
 
-/// A soft, blurred backdrop: slate above, warm tan below. Still (it never moves), so the page stays calm.
-class _WarmBackdrop extends StatelessWidget {
-  const _WarmBackdrop();
+/// The see-through backdrop of the call page and of the incoming-call page: slate above, warm tan below, softly blurred. Still, so the page stays calm. It fills the whole screen.
+class CallBackdrop extends StatelessWidget {
+  const CallBackdrop({super.key});
   @override
   Widget build(BuildContext context) {
     return Stack(fit: StackFit.expand, children: [
-      const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF66767F), Color(0xFF8B979A), Color(0xFFBFAF9C), Color(0xFFD3C3B0)], stops: [0, 0.45, 0.8, 1]))),
+      const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF5E6F7A), Color(0xFF7D8D93), Color(0xFFB4A794), Color(0xFFCDBBA6)], stops: [0, 0.45, 0.82, 1]))),
       ImageFiltered(
-        imageFilter: ImageFilter.blur(sigmaX: 46, sigmaY: 46, tileMode: TileMode.decal),
+        imageFilter: ImageFilter.blur(sigmaX: 54, sigmaY: 54, tileMode: TileMode.decal),
         child: Stack(children: const [
-          Positioned(right: -70, bottom: 60, width: 260, height: 220, child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Color(0xAA9C7352)))),
-          Positioned(left: -60, bottom: -40, width: 240, height: 200, child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Color(0xAAEADBC8)))),
-          Positioned(left: -50, top: -30, width: 240, height: 200, child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Color(0x88566570)))),
+          Positioned(right: -90, bottom: 120, width: 300, height: 260, child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Color(0x889C7352)))),
+          Positioned(left: -80, bottom: -60, width: 300, height: 260, child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Color(0x88EADBC8)))),
+          Positioned(left: -60, top: -40, width: 280, height: 240, child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Color(0x80465A68)))),
+          Positioned(right: -60, top: 80, width: 220, height: 200, child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, color: Color(0x4D3E7A8C)))),
         ]),
       ),
     ]);
   }
 }
 
-/// The control deck: its own shadowed card. Mute and Speaker in one row at the two outer positions, End call a red pill centred below on the orb's axis.
-class _Deck extends StatelessWidget {
+/// The controls, floating on the page itself (no card): Mute on the left, Speaker on the right, End call a red pill centred beneath on the orb's axis.
+class _Controls extends StatelessWidget {
   final CallSession s;
   final bool failed;
-  const _Deck({required this.s, required this.failed});
+  const _Controls({required this.s, required this.failed});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-      decoration: BoxDecoration(
-        color: _deck,
-        borderRadius: BorderRadius.circular(32),
-        boxShadow: const [BoxShadow(color: Color(0x24000000), blurRadius: 34, offset: Offset(0, 12)), BoxShadow(color: Color(0x14000000), blurRadius: 5, offset: Offset(0, 1))],
+    if (failed) {
+      return Column(mainAxisSize: MainAxisSize.min, children: [
+        FilledButton(style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: const Color(0xFF26231F), minimumSize: const Size(220, 56)), onPressed: () => Navigator.of(context).maybePop(), child: const Text('Close')),
+        TextButton(onPressed: () => showCallLog(context, headline: s.endDetail), child: const Text('Details', style: TextStyle(color: Colors.white70))),
+      ]);
+    }
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(
+        height: 96,
+        child: Stack(children: [
+          Align(
+            alignment: const Alignment(-0.54, 0),
+            child: _DeckButton(label: s.muted ? 'Unmute' : 'Mute', icon: s.muted ? Icons.mic_off : Icons.mic, on: s.muted, onTap: s.ended ? null : () => s.setMuted(!s.muted)),
+          ),
+          if (AudioRoute.android)
+            Align(
+              alignment: const Alignment(0.54, 0),
+              child: _DeckButton(label: s.speakerOn ? 'Speaker' : 'Earpiece', icon: s.speakerOn ? Icons.volume_up : Icons.hearing, on: s.speakerOn, onTap: s.ended ? null : () => s.setSpeaker(!s.speakerOn)),
+            ),
+        ]),
       ),
-      child: failed
-          ? Column(mainAxisSize: MainAxisSize.min, children: [
-              FilledButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Close')),
-              TextButton(onPressed: () => showCallLog(context, headline: s.endDetail), child: const Text('Details', style: TextStyle(color: _quiet))),
-            ])
-          : Column(mainAxisSize: MainAxisSize.min, children: [
-              // Mute where "type" sat, Speaker where "transcribe" sat; the middle is left open for the orb's axis
-              SizedBox(
-                height: 96,
-                child: Stack(children: [
-                  Align(
-                    alignment: const Alignment(-0.54, 0),
-                    child: _DeckButton(label: s.muted ? 'Unmute' : 'Mute', icon: s.muted ? Icons.mic_off : Icons.mic, on: s.muted, onTap: s.ended ? null : () => s.setMuted(!s.muted)),
-                  ),
-                  if (AudioRoute.android)
-                    Align(
-                      alignment: const Alignment(0.54, 0),
-                      child: _DeckButton(label: s.speakerOn ? 'Speaker' : 'Earpiece', icon: s.speakerOn ? Icons.volume_up : Icons.hearing, on: s.speakerOn, onTap: s.ended ? null : () => s.setSpeaker(!s.speakerOn)),
-                    ),
-                ]),
-              ),
-              const SizedBox(height: 20),
-              _EndPill(onTap: s.ended
-                  ? null
-                  : () {
-                      HapticFeedback.mediumImpact();
-                      s.hangUp();
-                    }),
-            ]),
-    );
+      const SizedBox(height: 18),
+      _EndPill(onTap: s.ended
+          ? null
+          : () {
+              HapticFeedback.mediumImpact();
+              s.hangUp();
+            }),
+    ]);
   }
 }
 
@@ -275,12 +252,12 @@ class _DeckButton extends StatelessWidget {
           duration: const Duration(milliseconds: 200),
           width: 68,
           height: 68,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: on ? _ink : _button),
-          child: Icon(icon, size: 28, color: on ? Colors.white : _ink),
+          decoration: BoxDecoration(shape: BoxShape.circle, color: on ? Colors.white : Colors.white.withValues(alpha: 0.22), border: Border.all(color: Colors.white.withValues(alpha: on ? 0 : 0.35))),
+          child: Icon(icon, size: 28, color: on ? const Color(0xFF26231F) : Colors.white),
         ),
       ),
       const SizedBox(height: 8),
-      FittedBox(fit: BoxFit.scaleDown, child: Text(label, style: const TextStyle(fontSize: 14, color: _quiet, fontWeight: FontWeight.w500))),
+      FittedBox(fit: BoxFit.scaleDown, child: Text(label, style: TextStyle(fontSize: 14, color: _quiet.withValues(alpha: 0.9), fontWeight: FontWeight.w500))),
     ]);
   }
 }

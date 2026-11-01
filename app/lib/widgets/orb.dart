@@ -1,31 +1,34 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' show PointMode;
 
 import 'package:flutter/material.dart';
 
 enum OrbState { connecting, listening, thinking, speaking }
 
-/// Maya's presence on the call page: a quiet translucent disc with a waveform that lives INSIDE it.
-/// Nothing is drawn outside the disc (no glow, no rings). The waveform moves for both voices:
-///   Maya speaking  - white bars, full and lively
-///   you speaking   - warm bars, a different rhythm (they pulse from the middle outward), so the two voices are told apart at a glance
-///   listening      - the bars rest, breathing very slowly
-///   thinking       - a soft light travels across the bars
-///   connecting     - a row of still dots
-/// Changes between these take 300 ms. The motion is ambient and never blocks a tap.
+/// Maya's presence on the call page: a sphere of fine particles in trust blue and teal, turning slowly.
+/// EVERY particle moves, all the time, each at its own rhythm; how far they move follows the voices:
+///   Maya speaking  - the whole surface swells and ripples
+///   you speaking   - the surface answers just as strongly (a touch smaller)
+///   thinking       - a steady shimmer
+///   listening      - a quiet breathing (the particles still stir, so the page is never dead)
+///   connecting     - the faintest stir
+/// Nothing is drawn outside the particles (no glow, no rings). Changes between these take 300 ms.
 class MayaOrb extends StatefulWidget {
   final OrbState state;
   final double size;
 
-  /// The person is speaking right now (their words are arriving). Shown inside the disc, on top of the state.
+  /// The person is speaking right now (their words are arriving).
   final bool youSpeaking;
-  const MayaOrb({super.key, required this.state, this.size = 120, this.youSpeaking = false});
+  const MayaOrb({super.key, required this.state, this.size = 240, this.youSpeaking = false});
 
   @override
   State<MayaOrb> createState() => _MayaOrbState();
 }
 
 class _MayaOrbState extends State<MayaOrb> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))..repeat();
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 120))..repeat();
+  late final _Cloud _cloud = _Cloud(3400);
 
   @override
   void dispose() {
@@ -33,18 +36,18 @@ class _MayaOrbState extends State<MayaOrb> with SingleTickerProviderStateMixin {
     super.dispose();
   }
 
-  // how tall the bars grow (0 rests, 1 is the full height) and which voice they show
-  double get _amp {
-    if (widget.youSpeaking) return 0.72;
+  // how far the particles move (0 is still, 1 is the full swell)
+  double get _level {
+    if (widget.youSpeaking) return 0.86;
     switch (widget.state) {
       case OrbState.speaking:
         return 1.0;
       case OrbState.thinking:
-        return 0.26;
+        return 0.46;
       case OrbState.listening:
-        return 0.1;
+        return 0.26;
       case OrbState.connecting:
-        return 0.0;
+        return 0.14;
     }
   }
 
@@ -61,18 +64,13 @@ class _MayaOrbState extends State<MayaOrb> with SingleTickerProviderStateMixin {
     return Semantics(
       label: label,
       child: TweenAnimationBuilder<double>(
-        tween: Tween(end: _amp),
+        tween: Tween(end: _level),
         duration: const Duration(milliseconds: 300),
-        builder: (context, amp, _) => TweenAnimationBuilder<double>(
-          tween: Tween(end: widget.youSpeaking ? 1.0 : 0.0),
-          duration: const Duration(milliseconds: 300),
-          builder: (context, you, _) => AnimatedBuilder(
-            animation: _c,
-            builder: (context, _) => SizedBox(
-              width: widget.size,
-              height: widget.size,
-              child: CustomPaint(painter: _OrbPainter(t: _c.value, amp: amp, you: you, thinking: widget.state == OrbState.thinking && !widget.youSpeaking, connecting: widget.state == OrbState.connecting && !widget.youSpeaking)),
-            ),
+        builder: (context, level, _) => RepaintBoundary(
+          child: SizedBox(
+            width: widget.size,
+            height: widget.size,
+            child: AnimatedBuilder(animation: _c, builder: (context, _) => CustomPaint(painter: _OrbPainter(_cloud, _c.value * 120, level, widget.youSpeaking))),
           ),
         ),
       ),
@@ -80,56 +78,97 @@ class _MayaOrbState extends State<MayaOrb> with SingleTickerProviderStateMixin {
   }
 }
 
-class _OrbPainter extends CustomPainter {
-  final double t, amp, you;
-  final bool thinking, connecting;
-  _OrbPainter({required this.t, required this.amp, required this.you, required this.thinking, required this.connecting});
+/// The particles: points spread evenly over a sphere, each with its own rhythm. Made once.
+class _Cloud {
+  final int n;
+  late final Float32List x, y, z, ph1, ph2, f1, f2;
+  late final Uint8List tint;
+  _Cloud(this.n) {
+    x = Float32List(n);
+    y = Float32List(n);
+    z = Float32List(n);
+    ph1 = Float32List(n);
+    ph2 = Float32List(n);
+    f1 = Float32List(n);
+    f2 = Float32List(n);
+    tint = Uint8List(n);
+    final rnd = math.Random(7);
+    final golden = math.pi * (3 - math.sqrt(5));
+    for (var i = 0; i < n; i++) {
+      final yy = 1 - (i / (n - 1)) * 2; // a point per band, from the top to the bottom
+      final rr = math.sqrt(1 - yy * yy);
+      final th = golden * i;
+      x[i] = math.cos(th) * rr;
+      y[i] = yy;
+      z[i] = math.sin(th) * rr;
+      ph1[i] = rnd.nextDouble() * math.pi * 2;
+      ph2[i] = rnd.nextDouble() * math.pi * 2;
+      f1[i] = 0.9 + rnd.nextDouble() * 1.9; // every particle has its own rhythm
+      f2[i] = 1.7 + rnd.nextDouble() * 2.6;
+      tint[i] = rnd.nextInt(256);
+    }
+  }
+}
 
-  static const int bars = 9;
-  static const Color maya = Color(0xFFFFFFFF);
-  static const Color warm = Color(0xFFF6DDBE);
+class _OrbPainter extends CustomPainter {
+  final _Cloud cloud;
+  final double t, level;
+  final bool you;
+  _OrbPainter(this.cloud, this.t, this.level, this.you);
+
+  // teal at the top, through cyan-blue, to trust blue below (cool only)
+  static const List<Color> ramp = [Color(0xFF2BD1BE), Color(0xFF35B6E8), Color(0xFF4A8BEF), Color(0xFF5A6FE6)];
+  // depth: back (dim), middle, front (bright)
+  static const List<double> alphas = [0.34, 0.68, 0.96];
+  static const List<double> widths = [1.2, 1.7, 2.2];
+  static final List<Float32List> _buf = List.generate(12, (_) => Float32List(0));
 
   @override
   void paint(Canvas canvas, Size size) {
-    final r = size.shortestSide / 2;
+    final n = cloud.n;
     final c = Offset(size.width / 2, size.height / 2);
-    // the disc: translucent and a little darker than the page behind it, so white reads on any part of the backdrop; its edge is a hairline, nothing glows
-    canvas.drawCircle(c, r, Paint()..color = const Color(0x3D2A2420));
-    canvas.drawCircle(c, r - 0.5, Paint()..style = PaintingStyle.stroke..strokeWidth = 1..color = const Color(0x33FFFFFF));
-    canvas.save();
-    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: c, radius: r - 1)));
-    final span = r * 1.12; // the bars sit well inside the disc
-    final bw = r * 0.15;
-    final step = span / (bars - 1);
-    final x0 = c.dx - span / 2;
-    for (var i = 0; i < bars; i++) {
-      final u = (i - (bars - 1) / 2) / ((bars - 1) / 2); // -1 .. 1 across the bars
-      final env = 0.35 + 0.65 * math.cos(u * math.pi / 2).abs(); // taller in the middle
-      // Maya: bars bob independently. You: a wave that leaves the middle and runs outward.
-      final mayaWave = 0.5 + 0.5 * math.sin(2 * math.pi * (t * 3 + i * 0.37)) * math.sin(2 * math.pi * (t * 2 - i * 0.21) + 1.3);
-      final youWave = 0.5 + 0.5 * math.sin(2 * math.pi * (t * 2 - u.abs() * 0.9));
-      final live = (1 - you) * mayaWave + you * youWave;
-      final breathe = 0.5 + 0.5 * math.sin(2 * math.pi * (t * 1 + i * 0.05));
-      double h;
-      var alpha = 0.95;
-      if (connecting) {
-        h = bw; // still dots
-        alpha = 0.45 + 0.25 * math.sin(2 * math.pi * (t * 2 - i * 0.12));
-      } else if (thinking) {
-        final pos = ((t * 1.0) % 1.0) * (bars + 4) - 2; // a soft light travels across
-        final d = (i - pos).abs();
-        h = bw + r * 0.5 * env * (0.25 + 0.75 * breathe) * amp * 3;
-        alpha = 0.5 + 0.45 * math.exp(-d * d / 2.2);
-      } else {
-        h = bw + r * 1.15 * env * (0.12 + 0.88 * live) * amp + (amp < 0.2 ? r * 0.12 * env * breathe : 0);
+    final base = size.shortestSide / 2 * 0.80; // room for the particles to swell outward
+    if (_buf[0].length != n * 2) {
+      for (var i = 0; i < 12; i++) {
+        _buf[i] = Float32List(n * 2);
       }
-      final color = Color.lerp(maya, warm, you)!.withValues(alpha: alpha.clamp(0.0, 1.0));
-      final rect = RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(x0 + i * step, c.dy), width: bw, height: math.min(h, r * 1.5)), Radius.circular(bw / 2));
-      canvas.drawRRect(rect, Paint()..color = color);
     }
-    canvas.restore();
+    final counts = List<int>.filled(12, 0);
+    final ay = t * 0.16, ax = 0.42; // slow turn, a little tilt
+    final cy = math.cos(ay), sy = math.sin(ay), cx = math.cos(ax), sx = math.sin(ax);
+    final swell = 0.03 + 0.12 * level; // how far a particle may leave the surface
+    for (var i = 0; i < n; i++) {
+      // every particle moves, all the time: slow waves run over the whole surface (so neighbours move together, as one body), and each particle adds a small rhythm of its own
+      final x0 = cloud.x[i], y0 = cloud.y[i], z0 = cloud.z[i];
+      final wave = 0.5 * math.sin(6.4 * x0 + 4.6 * y0 + t * (1.6 + 1.4 * level)) + 0.35 * math.sin(5.6 * y0 - 6.8 * z0 + t * (2.2 + 1.2 * level) + 1.0) + 0.25 * math.sin(7.0 * z0 + 4.2 * x0 - t * (1.4 + 1.6 * level) + 2.1);
+      final own = math.sin(cloud.f1[i] * t * (you ? 1.3 : 1.0) + cloud.ph1[i]);
+      final w = 0.72 * wave + 0.28 * own; // -1 .. 1
+      final r = 1 + swell * (0.35 + 0.65 * w.abs()) * (w >= 0 ? 1.0 : -0.5);
+      final px = x0 * r, py = y0 * r, pz = z0 * r;
+      // turn about the vertical axis, then tilt
+      final rx = px * cy + pz * sy;
+      final rz = -px * sy + pz * cy;
+      final ry = py * cx - rz * sx;
+      final rz2 = py * sx + rz * cx;
+      final depth = rz2 < -0.25 ? 0 : (rz2 < 0.35 ? 1 : 2);
+      final k = ((ry * 0.55 + rx * 0.25) * 0.5 + 0.5 + (cloud.tint[i] - 128) / 1400).clamp(0.0, 0.999);
+      final bucket = (k * 4).floor() * 3 + depth;
+      final at = counts[bucket];
+      _buf[bucket][at] = c.dx + rx * base;
+      _buf[bucket][at + 1] = c.dy + ry * base;
+      counts[bucket] = at + 2;
+    }
+    for (var b = 0; b < 12; b++) {
+      if (counts[b] == 0) continue;
+      final depth = b % 3;
+      final paint = Paint()
+        ..color = ramp[b ~/ 3].withValues(alpha: alphas[depth])
+        ..strokeWidth = widths[depth] * (size.shortestSide / 240).clamp(0.6, 1.5)
+        ..strokeCap = StrokeCap.round;
+      canvas.drawRawPoints(PointMode.points, Float32List.sublistView(_buf[b], 0, counts[b]), paint);
+    }
   }
 
   @override
-  bool shouldRepaint(_OrbPainter old) => old.t != t || old.amp != amp || old.you != you || old.thinking != thinking || old.connecting != connecting;
+  bool shouldRepaint(_OrbPainter old) => true;
 }

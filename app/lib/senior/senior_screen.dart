@@ -40,6 +40,8 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   AudioRecorder? _rec;
   Timer? _recTimer;
   int _recSeconds = 0;
+  final List<double> _levels = []; // how loud the voice note is, a moment at a time: it draws the waveform in the recording bar
+  StreamSubscription<Amplitude>? _ampSub;
   SeniorEvents? _events;
   StreamSubscription<SseEvent>? _eventSub;
   Map<String, dynamic>? _incoming; // a ring from Maya while the app is open
@@ -71,6 +73,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     _events?.stop();
     _ringTimer?.cancel();
     _recTimer?.cancel();
+    _ampSub?.cancel();
     _rec?.dispose();
     _scroll.dispose();
     _text.dispose();
@@ -327,6 +330,15 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
         _recording = true;
         _recSeconds = 0;
         _error = null;
+        _levels.clear();
+      });
+      _ampSub?.cancel();
+      _ampSub = rec.onAmplitudeChanged(const Duration(milliseconds: 90)).listen((a) {
+        if (!mounted) return;
+        setState(() {
+          _levels.add(((a.current + 50) / 50).clamp(0.0, 1.0));
+          if (_levels.length > 60) _levels.removeAt(0);
+        });
       });
       _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (!mounted) return;
@@ -338,8 +350,31 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     }
   }
 
+  // The bin in the recording bar: stop, throw the recording away, send nothing.
+  Future<void> _cancelRecord() async {
+    _recTimer?.cancel();
+    _ampSub?.cancel();
+    String? path;
+    try {
+      path = await _rec?.stop();
+    } catch (_) {}
+    if (path != null) {
+      try {
+        await File(path).delete();
+      } catch (_) {}
+    }
+    if (mounted) {
+      HapticFeedback.selectionClick();
+      setState(() {
+        _recording = false;
+        _levels.clear();
+      });
+    }
+  }
+
   Future<void> _stopAndSend() async {
     _recTimer?.cancel();
+    _ampSub?.cancel();
     final id = _pid;
     String? path;
     try {
@@ -406,7 +441,10 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      body: SafeArea(
+      backgroundColor: kChatTop,
+      body: DecoratedBox(
+        decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [kChatTop, kChatBottom])),
+        child: SafeArea(
         child: Stack(children: [
           LayoutBuilder(builder: (context, box) {
             final kb = MediaQuery.of(context).viewInsets.bottom > 0;
@@ -437,7 +475,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
                     TextButton(onPressed: () => setState(() => _error = null), child: const Text('OK')),
                   ]),
                 ),
-              _Composer(controller: _text, focus: _focus, recording: _recording, seconds: _recSeconds, busy: _busy != null, onSend: _sendText, onMic: _toggleRecord),
+              _Composer(controller: _text, focus: _focus, recording: _recording, seconds: _recSeconds, levels: _levels, busy: _busy != null, onSend: _sendText, onMic: _toggleRecord, onCancel: _cancelRecord),
               if (!kb)
                 SizedBox(
                   height: 48,
@@ -445,8 +483,9 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
                 ),
             ]);
           }),
-          if (_incoming != null) _IncomingCard(text: '${_incoming!['text'] ?? 'Maya is calling'}', onAccept: _acceptIncoming, onDecline: _declineIncoming),
+          if (_incoming != null) IncomingCallCard(kind: '${_incoming!['kind'] ?? ''}', onAccept: _acceptIncoming, onDecline: _declineIncoming),
         ]),
+      ),
       ),
     );
   }
@@ -506,46 +545,110 @@ class _CallButtonState extends State<_CallButton> with SingleTickerProviderState
   }
 }
 
+/// The box at the bottom. You write in it, or you tap the blue microphone to record a voice note; tap it again to send. While recording the box becomes a blue bar: a bin to throw it away,
+/// the waveform of what you are saying, the time, and a white send button. Writing and voice notes live in the same chat.
 class _Composer extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focus;
   final bool recording, busy;
   final int seconds;
-  final VoidCallback onSend, onMic;
-  const _Composer({required this.controller, required this.focus, required this.recording, required this.seconds, required this.busy, required this.onSend, required this.onMic});
+  final List<double> levels;
+  final VoidCallback onSend, onMic, onCancel;
+  const _Composer({required this.controller, required this.focus, required this.recording, required this.seconds, required this.levels, required this.busy, required this.onSend, required this.onMic, required this.onCancel});
 
   @override
   Widget build(BuildContext context) {
     final mm = '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      child: Row(children: [
-        Pressable(
-          onTap: busy && !recording ? null : onMic,
-          semanticLabel: recording ? 'Stop and send the voice note' : 'Record a voice note',
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(shape: BoxShape.circle, color: recording ? kAlert : Colors.white, border: Border.all(color: recording ? kAlert : kLine, width: 1.5)),
-            child: Icon(recording ? Icons.stop : Icons.mic, color: recording ? Colors.white : kInk),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: recording
-              ? Container(height: 52, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 16), decoration: BoxDecoration(border: Border.all(color: kAlert, width: 1.5), borderRadius: BorderRadius.circular(14)), child: Text('Recording $mm. Tap the square to send.', style: const TextStyle(fontSize: 16, color: kAlert)))
-              : TextField(controller: controller, focusNode: focus, minLines: 1, maxLines: 2, textInputAction: TextInputAction.send, onSubmitted: (_) => onSend(), decoration: const InputDecoration(hintText: 'Write to Maya', isDense: false), style: const TextStyle(fontSize: 18)),
-        ),
-        const SizedBox(width: 8),
-        Pressable(
-          onTap: recording || busy ? null : onSend,
-          semanticLabel: 'Send',
-          child: Container(width: 52, height: 52, decoration: const BoxDecoration(shape: BoxShape.circle, color: kInk), child: const Icon(Icons.arrow_upward, color: Colors.white)),
-        ),
-      ]),
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        child: recording
+            ? Container(
+                key: const ValueKey('recording'),
+                height: 64,
+                padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(32), gradient: const LinearGradient(colors: [kTrust, kTrustDeep]), boxShadow: const [BoxShadow(color: Color(0x334D63D8), blurRadius: 22, offset: Offset(0, 8))]),
+                child: Row(children: [
+                  Pressable(
+                    onTap: onCancel,
+                    semanticLabel: 'Throw this voice note away',
+                    child: const SizedBox(width: 48, height: 48, child: Icon(Icons.delete_outline, color: Colors.white70, size: 28)),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(child: SizedBox(height: 36, child: CustomPaint(painter: _LiveWave(levels)))),
+                  const SizedBox(width: 10),
+                  Text(mm, style: const TextStyle(fontSize: 17, color: Colors.white, fontWeight: FontWeight.w600, fontFeatures: [FontFeature.tabularFigures()])),
+                  const SizedBox(width: 10),
+                  Pressable(
+                    onTap: onMic,
+                    semanticLabel: 'Stop and send the voice note',
+                    child: Container(width: 50, height: 50, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white), child: const Icon(Icons.send_rounded, color: kTrust, size: 24)),
+                  ),
+                ]),
+              )
+            : Row(key: const ValueKey('writing'), children: [
+                Expanded(
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 56),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(28), border: Border.all(color: const Color(0xFFE2E7F6), width: 1.2)),
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    child: TextField(
+                      controller: controller,
+                      focusNode: focus,
+                      minLines: 1,
+                      maxLines: 3,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => onSend(),
+                      decoration: const InputDecoration(hintText: 'Write to Maya', filled: false, border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none, contentPadding: EdgeInsets.symmetric(vertical: 15)),
+                      style: const TextStyle(fontSize: 18.5, color: kInk),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // one blue button: a microphone while the box is empty, an arrow once there is something to send
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: controller,
+                  builder: (context, v, _) {
+                    final hasText = v.text.trim().isNotEmpty;
+                    return Pressable(
+                      onTap: busy ? null : (hasText ? onSend : onMic),
+                      semanticLabel: hasText ? 'Send' : 'Record a voice note',
+                      child: Container(
+                        width: 58,
+                        height: 58,
+                        decoration: const BoxDecoration(shape: BoxShape.circle, color: kTrust, boxShadow: [BoxShadow(color: Color(0x334D63D8), blurRadius: 18, offset: Offset(0, 6))]),
+                        child: Icon(hasText ? Icons.arrow_upward : Icons.mic, color: Colors.white, size: 28),
+                      ),
+                    );
+                  },
+                ),
+              ]),
+      ),
     );
   }
+}
+
+/// The waveform in the recording bar: thin white bars, one for each moment, the newest on the right.
+class _LiveWave extends CustomPainter {
+  final List<double> levels;
+  _LiveWave(this.levels);
+  @override
+  void paint(Canvas canvas, Size size) {
+    const bw = 3.0, gap = 3.0;
+    final n = (size.width / (bw + gap)).floor();
+    final mid = size.height / 2;
+    for (var i = 0; i < n; i++) {
+      final k = levels.length - n + i; // the newest sound is at the right edge
+      final has = k >= 0 && k < levels.length;
+      final h = 4 + (has ? levels[k] : 0.0) * (size.height - 4);
+      final x = i * (bw + gap) + bw / 2;
+      canvas.drawLine(Offset(x, mid - h / 2), Offset(x, mid + h / 2), Paint()..color = Colors.white.withValues(alpha: has ? 0.95 : 0.35)..strokeWidth = bw..strokeCap = StrokeCap.round);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_LiveWave old) => true;
 }
 
 class _NoticeBar extends StatelessWidget {
@@ -569,35 +672,57 @@ class _NoticeBar extends StatelessWidget {
       );
 }
 
-class _IncomingCard extends StatelessWidget {
-  final String text;
+/// The page the senior sees when Maya rings (a tap on the call notification, or a ring while the app is open). The same see-through backdrop as the call page, over the whole screen:
+/// "Maya is calling" in large type, one line under it for why (from the kind of call only, never any private words), then Accept and Decline, big, on the same page.
+class IncomingCallCard extends StatelessWidget {
+  final String kind;
   final VoidCallback onAccept, onDecline;
-  const _IncomingCard({required this.text, required this.onAccept, required this.onDecline});
+  const IncomingCallCard({super.key, required this.kind, required this.onAccept, required this.onDecline});
+
+  // why she is calling, from the kind only
+  String get _why {
+    switch (kind) {
+      case 'welfare':
+        return 'A welfare check: she would like to hear how you are.';
+      case 'reminder':
+        return 'A reminder from your family.';
+      case 'callback':
+        return 'A quick check-in: she is calling you back.';
+      default:
+        return 'A check-in: she would like to hear how you are.';
+    }
+  }
+
+  Widget _action(String label, Color color, IconData icon, VoidCallback onTap) => Column(mainAxisSize: MainAxisSize.min, children: [
+        Pressable(
+          onTap: onTap,
+          semanticLabel: label,
+          child: Container(width: 92, height: 92, decoration: BoxDecoration(shape: BoxShape.circle, color: color), child: Icon(icon, color: Colors.white, size: 40)),
+        ),
+        const SizedBox(height: 12),
+        Text(label, style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
+      ]);
+
   @override
   Widget build(BuildContext context) => Positioned.fill(
-        child: ColoredBox(
-          color: Colors.white,
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Text('Maya is calling', style: Theme.of(context).textTheme.headlineMedium),
-              const SizedBox(height: 12),
-              Text(text, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyLarge),
-              const SizedBox(height: 40),
-              Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-                Column(children: [
-                  Pressable(onTap: onDecline, semanticLabel: 'Decline', child: Container(width: 76, height: 76, decoration: const BoxDecoration(shape: BoxShape.circle, color: kAlert), child: const Icon(Icons.call_end, color: Colors.white, size: 34))),
-                  const SizedBox(height: 8),
-                  const Text('Decline', style: TextStyle(fontSize: 16, color: kSoft)),
-                ]),
-                Column(children: [
-                  Pressable(onTap: onAccept, semanticLabel: 'Accept', child: Container(width: 76, height: 76, decoration: const BoxDecoration(shape: BoxShape.circle, color: kAccent), child: const Icon(Icons.call, color: Colors.white, size: 34))),
-                  const SizedBox(height: 8),
-                  const Text('Accept', style: TextStyle(fontSize: 16, color: kSoft)),
+        child: Stack(fit: StackFit.expand, children: [
+          const CallBackdrop(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(28, 24, 28, 40),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Spacer(flex: 3),
+                const Text('Maya is calling', style: TextStyle(fontSize: 40, height: 1.05, color: Colors.white, fontWeight: FontWeight.w300, letterSpacing: -1)),
+                const SizedBox(height: 14),
+                Text(_why, style: TextStyle(fontSize: 20, height: 1.35, color: Colors.white.withValues(alpha: 0.86), fontWeight: FontWeight.w400)),
+                const Spacer(flex: 5),
+                Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                  _action('Decline', const Color(0xFFC0392B), Icons.call_end, onDecline),
+                  _action('Accept', const Color(0xFF2E9C86), Icons.call, onAccept),
                 ]),
               ]),
-            ]),
+            ),
           ),
-        ),
+        ]),
       );
 }

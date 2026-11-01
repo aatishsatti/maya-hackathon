@@ -9,6 +9,16 @@ const Color kFill = Color(0xFFF5F5F5);
 const Color kAccent = Color(0xFF14463C); // the Call button
 const Color kAlert = Color(0xFFB3261E); // end a call, errors
 
+// Trust blue and teal: the chat, the voice-note pill and the call orb (calm, cool, no pink or purple).
+const Color kTrust = Color(0xFF4D63D8);
+const Color kTrustDeep = Color(0xFF3F54C8);
+const Color kTrustSoft = Color(0xFFE8ECFB);
+const Color kTeal = Color(0xFF17B3A8);
+const Color kBubbleIn = Color(0xFFF2F6FD); // a message from Maya: a light blue-white
+const Color kBubbleOut = Color(0xFFE9F7EC); // a message from the person: a light green tint
+const Color kChatTop = Color(0xFFF8F9FE);
+const Color kChatBottom = Color(0xFFECEFFB);
+
 class Tone {
   final Color bg, ink, line;
   const Tone(this.bg, this.ink, this.line);
