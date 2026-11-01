@@ -339,13 +339,13 @@ test('24 h window guard: outside it a free text is refused (and says so), a voic
 test('template guard: outside the window only the approved template goes out (never the family\'s own words), at most twice a day', async () => {
   voiceReset(); const { id, phone } = outside();
   assert.deepEqual(await wa.sendOut(id, { kind: 'text', text: 'my own words must not leak into a template', useTemplate: true }), { sent: true, via: 'template', kind: 'template' });
-  const t = sent()[0]; assert.equal(t.type, 'template'); assert.equal(t.to, phone); assert.deepEqual(t.template, { name: 'hello_world', language: { code: 'en_US' } });
+  const t = sent()[0]; assert.equal(t.type, 'template'); assert.equal(t.to, phone); assert.deepEqual(t.template, { name: 'maya_reminder', language: { code: 'en_US' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'Your family would like to hear from you. Tap Got it, or write back, when you can.' }] }] });
   assert.ok(!JSON.stringify(t).match(/leak/));
   shift(id, 60000); await wa.sendOut(id, { kind: 'text', useTemplate: true });
   shift(id, 60000); await refusal(wa.sendOut(id, { kind: 'text', useTemplate: true }), /already sent today/, { status: 429 });
   assert.equal(sent().length, 2);
   process.env.WHATSAPP_TEMPLATE_NAME = 'maya_checkin'; process.env.WHATSAPP_TEMPLATE_LANG = 'en_GB'; const o = outside(); clearCalls();
-  try { await wa.sendOut(o.id, { kind: 'text', useTemplate: true }); assert.deepEqual(sent()[0].template, { name: 'maya_checkin', language: { code: 'en_GB' } }); }
+  try { await wa.sendOut(o.id, { kind: 'text', useTemplate: true }); assert.deepEqual(sent()[0].template, { name: 'maya_checkin', language: { code: 'en_GB' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'Your family would like to hear from you. Tap Got it, or write back, when you can.' }] }] }); }
   finally { delete process.env.WHATSAPP_TEMPLATE_NAME; delete process.env.WHATSAPP_TEMPLATE_LANG; }
   const back = inWindow(); await wa.sendOut(back.id, { kind: 'text', text: 'free text still works inside', useTemplate: true }); assert.equal(sent().at(-1).type, 'text', 'inside the window a template is never used');
 });
@@ -769,10 +769,10 @@ test('Reminder voice failures name the stage and WhatsApp\'s own code (never a r
 
 test('An incoming message of a type Maya does not handle logs its SHAPE (field names, never a value), so the first tap on a template quick-reply button shows its real structure', async () => {
   voiceReset(); const { id, phone } = linked(); reset(PLAIN);
-  const btn = incoming(phone, '', { type: 'button', text: undefined, button: { payload: 'SECRET-PAYLOAD-VALUE', text: 'Got it tulips' }, context: { from: '15556408264', id: 'wamid.CONTEXT-ID-1' } });
+  const btn = incoming(phone, '', { type: 'location', text: undefined, location: { payload: 'SECRET-PAYLOAD-VALUE', text: 'Got it tulips' }, context: { from: '15556408264', id: 'wamid.CONTEXT-ID-1' } });
   let logs = await captureLogs(async () => assert.deepEqual(await wa.handleWebhook(btn), ['unsupported']));
   const line = logs.find((l) => l.includes('unhandled incoming message'));
-  assert.equal(line, `whatsapp: unhandled incoming message from number ending ${phone.slice(-4)}: type button, fields [button{payload,text},context{from,id},from,id,timestamp,type]`);
+  assert.equal(line, `whatsapp: unhandled incoming message from number ending ${phone.slice(-4)}: type location, fields [context{from,id},from,id,location{payload,text},timestamp,type]`);
   assert.doesNotMatch(logs.join('\n'), /SECRET-PAYLOAD|tulips|CONTEXT-ID|15556408264/, 'names only: no value, no id, no number'); assert.ok(!logs.join('\n').includes(phone));
   assert.deepEqual(sent().map((m) => m.text.body), ['I can read your typed messages and listen to voice notes here. Please type it or send a voice note.'], 'what the person gets is unchanged');
   // other unhandled types too, and odd or deep structures are bounded and sanitised
@@ -1009,7 +1009,7 @@ test('dashboard sends are logged: the attempt, the success, every refusal and ev
 test('a template send logs the phone id (last 4 only), API version, template name and language, and the Meta error code; never the token or a full number', async () => {
   voiceReset(); const { id, phone } = outside(); graphFail = { code: 10, message: '(#10) Viewer cannot access the provided Paid Message Account 1116892537450220' };
   const out = await capture(() => wa.sendOut(id, { kind: 'text', useTemplate: true }).catch(() => {}));
-  assert.match(out, /template send: phone id ending 5671, api v\d+\.\d+, template hello_world\/en_US/); assert.match(out, /NOT sent: WhatsApp refused it \(10\)/);
+  assert.match(out, /template send: phone id ending 5671, api v\d+\.\d+, template maya_reminder\/en_US/); assert.match(out, /NOT sent: WhatsApp refused it \(10\)/);
   assert.match(out, /token length 19, sha256 [0-9a-f]{8}(?!,? ODD)/); // shape of the token the process reads, not the token
   assert.doesNotMatch(out, /TEST-TOKEN|1409237678935671/); assert.ok(!out.includes(phone));
   const call = graphCalls.find((c) => c.body && c.body.type === 'template'); assert.match(call.url, /\/v\d+\.\d+\/1409237678935671\/messages$/, 'the PHONE number id, not the WABA id');

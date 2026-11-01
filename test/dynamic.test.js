@@ -16,8 +16,7 @@ process.env.WHATSAPP_TOKEN = 'TEST-TOKEN-NOT-REAL';
 process.env.WHATSAPP_APP_SECRET = 'test-app-secret';
 process.env.WHATSAPP_VERIFY_TOKEN = 'test-verify-token';
 process.env.WHATSAPP_PHONE_ID = '1409237678935671';
-process.env.WHATSAPP_TEMPLATE_NAME = 'maya_checkin';
-process.env.WHATSAPP_TEMPLATE_LANG = 'en_GB';
+delete process.env.WHATSAPP_TEMPLATE_NAME; delete process.env.WHATSAPP_TEMPLATE_LANG;   // the defaults: maya_reminder / en_US
 process.env.MAYA_TZ_GUESS = 'on';   // the automatic guesses (connection, phone number) are tested here; the test runner switches them off elsewhere
 
 const brainPath = require.resolve('../brain');
@@ -68,7 +67,7 @@ const talker = (id, origin) => {
 
 // ---------------------------------------------------------------- 2. every N hours / days / weeks
 test('"every 2 hours" SETS a reminder (no question); every N hours, days and weeks work; the next one is N units later; a too-large number is asked about', async () => {
-  quiet(); const { id } = linked(true); care.get(id).tz = 'America/New_York'; const say = talker(id, 'whatsapp');
+  quiet(); const { id } = linked(true); const say = talker(id, 'whatsapp');   // no clock time here, so no time zone (and no quiet hours at the machine's hour)
   const a = await say('Remind me every 2 hours to drink water.'); assert.ok(a.labels.includes('setrem-confirm'), a.labels.join()); assert.match(a.text, /So, every 2 hours, starting in 2 hours, I will remind you to drink water\./);
   await say('Yes.'); const s = await say('A text please.'); assert.ok(s.labels.includes('setrem-saved'));
   const r = rem(id); assert.deepEqual([r.repeat, r.every, r.deliver, r.channel], ['hourly', 2, 'text', 'whatsapp']); const due0 = r.dueAt;
@@ -112,25 +111,46 @@ test('WhatsApp is picked but not set up for them: the app covers it (same type) 
   assert.ok(app.ev.some(([k, d]) => k === 'notice' && /take your tablets/.test(d.text))); assert.equal(cur(id).fellBack.reason, 'not_linked'); assert.match(acts(id).find((x) => x.where === 'app').note, /WhatsApp is not set up for this person/);
 });
 
-// ---------------------------------------------------------------- 6. the approved template, after 24 hours of silence
-test('the 24 hour window is closed: the approved invitation (template) goes first, the reminder follows their reply; the entry says so', async () => {
-  quiet(); const { id } = linked(false); add(id, { deliver: 'text', channel: 'whatsapp' }); await fire();
-  const tpl = sent(); assert.equal(tpl.length, 1); assert.equal(tpl[0].type, 'template'); assert.deepEqual([tpl[0].template.name, tpl[0].template.language.code], ['maya_checkin', 'en_GB']);
-  assert.equal(rem(id).active.state, 'wa_invited'); assert.ok(!sent().some((m) => m.type === 'text'), 'the reminder itself has not been sent yet');
-  const e = acts(id).find((x) => x.status !== 'scheduled'); assert.equal(e.label, 'Invitation sent, waiting for their reply'); assert.match(e.note, /approved invitation message was sent first/);
-  setInbound(id, 1000); assert.equal(care.waWindowOpened(id), 1); await settle();   // they replied
-  const texts = sent().filter((m) => m.type === 'text'); assert.equal(texts.length, 1, 'the reminder follows their reply'); assert.match(texts[0].text.body, /take your tablets/);
-  assert.equal(rem(id).active.state, 'wa_sent'); assert.match(acts(id).find((x) => x.status !== 'scheduled').note, /after they replied to the invitation/);
+// ---------------------------------------------------------------- 6. the approved template maya_reminder, after 24 hours of silence
+const GOT_IT = (from) => ({ object: 'whatsapp_business_account', entry: [{ id: 'WABA', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { display_phone_number: '15556408264', phone_number_id: '1409237678935671' }, contacts: [{ wa_id: from, profile: { name: 'X' } }], messages: [{ from, id: `wamid.in${Math.random().toString(36).slice(2)}`, timestamp: String(Math.floor(Date.now() / 1000)), type: 'button', button: { text: 'Got it', payload: 'Got it' } }] } }] }] });
+test('the 24 hour window is closed: a text goes as maya_reminder / en_US with ONE variable = the reminder text (not empty, never anything else); pressing Got it flips Activity to Answered', async () => {
+  quiet(); const { id, phone } = linked(false); add(id, { task: 'take your tablets', deliver: 'text', channel: 'whatsapp' }); await fire();
+  const m = sent(); assert.equal(m.length, 1); assert.equal(m[0].type, 'template'); assert.equal(m[0].to, phone);
+  assert.deepEqual(m[0].template, { name: 'maya_reminder', language: { code: 'en_US' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'take your tablets' }] }] }, 'one body variable holding the reminder text');
+  assert.ok(!JSON.stringify(graphCalls).includes('hello_world'), 'the old sample template is never sent'); assert.equal(rem(id).active.state, 'wa_sent'); assert.equal(rem(id).active.template, true);
+  const e = acts(id).find((x) => x.status !== 'scheduled'); assert.equal(e.where, 'whatsapp'); assert.equal(e.channel, 'text'); assert.match(e.note, /went as WhatsApp's approved reminder message \(with a Got it button\)/); assert.equal(e.words, 'take your tablets');
+  await wa.handleWebhook(GOT_IT(phone)); await settle();
+  const after = acts(id).find((x) => x.status !== 'scheduled'); assert.equal(after.status, 'answered'); assert.equal(after.label, 'Answered'); assert.equal(rem(id).last.state, 'done');
 });
 
-test('no reply to the invitation: the app delivers the reminder after the wait; an invitation that cannot go falls straight to the app', async () => {
-  quiet(); const { id } = linked(false); const app = openApp(id); add(id, { deliver: 'text', channel: 'whatsapp' }); await fire(); assert.equal(rem(id).active.state, 'wa_invited');
-  care.tick(Date.now() + 16 * 60000); await settle(); assert.ok(app.ev.some(([k, d]) => k === 'notice' && /take your tablets/.test(d.text)), 'the app delivered it'); assert.equal(cur(id).fellBack.reason, 'no_reply_to_invitation'); app.detach();
-  quiet(); const b = linked(false); const app2 = openApp(b.id); failMessages = true; add(b.id, { deliver: 'text', channel: 'whatsapp' }); await fire();
-  assert.ok(app2.ev.some(([k]) => k === 'notice'), 'the invitation failed: the app covers it at once'); assert.equal(cur(b.id).fellBack.reason, 'invite_failed'); app2.detach();
-  quiet(); const c = linked(false); const app3 = openApp(c.id); add(c.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); care.tick(Date.now() + 20 * 60000); await settle();
-  quiet(); add(c.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); care.tick(Date.now() + 20 * 60000); await settle();
-  quiet(); add(c.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); assert.ok(cur(c.id).fellBack, 'the third invitation of the day is refused by the daily limit: the app covers it'); app3.detach();
+test('the template variable follows who set it: a senior-set reminder is worded to them ("take your medicine"); a family one drops how the family addressed them; a voice note picked by the senior is NOT turned into a text after 24 hours (the app carries it)', async () => {
+  quiet(); const a = linked(false); care.addSeniorReminder(a.id, { task: 'take my medicine', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'text', channel: 'whatsapp', origin: 'whatsapp' }); await fire();
+  assert.equal(sent()[0].template.components[0].parameters[0].text, 'take your medicine');
+  quiet(); const b = linked(false); add(b.id, { task: 'Take your back meds mom', deliver: 'text', channel: 'whatsapp' }); await fire(); assert.equal(sent()[0].template.components[0].parameters[0].text, 'Take your back meds');
+  quiet(); const c = linked(false); care.addSeniorReminder(c.id, { task: 'go for a walk', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'voice', channel: 'whatsapp', origin: 'whatsapp' }); await fire();
+  assert.equal(sent().length, 0, 'no template for a voice note the senior chose'); assert.equal(cur(c.id).fellBack.reason, 'window_closed'); assert.ok(chat.thread(c.id).some((x) => x.kind === 'voice'), 'the voice note reached the app chat');
+});
+
+test('a missing variable, a missing or wrong template: the Maya app covers it cleanly, Activity says why, nothing crashes, no silent "Not sent", hello_world is never sent', async () => {
+  const keepName = process.env.WHATSAPP_TEMPLATE_NAME, keepFetch = wa.deps.fetch;
+  try {
+    // 1. nothing to put in {{1}}: not sent empty
+    quiet(); const v = linked(false); const appV = openApp(v.id); add(v.id, { task: '...', deliver: 'text', channel: 'whatsapp' }); await fire(); appV.detach();
+    assert.equal(sent().length, 0, 'an empty variable is never sent'); assert.equal(cur(v.id).fellBack.reason, 'template_no_text'); assert.ok(appV.ev.some(([k]) => k === 'notice'), 'the app delivered it'); assert.match(acts(v.id).find((e) => e.where === 'app').note, /no words to put in the approved reminder template.*Maya app instead/);
+    // 2. the template setting is EMPTY: no template, the app covers it
+    process.env.WHATSAPP_TEMPLATE_NAME = ''; quiet(); const a = linked(false); const appA = openApp(a.id); add(a.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); appA.detach();
+    assert.equal(sent().length, 0); assert.ok(appA.ev.some(([k, d]) => k === 'notice' && /take your tablets/.test(d.text))); assert.equal(cur(a.id).fellBack.reason, 'template_not_configured'); assert.match(acts(a.id).find((e) => e.where === 'app').note, /no approved reminder template is set up on the server \(WHATSAPP_TEMPLATE_NAME\).*Maya app instead/);
+    // 3. a template WhatsApp does not know (132001)
+    process.env.WHATSAPP_TEMPLATE_NAME = 'no_such_template'; wa.deps.fetch = async (url, opts = {}) => { const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : null; graphCalls.push({ url, body }); if (body && body.type === 'template') return { ok: false, status: 400, json: async () => ({ error: { code: 132001, message: 'Template name does not exist in the translation' } }) }; return { ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.x' }] }) }; };
+    quiet(); const b = linked(false); const appB = openApp(b.id); add(b.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); appB.detach();
+    assert.ok(appB.ev.some(([k, d]) => k === 'notice' && /take your tablets/.test(d.text))); assert.equal(cur(b.id).fellBack.reason, 'template_rejected'); assert.match(acts(b.id).find((e) => e.where === 'app').note, /rejected the approved reminder template \(its name, language or variable did not match the approved one\)/);
+    // 4. Meta is down
+    process.env.WHATSAPP_TEMPLATE_NAME = 'maya_reminder'; wa.deps.fetch = async (url) => { graphCalls.push({ url, body: null }); return { ok: false, status: 500, json: async () => ({ error: { code: 1, message: 'Server error' } }) }; };
+    quiet(); const c = linked(false); const appC = openApp(c.id); add(c.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); appC.detach(); assert.equal(cur(c.id).fellBack.reason, 'meta_error'); assert.ok(appC.ev.some(([k]) => k === 'notice'));
+  } finally { wa.deps.fetch = keepFetch; if (keepName === undefined) delete process.env.WHATSAPP_TEMPLATE_NAME; else process.env.WHATSAPP_TEMPLATE_NAME = keepName; }
+  // hello_world is gone from everything that ships
+  const root = path.join(__dirname, '..'); const files = ['whatsapp.js', 'care.js', 'server.js', 'render.yaml', 'README.md', ...fs.readdirSync(path.join(root, 'public')).map((f) => `public/${f}`), ...fs.readdirSync(path.join(root, 'docs')).filter((f) => /\.(md|html)$/.test(f)).map((f) => `docs/${f}`)];
+  for (const f of files) assert.doesNotMatch(fs.readFileSync(path.join(root, f), 'utf8'), /hello_world/i, f);
 });
 
 // ---------------------------------------------------------------- 3. Both
@@ -160,7 +180,7 @@ test('Both + Call: the app rings if it is open; otherwise where they were last a
 // ---------------------------------------------------------------- the rules, in plain words, before the family picks
 test('WhatsApp\'s rules are in the dashboard data in plain words (window, invitation, call limits, the app fallback), and on the web page and in the app', () => {
   quiet(); const { id } = linked(true); const rules = care.view(id).whatsappRules; assert.ok(Array.isArray(rules) && rules.length >= 5);
-  const all = rules.join(' '); for (const re of [/24 hours/, /invitation/, /template/, /2 invitations a day/, /allowed WhatsApp calls/, /limits how many calls/, /2 calls in a row/, /30 reminder messages/, /Maya app instead/, /last active/]) assert.match(all, re);
+  const all = rules.join(' '); for (const re of [/24 hours/, /approved reminder message/, /Got it/, /template/, /allowed WhatsApp calls/, /limits how many calls/, /2 calls in a row/, /30 reminder messages/, /Maya app instead/, /last active/]) assert.match(all, re);
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waRulesA"/); assert.match(html, /id="waRulesB"/); assert.match(html, /WhatsApp rules, in plain words/);
   const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.match(js, /v\.whatsappRules/);
   const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_reminders.dart'), 'utf8'); assert.match(dart, /WhatsappRules\(rules: WhatsappRules\.from\(widget\.data\.care\['whatsappRules'\]\)\)/);
@@ -247,25 +267,6 @@ test('Both + Call, answered on the first platform: the other is never rung', asy
   assert.equal(rang, 0, 'answered: WhatsApp never rang');
 });
 
-// ---------------------------------------------------------------- follow-up: the template name, a wrong or missing one
-test('a missing or wrong template name falls back to the Maya app cleanly: Activity says why, nothing crashes, no silent "Not sent"', async () => {
-  const keepName = process.env.WHATSAPP_TEMPLATE_NAME, keepFetch = wa.deps.fetch;
-  try {
-    // 1. nothing set: not guessed (no hello_world), the app covers it, and the reason names the setting to check
-    delete process.env.WHATSAPP_TEMPLATE_NAME; quiet(); const a = linked(false); const appA = openApp(a.id); add(a.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); appA.detach();
-    assert.equal(sent().length, 0, 'no template was sent'); assert.ok(appA.ev.some(([k, d]) => k === 'notice' && /take your tablets/.test(d.text)), 'the app delivered the reminder'); assert.equal(cur(a.id).fellBack.reason, 'template_not_configured');
-    assert.match(acts(a.id).find((e) => e.where === 'app').note, /no approved invitation template is set up on the server \(WHATSAPP_TEMPLATE_NAME\).*Maya app instead/);
-    // 2. a name WhatsApp does not know (132001): the app covers it, the reason says the template was rejected
-    process.env.WHATSAPP_TEMPLATE_NAME = 'no_such_template'; wa.deps.fetch = async (url, opts = {}) => { const body = typeof opts.body === 'string' ? JSON.parse(opts.body) : null; graphCalls.push({ url, body }); if (body && body.type === 'template') return { ok: false, status: 400, json: async () => ({ error: { code: 132001, message: 'Template name does not exist in the translation' } }) }; return { ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.x' }] }) }; };
-    quiet(); const b = linked(false); const appB = openApp(b.id); add(b.id, { deliver: 'text', channel: 'whatsapp' }); await fire(); appB.detach();
-    assert.ok(appB.ev.some(([k, d]) => k === 'notice' && /take your tablets/.test(d.text))); assert.equal(cur(b.id).fellBack.reason, 'template_rejected'); assert.match(acts(b.id).find((e) => e.where === 'app').note, /rejected the invitation template \(its name or language is not an approved one\)/);
-    assert.equal(rem(b.id).active.state === 'wa_invited', false, 'it is not left waiting for a reply to an invitation that never went');
-    // 3. Meta is down for the invitation (any other error): still the app
-    process.env.WHATSAPP_TEMPLATE_NAME = 'maya_checkin'; wa.deps.fetch = async (url, opts = {}) => { graphCalls.push({ url, body: null }); return { ok: false, status: 500, json: async () => ({ error: { code: 1, message: 'Server error' } }) }; };
-    quiet(); const c = linked(false); const appC = openApp(c.id); add(c.id, { deliver: 'voice', channel: 'whatsapp' }); await fire(); appC.detach(); assert.equal(cur(c.id).fellBack.reason, 'invite_failed'); assert.ok(chat.thread(c.id).some((m) => m.kind === 'voice'), 'the voice note reached the app chat');
-  } finally { wa.deps.fetch = keepFetch; if (keepName === undefined) delete process.env.WHATSAPP_TEMPLATE_NAME; else process.env.WHATSAPP_TEMPLATE_NAME = keepName; }
-});
-
 // ---------------------------------------------------------------- follow-up: the IP lookup, in plain words and switchable
 test('the IP-to-time-zone lookup can be switched off by config (nothing is sent to the service); device, phone-country and the dashboard still work; the privacy page says it in plain words', async () => {
   const keep = process.env.MAYA_TZ_IP_LOOKUP; let asked = 0; tz.deps.geoTz = async () => { asked += 1; return 'America/Chicago'; };
@@ -277,6 +278,5 @@ test('the IP-to-time-zone lookup can be switched off by config (nothing is sent 
     care.get(b).tz = null; assert.equal(await tz.learnFromIp(care, b, '8.8.4.4'), false, 'and the same person is not looked up again within hours'); assert.equal(asked, 1);
   } finally { if (keep === undefined) delete process.env.MAYA_TZ_IP_LOOKUP; else process.env.MAYA_TZ_IP_LOOKUP = keep; }
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'privacy.html'), 'utf8'); const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  for (const re of [/Time zone/, /one-time lookup of where their internet connection is/, /only while the time zone is still unknown/, /is not kept by Maya/, /public location service/, /can be switched off by whoever runs the server/, /country code of their linked WhatsApp number/, /Only if none of these works does the family dashboard ask/]) assert.match(text, re);
-  assert.match(text, /approved invitation message that asks them to reply/); assert.doesNotMatch(text, /whose text is the reminder/);
+  for (const re of [/Time zone/, /whose text is the reminder, with a Got it button/, /one-time lookup of where their internet connection is/, /only while the time zone is still unknown/, /is not kept by Maya/, /public location service/, /can be switched off by whoever runs the server/, /country code of their linked WhatsApp number/, /Only if none of these works does the family dashboard ask/]) assert.match(text, re);
 });

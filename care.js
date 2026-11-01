@@ -39,8 +39,7 @@ const cfg = {
   reminderLateMs: 30 * MIN,         // a reminder missed by more than this (server down) is marked Missed, never called late
   waNudgeMs: 10 * MIN * SCALE,      // a reminder sent on WhatsApp and not answered: ONE nudge after this
   waMissMs: 60 * MIN * SCALE,       // ...and it is marked Missed (visible, never hidden) after this
-  waFallback: true,                 // when WhatsApp cannot deliver, the Maya app covers it (and a closed 24 hour window gets the invitation first). Tests of WhatsApp's raw mechanics switch it off.
-  waInviteWaitMs: 15 * MIN * SCALE, // the invitation (template) was sent because the 24 hour window was closed: if they have not replied by now, the app covers the reminder
+  waFallback: true,                 // when WhatsApp cannot deliver, the Maya app covers it (and a closed 24 hour window gets the approved template). Tests of WhatsApp's raw mechanics switch it off.
   waSendStuckMs: 2 * MIN * SCALE,   // a send that never answered in this long is shown as not sent
   waAnsweredCtxMs: 30 * MIN * SCALE, // after a reminder was answered, Maya keeps it in mind this long ("done, carry on")
   waThisMessageMs: 15 * 1000,       // a reply that answered a reminder less than this long ago IS the reply that answered it
@@ -997,7 +996,7 @@ function finishOccurrence(p, rid, state, extra = {}) {
   const r = p.reminders.find((x) => x.id === rid);
   if (!r) return;
   const act = r.active || { dueAt: r.dueAt, attempts: 0 };
-  const wa = act.channel === 'whatsapp' || act.channel === 'app' ? { channel: act.channel, ...(act.app ? { app: act.app } : {}), notifId: act.notifId || null, via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged), ...(act.pausedBy ? { pausedBy: act.pausedBy } : {}) } : {};
+  const wa = act.channel === 'whatsapp' || act.channel === 'app' ? { channel: act.channel, ...(act.app ? { app: act.app } : {}), notifId: act.notifId || null, via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged), ...(act.template ? { template: true } : {}), ...(act.pausedBy ? { pausedBy: act.pausedBy } : {}) } : {};
   r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...(act.instead ? { instead: act.instead } : {}), ...(act.fellBack ? { fellBack: act.fellBack } : {}), ...(act.alsoTried ? { alsoTried: act.alsoTried } : {}), ...extra };
   r.active = null;
   if (state === 'done') trendEvent(p.id, { kind: 'reminder', acked: true });                          // answered
@@ -1331,8 +1330,9 @@ function dispatchWA(p, r) {
 // ---- when WhatsApp cannot deliver: the app covers it, and the family SEES what happened (never a silent "Not sent" with nowhere else to go) ----
 // The occurrence on WhatsApp is closed as Not sent with its plain reason, then the SAME reminder (same delivery type) is delivered in the Maya app, which has none of WhatsApp's rules.
 // 'Both' already sent to the app at the same time, so nothing more is needed there. If the app cannot take it either (a call to a closed phone), that is told plainly too.
-const WA_WHY = { window_closed: "WhatsApp's 24 hour window was closed", no_reply_to_invitation: 'they did not reply to the invitation in time', invite_failed: "WhatsApp's invitation message could not be sent", template_not_configured: 'no approved invitation template is set up on the server (WHATSAPP_TEMPLATE_NAME)', template_rejected: "WhatsApp rejected the invitation template (its name or language is not an approved one)", invite_limit: "today's limit of 2 invitations was reached", daily_cap: "today's WhatsApp message limit was reached", not_linked: 'WhatsApp is not set up for this person',
-  not_configured: 'WhatsApp is not set up on this server', meta_error: 'WhatsApp refused it', voice_failed: 'the voice note could not be made or sent', call_not_placed: 'the WhatsApp call could not be placed', no_answer: 'WhatsApp did not answer', whatsapp_failed: 'WhatsApp reported that it failed', no_id: 'WhatsApp did not confirm it', error: 'a WhatsApp error' };
+const WA_WHY = { window_closed: "WhatsApp's 24 hour window was closed", daily_cap: "today's WhatsApp message limit was reached", not_linked: 'WhatsApp is not set up for this person', not_configured: 'WhatsApp is not set up on this server',
+  template_not_configured: 'no approved reminder template is set up on the server (WHATSAPP_TEMPLATE_NAME)', template_no_text: 'there were no words to put in the approved reminder template', template_rejected: "WhatsApp rejected the approved reminder template (its name, language or variable did not match the approved one)",
+  meta_error: 'WhatsApp refused it', voice_failed: 'the voice note could not be made or sent', call_not_placed: 'the WhatsApp call could not be placed', no_answer: 'WhatsApp did not answer', whatsapp_failed: 'WhatsApp reported that it failed', no_id: 'WhatsApp did not confirm it', error: 'a WhatsApp error' };
 const waWhy = (reason) => WA_WHY[reason] || 'WhatsApp could not deliver it';
 function failWA(p, r, reason, error, dueAt, { silent = false } = {}) {
   const id = p.id, both = effectiveChannel(p, r) === 'both';
@@ -1349,43 +1349,17 @@ function failWA(p, r, reason, error, dueAt, { silent = false } = {}) {
   save(id); pushFamily('refresh', { id });
   return covered;
 }
-// The person replied (so WhatsApp's 24 hour window is open again): a reminder that was waiting behind the invitation is sent now, as the delivery type chosen.
-function waWindowOpened(id) {
-  const p = get(id); if (!p || !reminderSender) return 0; let n = 0;
-  for (const r of p.reminders) {
-    const a = r.active; if (!a || a.channel !== 'whatsapp' || a.state !== 'wa_invited') continue;
-    const now = Date.now(); a.state = 'wa_sending'; a.key = `${r.id}:${a.dueAt}:r`; a.startedAt = now; a.nudgeAt = now + cfg.waNudgeMs; a.missAt = now + cfg.waMissMs; a.repliedToInvite = true;
-    flushOne(id); dispatchWA(p, r); n += 1; waLog({ event: 'invitation answered', then: 'reminder' });
-  }
-  if (n) pushFamily('refresh', { id });
-  return n;
-}
-
 // The send came back. Only a result WITH a message id counts as sent.
 function reminderSent(id, rid, key, res) {
   const p = get(id); const r = p && p.reminders.find((x) => x.id === rid);
   if (!r || !r.active || r.active.key !== key || r.active.state !== 'wa_sending') return false;   // deleted, or already settled
   const a = r.active;
   if (res && res.ok && res.wamid) {
-    a.state = 'wa_sent'; a.wamid = res.wamid; a.via = res.via === 'voice' ? 'voice' : 'text'; a.voiceUnavailable = Boolean(res.voiceUnavailable); a.sentAt = Date.now();
+    a.state = 'wa_sent'; a.wamid = res.wamid; a.via = res.via === 'voice' ? 'voice' : 'text'; if (res.via === 'template') a.template = true; a.voiceUnavailable = Boolean(res.voiceUnavailable); a.sentAt = Date.now();
     save(id); pushFamily('refresh', { id }); waLog({ event: 'sent', via: a.via, voiceUnavailable: a.voiceUnavailable });
     return true;
   }
   const reason = (res && res.reason) || 'error', error = (res && res.error) || null;
-  if (reason === 'window_closed' && !a.invited && reminderSender.invite && cfg.waFallback) {
-    // The 24 hour window is closed: WhatsApp allows only its approved template now. The invitation goes first (it asks them to reply); the reminder follows their reply. If they do not reply in time, or the
-    // invitation cannot go, the app covers it.
-    a.invited = true; a.state = 'wa_invite_sending'; a.startedAt = Date.now(); save(id); waLog({ event: 'window closed', then: 'invitation' });
-    Promise.resolve().then(() => reminderSender.invite(id)).then(() => {
-      const q = get(id), rr = q && q.reminders.find((x) => x.id === rid);
-      if (!rr || !rr.active || rr.active.state !== 'wa_invite_sending') return;
-      rr.active.state = 'wa_invited'; rr.active.inviteAt = Date.now(); rr.active.inviteExpireAt = Date.now() + cfg.waInviteWaitMs; save(id); pushFamily('refresh', { id }); waLog({ event: 'invitation sent' });
-    }, (e) => {
-      const q = get(id), rr = q && q.reminders.find((x) => x.id === rid);
-      if (rr && rr.active && rr.active.state === 'wa_invite_sending') failWA(q, rr, (e && e.reason) || 'invite_failed', { title: String((e && e.message) || 'error').slice(0, 120), ...(e && e.code ? { code: e.code } : {}) });   // the app covers it; the reason is named
-    });
-    return true;
-  }
   if (reason === 'window_closed' && !cfg.waFallback && !a.noCall && !r.strict && reminderSender.placeCall && reminderSender.channelFor(id) === 'whatsapp') {
     // LEGACY (only when cfg.waFallback is off, as the WhatsApp mechanics tests run it): a closed window is rescued by a CALL for this round instead of the invitation.
     const dueAt = a.dueAt; p.notifications = p.notifications.filter((n) => n.id !== a.notifId); r.active = null; save(id); waLog({ event: 'window closed', then: 'call' });
@@ -1503,10 +1477,6 @@ function waTick(p, r, now) {
     const quiet = Boolean(p.tz) && inQuietHours(now, p.tz);
     if (a.state === 'wa_sending') {
       if (now - a.startedAt > cfg.waSendStuckMs) failWA(p, r, 'no_answer', { title: 'WhatsApp did not answer' });
-    } else if (a.state === 'wa_invite_sending') {
-      if (now - a.startedAt > cfg.waSendStuckMs) failWA(p, r, 'invite_failed', { title: 'WhatsApp did not answer' });
-    } else if (a.state === 'wa_invited') {
-      if (now >= a.inviteExpireAt) failWA(p, r, 'no_reply_to_invitation', null);   // they did not reply in time: the app covers it
     } else if (WA_OPEN.has(a.state)) {
       if (now >= a.missAt) {
         finishOccurrence(p, r.id, 'wa_missed', {}); waLog({ event: 'missed' }); escalate(p, r, 'missed', now); pushFamily('refresh', { id: p.id });
@@ -1729,7 +1699,7 @@ function view(id) {
 // WhatsApp's rules, in plain words, shown on the dashboard BEFORE the family picks WhatsApp (served from here so the web page and the app can never disagree).
 const WA_RULES = [
   'Text and voice notes: WhatsApp only lets Maya send these within 24 hours after the person last wrote to Maya on WhatsApp.',
-  'After 24 hours of silence, Maya first sends a standard invitation message (an approved WhatsApp template) asking them to reply. The reminder follows their reply. Only 2 invitations a day can be sent.',
+  'After 24 hours of silence, a text reminder goes as WhatsApp\'s approved reminder message (a template that carries the reminder text and a Got it button). A voice note cannot be sent after 24 hours; a reminder set to a voice note goes to the Maya app instead.',
   'Calls: the person must have allowed WhatsApp calls from Maya, WhatsApp limits how many calls a business may start, and 2 calls in a row that nobody answers pause calls.',
   'At most 30 reminder messages a day can go to one person on WhatsApp.',
   'If WhatsApp cannot deliver (window closed, no reply to the invitation, a limit reached, or a WhatsApp error), the same reminder goes to the Maya app instead, and the Activity list tells you what happened and why.',
@@ -1746,6 +1716,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWindowOpened, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareScheduleStart, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareScheduleStart, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

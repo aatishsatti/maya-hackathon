@@ -16,8 +16,10 @@
 //     list the other inbound audio fields, so only id and mime_type are used.
 //   Outgoing rules (step 3): the 24 h "customer service window" opens when the person writes and resets with each message they send; only then may free-form
 //     text or audio be sent. Outside it ONLY a pre-approved template can be sent (type "template", template.name, template.language.code; components only when the
-//     template has variables); Meta answers a free-form send outside the window with error 131047. The one template Meta pre-creates is "hello_world" / "en_US".
-//     Template name and language are WHATSAPP_TEMPLATE_NAME / WHATSAPP_TEMPLATE_LANG in the server env (a template with variables is not supported here).
+//     template has variables); Meta answers a free-form send outside the window with error 131047.
+//     The template Maya uses is "maya_reminder" / "en_US" (approved, Marketing, ONE body variable {{1}} = the reminder text, quick-reply button "Got it"): components = [{ type: "body",
+//     parameters: [{ type: "text", text }] }]. Name and language can be overridden by WHATSAPP_TEMPLATE_NAME / WHATSAPP_TEMPLATE_LANG in the server env. A pressed quick-reply button arrives as an
+//     inbound message of type "button" with button.text / button.payload. No other template is ever sent.
 //   Status webhook: value.statuses[] { id (the wamid we sent), status: sent | delivered | read | failed, recipient_id, errors?: [{ code, title }] }.
 //   The Graph API version is not named on the pages read: WHATSAPP_API_VERSION in the server env, default below, change it there if Meta retires it.
 //   Calls (Calling API, user-initiated; docs read: developers.facebook.com/docs/whatsapp/cloud-api/calling and .../calling/user-initiated-calls):
@@ -204,7 +206,17 @@ function wavToVoiceNote(wav) {
 // who: 'family' (the words are announced as the family's, never passed off as Maya's own) or 'maya' (her own words, no announcement).
 class OutError extends Error { constructor(msg, status, extra = {}) { super(msg); this.status = status; Object.assign(this, extra); } }
 const FAMILY_PREFIX = 'A message from your family: ';
-const templateCfg = () => (process.env.WHATSAPP_TEMPLATE_NAME ? { name: process.env.WHATSAPP_TEMPLATE_NAME, lang: process.env.WHATSAPP_TEMPLATE_LANG || 'en_US' } : null);
+// The ONE approved template. With WHATSAPP_TEMPLATE_NAME unset it is maya_reminder / en_US; set to another name it uses that; set to an EMPTY value it means "no template": null, and everything that needed it falls back
+// to the Maya app (or says so) - a template is never guessed.
+const TEMPLATE_DEFAULT = { name: 'maya_reminder', lang: 'en_US' };
+const templateCfg = () => {
+  const name = process.env.WHATSAPP_TEMPLATE_NAME === undefined ? TEMPLATE_DEFAULT.name : String(process.env.WHATSAPP_TEMPLATE_NAME).trim();
+  return name ? { name, lang: String(process.env.WHATSAPP_TEMPLATE_LANG || TEMPLATE_DEFAULT.lang).trim() } : null;
+};
+// {{1}}: one line, no line breaks or runs of spaces (Meta refuses them in a variable), never empty.
+const templateVar = (text) => String(text == null ? '' : text).replace(/[\r\n\t]+/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 200);
+const templateBody = (t, text) => ({ name: t.name, language: { code: t.lang }, components: [{ type: 'body', parameters: [{ type: 'text', text }] }] });
+const INVITE_TEXT = 'Your family would like to hear from you. Tap Got it, or write back, when you can.';   // the dashboard's manual invitation: the template's {{1}} when no reminder is being sent
 
 function guardOut(l, now, kind, useTemplate) {
   if (!configured()) throw new OutError('WhatsApp is not set up on this server.', 503);
@@ -216,7 +228,8 @@ function guardOut(l, now, kind, useTemplate) {
   const open = Boolean(l.lastInboundAt && now - l.lastInboundAt < WINDOW_MS);
   if (open) return 'free';
   if (kind === 'voice') throw new OutError('They have not written to Maya on WhatsApp in the last 24 hours, and WhatsApp only allows a voice note inside that window. Nothing was sent.', 409, { windowClosed: true });
-  const t = templateCfg() || { name: 'hello_world', lang: 'en_US' };
+  const t = templateCfg();
+  if (!t) throw new OutError('No approved WhatsApp template is set up on the server (WHATSAPP_TEMPLATE_NAME is empty), so nothing was sent.', 409, { windowClosed: true });
   if (!useTemplate) throw new OutError('They have not written to Maya on WhatsApp in the last 24 hours, so WhatsApp does not allow a free message yet. You can send a standard invitation to reply instead; your own words are not sent.', 409, { windowClosed: true, needsTemplate: true, template: t.name });
   if (day.filter((x) => x.via === 'template').length >= OUT_MAX_TEMPLATES_PER_DAY) throw new OutError('An invitation was already sent today. Please wait for them to reply.', 429);
   return 'template';
@@ -235,9 +248,9 @@ async function sendOutInner(profileId, { kind = 'text', text, who = 'family', us
   let id;
   try {
     if (way === 'template') {
-      const t = templateCfg() || { name: 'hello_world', lang: 'en_US' };
+      const t = templateCfg();
       note(`template send: phone id ending ${end(process.env.WHATSAPP_PHONE_ID)}, api ${API_VERSION()}, template ${t.name}/${t.lang}, ${tokenShape()}`); // ids / names only: no token, no full number
-      const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to: l.phone, type: 'template', template: { name: t.name, language: { code: t.lang } } });
+      const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to: l.phone, type: 'template', template: templateBody(t, INVITE_TEXT) });
       id = d && d.messages && d.messages[0] ? d.messages[0].id : null;
     } else if (kind === 'text') {
       id = await sendTextTo(l.phone, who === 'family' ? FAMILY_PREFIX + words : words);
@@ -305,8 +318,14 @@ async function sendReminder(profileId, { task, nudge = false, deliver = null, by
   const l = linkOf(profileId);
   if (!l || !l.optIn) return { ok: false, reason: 'not_linked' };
   const now = Date.now();
-  if (!(l.lastInboundAt && now - l.lastInboundAt < WINDOW_MS)) return { ok: false, reason: 'window_closed' };
   const today = (l.remSent || []).filter((t) => now - t < WINDOW_MS);
+  if (!(l.lastInboundAt && now - l.lastInboundAt < WINDOW_MS)) {
+    // The window is closed. A voice note cannot go; a text goes as the approved template (care.cfg.waFallback is the modern mode: the mechanics tests run the legacy one, where it is simply Not sent / rescued by a call).
+    const care0 = require('./care');
+    if (!care0.cfg.waFallback || nudge || (strict && deliver === 'voice')) return { ok: false, reason: 'window_closed' };
+    if (today.length >= REMINDER_CAP) return { ok: false, reason: 'daily_cap' };
+    return sendTemplateReminder(profileId, l, today, now, { task, by });
+  }
   if (today.length >= REMINDER_CAP) return { ok: false, reason: 'daily_cap' };
   update(profileId, (x) => { x.remSent = [...today, now]; });   // the slot is taken BEFORE the network call
   const w = reminderWords(task, nudge, by);
@@ -331,21 +350,31 @@ async function sendReminder(profileId, { task, nudge = false, deliver = null, by
   try { const wamid = await sendTextTo(l.phone, w.text); return wamid ? { ok: true, via: 'text', wamid, voiceUnavailable: voiceFailed } : { ok: false, reason: 'no_id' }; }
   catch (e) { return { ok: false, reason: 'meta_error', error: { code: e.code || null, title: String(e.message).replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } }; }
 }
-// The invitation a closed 24 hour window gets before a reminder (care.js). It uses the approved template named in the server env: WHATSAPP_TEMPLATE_NAME (required here: with none set NOTHING is guessed)
-// and WHATSAPP_TEMPLATE_LANG (default en_US), a template WITHOUT variables. Any failure carries a plain reason so care.js can hand the reminder to the Maya app and Activity can say why:
-// template_not_configured (no name set), template_rejected (Meta says the name / language / parameters are not an approved template: codes 132000 132001 132005 132007 132012 132015 132016),
-// invite_limit (2 invitations a day), invite_failed (anything else). Never thrown past this function without a reason, never a crash.
+// A reminder whose 24 hour window is closed goes as the approved template maya_reminder: {{1}} = the reminder text, with a "Got it" button. Every failure has a plain reason so care.js can hand
+// the reminder to the Maya app and Activity can say why: template_not_configured (no template set), template_no_text (nothing to put in {{1}}: never sent empty), template_rejected (Meta says
+// the name / language / parameters are not the approved template: codes 132000 132001 132005 132007 132012 132015 132016 - from memory, verify against Meta's list), meta_error (anything else).
 const TEMPLATE_CODES = new Set([132000, 132001, 132005, 132007, 132012, 132015, 132016]);
-async function invite(profileId) {
-  if (!process.env.WHATSAPP_TEMPLATE_NAME) throw Object.assign(new Error('No approved WhatsApp template is set up on the server (WHATSAPP_TEMPLATE_NAME is empty).'), { reason: 'template_not_configured' });
-  try { return await sendOut(profileId, { kind: 'text', useTemplate: true, who: 'maya' }); }
-  catch (e) {
+const templateWords = (task, by) => {
+  const { isFamilyMessage, stripAddressee } = require('./call');
+  return templateVar(endPunct(by === 'senior' ? require('./setrem').second(task) : isFamilyMessage(task) ? task : stripAddressee(task)));
+};
+async function sendTemplateReminder(profileId, l, today, now, { task, by }) {
+  const t = templateCfg();
+  if (!t) return { ok: false, reason: 'template_not_configured' };
+  const text = templateWords(task, by);
+  if (!text) return { ok: false, reason: 'template_no_text' };   // {{1}} would be empty: Meta would refuse it, and an empty reminder helps nobody
+  update(profileId, (x) => { x.remSent = [...today, now]; });   // the slot is taken BEFORE the network call
+  note(`reminder template send: phone id ending ${end(process.env.WHATSAPP_PHONE_ID)}, template ${t.name}/${t.lang}, one variable of ${text.length} characters`);   // names and a length: never the words
+  try {
+    const d = await graph(`${process.env.WHATSAPP_PHONE_ID}/messages`, { messaging_product: 'whatsapp', recipient_type: 'individual', to: l.phone, type: 'template', template: templateBody(t, text) });
+    const wamid = d && d.messages && d.messages[0] ? d.messages[0].id : null;
+    return wamid ? { ok: true, via: 'template', wamid } : { ok: false, reason: 'no_id' };
+  } catch (e) {
     const code = Number(e && e.code);
-    const reason = TEMPLATE_CODES.has(code) ? 'template_rejected' : e && e.status === 429 ? 'invite_limit' : 'invite_failed';
-    throw Object.assign(e instanceof Error ? e : new Error(String(e)), { reason });
+    return { ok: false, reason: TEMPLATE_CODES.has(code) ? 'template_rejected' : 'meta_error', error: { code: (e && e.code) || null, title: String((e && e.message) || 'error').replace(/^WhatsApp refused it \(\d+\): /, '').slice(0, 120) } };
   }
 }
-require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, callRoute: (profileId) => { const l = linkOf(profileId); return { permission: !(l && l.noCallPermission), windowOpen: Boolean(l && l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS) }; }, send: sendReminder, invite, placeCall: (profileId, rid, dueAt, instead, alsoTried) => placeCall(profileId, 'reminder', { rid, dueAt, ...(instead ? { instead } : {}), ...(alsoTried ? { alsoTried } : {}) }) });
+require('./care').setReminderSender({ channelFor: (profileId) => { const l = linkOf(profileId); return configured() && l && l.optIn ? 'whatsapp' : null; }, callRoute: (profileId) => { const l = linkOf(profileId); return { permission: !(l && l.noCallPermission), windowOpen: Boolean(l && l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS) }; }, send: sendReminder, placeCall: (profileId, rid, dueAt, instead, alsoTried) => placeCall(profileId, 'reminder', { rid, dueAt, ...(instead ? { instead } : {}), ...(alsoTried ? { alsoTried } : {}) }) });
 
 // ---- Maya's words must be true about WhatsApp ----
 // A text door cannot ring a phone or hold a live WhatsApp call. A reply that promises one is replaced by the plain truth.
@@ -467,8 +496,9 @@ async function onMessage(msg) {
     }
     x.seen = [...(x.seen || []), msg.id].slice(-SEEN_KEEP);
   });
-  if (!(msg.type === 'text' && msg.text && STOP.test(String(msg.text.body)))) { try { require('./care').waWindowOpened(l.profileId); } catch (e) { note(`a reminder waiting behind the invitation could not be sent: ${String(e.message).slice(0, 80)}`); } }   // the 24 hour window is open again: a reminder that waited behind the invitation goes now
   note(`received a ${typeName(msg.type)} from number ending ${end(msg.from)}${msg.type === 'interactive' ? ` (interactive type ${/^[a-z_]{1,40}$/.test(String(msg.interactive && msg.interactive.type)) ? msg.interactive.type : 'unknown'})` : ''}`); // the interactive type is an enum (button_reply, call_permission_reply ...), never the person's words
+  // The "Got it" button on the reminder template (a quick reply): the person pressed it. It is read exactly like them writing "Got it" (it answers the reminder in Activity, and Maya replies), now that the window is open.
+  if (msg.type === 'button' && msg.button && (typeof msg.button.text === 'string' || typeof msg.button.payload === 'string')) { const words = String(msg.button.text || msg.button.payload).slice(0, 40); await onText(l, { ...msg, type: 'text', text: { body: words } }); note(`the reminder button was pressed by number ending ${end(msg.from)}`); return 'text'; }
   if (msg.type === 'text' && msg.text && typeof msg.text.body === 'string') { await onText(l, msg); note(`replied to number ending ${end(msg.from)}`); return 'text'; }
   if (msg.type === 'audio') { const out = await onAudio(l, msg); note(`answered a voice note from number ending ${end(msg.from)} (${out})`); return out; }
   if (msg.type === 'image') return onImage(l, msg);
@@ -567,7 +597,6 @@ async function onCalls(value) {
 // (a reminder or message they typed); the person's own words are never kept here. ----
 const OCC = { calling: ['sent', 'Calling now', 1], answered: ['delivered', 'Picked up', 2], done: ['answered', 'Answered', 4], no_reply: ['noreply', "Hasn't replied yet", 2], unanswered: ['unreached', "Couldn't reach", 0], declined: ['noreply', 'Declined', 2], missed: ['missed', 'Missed', 0],
   app_sending: ['sent', 'Sending', 1], app_sent: ['sent', 'Sent', 1], app_delivered: ['delivered', 'Delivered', 2], app_read: ['read', 'Seen', 3], app_done: ['answered', 'Answered', 4], app_missed: ['missed', 'Missed', 2], app_failed: ['failed', 'Not sent', 0],
-  wa_invite_sending: ['sent', 'Sending invitation', 1], wa_invited: ['sent', 'Invitation sent, waiting for their reply', 1],
   wa_sending: ['sent', 'Sending', 1], wa_sent: ['sent', 'Sent', 1], wa_delivered: ['delivered', 'Delivered', 2], wa_read: ['read', 'Read', 3], wa_missed: ['missed', 'Missed', 2], wa_failed: ['failed', 'Not sent', 0] };   // [status, label, rank]: rank 1 left Maya, 2 arrived / picked up, 3 read, 4 answered
 const OUTMSG = { sending: ['sent', 'Sending', 1], sent: ['sent', 'Sent', 1], delivered: ['delivered', 'Delivered', 2], read: ['read', 'Read', 3], failed: ['failed', 'Not sent', 0] };
 const NOTE_LABEL = { Sent: ['sent', 'Sent', 1], Delivered: ['delivered', 'Delivered', 2], Seen: ['read', 'Read', 3], Played: ['read', 'Read', 3], Replied: ['answered', 'Answered', 4], "Hasn't replied yet": ['noreply', "Hasn't replied yet", 2], 'Seen · Not replied yet': ['noreply', "Hasn't replied yet", 3],
@@ -593,7 +622,7 @@ function activityOf(profileId) {
       const note = paused ? (x.pausedBy === 'window' ? `The 24 hour window was closed and the call could not be placed (${(x.error && x.error.title) || 'no reason given'}): nothing was sent.` : `The 24 hour window is closed and calls are paused (${PAUSED_WHY[x.pausedBy] || 'calls are paused'}): nothing was sent.`) : x.pausedBy ? 'Calls were paused, so it went as a message.' : x.instead === 'window' ? 'The 24 hour window was closed, so Maya called instead.' : null;
       const where = x.channel === 'app' ? 'app' : x.channel === 'whatsapp' ? 'whatsapp' : (x.where || 'whatsapp');
       const alsoNote = x.alsoTried ? `${x.alsoTried.channel === 'app' ? 'The Maya app' : 'WhatsApp'} rang first and was not answered, so ${x.alsoTried.channel === 'app' ? 'WhatsApp' : 'the Maya app'} was tried.` : null;
-      const inviteNote = x.state === 'wa_invited' ? "WhatsApp's 24 hour window was closed, so the approved invitation message was sent first. The reminder follows when they reply; if they do not reply soon, the Maya app delivers it." : x.repliedToInvite ? 'It was sent after they replied to the invitation.' : null;
+      const inviteNote = x.template ? "The 24 hour window was closed, so it went as WhatsApp's approved reminder message (with a Got it button)." : null;
       const fb = x.fellBack ? `WhatsApp could not deliver it (${x.fellBack.why || 'no reason given'}), so it went to the Maya app instead.` : null;
       const nf = !fb && x.state === 'wa_failed' && x.reason && !paused ? `Not sent: ${care.waWhy(x.reason)}.` : null;
       const note2 = fb || note || nf || (x.voiceUnavailable && x.channel === 'app' ? 'Her voice was not available, so it went as a text.' : x.reason === 'push_failed' ? 'The app was closed and the push to the phone did not go (no phone registered, push not set up, or the push was refused).' : x.reason === 'app_closed' ? 'The app was closed, and a closed phone cannot be rung yet.' : null);
