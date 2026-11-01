@@ -148,3 +148,60 @@ test('the native call code: lock-screen ring and clean-up, as written (Android f
   assert.equal((pbx.match(/CODE_SIGN_ENTITLEMENTS = Runner\/Runner\.entitlements;/g) || []).length, 3, 'Debug, Release and Profile'); assert.match(pbx, /Runner\.entitlements \*\//);
   assert.doesNotMatch(kt + act + sw + man + plist, /AIza|-----BEGIN|private_key|[0-9a-f]{32,}/, 'no key in the repository');
 });
+
+// ---- closed-app notifications: tapping the call notification, a text and a voice note that find the app closed ----
+const chatMod = require('../chat');
+test('closed ring, the person TAPS the notification: the app opens, the ring is announced again at once (Accept / Decline card), keeps ringing, is not a miss; only an app\'s own ring, never a WhatsApp call, is announced', async () => {
+  quiet(); reset(); const { id } = linked(true); device(id);
+  const r = care.welfareAppRing(id); assert.equal(r.ok, true); await settleT(); assert.equal(pushes.length, 1, 'rung by a push, the app is closed');
+  const oid = pushes[0].outreachId, app = openApp(id);   // the tap: the app starts and connects
+  const again = app.ev.filter(([k]) => k === 'incoming'); assert.equal(again.length, 1, 'the ring is announced again'); assert.deepEqual([again[0][1].outreachId, again[0][1].kind], [oid, 'welfare']); assert.ok(again[0][1].notifId);
+  assert.equal(care.activeByProfile.get(id).state, 'ringing', 'it did not disappear'); assert.equal(care.claim(id, oid).kind, 'welfare', 'Accept on the in-app card joins the same ring'); app.detach(); quiet();
+  // a reminder ring too
+  reset(); const b = linked(true); noPerm(b.id); device(b.id); due(b.id, 'tapped reminder', { channel: 'both', deliver: 'call' }); care.tick(Date.now() + 5000); await settleT();
+  const app2 = openApp(b.id); assert.equal(app2.ev.filter(([k, d]) => k === 'incoming' && d.kind === 'reminder').length, 1); app2.detach(); quiet();
+  // a WhatsApp welfare call is not an app ring: opening the app does not show a card for it
+  reset(); const c = linked(true); const rec = care.welfareCallStart(c.id); const app3 = openApp(c.id); assert.equal(app3.ev.filter(([k]) => k === 'incoming').length, 0, 'a WhatsApp call is not announced as an app ring'); care.welfareCallCancel(c.id, rec.nid); app3.detach(); quiet();
+  // nothing ringing: nothing is announced
+  const d = linked(true); const app4 = openApp(d.id); assert.equal(app4.ev.filter(([k]) => k === 'incoming').length, 0); app4.detach(); quiet();
+});
+
+test('closed app, a TEXT (reminder or welfare via the app): ONE push (type message, via text, no words), the text is put in the chat so the tap lands on it, and it is delivered when the chat opens; not announced again as a notice', async () => {
+  quiet(); reset(); const { id } = linked(true); device(id, 'android');
+  await care.welfareAppSend(id, 'text'); await settleT();
+  assert.equal(pushes.length, 1); assert.deepEqual([pushes[0].platform, pushes[0].type, pushes[0].via, pushes[0].what], ['android', 'message', 'text', 'welfare']); assert.ok(pushes[0].notifId);
+  assert.doesNotMatch(JSON.stringify(pushes[0]), /check in on you|How are you|Rosa/i, 'no words in a push');
+  assert.ok(chatMod.thread(id).some((m) => m.role === 'maya' && m.kind === 'text' && /check in on you/.test(m.text)), 'the text is in the chat');
+  assert.equal(wa.activityOf(id).entries.find((e) => e.type === 'welfare').status, 'sent', 'sent, not yet delivered: the app has not shown it');
+  const app = openApp(id); assert.equal(app.ev.filter(([k]) => k === 'notice').length, 0, 'not shown a second time as a notice'); care.appThreadOpened(id);
+  assert.equal(wa.activityOf(id).entries.find((e) => e.type === 'welfare').status, 'delivered', 'delivered when the chat opens'); app.detach(); quiet();
+  // a reminder text
+  reset(); const b = linked(true); device(b.id, 'android'); due(b.id, 'drink water', { channel: 'app', deliver: 'text' }); care.tick(Date.now() + 5000); await settleT();
+  assert.deepEqual([pushes.length, pushes[0].type, pushes[0].via, pushes[0].what], [1, 'message', 'text', 'reminder']); assert.doesNotMatch(JSON.stringify(pushes[0]), /drink water/);
+  assert.ok(chatMod.thread(b.id).some((m) => /drink water/.test(m.text)), 'in the chat'); quiet();
+});
+
+test('closed app, a VOICE note: ONE push (via voice, with the message id so the tap plays it), the voice note is in the chat', async () => {
+  quiet(); reset(); const { id } = linked(true); device(id, 'android'); chatMod.deps.speak = async () => Buffer.alloc(48000);
+  await care.welfareAppSend(id, 'voice'); await settleT();
+  assert.equal(pushes.length, 1); assert.deepEqual([pushes[0].type, pushes[0].via, pushes[0].what], ['message', 'voice', 'welfare']); assert.ok(pushes[0].messageId);
+  const m = chatMod.thread(id).find((x) => x.id === pushes[0].messageId); assert.ok(m && m.kind === 'voice' && m.mediaUrl, 'that voice note is in the chat'); quiet();
+  reset(); const b = linked(true); device(b.id, 'android'); due(b.id, 'voice reminder', { channel: 'app', deliver: 'voice' }); care.tick(Date.now() + 5000); await settleT(); await settleT();
+  assert.deepEqual([pushes.length, pushes[0].via, pushes[0].what], [1, 'voice', 'reminder']); assert.ok(chatMod.thread(b.id).some((x) => x.id === pushes[0].messageId)); quiet();
+});
+
+test('no message push when the app is open (it shows the text or plays in the chat itself), none for an iPhone (its VoIP token cannot show an alert), none when push is not set up; a refused token is forgotten', async () => {
+  quiet(); reset(); const { id } = linked(true); device(id, 'android'); const app = openApp(id); await care.welfareAppSend(id, 'text'); await settleT(); assert.equal(pushes.length, 0, 'open app: no push'); assert.ok(app.ev.some(([k]) => k === 'notice')); app.detach(); quiet();
+  reset(); const b = linked(true); device(b.id, 'ios'); await care.welfareAppSend(b.id, 'text'); await settleT(); assert.equal(pushes.length, 0, 'iOS: no message push'); quiet();
+  reset(); const c = linked(true); device(c.id, 'android'); push.deps.configured = () => false; await care.welfareAppSend(c.id, 'text'); await settleT(); assert.equal(pushes.length, 0, 'not configured: nothing'); push.deps.configured = () => true; quiet();
+  reset(); const d = linked(true); device(d.id, 'android'); pushResult = { ok: false, reason: 'fcm_404', gone: true }; await care.welfareAppSend(d.id, 'text'); await settleT(); assert.equal((care.get(d.id).devices || []).length, 0, 'a dead token is dropped'); reset(); quiet();
+});
+
+test('the Android code: tapping a call notification re-opens the call (no Accept needed, nothing cancelled), a message notification opens the chat and a voice note plays; messages show generic words only', () => {
+  const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8'), k = ['app', 'android', 'app', 'src', 'main', 'kotlin', 'com', 'mayateam', 'maya_app'];
+  const kt = read(...k, 'NativeCalls.kt'), act = read(...k, 'MainActivity.kt');
+  assert.match(kt, /fun showMessage/); assert.match(kt, /d\["type"\] == "message"/); assert.match(kt, /maya_messages/); assert.match(kt, /setAutoCancel\(true\)/);
+  assert.doesNotMatch(kt, /putExtra\([^)]*text/i, 'no words travel in a message notification');
+  assert.match(act, /"ring"/); assert.match(act, /emit\("ring"/); assert.match(act, /"message"/); assert.match(act, /emit\("opened"/);
+  const dart = read('app', 'lib', 'senior', 'senior_screen.dart'); assert.match(dart, /NativeCall\.instance\.opened/); assert.match(dart, /NativeCall\.instance\.ring/);
+});

@@ -4,7 +4,7 @@
 //            HTTP/2 POST https://api.push.apple.com/3/device/<token> (sandbox: api.sandbox.push.apple.com),
 //            headers: authorization: bearer <JWT ES256, kid = key id, iss = team id>, apns-topic: <bundle id>.voip,
 //            apns-push-type: voip, apns-priority: 10, apns-expiration. A refused token answers 410 or 400 BadDeviceToken.
-//   Android: Firebase Cloud Messaging HTTP v1, a high priority DATA message -> the app shows its incoming call notification.
+//   Android: Firebase Cloud Messaging HTTP v1, a high priority DATA message -> the app shows its incoming call notification ('incoming', 'end'), or a text / voice-note notification ('message', kept up to an hour).
 //            https://firebase.google.com/docs/cloud-messaging/send-message  (POST fcm.googleapis.com/v1/projects/<id>/messages:send,
 //            OAuth2 bearer from a service account: JWT RS256 -> https://oauth2.googleapis.com/token, scope firebase.messaging).
 //            A dead token answers 404 UNREGISTERED.
@@ -72,7 +72,7 @@ async function sendFcm(device, payload) {
   try {
     const data = {}; for (const [k, v] of Object.entries(payload)) data[k] = String(v);   // FCM data values must be strings
     const r = await fetch(`https://fcm.googleapis.com/v1/projects/${env('FCM_PROJECT_ID')}/messages:send`, { method: 'POST', headers: { authorization: `Bearer ${await fcmToken()}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ message: { token: device.token, data, android: { priority: 'HIGH', ttl: '30s' } } }), signal: AbortSignal.timeout(deps.timeoutMs) });
+      body: JSON.stringify({ message: { token: device.token, data, android: { priority: 'HIGH', ttl: payload.type === 'message' ? '3600s' : '30s' } } }), signal: AbortSignal.timeout(deps.timeoutMs) });
     return r.ok ? { ok: true } : { ok: false, reason: `fcm_${r.status}`, gone: r.status === 404 };
   } catch (e) { return { ok: false, reason: e && e.message === 'fcm_auth' ? 'fcm_auth' : 'fcm_unreachable' }; }
 }

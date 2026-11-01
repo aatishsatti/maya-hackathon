@@ -11,7 +11,8 @@ import '../widgets/pressable.dart';
 class ChatView extends StatelessWidget {
   final List<ChatMessage> messages;
   final ScrollController controller;
-  const ChatView({super.key, required this.messages, required this.controller});
+  final String? playId; // a voice note to start playing (the person tapped its notification)
+  const ChatView({super.key, required this.messages, required this.controller, this.playId});
 
   @override
   Widget build(BuildContext context) {
@@ -29,14 +30,15 @@ class ChatView extends StatelessWidget {
       reverse: true,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       itemCount: rev.length,
-      itemBuilder: (context, i) => _Bubble(key: ValueKey(rev[i].id), m: rev[i]),
+      itemBuilder: (context, i) => _Bubble(key: ValueKey(rev[i].id), m: rev[i], autoPlay: rev[i].id == playId),
     );
   }
 }
 
 class _Bubble extends StatelessWidget {
   final ChatMessage m;
-  const _Bubble({super.key, required this.m});
+  final bool autoPlay;
+  const _Bubble({super.key, required this.m, this.autoPlay = false});
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +61,7 @@ class _Bubble extends StatelessWidget {
             children: [
               Text(maya ? 'Maya' : 'You', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: maya ? kSoft : Colors.white70)),
               const SizedBox(height: 2),
-              if (m.kind == 'voice' && m.mediaUrl != null) VoiceBubble(url: m.mediaUrl!, dark: !maya),
+              if (m.kind == 'voice' && m.mediaUrl != null) VoiceBubble(url: m.mediaUrl!, dark: !maya, autoPlay: autoPlay),
               if (m.kind == 'voice' && m.mediaUrl == null) Text('Voice note', style: TextStyle(fontSize: 16, color: maya ? kInk : Colors.white)),
               if (m.kind == 'image') Text('Photo', style: TextStyle(fontSize: 16, color: maya ? kInk : Colors.white)),
               if (m.text.isNotEmpty) Text(m.text, style: TextStyle(fontSize: 17, height: 1.3, color: maya ? kInk : Colors.white)),
@@ -76,7 +78,8 @@ class _Bubble extends StatelessWidget {
 class VoiceBubble extends StatefulWidget {
   final String url;
   final bool dark;
-  const VoiceBubble({super.key, required this.url, this.dark = false});
+  final bool autoPlay;   // start playing when it appears (or when this turns true): a voice note opened from its notification
+  const VoiceBubble({super.key, required this.url, this.dark = false, this.autoPlay = false});
   @override
   State<VoiceBubble> createState() => _VoiceBubbleState();
 }
@@ -85,6 +88,18 @@ class _VoiceBubbleState extends State<VoiceBubble> {
   AudioPlayer? _p;
   bool _playing = false;
   String? _err;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoPlay) WidgetsBinding.instance.addPostFrameCallback((_) => mounted && !_playing ? _toggle() : null);
+  }
+
+  @override
+  void didUpdateWidget(VoiceBubble old) {
+    super.didUpdateWidget(old);
+    if (widget.autoPlay && !old.autoPlay && !_playing) _toggle();
+  }
 
   @override
   void dispose() {

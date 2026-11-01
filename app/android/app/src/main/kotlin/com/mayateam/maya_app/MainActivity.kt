@@ -97,6 +97,16 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun handle(i: Intent?) {
+        when (i?.getStringExtra(NativeCalls.EXTRA_ACTION)) {
+            // The person TAPPED the call notification (or the full-screen call opened): the ring is still going on the server. Dart reconnects, the server announces it again, and the Accept / Decline card appears.
+            // Nothing is cancelled here: the ring is not answered, declined or lost by looking at it.
+            "ring" -> { NativeCalls.emit("ring", mapOf("outreachId" to (i.getStringExtra(NativeCalls.EXTRA_OUTREACH) ?: ""))); i.removeExtra(NativeCalls.EXTRA_ACTION) }
+            // The person tapped a text or voice-note notification: the chat opens on it (a voice note plays).
+            "message" -> {
+                NativeCalls.emit("opened", mapOf("via" to (i.getStringExtra(NativeCalls.EXTRA_VIA) ?: "text"), "messageId" to (i.getStringExtra(NativeCalls.EXTRA_MESSAGE) ?: "")))
+                i.removeExtra(NativeCalls.EXTRA_ACTION)
+            }
+        }
         if (i?.getStringExtra(NativeCalls.EXTRA_ACTION) == "accept") {
             val oid = i.getStringExtra(NativeCalls.EXTRA_OUTREACH) ?: return
             NativeCalls.cancel(this, oid)

@@ -268,8 +268,12 @@ function attachSenior(id, res, tz) {
   seniorClients.get(id).add(res);
   const p = get(id);
   if (tz) tzmod.setZone(p, tz, 'device');
-  // A family message sent while the app was closed arrives when it opens.
-  for (const n of p.notifications) if (n.to === 'senior' && (n.kind === 'family_message' || (n.kind === 'reminder' && n.app)) && n.status === 'sent' && Date.now() - n.times.sent < (n.kind === 'reminder' ? 60 : 24 * 60) * MIN) send(res, 'notice', { notifId: n.id, kind: n.kind, text: n.text, ...(n.by ? { by: n.by } : {}) });
+  try { require('./whatsapp').noteReachable(id); } catch { /* WhatsApp not loaded (some tests) */ }   // the app was opened: they are reachable, so WhatsApp's unanswered-calls count starts again
+  // A ring that is still going when the app opens (the person tapped the call notification of a closed app): the in-app Accept / Decline card appears at once, and it keeps ringing until it is answered, declined or its time is up.
+  const ring = activeByProfile.get(id);
+  if (ring && ring.app && ring.state === 'ringing' && ring.notif) send(res, 'incoming', { outreachId: ring.id, notifId: ring.notif.id, kind: ring.kind, text: ring.notif.text, attempt: ring.attempts, of: cfg.maxAttempts });
+  // A family message sent while the app was closed arrives when it opens. (A text that was put in the chat while the app was closed is waiting there instead.)
+  for (const n of p.notifications) if (n.to === 'senior' && !n.inChat && (n.kind === 'family_message' || (n.kind === 'reminder' && n.app)) && n.status === 'sent' && Date.now() - n.times.sent < (n.kind === 'reminder' ? 60 : 24 * 60) * MIN) send(res, 'notice', { notifId: n.id, kind: n.kind, text: n.text, ...(n.by ? { by: n.by } : {}) });
   return () => { const set = seniorClients.get(id); if (set) { set.delete(res); if (!set.size) seniorClients.delete(id); } };
 }
 function attachFamily(res) { familyClients.add(res); return () => familyClients.delete(res); }
@@ -380,7 +384,7 @@ function startOutreach(id, { kind, reminderId = null, talked = false, delayMs = 
     if (kind === 'reminder' && cur.kind === 'callback') { cur.kind = 'reminder'; cur.reminderId = reminderId; cur.notif.kind = 'reminder'; cur.notif.text = ringText(p, reminderId); return cur; }
     return null;
   }
-  const o = { id: uid(), profileId: id, kind, reminderId, talked, safety, attempts: 0, state: 'pending', timer: null, notif: null, startedAt: Date.now() };
+  const o = { id: uid(), profileId: id, kind, reminderId, talked, safety, attempts: 0, state: 'pending', timer: null, notif: null, startedAt: Date.now(), app: true };   // app: the ring is the app's own (a WhatsApp call's record is made elsewhere and has no app: true)
   o.notif = makeNotif(p, { to: 'senior', kind, text: kind === 'reminder' ? ringText(p, reminderId) : 'Maya is calling to check on you.', ref: o.id, incident: safety && safetyFlag(p) ? safetyFlag(p).id : null });
   outreaches.set(o.id, o);
   activeByProfile.set(id, o);
@@ -1250,6 +1254,7 @@ function fireReminderApp(p, r, now, chan, opts = {}) {
   const asText = (voiceFailed) => {
     const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: words.text, ref: null }); n.app = true; if (r.by === 'senior') n.by = 'senior'; holder.notifId = n.id;
     const reached = pushSenior(id, 'notice', { notifId: n.id, kind: 'reminder', text: words.text, ...(n.by ? { by: n.by } : {}) });
+    if (reached === 0) { textToChatAndPush(id, n, words.text, 'reminder'); holder.inChat = true; }
     holder.state = 'app_sent'; holder.sentAt = Date.now(); holder.via = 'text'; if (voiceFailed) holder.voiceUnavailable = true;
     save(id); pushFamily('refresh', { id }); waLog({ event: 'app sent', via: 'text', reached: reached > 0, voiceUnavailable: Boolean(voiceFailed) });
   };
@@ -1257,6 +1262,7 @@ function fireReminderApp(p, r, now, chan, opts = {}) {
   else {
     Promise.resolve().then(() => require('./chat').deliverVoiceNote(id, words.spoken, words.text)).then((res) => {
       holder.state = res.reached > 0 ? 'app_delivered' : 'app_sent'; holder.sentAt = Date.now(); if (res.reached > 0) holder.deliveredAt = Date.now(); holder.messageId = res.message && res.message.id;
+      if (res.reached === 0) { holder.inChat = true; pushMessage(id, { via: 'voice', what: 'reminder', messageId: holder.messageId }); }
       save(id); pushFamily('refresh', { id }); waLog({ event: 'app sent', via: 'voice', reached: res.reached > 0 });
     }, (e) => {
       if (r.strict) { console.log('reminder', JSON.stringify({ event: 'app voice failed', then: 'nothing' })); finishOccurrence(p, rid, 'app_failed', { reason: 'voice_failed', channel: 'app', via: 'voice' }); pushFamily('refresh', { id }); return; }   // chosen as a voice note: never turned into a text on its own
@@ -1282,6 +1288,7 @@ function appThreadOpened(id) {
   const p = get(id); if (!p) return false; let any = false;
   for (const r of p.reminders) for (const h of [r.active, r.last]) { const part = h && (h.channel === 'app' ? h : h.app); if (part && part.via === 'voice' && part.state === 'app_sent') { part.state = 'app_delivered'; part.deliveredAt = Date.now(); any = true; } }
   for (const n of p.notifications) if (n.kind === 'welfare' && n.channel === 'app' && n.via === 'voice' && n.status === 'sent') { advance(p, n, 'delivered'); any = true; }   // a welfare voice note waiting in the chat has arrived
+  for (const n of p.notifications) if (n.to === 'senior' && n.inChat && n.status === 'sent' && (n.kind === 'welfare' || n.kind === 'reminder')) { advance(p, n, 'delivered'); if (n.app) appNotifStatus(p, n.id, 'delivered'); any = true; }   // a text that was put in the chat while the app was closed is delivered when the chat opens
   if (any) { save(id); pushFamily('refresh', { id }); }
   return any;
 }
@@ -1293,6 +1300,23 @@ function reminderAckApp(id) {
   const a = waiting.active; if (a.app) a.app.state = 'app_done';
   finishOccurrence(p, waiting.id, 'done'); waLog({ event: 'answered', via: 'app' }); pushFamily('refresh', { id });
   return true;
+}
+
+// ---- a text or a voice note that reached NO open app: the phone is told by a push so it can show a notification, and tapping it opens the chat where the text or the voice note is ----
+// Android (Firebase) only for now: an iPhone's VoIP token cannot show an alert (that needs the ordinary APNs token). The push carries no words and no names: what it is (text | voice), who it is from (reminder | welfare),
+// and the ids the app needs to find it. The notification says only "from your family" / "Maya"; the words are read in the chat.
+function pushMessage(id, { via, what, notifId = null, messageId = null }) {
+  const p = get(id);
+  const all = (p && p.devices) || [], devs = all.filter((d) => d.platform === 'android' && push.configured('android'));
+  if (!devs.length) { console.log('push', JSON.stringify({ event: 'message not tried', reason: all.length ? (all.some((d) => d.platform === 'android') ? 'not_configured' : 'ios_not_supported') : 'no_device' })); return 0; }
+  const payload = { type: 'message', via, what, ...(notifId ? { notifId } : {}), ...(messageId ? { messageId } : {}) };
+  Promise.all(devs.map((d) => push.send(d, payload).then((r) => ({ d, r })))).then((rs) => { for (const { d, r } of rs) if (r.gone) removeDevice(id, d.token); });
+  return devs.length;
+}
+// A text for the app that found the app closed: it goes into the chat (so the notification's tap lands on it), and the push is sent.
+function textToChatAndPush(id, n, text, what) {
+  try { require('./chat').deliverText(id, text); n.inChat = true; } catch (e) { console.log('push', JSON.stringify({ event: 'text not put in chat', reason: String((e && e.message) || e).slice(0, 60) })); }
+  pushMessage(id, { via: 'text', what, notifId: n.id });
 }
 
 // ---------------------------------------------------------------- the welfare check in the Maya app (the other half of "Where it goes": App / WhatsApp / Both; welfarechan.js decides where)
@@ -1314,12 +1338,12 @@ function welfareEntry(id, { channel, via, failed = false, why = null, fellBackFr
 async function welfareAppSend(id, via, opts = {}) {
   const p = get(id); if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   const n = welfareEntry(id, { channel: 'app', via, ...opts });
-  const asText = (voiceFailed) => { if (voiceFailed) { n.via = 'text'; n.voiceUnavailable = true; } pushSenior(id, 'notice', { notifId: n.id, kind: 'welfare', text: WELFARE_WORDS }); save(id); pushFamily('refresh', { id }); };
+  const asText = (voiceFailed) => { if (voiceFailed) { n.via = 'text'; n.voiceUnavailable = true; } const reached = pushSenior(id, 'notice', { notifId: n.id, kind: 'welfare', text: WELFARE_WORDS }); if (reached === 0) textToChatAndPush(id, n, WELFARE_WORDS, 'welfare'); save(id); pushFamily('refresh', { id }); };
   if (via === 'text') asText(false);
   else {
     try {
       const res = await require('./chat').deliverVoiceNote(id, WELFARE_WORDS, WELFARE_WORDS);
-      n.messageId = res.message && res.message.id; if (res.reached > 0) advance(p, n, 'delivered'); save(id); pushFamily('refresh', { id });
+      n.messageId = res.message && res.message.id; if (res.reached > 0) advance(p, n, 'delivered'); else { n.inChat = true; pushMessage(id, { via: 'voice', what: 'welfare', messageId: n.messageId }); } save(id); pushFamily('refresh', { id });
     } catch { asText(true); }   // her voice could not be made: the same words go as a text, and the entry says so
   }
   waLog({ event: 'welfare app sent', via: n.via });
@@ -1793,6 +1817,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

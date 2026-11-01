@@ -87,7 +87,7 @@ const CLOSE_WAIT_MS = 8000;
 const PLAIN_FACTS = new Set(['family-written-reminder', 'reminder-acknowledged-placed-call']);   // facts that say nothing about safety, health, a scam or a promise: they never stop a goodbye
 const plainWords = (t) => String(t || '').toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
 const NO_MORE = /^(no|nope|nah|no thanks|no thank you|nothing|nothing else|nothing more|that'?s all|that is all|that'?s it|i'?m fine|i am fine|all good|i'?m good|not really|no questions|none|i don'?t have any|no i don'?t|no i'?m fine)( thanks| thank you| dear| maya)?$/;
-const BYE_WORDS = /\b(good ?bye|bye( bye)?|good ?night|see you|talk (to you )?later|take care|i have to go|i must go|got to go|gotta go|you can (hang up|go now|go)|hang up now|let you go|we are done|we'?re done)\b/;
+const BYE_WORDS = /\b(good ?bye|bye( bye)?|good ?night|see you|talk (to you )?later|take care|i have to go|i must go|got to go|gotta go|you can (hang up|go now|go)|hang up now|let you go|we are done|we'?re done|(please )?hang up( the call| maya)?$)\b/;
 const NOT_BYE = /\b(don'?t|do not|never|please don'?t|not yet|wait)\b/;   // "don't hang up", "wait": they are not ending it
 const saysBye = (t) => { const w = plainWords(t); return w.split(' ').length <= 10 && BYE_WORDS.test(w) && !NOT_BYE.test(w); };
 // After her question, a natural "no" is more than the bare words ("No thanks, got it, all set then."): it BEGINS like a no, is short, and asks or adds nothing (no question word, no "but", "wait", "actually", "one thing").
@@ -1619,11 +1619,13 @@ class Call {
     };
 
     // A call Maya placed: the person's own words decide whether it ends (their goodbye, or "no, that's all" after her question). Never when a safety, health or other fact is in play: then she answers as usual.
-    const endNow = outboundEnd(turns.map((t) => t.text).join(' '), this.closing === 'asked'); this.closing = null; clearTimeout(this.closeTimer);
+    // On an app call the person's goodbye ("goodbye", "hang up", "you can go") ends it too: one fixed close, then the hang-up, in code. Only the goodbye rule: the question-and-"no" rule belongs to a call Maya placed.
+    const heardAll = turns.map((t) => t.text).join(' ');
+    const endNow = this.ws.outbound ? outboundEnd(heardAll, this.closing === 'asked') : (saysBye(heardAll) ? 'bye' : null); this.closing = null; clearTimeout(this.closeTimer);
     // Only when no fact of any weight is in play. The reminder's own 'what the family wrote' fact rides along for the next four turns, so 'no extra at all' was never true right after a reminder (found live: 'No, thank you.' went to Spark).
     const plain = (this.factLabels || []).every((l) => PLAIN_FACTS.has(l));
-    if (this.ws.outbound && endNow) console.log('outbound end', JSON.stringify({ rule: endNow, plain, safety: Boolean(this.safety || this.health) }));   // booleans and a rule name only
-    if (this.ws.outbound && plain && !this.safety && !this.health && endNow) return this.sayFixed(endNow === 'nomore' ? BYE_NOMORE : BYE_SAID, { bye: true });
+    if (endNow) console.log(this.ws.outbound ? 'outbound end' : 'app call end', JSON.stringify({ rule: endNow, plain, safety: Boolean(this.safety || this.health) }));   // booleans and a rule name only
+    if (plain && !this.safety && !this.health && endNow) return this.sayFixed(endNow === 'nomore' ? BYE_NOMORE : BYE_SAID, { bye: true });
     if (this.abort) this.abort.abort(); // never two replies at once
     this.lastAnswered = { key: this.textKey(turns), at: Date.now() };
     const myGen = ++this.gen;

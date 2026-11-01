@@ -46,7 +46,10 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   Map<String, dynamic>? _notice; // a note from the family
   Timer? _ringTimer;
   bool _inCall = false;
-  StreamSubscription<String>? _nativeAccept, _nativeEnd;
+  StreamSubscription<String>? _nativeAccept, _nativeEnd, _nativeRing;
+  StreamSubscription<({String via, String messageId})>? _nativeOpened;
+  String? _playId; // the voice note that opens playing (its notification was tapped)
+  Timer? _playClear;
   CallSession? _live; // the call on screen, so the system call screen's hang-up can end it
 
   @override
@@ -62,6 +65,9 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     _eventSub?.cancel();
     _nativeAccept?.cancel();
     _nativeEnd?.cancel();
+    _nativeRing?.cancel();
+    _nativeOpened?.cancel();
+    _playClear?.cancel();
     _events?.stop();
     _ringTimer?.cancel();
     _recTimer?.cancel();
@@ -100,6 +106,30 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
       _startCall(reason: kind, outreachId: oid);
     });
     _nativeEnd ??= NativeCall.instance.ended.listen((_) => _live?.hangUp());
+    // The call notification of a closed app was tapped: the ring is still going on the server, so connect again; it is announced at once and the Accept / Decline card shows (nothing is answered or lost by looking).
+    _nativeRing ??= NativeCall.instance.ring.listen((_) {
+      final pid = _pid;
+      if (!mounted || pid == null || _inCall || _incoming != null) return;
+      _attach(pid);
+    });
+    // A text or a voice-note notification was tapped: the chat opens on it, and a voice note plays.
+    _nativeOpened ??= NativeCall.instance.opened.listen((o) async {
+      await _loadThread();
+      if (!mounted || o.via != 'voice') return;
+      String? id = o.messageId.isEmpty ? null : o.messageId;
+      if (id == null) {
+        for (final m in _messages.reversed) {
+          if (m.fromMaya && m.kind == 'voice' && m.mediaUrl != null) {
+            id = m.id;
+            break;
+          }
+        }
+      }
+      if (id == null) return;
+      setState(() => _playId = id);
+      _playClear?.cancel();
+      _playClear = Timer(const Duration(seconds: 3), () => mounted ? setState(() => _playId = null) : null);
+    });
     NativeCall.instance.start(id);
     if (Platform.isIOS) _primeMic();
   }
@@ -393,7 +423,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
                   height: callSize + 44,
                   child: Center(child: _CallButton(size: callSize, onTap: _ready ? () => _startCall() : null)),
                 ),
-              Expanded(child: ClipRect(child: ChatView(messages: _messages, controller: _scroll))),
+              Expanded(child: ClipRect(child: ChatView(messages: _messages, controller: _scroll, playId: _playId))),
               if (_notice != null) _NoticeBar(text: '${_notice!['text']}', label: _notice!['kind'] == 'reminder' ? (_notice!['by'] == 'senior' ? 'Your reminder' : 'Reminder from your family') : _notice!['kind'] == 'welfare' ? 'Check-in from your family' : 'Message from your family', onClose: () {
                 Api.postJson('/api/care/$_pid/notifications/${_notice!['notifId']}/seen').catchError((_) => null);
                 setState(() => _notice = null);

@@ -719,7 +719,7 @@ function placeCall(profileId, kind, spec) {
   const what = kind === 'reminder' ? 'reminder call' : kind === 'welfare' ? 'welfare call' : 'test call';
   let cid = 'unknown'; const log = (m) => note(`${what} ${cid} to number ending ${tail}: ${m}`);
   setTest(profileId, 'starting');
-  let connected = false, placed = false;
+  let connected = false, placed = false, rang = false;   // rang: WhatsApp reported RINGING, so the phone really rang
   const settle = () => {
     if (wc) { const st = care.welfareCallEnded(profileId, wc.nid, wc.startedAt); if (st) log(`activity entry: ${st === 'unreached' ? "Couldn't reach senior" : st === 'spoke' ? 'Replied' : "Hasn't replied yet"}`); if (st && placed && spec && typeof spec.onEnd === 'function') { try { spec.onEnd(st); } catch (e) { log(`follow-up failed: ${sayWhy(e)}`); } } return; }
     if (!rc) return; const st = care.reminderCallEnded(profileId, rc.rid); if (st) log(`dashboard state: ${st === 'unanswered' ? "Couldn't reach" : "Hasn't replied yet"}`);
@@ -736,13 +736,14 @@ function placeCall(profileId, kind, spec) {
     };
     const terminate = async () => { if (!cur.id) throw new Error('Meta has not named the call, so it cannot be hung up by id'); await callAction(cur.id, 'terminate'); };
     const label = { RINGING: 'ringing', ACCEPTED: 'answered', REJECTED: 'rejected' };
-    sig.on('status', (s) => { if (label[s]) setTest(profileId, label[s]); if (s === 'ACCEPTED' && !connected) { connected = true; noteConnected(profileId); } });
+    sig.on('status', (s) => { if (s === 'RINGING') rang = true; if (label[s]) setTest(profileId, label[s]); if (s === 'ACCEPTED' && !connected) { connected = true; noteConnected(profileId); } });
     const tzOf = () => (care.get(profileId) || {}).tz || null;
     Promise.resolve().then(() => deps.callOut({ sig, place, terminate, log, speak: (t) => chat.deps.speak(t), ringCapMs: deps.testRingCapMs, tailMs: deps.testTailMs,
       ...((rc || wc) ? { bridge: { prefetch: rc ? (signal) => deps.prefetchLine(profileId, rc.rid, tzOf(), signal) : (signal) => deps.prefetchWelfare(profileId, tzOf(), signal), newCall: deps.newCall, apiKey: process.env.META_API_KEY, profileId, tz: tzOf(), outreachId: (rc || wc).outreachId, reason: wc ? 'welfare' : 'reminder', capMs: deps.callCapMs, greetingTimeoutMs: deps.greetingTimeoutMs } } : {}) }))
       .then((r) => {
-        const missed = /^no answer/.test(r) || r === 'rejected';
-        if (missed) noteMissed(profileId);
+        // A miss counts toward the 2-in-a-row pause only when it was TRUE: the phone rang (RINGING) and nobody answered, or they rejected it. A call WhatsApp never rang (no RINGING before the cap) says nothing about them.
+        const missed = (/^no answer/.test(r) && rang) || r === 'rejected';
+        if (missed) noteMissed(profileId); else if (/^no answer/.test(r)) note(`${what} ${cid} to number ending ${tail}: never rang (no RINGING from WhatsApp), so it is not counted as an unanswered call`);
         setTest(profileId, /^no answer/.test(r) ? 'no answer' : r === 'rejected' ? 'rejected' : r === 'completed' ? (rc || wc ? 'finished' : 'completed') : 'ended');
         settle(); note(`${what} ${cid} to number ending ${tail}: finished, ${r}`);
       })
@@ -828,4 +829,4 @@ async function handleWebhook(payload) {
   return (await Promise.all(done)).flat(); // calls answer with one result per call
 }
 
-module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, placeWelfareCall, placeWelfare, welfareRoute, activityOf, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, placeWelfareCall, placeWelfare, welfareRoute, noteReachable, activityOf, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

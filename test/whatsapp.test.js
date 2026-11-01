@@ -1289,7 +1289,12 @@ test('C2 a goodbye turn on a call Maya placed is answered by the fixed goodbye a
   const run = async (outbound, text, asked) => { const { call } = outCall(id, outbound); call.sayFixed = async (t, o) => { said.push([t, o.bye]); }; call.closing = asked ? 'asked' : null; call.pending = [{ text, partial: '', completedAt: Date.now(), endedAt: Date.now() }]; call.attribute = (t) => [{ label: 'A', text: t.text }]; call.respond = callMod.Call.prototype.respond; try { await Promise.race([call.respond(0), sleepMs(300)]); } catch { /* the rest of a normal reply needs Spark: not under test */ } return call; };
   await run(true, 'No thanks', true); await run(true, 'Okay, goodbye then', false);
   assert.deepEqual(said, [[callMod.BYE_NOMORE, true], [callMod.BYE_SAID, true]]);
-  said.length = 0; await run(false, 'No thanks', true); await run(true, 'Who wrote me that message?', true); assert.deepEqual(said, [], 'an app call is never hung up on, and a question carries on');
+  said.length = 0; await run(false, 'No thanks', true); await run(true, 'Who wrote me that message?', true); assert.deepEqual(said, [], 'a "no" is not a goodbye on an app call, and a question carries on');
+  // an APP call (Android or iPhone, the person called Maya): their goodbye gets ONE fixed close and the hang-up, in code; nothing else about an app call changes
+  said.length = 0; for (const t of ['Okay, goodbye then', 'Bye', 'Good night Maya', 'Please hang up', 'Sounds good. Maya, you can hang up.', 'You can hang up now, thank you']) await run(false, t, false);
+  assert.deepEqual(said, Array(6).fill([callMod.BYE_SAID, true]), 'every goodbye on an app call: the one fixed close, then the hang-up');
+  said.length = 0; for (const t of ['Hang up the washing, will you?', "Please don't hang up", 'Wait, do not hang up yet', 'What is the weather today?', 'Okay, okay', 'Thank you Maya']) await run(false, t, false);
+  assert.deepEqual(said, [], 'a thank-you, an okay, a question, "don\'t hang up": the call carries on');
 });
 
 test('C2 after the reminder she asks the fixed question, then waits; silence ends it with the fixed line, but never while they are talking', async () => {
@@ -1377,6 +1382,22 @@ test('Step 1 welfare: nobody answers (cap here 200 ms) -> terminate, Couldn\'t r
   reminderReset(); const b = inWindow();
   await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeWelfareCall(b.id); await wa.handleWebhook(outStatus(b.phone, 'RINGING')); await wa.handleWebhook(outStatus(b.phone, 'REJECTED')); await waitFor(() => noteOf(b.id).unreached); await sleepMs(100); });
   assert.equal(labelOf(b.id), "Couldn't reach senior"); assert.deepEqual(actions(), ['connect']); assert.equal(wa.linkOf(b.id).callMisses, 1); assert.equal(starts.length, 0);
+});
+
+test('2-miss pause counts only TRUE unanswered rings: a call WhatsApp never rang (no RINGING) is not a miss; rung and unanswered is; the person opening the app starts the count again', async () => {
+  reminderReset(); wa.deps.testRingCapMs = 200; wa.deps.testCooldownMs = 0;
+  const a = inWindow();   // never rang: the cap passes with no RINGING status from WhatsApp (the notification never reached the phone)
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeWelfareCall(a.id); await waitFor(() => actions().includes('terminate')); await waitFor(() => noteOf(a.id).unreached); await sleepMs(50); });
+  assert.equal(wa.linkOf(a.id).callMisses || 0, 0, 'a call that never rang is not counted'); assert.equal(labelOf(a.id), "Couldn't reach senior", 'the entry still says so (nobody was reached)');
+  reminderReset(); wa.deps.testRingCapMs = 200; const b = inWindow();   // rang and nobody answered: one miss
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeWelfareCall(b.id); await wa.handleWebhook(outStatus(b.phone, 'RINGING')); await waitFor(() => actions().includes('terminate')); await waitFor(() => noteOf(b.id).unreached); await sleepMs(50); });
+  assert.equal(wa.linkOf(b.id).callMisses, 1, 'rang and unanswered: a true miss');
+  // the person opens the app (home-open): they are reachable, the count starts again
+  const ev = []; const detach = care.attachSenior(b.id, { write: (x) => { ev.push(x); return true; } }, null);
+  assert.equal(wa.linkOf(b.id).callMisses || 0, 0, 'opening the app clears the count'); detach();
+  reminderReset(); wa.deps.testRingCapMs = 200; const c = inWindow();   // rejected after ringing: a miss, as before
+  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => { await wa.placeWelfareCall(c.id); await wa.handleWebhook(outStatus(c.phone, 'RINGING')); await wa.handleWebhook(outStatus(c.phone, 'REJECTED')); await waitFor(() => noteOf(c.id).unreached); await sleepMs(100); });
+  assert.equal(wa.linkOf(c.id).callMisses, 1); wa.deps.testRingCapMs = undefined;
 });
 
 test('Step 1 welfare: two unanswered in a row, or WhatsApp refusing (138012) -> no call, a fixed true text instead (inside the 24 h window; outside it nothing is sent and the entry says Paused); the words never reach the log', async () => {
@@ -1526,7 +1547,7 @@ test('live fix: "No, thank you." right after the reminder ends the call: the rem
   said.length = 0; await run('Sounds good for now. Maya, you can hang up.'); assert.deepEqual(said, [[callMod.BYE_SAID, true]]);
   said.length = 0; const d = await run('No thanks, please tell my family I am fine.'); assert.ok(d.factLabels.some((l) => l !== 'family-written-reminder'), `a fact of weight was in play: ${d.factLabels}`); assert.deepEqual(said, [], 'the family request goes to Spark, not to a goodbye');
   said.length = 0; await run('No, thank you.', (call) => { call.safety = true; }); assert.deepEqual(said, [], 'safety in play: never a goodbye in code');
-  const src = fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'); assert.match(src, /console\.log\('outbound reply', JSON\.stringify\(\{ farewell, pieces: said\.length \}\)\)/); assert.match(src, /console\.log\('outbound end', JSON\.stringify\(\{ rule: endNow, plain, safety:/);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'call.js'), 'utf8'); assert.match(src, /console\.log\('outbound reply', JSON\.stringify\(\{ farewell, pieces: said\.length \}\)\)/); assert.match(src, /console\.log\(this\.ws\.outbound \? 'outbound end' : 'app call end', JSON\.stringify\(\{ rule: endNow, plain, safety:/);
 });
 
 // ---- pre-ring: the first line of a reminder call is written while the phone rings (a scratch Call; nothing a real call does happens for a call nobody answers) ----

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -11,6 +12,7 @@ import 'package:maya_app/main.dart';
 import 'package:maya_app/models.dart';
 import 'package:maya_app/services/api.dart';
 import 'package:maya_app/senior/call_screen.dart';
+import 'package:maya_app/senior/chat_view.dart';
 import 'package:maya_app/services/audio_route.dart';
 import 'package:maya_app/services/call_session.dart';
 import 'package:maya_app/services/voice_player.dart';
@@ -342,6 +344,25 @@ void main() {
         await t.pumpWidget(const SizedBox());
       } finally {
         AudioRoute.android = keep;
+      }
+    });
+
+    testWidgets('a voice note opened from its notification starts playing by itself (autoPlay), and only that one; the others wait to be tapped', (t) async {
+      await phone(t, 360, 700);
+      final urls = <String>[];
+      for (final name in const ['xyz.luan/audioplayers', 'xyz.luan/audioplayers.global']) {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(MethodChannel(name), (c) async {
+          if (c.method == 'setSourceUrl' && c.arguments is Map) urls.add('${(c.arguments as Map)['url']}');
+          return null;
+        });
+      }
+      await t.pumpWidget(MaterialApp(home: Scaffold(body: Column(children: const [VoiceBubble(url: 'http://127.0.0.1:1/a.wav'), VoiceBubble(url: 'http://127.0.0.1:1/b.wav', autoPlay: true)]))));
+      await t.pump(const Duration(milliseconds: 300));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(urls, ['http://127.0.0.1:1/b.wav'], reason: 'only the voice note whose notification was tapped started by itself');
+      await t.pumpWidget(const SizedBox());
+      for (final name in const ['xyz.luan/audioplayers', 'xyz.luan/audioplayers.global']) {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(MethodChannel(name), null);
       }
     });
 

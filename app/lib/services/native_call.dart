@@ -23,9 +23,17 @@ class NativeCall {
 
   final _accepted = StreamController<String>.broadcast();
   final _ended = StreamController<String>.broadcast();
+  final _ring = StreamController<String>.broadcast();
+  final _opened = StreamController<({String via, String messageId})>.broadcast();
 
   /// The outreach id of a ring the person accepted on the system call screen.
   Stream<String> get accepted => _accepted.stream;
+
+  /// The person tapped the notification of a ring that is still going (the outreach id). The app reconnects so the ring is announced again and the Accept / Decline card shows.
+  Stream<String> get ring => _ring.stream;
+
+  /// The person tapped the notification of a text or a voice note that came while the app was closed: via is 'text' or 'voice'; messageId is the voice note's chat id ('' for a text).
+  Stream<({String via, String messageId})> get opened => _opened.stream;
 
   /// The system call screen's hang-up on a live call.
   Stream<String> get ended => _ended.stream;
@@ -92,6 +100,14 @@ class NativeCall {
         _audioOn = true;
         final w = _audio;
         if (w != null && !w.isCompleted) w.complete();
+        break;
+      case 'ring':
+        CallLog.add('native: the call notification was tapped');
+        _ring.add('${a['outreachId'] ?? ''}');
+        break;
+      case 'opened':
+        CallLog.add('native: a message notification was tapped (${a['via']})');
+        _opened.add((via: '${a['via'] ?? 'text'}', messageId: '${a['messageId'] ?? ''}'));
         break;
       case 'declined':
         CallLog.add('native: declined on the system call screen');

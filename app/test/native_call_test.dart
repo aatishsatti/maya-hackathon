@@ -110,4 +110,26 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, null);
     }
   });
+
+  test('closed-app notifications: a tap on the call notification reaches Dart as "ring" (nothing is declined or accepted by it); a tap on a text or voice-note notification reaches Dart as "opened" with what it was and the voice note\'s id', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, (c) async => null);
+    await NativeCall.instance.start('abc12345');
+    final rings = <String>[];
+    final opened = <({String via, String messageId})>[];
+    final accepted = <String>[];
+    final a = NativeCall.instance.ring.listen(rings.add);
+    final b = NativeCall.instance.opened.listen(opened.add);
+    final c = NativeCall.instance.accepted.listen(accepted.add);
+    await fromNative('ring', {'outreachId': 'o7'});
+    await fromNative('opened', {'via': 'voice', 'messageId': 'm9'});
+    await fromNative('opened', {'via': 'text', 'messageId': ''});
+    await Future<void>.delayed(Duration.zero);
+    expect(rings, ['o7']);
+    expect(accepted, isEmpty, reason: 'a tap on the notification is not an Accept');
+    expect(opened.map((e) => '${e.via}:${e.messageId}'), ['voice:m9', 'text:']);
+    await a.cancel();
+    await b.cancel();
+    await c.cancel();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, null);
+  });
 }

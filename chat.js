@@ -385,6 +385,13 @@ async function voiceFor(pieces) {
 
 // A reminder (or any short note) as Maya's voice in the chat: a voice message with its words, pushed to the open app as a normal chat message (a closed app finds it in the thread when it opens).
 // Returns { message, reached }: reached counts the open apps it was pushed to. Throws if her voice cannot be made (the caller then sends the words as text; never a fake voice note).
+// A text from Maya that is put in the chat (a reminder or a check-in that found the app closed, so the notification's tap lands on it).
+function deliverText(profileId, text) {
+  const s = session(profileId);
+  const m = s.push({ role: 'maya', kind: 'text', text: String(text || '') });
+  return { message: m, reached: care.pushSenior(profileId, 'chat', { message: m }) };
+}
+
 async function deliverVoiceNote(profileId, spoken, text) {
   const s = session(profileId);
   const pcm = await deps.speak(spoken);
@@ -493,4 +500,4 @@ function forget(profileId) {
 // Test and shutdown helper: files every open chat into memory now.
 function endAll() { for (const [id, s] of sessions) { sessions.delete(id); s.finish(); } }
 
-module.exports = { continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
+module.exports = { continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deliverText, deps, sendText, sendVoiceNote, sendImage, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };

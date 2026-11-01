@@ -28,6 +28,9 @@ object NativeCalls {
     const val EXTRA_OUTREACH = "maya_outreach"
     const val EXTRA_KIND = "maya_kind"   // callback | reminder | welfare: the reason the call is joined with
     private const val CHANNEL = "maya_calls"
+    private const val MESSAGES = "maya_messages"
+    const val EXTRA_VIA = "maya_via"               // text | voice
+    const val EXTRA_MESSAGE = "maya_message"       // the chat message id of a voice note
     private val main = Handler(Looper.getMainLooper())
     private var ch: MethodChannel? = null
     private val queue = ArrayList<Pair<String, Map<String, Any>>>()
@@ -68,6 +71,22 @@ object NativeCalls {
         nm.notify(idOf(oid), n)
     }
 
+    // A text or a voice note that found the app closed. The notification says only who it is from and what it is; the words are read in the chat, which is where a tap goes
+    // (a voice note starts playing there). Nothing from the message travels in the push.
+    fun showMessage(ctx: Context, via: String, what: String, messageId: String?) {
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(MESSAGES, "Maya messages", NotificationManager.IMPORTANCE_HIGH))
+        val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_ACTION, "message").putExtra(EXTRA_VIA, via)
+        if (messageId != null) i.putExtra(EXTRA_MESSAGE, messageId)
+        val code = (messageId ?: (what + via + System.currentTimeMillis())).hashCode()
+        val open = PendingIntent.getActivity(ctx, code, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val title = if (what == "welfare") "Check-in from your family" else "Reminder from your family"
+        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, MESSAGES) else @Suppress("DEPRECATION") Notification.Builder(ctx)
+        b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(title).setContentText(if (via == "voice") "Maya sent you a voice note. Tap to listen." else "Maya has a message for you. Tap to read it.")
+            .setCategory(Notification.CATEGORY_MESSAGE).setAutoCancel(true).setContentIntent(open)
+        nm.notify(code, b.build())
+    }
+
     fun cancel(ctx: Context, oid: String) { (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(idOf(oid)) }
     fun dismiss(ctx: Context, oid: String?) { if (oid != null) cancel(ctx, oid) }
 
@@ -95,7 +114,9 @@ class DeclineReceiver : BroadcastReceiver() {
 class MayaMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) { NativeCalls.emit("token", mapOf("platform" to "android", "token" to token)) }
     override fun onMessageReceived(m: RemoteMessage) {
-        val d = m.data; val oid = d["outreachId"] ?: return
+        val d = m.data
+        if (d["type"] == "message") { NativeCalls.showMessage(this, d["via"] ?: "text", d["what"] ?: "reminder", d["messageId"]); return }
+        val oid = d["outreachId"] ?: return
         when (d["type"]) {
             "incoming" -> NativeCalls.show(this, oid, (d["ringMs"]?.toLongOrNull() ?: 30000L), d["kind"] ?: "reminder")
             "end" -> NativeCalls.cancel(this, oid)
