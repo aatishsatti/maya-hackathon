@@ -1703,6 +1703,7 @@ function welfareTick(p, now) {
 // The call says only WHO has not responded and since when, never anything the person said. Seen stops it. The words are fixed here, never written by the model.
 const ESC = { standard: { missed: 3, silentH: 48 }, cautious: { missed: 2, silentH: 24 }, ultra: { missed: 1, silentH: 24 } };
 const ESC_RING_MS = 45000;
+const familyHooks = { push: null };   // server.js sets push(profileId, payload): sends to every phone of the families that own this person
 const MISS_STATES = new Set(['missed', 'app_missed', 'wa_missed', 'unanswered']);
 function escWords(kind, name, anchor) {
   const day = anchor ? new Date(anchor).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'a while';
@@ -1717,6 +1718,8 @@ function ringFamily(p, kind, anchor, now = Date.now()) {
   save(p.id);
   const sent = pushFamily('familyCall', { id: p.id, episodeId: ep.id, kind, text: ep.text, at: now });
   ep.reached = sent;
+  // The family's phones that are CLOSED: a push, ids and the kind only (no name, no words): the app opens and shows who. Set by server.js (the accounts live there).
+  if (familyHooks.push) { try { familyHooks.push(p.id, { type: 'family_call', seniorId: p.id, episodeId: ep.id, kind }); } catch (e) { console.log('escalation', JSON.stringify({ event: 'push error' })); } }
   const t = setTimeout(() => { if (ep.status === 'ringing') { ep.status = 'no_answer'; save(p.id); pushFamily('refresh', { id: p.id }); } }, ESC_RING_MS); if (t.unref) t.unref();
   pushFamily('refresh', { id: p.id });
   console.log('escalation', JSON.stringify({ event: 'family rung', kind, reached: sent }));   // kinds and a count: never a name or words
@@ -1903,7 +1906,7 @@ module.exports = {
   trendEvent, trendTurn, trendView, localParts,
   linesWithin, touch, lastSeen, callStarted, callEnded, callCount, liveCalls, liveChats, pushSenior, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
-  escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
+  familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
   addReminder, addSeniorReminder, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,

@@ -12,6 +12,7 @@ const care = require('./care');
 const chat = require('./chat');
 const origin = require('./origin');
 const accounts = require('./accounts');
+const push = require('./push');
 const whatsapp = require('./whatsapp');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env: use defaults */ }
@@ -227,6 +228,10 @@ function needFamily(req, res, id) {
   if (id && !accounts.owns(u, id)) { sendJson(res, 403, { error: 'This is not one of your family members.' }); return false; }
   return true;
 }
+// A ring for a closed family app: every phone of every family that owns this person (ids and the kind only, see care.ringFamily).
+care.familyHooks.push = (profileId, payload) => {
+  for (const u of accounts.ownersOf(profileId)) for (const d of accounts.devicesOf(u)) push.send(d, payload).then((r) => { if (r.gone) accounts.removeDevice(u, d.token); });
+};
 async function handleFamily(req, res, url) {
   const what = url.pathname.split('/')[3];
   if (req.method !== 'GET' && !sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
@@ -243,6 +248,7 @@ async function handleFamily(req, res, url) {
   if (req.method === 'GET' && what === 'session') return sendJson(res, 200, { username: familyOf(req) });   // asked by the login page: never an error when nobody is signed in
   const u = familyOf(req);
   if (!u) return sendJson(res, 401, { error: 'Please log in as family.' });
+  if (req.method === 'POST' && what === 'device') { const body = await readJson(req, 4096); if (!body) return sendJson(res, 400, { error: 'Bad request' }); try { accounts.addDevice(u, body.platform, body.token); return sendJson(res, 200, { ok: true, ready: push.configured(body.platform) }); } catch (e) { return fail(e); } }   // the family's phone, so a ring reaches it while the app is closed
   if (req.method === 'GET' && what === 'me') {
     const seniors = accounts.seniorsOf(u).map((id) => memory.load(id)).filter(Boolean).map((p) => ({ id: p.id, name: p.name, mode: care.view(p.id).mode }));
     return sendJson(res, 200, { username: u, seniors });

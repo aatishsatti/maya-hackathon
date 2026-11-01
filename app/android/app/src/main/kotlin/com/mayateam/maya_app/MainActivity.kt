@@ -23,7 +23,7 @@ class MainActivity : FlutterActivity() {
         ch.setMethodCallHandler { call, result ->
             when (call.method) {
                 "configure" -> {   // the server address and the profile, kept so a Decline can reach the server even when the app is not running
-                    NativeCalls.configure(this, call.argument<String>("base") ?: "", call.argument<String>("profile") ?: "")
+                    NativeCalls.configure(this, call.argument<String>("base") ?: "", call.argument<String>("profile") ?: "", call.argument<String>("familyToken") ?: "")
                     askPermissions()
                     NativeCalls.fetchToken()
                     result.success(null)
@@ -102,6 +102,13 @@ class MainActivity : FlutterActivity() {
             // Nothing is cancelled here: the ring is not answered, declined or lost by looking at it.
             "ring" -> { NativeCalls.emit("ring", mapOf("outreachId" to (i.getStringExtra(NativeCalls.EXTRA_OUTREACH) ?: ""))); i.removeExtra(NativeCalls.EXTRA_ACTION) }
             // The person tapped a text or voice-note notification: the chat opens on it (a voice note plays).
+            // The family tapped (or accepted) the ring that reached the closed family app: the app opens on the ring screen.
+            "family_ring" -> {
+                val eid = i.getStringExtra(NativeCalls.EXTRA_EPISODE) ?: ""
+                NativeCalls.cancelFamily(this, eid)
+                NativeCalls.emit("familyRing", mapOf("seniorId" to (i.getStringExtra(NativeCalls.EXTRA_SENIOR) ?: ""), "episodeId" to eid, "act" to (i.getStringExtra(NativeCalls.EXTRA_ACT) ?: "")))
+                i.removeExtra(NativeCalls.EXTRA_ACTION)
+            }
             "message" -> {
                 NativeCalls.emit("opened", mapOf("via" to (i.getStringExtra(NativeCalls.EXTRA_VIA) ?: "text"), "messageId" to (i.getStringExtra(NativeCalls.EXTRA_MESSAGE) ?: "")))
                 i.removeExtra(NativeCalls.EXTRA_ACTION)

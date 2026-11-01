@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 import '../services/store.dart';
 import '../theme.dart';
+import '../services/api.dart';
 import '../widgets/pressable.dart';
+import 'family_ring.dart';
 import 'family_data.dart';
 import 'family_login.dart';
 import 'tab_activity.dart';
@@ -22,9 +24,29 @@ class FamilyDashboard extends StatefulWidget {
 class _FamilyDashboardState extends State<FamilyDashboard> {
   late Profile _profile = widget.profile;
   late FamilyData _data = FamilyData(_profile.id)..start();
+  String? _ringShown;   // the ring (episode) already shown on this screen
+
+  @override
+  void initState() {
+    super.initState();
+    _data.addListener(_maybeRing);
+  }
+
+  // Maya is ringing the family and this dashboard is open: the ring screen comes up once for each ring.
+  void _maybeRing() {
+    final list = _data.care['escalations'];
+    if (list is! List || list.isEmpty || !mounted) return;
+    final e = list.first;
+    if (e is! Map || e['status'] != 'ringing' || e['id'] == _ringShown) return;
+    final started = e['startedAt'] is num ? (e['startedAt'] as num).toInt() : 0;
+    if (DateTime.now().millisecondsSinceEpoch - started > 60000) return;
+    _ringShown = '${e['id']}';
+    showFamilyRing(context, seniorId: _profile.id, episodeId: '${e['id']}', text: '${e['text']}');
+  }
 
   @override
   void dispose() {
+    _data.removeListener(_maybeRing);
     _data.dispose();
     super.dispose();
   }
@@ -32,9 +54,11 @@ class _FamilyDashboardState extends State<FamilyDashboard> {
   Future<void> _switch(Profile p) async {
     await Store.setProfile(p.id, p.name);
     final old = _data;
+    old.removeListener(_maybeRing);
     setState(() {
       _profile = p;
       _data = FamilyData(p.id)..start();
+      _data.addListener(_maybeRing);
     });
     old.dispose();
   }
@@ -91,6 +115,49 @@ class _FamilyDashboardState extends State<FamilyDashboard> {
     );
   }
 
+  // After Maya rang the family: one fixed topic-only line, what happened to the ring, and Seen. Nothing here when there was no ring.
+  List<Widget> _escBanner(FamilyData d) {
+    final list = d.care['escalations'];
+    if (list is! List) return const [];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final e in list) {
+      if (e is! Map || e['status'] == 'seen') continue;
+      final at = e['startedAt'] is num ? (e['startedAt'] as num).toInt() : 0;
+      if (now - at > 3 * 86400000) continue;
+      const labels = {'ringing': 'Ringing', 'no_answer': 'No answer', 'accepted': 'You answered', 'declined': 'Declined'};
+      return [
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: kTrustSoft, borderRadius: BorderRadius.circular(16)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Maya rang the family: ${'${e['text']}'.replaceFirst('This is Maya. ', '')} (${dateTime(at)})', style: const TextStyle(fontSize: 16, height: 1.35, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Row(children: [
+                Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(99)), child: Text(labels['${e['status']}'] ?? '${e['status']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: kTrust))),
+                const Spacer(),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(48, 44), backgroundColor: Colors.white),
+                  onPressed: () async {
+                    try {
+                      await Api.postJson('/api/care/${_profile.id}/escalation/${e['id']}/seen');
+                    } on ApiError {
+                      // it stays until it can be marked
+                    }
+                    d.refresh(quiet: true);
+                  },
+                  child: const Text('Seen'),
+                ),
+              ]),
+            ]),
+          ),
+        ),
+      ];
+    }
+    return const [];
+  }
+
   Widget _summary(FamilyData d) {
     final alerts = d.activeAlerts, hasAlert = alerts.any((a) => a['_kind'] == 'alerts' || a['level'] == 'alert'), need = alerts.isNotEmpty;
     final s = d.schedule;
@@ -119,6 +186,7 @@ class _FamilyDashboardState extends State<FamilyDashboard> {
     final recent = d.activity.take(4).toList();
     final tone = hasAlert ? kToneMiss : need ? kToneWait : kToneOk;
     return ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [
+      ..._escBanner(d),
       if (need)
         Padding(
           padding: const EdgeInsets.only(top: 12),

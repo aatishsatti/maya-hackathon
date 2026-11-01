@@ -8,6 +8,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:maya_app/family/dashboard.dart';
 import 'package:maya_app/family/family_login.dart';
+import 'package:maya_app/family/family_data.dart';
+import 'package:maya_app/family/family_ring.dart';
+import 'package:maya_app/family/schedule_upload.dart';
 import 'package:maya_app/start/start_gate.dart';
 import 'package:maya_app/main.dart';
 import 'package:maya_app/models.dart';
@@ -291,6 +294,78 @@ void main() {
       await t.pumpAndSettle(const Duration(milliseconds: 100));
       expect(find.textContaining('within 24 hours after the person last wrote'), findsOneWidget);
       expect(find.textContaining('Maya app instead'), findsOneWidget);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('tap a reminder: an edit sheet with Save changes, and Stop this reminder asks once more before it stops', (t) async {
+      await phone(t, 360, 800);
+      await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
+      await t.pump(const Duration(milliseconds: 400));
+      await openSection(t, 'Reminders');
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.byTooltip('Delete Take your tablets'), findsNothing, reason: 'no loose delete button in the list');
+      await t.tap(find.text('Take your tablets').last);
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(find.text('Edit reminder'), findsOneWidget);
+      expect(find.text('Save changes'), findsOneWidget);
+      await t.scrollUntilVisible(find.text('Stop this reminder'), 100, scrollable: find.byType(Scrollable).last);
+      await t.tap(find.text('Stop this reminder'));
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(find.text('Stop this reminder?'), findsOneWidget, reason: 'destructive: asked once more');
+      await t.tap(find.text('Keep it'));
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(find.text('Stop this reminder?'), findsNothing);
+      expect(find.text('Edit reminder'), findsOneWidget, reason: 'Keep it leaves the sheet as it was');
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('the ring screen: "Maya is calling", the fixed topic-only line, Decline (red) on the LEFT and Accept (green) on the RIGHT', (t) async {
+      await phone(t, 390, 844);
+      var answer = '';
+      await t.pumpWidget(MaterialApp(home: FamilyRingScreen(text: 'This is Maya. Rosa has not responded to reminders. Please check in.', onAccept: () => answer = 'accept', onDecline: () => answer = 'decline')));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text('Maya is calling'), findsOneWidget);
+      expect(find.textContaining('has not responded to reminders'), findsOneWidget);
+      expect(t.getCenter(find.text('Decline')).dx, lessThan(t.getCenter(find.text('Accept')).dx), reason: 'Decline left, Accept right');
+      await t.tap(find.byIcon(Icons.call_end));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(answer, 'decline');
+      await t.tap(find.byIcon(Icons.call));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(answer, 'accept');
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('upload a schedule: type it, Maya lists what she found with nothing ticked, and only the ticked ones are set', (t) async {
+      await phone(t, 390, 844);
+      final posts = <String>[];
+      Api.testClient = MockClient((req) async {
+        posts.add('${req.method} ${req.url.path} ${req.body}');
+        final body = req.url.path.endsWith('/schedule/text') ? {'items': [{'id': '1', 'task': 'take your tablet', 'when': '8:00 AM every day'}, {'id': '2', 'task': 'go for a walk', 'when': '5:00 PM every day'}]} : {'set': ['take your tablet at 8:00 AM every day'], 'failed': [], 'skipped': ['go for a walk']};
+        return http.Response(jsonEncode(body), 200, headers: {'content-type': 'application/json'});
+      });
+      addTearDown(() => Api.testClient = null);
+      await t.pumpWidget(MaterialApp(home: Scaffold(body: ScheduleUpload(data: FamilyData('abcdef12')))));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text('Photo'), findsOneWidget);
+      expect(find.text('PDF'), findsOneWidget);
+      expect(find.text('Voice'), findsOneWidget);
+      await t.tap(find.text('Type it'));
+      await t.pump(const Duration(milliseconds: 300));
+      await t.enterText(find.byType(TextField), 'tablet at 8 am daily, walk at 5 pm daily');
+      await t.tap(find.text('Read it'));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text('What Maya found'), findsOneWidget);
+      expect(find.text('Tick the ones you want'), findsOneWidget, reason: 'nothing is ticked, nothing can be set');
+      expect(posts.where((p) => p.contains('/schedule/set')), isEmpty, reason: 'reading sets nothing');
+      await t.tap(find.text('take your tablet'));
+      await t.pump(const Duration(milliseconds: 200));
+      expect(find.text('Set 1 reminder'), findsOneWidget);
+      await t.tap(find.text('Set 1 reminder'));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(posts.where((p) => p.contains('/schedule/set')).last, contains('"ids":["1"]'));
+      expect(find.textContaining('Set 1 reminder: take your tablet at 8:00 AM every day'), findsOneWidget);
+      expect(find.textContaining('Not set (not ticked): go for a walk'), findsOneWidget);
       await t.pumpWidget(const SizedBox());
     });
 

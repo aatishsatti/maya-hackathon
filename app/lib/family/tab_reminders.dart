@@ -8,6 +8,7 @@ import '../widgets/whatsapp_rules.dart';
 import '../widgets/pill.dart';
 import 'common.dart';
 import 'family_data.dart';
+import 'schedule_upload.dart';
 
 const _whereLabel = {'whatsapp': 'WhatsApp', 'app': 'Maya app', 'both': 'WhatsApp + app'};
 const _howLabel = {'call': 'Call', 'text': 'Text', 'voice': 'Voice note'};
@@ -41,6 +42,15 @@ class _RemindersTabState extends State<RemindersTab> {
           label: const Text('Add a reminder'),
         ),
       ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 48)),
+          onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => Scaffold(appBar: AppBar(title: const Text('Upload a schedule')), body: SafeArea(child: ScheduleUpload(data: data))))),
+          icon: const Icon(Icons.upload_file),
+          label: const Text('Upload a schedule'),
+        ),
+      ),
       if (data.error != null) ErrorBanner(message: data.error!, onRetry: () => data.refresh()),
       Expanded(
         child: rows.isEmpty
@@ -54,7 +64,9 @@ class _RemindersTabState extends State<RemindersTab> {
                     return TextButton(onPressed: () => setState(() => _showAll = !_showAll), child: Text(_showAll ? 'Show fewer finished reminders' : 'Show ${finished.length - 5} earlier finished reminders'));
                   }
                   final r = rows[i];
-                  return Padding(
+                  return InkWell(
+                    onTap: () => showModalBottomSheet<void>(context: context, isScrollControlled: true, backgroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))), builder: (_) => Padding(padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom), child: _AddSheet(data: data, edit: r))),
+                    child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Expanded(
@@ -71,17 +83,9 @@ class _RemindersTabState extends State<RemindersTab> {
                           if (r.dueAt != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Next: ${dayTime(r.dueAt!)}${r.repeat != 'none' ? ' · repeats ${r.every == 2 ? 'every 2 ${r.repeat == 'weekly' ? 'weeks' : 'days'}' : r.repeat}' : ''}', style: const TextStyle(fontSize: 13, color: kSoft))),
                         ]),
                       ),
-                      IconButton(
-                        tooltip: 'Delete ${r.task}',
-                        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () async {
-                          final ok = await act(context, () => Api.delete('/api/care/${data.profileId}/reminders/${r.id}'), done: 'Reminder deleted.');
-                          if (ok) data.refresh(quiet: true);
-                        },
-                      ),
+                      const Padding(padding: EdgeInsets.only(left: 8, top: 4), child: Icon(Icons.chevron_right, color: kSoft)),
                     ]),
-                  );
+                  ));
                 },
               ),
       ),
@@ -91,7 +95,8 @@ class _RemindersTabState extends State<RemindersTab> {
 
 class _AddSheet extends StatefulWidget {
   final FamilyData data;
-  const _AddSheet({required this.data});
+  final Reminder? edit;   // set: the sheet changes this reminder (or stops it) instead of adding one
+  const _AddSheet({required this.data, this.edit});
   @override
   State<_AddSheet> createState() => _AddSheetState();
 }
@@ -102,6 +107,38 @@ class _AddSheetState extends State<_AddSheet> {
   String _repeat = 'none';
   String? _deliver, _channel;
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final r = widget.edit;
+    if (r == null) return;
+    _task.text = r.task;
+    if (r.dueAt != null) _at = DateTime.fromMillisecondsSinceEpoch(r.dueAt!);
+    _repeat = r.repeat == 'none' ? 'none' : '${r.repeat}${r.every == 2 ? '2' : ''}';
+    if (!const ['none', 'daily', 'daily2', 'weekly', 'weekly2'].contains(_repeat)) _repeat = 'none';   // a repeat only talking can set (every few hours) is shown as Once here and the family picks again
+    _deliver = r.deliver;
+    _channel = r.channel;
+  }
+
+  // Stopping is destructive: it asks once more.
+  Future<void> _stop() async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Stop this reminder?'),
+        content: Text('Maya will no longer remind them: ${widget.edit!.task}.'),
+        actions: [TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Keep it')), TextButton(onPressed: () => Navigator.of(c).pop(true), child: const Text('Yes, stop it', style: TextStyle(color: kAlert)))],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    final nav = Navigator.of(context);
+    final ok = await act(context, () => Api.delete('/api/care/${widget.data.profileId}/reminders/${widget.edit!.id}'), done: 'Reminder stopped.');
+    if (ok) {
+      widget.data.refresh(quiet: true);
+      nav.pop();
+    }
+  }
 
   @override
   void dispose() {
@@ -125,7 +162,7 @@ class _AddSheetState extends State<_AddSheet> {
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('New reminder', style: Theme.of(context).textTheme.titleLarge),
+          Text(widget.edit == null ? 'New reminder' : 'Edit reminder', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 12),
           TextField(controller: _task, maxLength: 80, decoration: const InputDecoration(labelText: 'What should Maya remind them about?', counterText: ''), textCapitalization: TextCapitalization.sentences),
           const SizedBox(height: 12),
@@ -153,7 +190,7 @@ class _AddSheetState extends State<_AddSheet> {
                 : () async {
                     setState(() => _busy = true);
                     final nav = Navigator.of(context);
-                    final ok = await act(context, () => Api.postJson('/api/care/${widget.data.profileId}/reminders', {'task': _task.text, 'dueAt': _at.millisecondsSinceEpoch, 'repeat': _repeat.replaceAll(RegExp(r'2$'), ''), if (_repeat.endsWith('2')) 'every': 2, if (_deliver != null) 'deliver': _deliver, if (_channel != null) 'channel': _channel}), done: 'Reminder added.');
+                    final ok = await act(context, () => Api.postJson('/api/care/${widget.data.profileId}/reminders${widget.edit == null ? '' : '/${widget.edit!.id}'}', {'task': _task.text, 'dueAt': _at.millisecondsSinceEpoch, 'repeat': _repeat.replaceAll(RegExp(r'2$'), ''), if (_repeat.endsWith('2')) 'every': 2, if (_deliver != null) 'deliver': _deliver, if (_channel != null) 'channel': _channel}), done: 'Reminder added.');
                     if (!mounted) return;
                     setState(() => _busy = false);
                     if (ok) {
@@ -161,8 +198,9 @@ class _AddSheetState extends State<_AddSheet> {
                       nav.pop();
                     }
                   },
-            child: Text(_busy ? 'Adding...' : 'Add reminder'),
+            child: Text(_busy ? (widget.edit == null ? 'Adding...' : 'Saving...') : (widget.edit == null ? 'Add reminder' : 'Save changes')),
           ),
+          if (widget.edit != null) Padding(padding: const EdgeInsets.only(top: 8), child: TextButton(style: TextButton.styleFrom(minimumSize: const Size(48, 48)), onPressed: _busy ? null : _stop, child: const Text('Stop this reminder', style: TextStyle(color: kAlert, fontSize: 16, fontWeight: FontWeight.w600)))),
         ]),
       ),
     );

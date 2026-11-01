@@ -25,6 +25,8 @@ class NativeCall {
   final _ended = StreamController<String>.broadcast();
   final _ring = StreamController<String>.broadcast();
   final _opened = StreamController<({String via, String messageId})>.broadcast();
+  final _familyRing = StreamController<({String seniorId, String episodeId, String act})>.broadcast();
+  String? _familyToken;   // set on a family phone: its push token is then registered with the family account, not with a senior
 
   /// The outreach id of a ring the person accepted on the system call screen.
   Stream<String> get accepted => _accepted.stream;
@@ -34,6 +36,9 @@ class NativeCall {
 
   /// The person tapped the notification of a text or a voice note that came while the app was closed: via is 'text' or 'voice'; messageId is the voice note's chat id ('' for a text).
   Stream<({String via, String messageId})> get opened => _opened.stream;
+
+  /// The family was rung while the app was closed (a push), and tapped or accepted it: who (the senior's id), which ring, and act = 'accepted' when Accept was pressed.
+  Stream<({String seniorId, String episodeId, String act})> get familyRing => _familyRing.stream;
 
   /// The system call screen's hang-up on a live call.
   Stream<String> get ended => _ended.stream;
@@ -53,6 +58,24 @@ class NativeCall {
     if (!isIOS || _audioOn) return;
     final c = _audio ??= Completer<void>();
     await c.future.timeout(timeout, onTimeout: () {});
+  }
+
+  /// A FAMILY phone: register it with the family account so a ring reaches it while the app is closed (Android: Firebase; the token goes to /api/family/device).
+  Future<void> startFamily(String familyToken) async {
+    _familyToken = familyToken;
+    _profile = null;
+    try {
+      if (!_started) {
+        _started = true;
+        channel.setMethodCallHandler(_onNative);
+      }
+      await channel.invokeMethod('configure', {'base': kServer.replaceAll(RegExp(r'/$'), ''), 'profile': '', 'familyToken': familyToken});
+      await channel.invokeMethod('ready');
+    } on MissingPluginException {
+      // a platform without the native side (tests, desktop): nothing to do
+    } on PlatformException catch (e) {
+      CallLog.add('native: family start failed: ${e.code}');
+    }
   }
 
   /// Call once the profile is known. Safe to call again for another profile.
@@ -78,6 +101,15 @@ class NativeCall {
       case 'token':
         final id = _profile;
         final token = '${a['token'] ?? ''}';
+        if (id == null && _familyToken != null && token.isNotEmpty) {   // a family phone
+          try {
+            await Api.postJson('/api/family/device', {'platform': a['platform'] ?? (Platform.isIOS ? 'ios' : 'android'), 'token': token});
+            CallLog.add('native: family push token sent');
+          } catch (_) {
+            CallLog.add('native: family push token not sent');
+          }
+          return;
+        }
         if (id == null || token.isEmpty) return;
         try {
           await Api.postJson('/api/care/$id/device', {'platform': a['platform'] ?? (Platform.isIOS ? 'ios' : 'android'), 'token': token});
@@ -108,6 +140,9 @@ class NativeCall {
       case 'opened':
         CallLog.add('native: a message notification was tapped (${a['via']})');
         _opened.add((via: '${a['via'] ?? 'text'}', messageId: '${a['messageId'] ?? ''}'));
+        break;
+      case 'familyRing':
+        _familyRing.add((seniorId: '${a['seniorId'] ?? ''}', episodeId: '${a['episodeId'] ?? ''}', act: '${a['act'] ?? ''}'));
         break;
       case 'declined':
         CallLog.add('native: declined on the system call screen');

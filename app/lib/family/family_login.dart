@@ -1,13 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models.dart';
 import '../services/api.dart';
+import '../services/native_call.dart';
 import '../services/store.dart';
 import '../start/start_gate.dart';
 import '../theme.dart';
 import '../widgets/pressable.dart';
 import 'dashboard.dart';
+import 'family_ring.dart';
 
 /// The family door: a username and a password (the same account as on the web). There is no PIN. After signing up the family adds a family member (the server makes
 /// their profile and gives a link for their phone); after logging in the family sees its dashboards, one per family member.
@@ -90,9 +94,50 @@ class _FamilyHomeState extends State<FamilyHome> {
   List<Profile>? _seniors;
   String? _error;
 
+  StreamSubscription<({String seniorId, String episodeId, String act})>? _ringSub;
+
+  @override
+  void dispose() {
+    _ringSub?.cancel();
+    super.dispose();
+  }
+
+  // The family phone registers for push (so a ring reaches it while the app is closed) and listens for a ring that was tapped or accepted from the notification.
+  Future<void> _push() async {
+    final token = await Store.familyToken();
+    if (token == null) return;
+    await NativeCall.instance.startFamily(token);
+    _ringSub ??= NativeCall.instance.familyRing.listen(_ringFromPush);
+  }
+
+  Future<void> _ringFromPush(({String seniorId, String episodeId, String act}) r) async {
+    try {
+      final v = await Api.get('/api/care/${r.seniorId}');
+      final eps = v is Map && v['escalations'] is List ? v['escalations'] as List : const [];
+      final e = eps.cast<dynamic>().firstWhere((x) => x is Map && x['id'] == r.episodeId, orElse: () => null);
+      final name = v is Map ? '${v['name'] ?? 'them'}' : 'them';
+      if (!mounted) return;
+      if (r.act == 'accepted') {
+        try {
+          await Api.postJson('/api/care/${r.seniorId}/escalation/${r.episodeId}/accepted');
+        } on ApiError {
+          // the dashboard still opens
+        }
+        if (mounted) await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => FamilyDashboard(profile: Profile(r.seniorId, name))));
+      } else if (e is Map && e['status'] == 'ringing') {
+        await showFamilyRing(context, seniorId: r.seniorId, episodeId: r.episodeId, text: '${e['text']}');
+      } else if (mounted) {
+        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => FamilyDashboard(profile: Profile(r.seniorId, name))));
+      }
+    } on ApiError {
+      // the ring ended or the login is gone: the family list is shown as it is
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    unawaited(_push());
     _load().then((_) {
       if (widget.addFirst && mounted && (_seniors?.isEmpty ?? false)) _add();
     });

@@ -78,6 +78,17 @@ function addSenior(username, profileId) {
   if (!f.seniors.includes(profileId)) f.seniors.push(profileId);
   writeAll(all);
 }
+// The family's phones, for a ring while the app is closed. Same rules as a senior's push token (the token is never returned or logged); several phones per account, newest five kept.
+function addDevice(username, platform, token) {
+  if (!['ios', 'android'].includes(platform)) throw new AccountError('The platform must be ios or android.');
+  if (typeof token !== 'string' || !/^[\w:\-.]{16,4096}$/.test(token)) throw new AccountError('That is not a push token.');
+  const all = readAll(), f = all.families[username]; if (!f) throw new AccountError('Please log in again.', 401);
+  f.devices = (f.devices || []).filter((d) => d.token !== token); f.devices.push({ platform, token, at: Date.now() }); f.devices = f.devices.slice(-5);
+  writeAll(all);
+}
+const devicesOf = (username) => ((readAll().families[username] || {}).devices || []).slice();
+function removeDevice(username, token) { const all = readAll(), f = all.families[username]; if (!f) return; const n = (f.devices || []).length; f.devices = (f.devices || []).filter((d) => d.token !== token); if (f.devices.length !== n) writeAll(all); }
+const ownersOf = (profileId) => Object.entries(readAll().families).filter(([, f]) => f.seniors.includes(profileId)).map(([u]) => u);
 function removeSenior(profileId) { const all = readAll(); let ch = false; for (const f of Object.values(all.families)) { const n = f.seniors.length; f.seniors = f.seniors.filter((x) => x !== profileId); if (f.seniors.length !== n) ch = true; } if (ch) writeAll(all); }
 
 // The token from a request: the app sends it as "Authorization: Bearer ...", the web keeps it in an HttpOnly cookie.
@@ -90,4 +101,4 @@ function fromRequest(req) {
 const cookie = (tok, secure) => `maya_family=${encodeURIComponent(tok)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MS / 1000}${secure ? '; Secure' : ''}`;
 const clearCookie = (secure) => `maya_family=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
 
-module.exports = { AccountError, signup, login, verify, token, seniorsOf, owns, addSenior, removeSenior, fromRequest, cookie, clearCookie, MIN_PASSWORD, tries };
+module.exports = { addDevice, devicesOf, removeDevice, ownersOf, AccountError, signup, login, verify, token, seniorsOf, owns, addSenior, removeSenior, fromRequest, cookie, clearCookie, MIN_PASSWORD, tries };

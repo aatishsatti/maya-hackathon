@@ -38,7 +38,49 @@ object NativeCalls {
     fun attach(c: MethodChannel?) { if (c != null) { ch = c; val q = ArrayList(queue); queue.clear(); for ((n, m) in q) emit(n, m) } }
     fun emit(name: String, data: Map<String, Any>) = main.post { val c = ch; if (c == null) queue.add(name to data) else c.invokeMethod(name, data) }
 
-    fun configure(ctx: Context, base: String, profile: String) { ctx.getSharedPreferences("maya_native", 0).edit().putString("base", base).putString("profile", profile).apply() }
+    fun configure(ctx: Context, base: String, profile: String, familyToken: String = "") { ctx.getSharedPreferences("maya_native", 0).edit().putString("base", base).putString("profile", profile).putString("familyToken", familyToken).apply() }
+
+    // Maya ringing the FAMILY while the family app is closed (a push with ids and a kind only, no name and no words). The notification says only that someone needs a check-in; the app opens and shows who.
+    // Accept opens the app on the ring; Decline tells the server from here (with the family's own login), so it works with the app not running.
+    const val EXTRA_SENIOR = "maya_senior"
+    const val EXTRA_EPISODE = "maya_episode"
+    const val EXTRA_ACT = "maya_act"   // accepted | (empty: just opened)
+    fun showFamilyCall(ctx: Context, seniorId: String, episodeId: String, kind: String) {
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            val c = NotificationChannel(CHANNEL, "Maya calls", NotificationManager.IMPORTANCE_HIGH)
+            c.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build())
+            c.enableVibration(true); nm.createNotificationChannel(c)
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val code = episodeId.hashCode()
+        fun open(act: String, add: Int): PendingIntent {
+            val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_ACTION, "family_ring").putExtra(EXTRA_SENIOR, seniorId).putExtra(EXTRA_EPISODE, episodeId).putExtra(EXTRA_ACT, act)
+            return PendingIntent.getActivity(ctx, code + add, i, flags)
+        }
+        val decline = PendingIntent.getBroadcast(ctx, code + 3, Intent(ctx, FamilyDeclineReceiver::class.java).putExtra(EXTRA_SENIOR, seniorId).putExtra(EXTRA_EPISODE, episodeId), flags)
+        val text = when (kind) { "safety" -> "Please check in now."; "silent" -> "It has been quiet for a long time."; else -> "A reminder has gone unanswered." }
+        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, CHANNEL) else @Suppress("DEPRECATION") Notification.Builder(ctx)
+        b.setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle("Maya is calling").setContentText(text).setCategory(Notification.CATEGORY_CALL)
+            .setOngoing(true).setAutoCancel(false).setFullScreenIntent(open("", 1), true).setContentIntent(open("", 1))
+            .addAction(Notification.Action.Builder(null, "Decline", decline).build())
+            .addAction(Notification.Action.Builder(null, "Accept", open("accepted", 2)).build())
+        if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(45000)
+        val n = b.build(); n.flags = n.flags or Notification.FLAG_INSISTENT
+        nm.notify(code, n)
+    }
+    fun cancelFamily(ctx: Context, episodeId: String) { (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(episodeId.hashCode()) }
+    fun declineFamily(ctx: Context, seniorId: String, episodeId: String) {
+        val p = ctx.getSharedPreferences("maya_native", 0); val base = p.getString("base", "") ?: ""; val tok = p.getString("familyToken", "") ?: ""
+        if (base.isEmpty() || tok.isEmpty()) return
+        thread {
+            try {
+                val c = URL("$base/api/care/$seniorId/escalation/$episodeId/declined").openConnection() as HttpURLConnection
+                c.requestMethod = "POST"; c.connectTimeout = 8000; c.readTimeout = 8000; c.doOutput = true; c.setRequestProperty("Content-Type", "application/json"); c.setRequestProperty("Authorization", "Bearer $tok")
+                c.outputStream.use { it.write("{}".toByteArray()) }; c.responseCode; c.disconnect()
+            } catch (e: Exception) { /* the ring ends by itself on the server */ }
+        }
+    }
 
     fun fetchToken() {
         try { FirebaseMessaging.getInstance().token.addOnSuccessListener { t -> emit("token", mapOf("platform" to "android", "token" to t)) } }
@@ -201,10 +243,18 @@ class ReplyReceiver : BroadcastReceiver() {
     }
 }
 
+class FamilyDeclineReceiver : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, i: Intent) {
+        val sid = i.getStringExtra(NativeCalls.EXTRA_SENIOR) ?: return; val eid = i.getStringExtra(NativeCalls.EXTRA_EPISODE) ?: return
+        NativeCalls.cancelFamily(ctx, eid); NativeCalls.declineFamily(ctx, sid, eid)
+    }
+}
+
 class MayaMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) { NativeCalls.emit("token", mapOf("platform" to "android", "token" to token)) }
     override fun onMessageReceived(m: RemoteMessage) {
         val d = m.data
+        if (d["type"] == "family_call") { NativeCalls.showFamilyCall(this, d["seniorId"] ?: return, d["episodeId"] ?: return, d["kind"] ?: "missed"); return }
         if (d["type"] == "message") { NativeCalls.showMessage(this, d["via"] ?: "text", d["what"] ?: "reminder", d["messageId"]); return }
         val oid = d["outreachId"] ?: return
         when (d["type"]) {

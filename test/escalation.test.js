@@ -65,4 +65,17 @@ test('an unanswered ring becomes "no answer" by itself (in the dashboard) and th
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'); assert.match(server, /b === 'escalation' && c && d\) return care\.escalationAct/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'care.js'), 'utf8'), /ESC_RING_MS = 45000/);
 });
+test('a ring also goes to the family\'s CLOSED phones: a push with ids and the kind only (no name, no words); devices are kept per account and only that family\'s are used', () => {
+  const sent = []; care.familyHooks.push = (id, payload) => sent.push([id, payload]);
+  const id = person(true); const p = care.get(id); const ep = care.ringFamily(p, 'silent', Date.now());
+  assert.deepEqual(sent, [[id, { type: 'family_call', seniorId: id, episodeId: ep.id, kind: 'silent' }]]);
+  assert.doesNotMatch(JSON.stringify(sent), /Esca|has not talked|Maya/, 'nothing about who or what is in the push');
+  care.familyHooks.push = null;
+  process.env.MAYA_MEDIA_DIR = path.join(tmp, 'm2'); const accounts = require('../accounts');
+  accounts.signup('fam.one', 'a good password'); accounts.signup('fam.two', 'another good one'); accounts.addSenior('fam.one', 'aaaaaaaa');
+  accounts.addDevice('fam.one', 'android', 'tok_one_aaaaaaaaaaaaaaaa'); accounts.addDevice('fam.two', 'android', 'tok_two_bbbbbbbbbbbbbbbb');
+  assert.deepEqual(accounts.ownersOf('aaaaaaaa'), ['fam.one']); assert.deepEqual(accounts.devicesOf('fam.one').map((d) => d.token), ['tok_one_aaaaaaaaaaaaaaaa']);
+  assert.throws(() => accounts.addDevice('fam.one', 'android', 'short'), /not a push token/); assert.throws(() => accounts.addDevice('fam.one', 'windows', 'tok_one_aaaaaaaaaaaaaaaa'), /ios or android/);
+  accounts.removeDevice('fam.one', 'tok_one_aaaaaaaaaaaaaaaa'); assert.deepEqual(accounts.devicesOf('fam.one'), []);
+});
 test.after(() => care.stop());
