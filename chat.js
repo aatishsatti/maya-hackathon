@@ -370,6 +370,8 @@ async function sendText(profileId, text, tz, opts = {}) {
   if (opts.source !== 'whatsapp') care.welfareReplyApp(profileId);   // anything they write answers a welfare check that came to the app
   if (opts.source !== 'whatsapp' && require('./call').isAck(t)) care.reminderAckApp(profileId);   // "okay" to a reminder that came to the app: answered
   const you = s.push({ role: 'senior', kind: 'text', text: t });
+  // A schedule told to Maya (or an answer to "do you want any reminders from your schedule?"): code reads it and asks; only the items they say yes to are set (schedule.js).
+  if (opts.source !== 'whatsapp') { const sc = await require('./schedule').handle(profileId, t, { tz: s.tz }); if (sc) return { messages: [you, s.push({ role: 'maya', kind: 'text', text: sc.text })], scam: 'none' }; }
   // A reconfirm question is open: this message may settle it (a plain yes / no to the family question does not). Otherwise the usual scam check.
   let scam = null, off = null;
   if (require('./official').asking(s.rc) && !care.hasActiveSafety(profileId) && !selfHarmText(t)) { off = await officialStep(s, profileId, t, null); if (off) scam = off.scam; }
@@ -436,6 +438,8 @@ async function sendVoiceNote(profileId, wav, tz, opts = {}) {
   const mine = saveMedia(profileId, 'wav', wav);
   const you = s.push({ role: 'senior', kind: 'voice', text: words, mediaUrl: mediaUrl(profileId, mine) });
   const scam = await talkCheck(profileId, words);
+  // A schedule told by voice, or a spoken yes / no to her question about it: the same steps as typed words (schedule.js); her reply is written, so it can be read back.
+  if (opts.source !== 'whatsapp') { const sc = await require('./schedule').handle(profileId, words, { tz: s.tz }); if (sc) return { messages: [you, s.push({ role: 'maya', kind: 'text', text: sc.text })], scam: 'none' }; }
   const r = await s.turn({ heard: words, how: 'voice', ...talkTurn(scam, profileId) });
   afterTalkReply(profileId, scam, 'spoken');
   // A live call has the voice: the note's answer is text only, so two Mayas never talk at once.
@@ -509,7 +513,10 @@ async function sendImage(profileId, buf, caption, tz, opts = {}) {
       return { messages: [you, s.push({ role: 'maya', kind: 'voice', text: r.text, mediaUrl: mediaUrl(profileId, name) })], scam: level };
     } catch (e) { return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text, voiceError: `Maya's voice failed: ${e.message}` })], scam: level, voice: 'failed' }; }
   }
-  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], scam: level };
+  const answered = s.push({ role: 'maya', kind: 'text', text: r.text });
+  // A photo of a schedule: after her plain answer she asks which items they want as reminders (nothing is set until they say yes).
+  const asked = level === 'none' && require('./schedule').looksLikeSchedule(`${seen} ${said}`) ? await require('./schedule').propose(profileId, `${seen} ${said}`) : null;
+  return { messages: asked ? [you, answered, s.push({ role: 'maya', kind: 'text', text: asked })] : [you, answered], scam: level };
 }
 
 
@@ -668,13 +675,17 @@ async function sendPdf(profileId, buf, name, tz, opts = {}) {
   const r = await s.turn({ heard: '', message, how: 'document', note, scam: scam && scam.level !== 'none' ? scam.level : null });
   care.checkDelivered(profileId, due);
   afterTalkReply(profileId, scam, 'text');
-  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], scam: level };
+  const answered = s.push({ role: 'maya', kind: 'text', text: r.text });
+  // A PDF that is a schedule: after the plain answer, she asks which items they want as reminders (nothing is set until they say yes).
+  const asked = (!scam || scam.level === 'none') && require('./schedule').looksLikeSchedule(read.text) ? await require('./schedule').propose(profileId, read.text) : null;
+  return { messages: asked ? [you, answered, s.push({ role: 'maya', kind: 'text', text: asked })] : [you, answered], scam: level };
 }
 
 // A deleted profile takes its chat, photos and voice notes with it.
 function forget(profileId) {
   const s = sessions.get(profileId);
   if (s) { sessions.delete(profileId); s.finish(); }
+  require('./schedule').forget(profileId);
   if (/^[a-f0-9]{8}$/.test(profileId)) fs.rmSync(path.join(MEDIA_DIR(), profileId), { recursive: true, force: true });
 }
 // Test and shutdown helper: files every open chat into memory now.
