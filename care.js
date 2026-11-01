@@ -259,7 +259,7 @@ const callCount = (id) => (get(id) || { callCount: 0 }).callCount;
 
 // ---------------------------------------------------------------- SSE hubs
 const seniorClients = new Map(); // profileId -> Set(res)
-const familyClients = new Set();
+const familyClients = new Map();   // response -> null (everyone's) or a function of a senior id (only that family's)
 const send = (res, ev, data) => { try { res.write(`event: ${ev}\ndata: ${JSON.stringify(data)}\n\n`); return true; } catch { return false; } };
 
 function attachSenior(id, res, tz) {
@@ -276,7 +276,8 @@ function attachSenior(id, res, tz) {
   for (const n of p.notifications) if (n.to === 'senior' && !n.inChat && (n.kind === 'family_message' || (n.kind === 'reminder' && n.app)) && n.status === 'sent' && Date.now() - n.times.sent < (n.kind === 'reminder' ? 60 : 24 * 60) * MIN) send(res, 'notice', { notifId: n.id, kind: n.kind, text: n.text, ...(n.by ? { by: n.by } : {}) });
   return () => { const set = seniorClients.get(id); if (set) { set.delete(res); if (!set.size) seniorClients.delete(id); } };
 }
-function attachFamily(res) { familyClients.add(res); return () => familyClients.delete(res); }
+// A family's live stream: with `owns` (a function of a senior id) it carries only that family's seniors; without it (login switched off) everyone's, as before.
+function attachFamily(res, owns = null) { familyClients.set(res, owns); return () => familyClients.delete(res); }
 function pushSenior(id, ev, data) {
   let n = 0;
   for (const res of seniorClients.get(id) || []) if (send(res, ev, data)) n += 1;
@@ -284,7 +285,7 @@ function pushSenior(id, ev, data) {
 }
 function pushFamily(ev, data) {
   let n = 0;
-  for (const res of familyClients) if (send(res, ev, data)) n += 1;
+  for (const [res, owns] of familyClients) { if (owns && !(data && data.id && owns(data.id))) continue; if (send(res, ev, data)) n += 1; }
   return n;
 }
 const appOpen = (id) => (seniorClients.get(id) || new Set()).size > 0;

@@ -8,7 +8,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
-import '../family/family_gate.dart';
 import '../models.dart';
 import '../services/api.dart';
 import '../services/call_session.dart';
@@ -20,7 +19,6 @@ import '../theme.dart';
 import '../widgets/pressable.dart';
 import 'call_screen.dart';
 import 'chat_view.dart';
-import 'profile_picker.dart';
 
 /// The senior's whole app: one screen, no login, no menu. A big Call button in the middle, the chat below it, and a small
 /// Family link at the bottom. Nothing on this screen scrolls except the chat, inside its own area.
@@ -241,17 +239,8 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     Api.postJson('/api/care/$_pid/outreach/${d['outreachId']}/decline').catchError((_) => null);
   }
 
-  Future<void> _ensureProfile() async {
-    if (_pid != null) return;
-    final p = await showProfilePicker(context);
-    if (p != null && mounted) {
-      setState(() {
-        _pid = p.id;
-        _name = p.name;
-      });
-      _attach(p.id);
-    }
-  }
+  // A senior's phone always knows who it is (the family's link or code set it, see start_gate.dart): there is no list of people to pick from and nothing to set up here.
+  Future<void> _ensureProfile() async {}
 
   Future<void> _startCall({String? reason, String? outreachId}) async {
     await _ensureProfile();
@@ -544,27 +533,6 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     }
   }
 
-  Future<void> _openFamily() async {
-    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const FamilyGate()));
-    if (!mounted) return;
-    final id = await Store.profileId();
-    final name = await Store.profileName();
-    if (id != _pid) {
-      setState(() {
-        _pid = id;
-        _name = name;
-        _messages.clear();
-      });
-      if (id != null) {
-        _attach(id);
-      } else {
-        _events?.stop();
-      }
-    } else {
-      _loadThread();
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -593,7 +561,6 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
 
   // The chat is the whole app: the person opens Maya and is in the conversation. A small phone icon in the header (top right, one tap to call), the messages, the box, the Family link at the bottom.
   Widget _chatPage() {
-    final kb = MediaQuery.of(context).viewInsets.bottom > 0;
     return Column(children: [
       _ChatHeader(title: _title, onCall: _ready ? (_live != null ? _backToCall : () => _startCall()) : null),
       _backBar(),
@@ -613,7 +580,6 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
           ]),
         ),
       _Composer(controller: _text, focus: _focus, recording: _recording, seconds: _recSeconds, levels: _levels, busy: _busy != null, onSend: _sendText, onMic: _toggleRecord, onCancel: _cancelRecord, onAttach: _attachSheet),
-      if (!kb) SizedBox(height: 44, child: Center(child: TextButton(onPressed: _openFamily, child: const Text('Family', style: TextStyle(fontSize: 15, color: kSoft, fontWeight: FontWeight.w700))))),
     ]);
   }
 }

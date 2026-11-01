@@ -1,13 +1,12 @@
-import 'dart:convert';
-
-import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// What this phone remembers about itself: who Maya talks with, and the family PIN.
-/// The PIN is a lock on THIS phone only. The server has no family accounts, so it is not a server login.
+/// What this phone remembers about itself: who Maya talks with (a senior's phone), or the family's login (a family phone). There is no PIN.
 class Store {
   static SharedPreferences? _p;
   static Future<SharedPreferences> get _prefs async => _p ??= await SharedPreferences.getInstance();
+
+  /// Tests only: forget the opened preferences so a test can start from its own saved values.
+  static void forgetForTest() => _p = null;
 
   static Future<String?> profileId() async => (await _prefs).getString('profileId');
   static Future<String?> profileName() async => (await _prefs).getString('profileName');
@@ -23,26 +22,18 @@ class Store {
     await p.remove('profileName');
   }
 
-  static String _hash(String pin, String salt) => sha256.convert(utf8.encode('$salt:$pin')).toString();
-
-  static Future<bool> hasPin() async => (await _prefs).getString('pinHash') != null;
-
-  static Future<void> setPin(String pin) async {
+  /// The family's login on this phone (a username and the signed session the server gave). The password is never kept here. A senior's phone has none.
+  static Future<String?> familyToken() async => (await _prefs).getString('familyToken');
+  static Future<String?> familyName() async => (await _prefs).getString('familyName');
+  static Future<void> setFamily(String username, String token) async {
     final p = await _prefs;
-    final salt = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
-    await p.setString('pinSalt', salt);
-    await p.setString('pinHash', _hash(pin, salt));
+    await p.setString('familyName', username);
+    await p.setString('familyToken', token);
   }
 
-  static Future<bool> checkPin(String pin) async {
+  static Future<void> clearFamily() async {
     final p = await _prefs;
-    final salt = p.getString('pinSalt'), h = p.getString('pinHash');
-    return salt != null && h != null && _hash(pin, salt) == h;
-  }
-
-  static Future<void> clearPin() async {
-    final p = await _prefs;
-    await p.remove('pinSalt');
-    await p.remove('pinHash');
+    await p.remove('familyName');
+    await p.remove('familyToken');
   }
 }

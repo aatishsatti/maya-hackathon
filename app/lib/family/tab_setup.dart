@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../senior/call_screen.dart' show showCallLog;
-import '../senior/profile_picker.dart';
 import '../services/api.dart';
-import '../services/store.dart';
 import '../theme.dart';
 import '../widgets/delivery_picker.dart';
 import '../widgets/whatsapp_rules.dart';
@@ -136,18 +134,9 @@ class _SetupTabState extends State<SetupTab> {
       sectionLabel('People'),
       OutlinedButton(
         onPressed: () async {
-          final p = await showProfilePicker(context);
-          if (p != null) widget.onSwitch(p);
-        },
-        child: Text('Change person (now ${widget.profile.name})'),
-      ),
-      const SizedBox(height: 8),
-      OutlinedButton(
-        onPressed: () async {
           final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(title: Text('Delete ${widget.profile.name}?'), content: const Text('This deletes the person and everything Maya remembers about them. It cannot be undone.'), actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep')), TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete', style: TextStyle(color: kAlert)))]));
           if (ok != true || !context.mounted) return;
           if (await act(context, () => Api.delete('/api/profiles/${d.profileId}'), done: 'Deleted.')) {
-            await Store.clearProfile();
             if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
           }
         },
@@ -155,16 +144,6 @@ class _SetupTabState extends State<SetupTab> {
       ),
       sectionLabel('This phone'),
       OutlinedButton(onPressed: () => showCallLog(context, lines: 300), child: const Text('Call log (for finding out why a call dropped)')),
-      const SizedBox(height: 8),
-      OutlinedButton(
-        onPressed: () async {
-          final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(title: const Text('Change the family PIN?'), content: const Text('You will choose a new PIN the next time you open the family area. The PIN only locks this phone.'), actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')), TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Change'))]));
-          if (ok != true) return;
-          await Store.clearPin();
-          if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
-        },
-        child: const Text('Change the family PIN'),
-      ),
     ]);
   }
 }

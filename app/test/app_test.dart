@@ -7,10 +7,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:maya_app/family/dashboard.dart';
-import 'package:maya_app/family/family_gate.dart';
+import 'package:maya_app/family/family_login.dart';
+import 'package:maya_app/start/start_gate.dart';
 import 'package:maya_app/main.dart';
 import 'package:maya_app/models.dart';
 import 'package:maya_app/services/api.dart';
+import 'package:maya_app/services/store.dart';
 import 'package:maya_app/senior/call_screen.dart';
 import 'package:maya_app/senior/senior_screen.dart';
 import 'package:maya_app/senior/chat_view.dart';
@@ -85,9 +87,9 @@ void main() {
   });
 
   group('senior side', () {
-    testWidgets('the app opens straight into the chat: no home page, no big Call button, a small phone icon top right, Family at the bottom, no login, no menu', (t) async {
+    testWidgets('the senior chat: no home page, no big Call button, a small phone icon top right, no Family button, no login, no menu', (t) async {
       await phone(t, 360, 740);
-      await t.pumpWidget(const MayaApp());
+      await t.pumpWidget(const MayaApp(home: SeniorScreen()));
       await t.pump(const Duration(milliseconds: 300));
       expect(find.text('Call Maya'), findsNothing, reason: 'no big Call button');
       expect(find.text('Chat with Maya'), findsNothing, reason: 'no Call-or-Chat gate: she is already in the chat');
@@ -98,7 +100,7 @@ void main() {
       final icon = t.getRect(find.byIcon(Icons.call));
       expect(icon.top, lessThan(80));
       expect(icon.right, greaterThan(360 - 80), reason: 'top right');
-      expect(find.text('Family'), findsOneWidget);
+      expect(find.text('Family'), findsNothing, reason: 'no Family button in the senior chat: the family has its own login');
       expect(find.byType(Drawer), findsNothing);
       expect(find.byType(AppBar), findsNothing);
       expect(find.byIcon(Icons.arrow_back_ios_new), findsNothing, reason: 'nothing to go back to');
@@ -109,14 +111,13 @@ void main() {
     testWidgets('the senior screen fits without scrolling on a small and a normal phone, and only the chat can scroll', (t) async {
       for (final s in const [Size(320, 480), Size(360, 640), Size(390, 844)]) {
         await phone(t, s.width, s.height);
-        await t.pumpWidget(const MayaApp());
+        await t.pumpWidget(const MayaApp(home: SeniorScreen()));
         await t.pump(const Duration(milliseconds: 300));
         expect(t.takeException(), isNull, reason: 'no overflow at ${s.width}x${s.height}');
         expect(find.byType(SingleChildScrollView), findsNothing, reason: 'no page that scrolls');
         expect(find.bySemanticsLabel('Call Maya'), findsOneWidget);
         // the whole screen stays inside the window
-        final r = t.getRect(find.text('Family'));
-        expect(r.bottom, lessThanOrEqualTo(s.height));
+        expect(t.getRect(find.byType(TextField)).bottom, lessThanOrEqualTo(s.height));
         // the chat is the only list on the screen; with no messages it is a plain line, so nothing scrolls
         expect(find.byType(ListView), findsNothing);
       }
@@ -124,7 +125,7 @@ void main() {
 
     testWidgets('with the keyboard open on a small phone the chat page still fits (the keyboard can only open in the chat)', (t) async {
       await phone(t, 320, 480);
-      await t.pumpWidget(const MayaApp());
+      await t.pumpWidget(const MayaApp(home: SeniorScreen()));
       await t.pump(const Duration(milliseconds: 300));
       t.view.viewInsets = const FakeViewPadding(bottom: 250 * 3);
       addTearDown(t.view.resetViewInsets);
@@ -135,20 +136,53 @@ void main() {
   });
 
   group('family side', () {
-    testWidgets('the family area opens on a PIN screen (a first PIN is chosen, then repeated); it fits on a small phone', (t) async {
+    testWidgets('there is no PIN: the start screen offers Log in and Sign up for the family and Enter code for the senior; a code is read from the last 8 letters of the link', (t) async {
       await phone(t, 320, 480);
-      await t.pumpWidget(const MaterialApp(home: FamilyGate()));
+      SharedPreferences.setMockInitialValues({});
+      Store.forgetForTest();
+      await t.pumpWidget(const MaterialApp(home: StartGate()));
       await t.pump(const Duration(milliseconds: 300));
-      expect(find.text('Choose a family PIN'), findsOneWidget);
-      expect(find.text('5'), findsOneWidget);
-      expect(find.byType(SingleChildScrollView), findsNothing);
+      expect(find.text('Log in'), findsOneWidget);
+      expect(find.text('Sign up'), findsOneWidget);
+      expect(find.text('Enter code'), findsOneWidget);
+      expect(find.textContaining('PIN'), findsNothing);
       expect(t.takeException(), isNull);
-      for (final d in ['1', '2', '3', '4']) {
-        await t.tap(find.text(d));
-        await t.pump(const Duration(milliseconds: 50));
-      }
+      expect(codeFrom('a1b2c3d4'), 'a1b2c3d4');
+      expect(codeFrom('/s/a1b2c3d4'), 'a1b2c3d4');
+      expect(codeFrom('https://maya-singapore.onrender.com/s/A1B2C3D4/'), 'a1b2c3d4');
+      expect(codeFrom('hello'), isNull);
+      expect(codeFrom('https://evil.example/x/a1b2c3d4'), isNull, reason: 'only a Maya senior link shape is a code');
+      await t.ensureVisible(find.text('Enter code'));
+      await t.tap(find.text('Enter code'));
       await t.pump(const Duration(milliseconds: 300));
-      expect(find.text('Repeat the PIN'), findsOneWidget);
+      expect(find.text('Open Maya'), findsOneWidget);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('a phone that already has a senior opens straight into the chat (no start screen, no login); the chat has no Family button', (t) async {
+      await phone(t, 390, 844);
+      SharedPreferences.setMockInitialValues({'profileId': 'a1b2c3d4', 'profileName': 'Kali'});
+      Store.forgetForTest();
+      await t.pumpWidget(const MayaApp());
+      await t.pump(const Duration(milliseconds: 600));
+      await t.pump(const Duration(milliseconds: 600));
+      expect(find.byType(TextField), findsOneWidget, reason: 'the chat box is there at once');
+      expect(find.text('Log in'), findsNothing);
+      expect(find.text('Family'), findsNothing, reason: 'the family has its own login, not a button in the senior chat');
+      expect(find.textContaining('Kali'), findsWidgets);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('family login and signup: a username and a password, the same account as on the web', (t) async {
+      await phone(t, 360, 640);
+      SharedPreferences.setMockInitialValues({});
+      Store.forgetForTest();
+      await t.pumpWidget(const MaterialApp(home: FamilyLogin(signup: true)));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.text('Username'), findsOneWidget);
+      expect(find.text('Password'), findsOneWidget);
+      expect(find.textContaining('PIN'), findsNothing);
+      await t.pumpWidget(const SizedBox());
     });
 
     testWidgets('the dashboard shows the five cards from the server, the activity list and the five tabs', (t) async {
@@ -393,7 +427,7 @@ void main() {
 
     testWidgets('the chat box: write or record in one chat; a microphone while the box is empty, an arrow once there is text', (t) async {
       await phone(t, 390, 844);
-      await t.pumpWidget(const MayaApp());
+      await t.pumpWidget(const MayaApp(home: SeniorScreen()));
       await t.pump(const Duration(milliseconds: 400));
       expect(find.bySemanticsLabel('Record a voice note'), findsOneWidget);
       expect(find.byIcon(Icons.mic), findsOneWidget);
@@ -418,7 +452,7 @@ void main() {
 
     testWidgets('the paperclip opens a sheet with three plain choices, in words, and Cancel closes it', (t) async {
       await phone(t, 390, 844);
-      await t.pumpWidget(const MayaApp());
+      await t.pumpWidget(const MayaApp(home: SeniorScreen()));
       await t.pump(const Duration(milliseconds: 400));
       await t.tap(find.byIcon(Icons.attach_file));
       await t.pump(const Duration(milliseconds: 100));

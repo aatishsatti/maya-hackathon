@@ -90,7 +90,7 @@ async function handleCare(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean).slice(2); // after /api/care
   const [a, b, c, d] = parts;
   if (req.method === 'GET' && a === 'overview') { if (!needFamily(req, res, null)) return; const mine = familyLoginOn() ? new Set(accounts.seniorsOf(familyOf(req))) : null; return sendJson(res, 200, { seniors: care.overview().filter((x) => !mine || mine.has(x.id)) }); }
-  if (req.method === 'GET' && a === 'events') { if (!needFamily(req, res, null)) return; return openStream(req, res, (r) => care.attachFamily(r)); }
+  if (req.method === 'GET' && a === 'events') { if (!needFamily(req, res, null)) return; const fam = familyLoginOn() ? familyOf(req) : null; return openStream(req, res, (r) => care.attachFamily(r, fam ? (id) => accounts.owns(fam, id) : null)); }
   if (!/^[a-f0-9]{8}$/.test(a || '') || !care.get(a)) return sendJson(res, 404, { error: 'Not found' });
   // The senior's own routes (the live stream, the push token, the activity ping, delivered / seen, declining a ring, the notification buttons) stay open: the senior has no login. Everything else here is the family's.
   const seniorRoute = (b === 'events' || b === 'device' || b === 'activity' || b === 'notifications' || (b === 'outreach' && d === 'decline') || b === 'ack');

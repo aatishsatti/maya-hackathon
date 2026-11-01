@@ -33,6 +33,13 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- The senior's link, sent by the family on WhatsApp or SMS: tapping https://<server>/s/<id> opens Maya straight into that person's chat (start_gate.dart). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="maya-singapore.onrender.com" android:pathPrefix="/s/"/>
+            </intent-filter>
         </activity>
         <receiver android:name=".DeclineReceiver" android:exported="false"/>
         <receiver android:name=".AckReceiver" android:exported="false"/>

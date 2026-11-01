@@ -23,16 +23,20 @@ class Api {
 
   static http.Client get _c => testClient ?? _client;
 
+  /// The family's signed session (set when the family is logged in on this phone). Sent as "Authorization: Bearer ..." with every request; a senior's phone has none.
+  static String? familyToken;
+  static Map<String, String> _h([Map<String, String>? more]) => {...?more, if (familyToken != null) 'Authorization': 'Bearer $familyToken'};
+
   static Future<dynamic> get(String path, {Map<String, String>? query, Duration timeout = const Duration(seconds: 25)}) =>
-      _send(() => _c.get(apiUri(path, query)), timeout);
+      _send(() => _c.get(apiUri(path, query), headers: _h()), timeout);
 
   static Future<dynamic> postJson(String path, [Map<String, dynamic>? body, Map<String, String>? query, Duration timeout = const Duration(seconds: 40)]) =>
-      _send(() => _c.post(apiUri(path, query), headers: {'Content-Type': 'application/json'}, body: jsonEncode(body ?? {})), timeout);
+      _send(() => _c.post(apiUri(path, query), headers: _h({'Content-Type': 'application/json'}), body: jsonEncode(body ?? {})), timeout);
 
   static Future<dynamic> postBytes(String path, Uint8List bytes, String contentType, {Map<String, String>? query, Duration timeout = const Duration(seconds: 90)}) =>
-      _send(() => _c.post(apiUri(path, query), headers: {'Content-Type': contentType}, body: bytes), timeout);
+      _send(() => _c.post(apiUri(path, query), headers: _h({'Content-Type': contentType}), body: bytes), timeout);
 
-  static Future<dynamic> delete(String path, {Duration timeout = const Duration(seconds: 25)}) => _send(() => _c.delete(apiUri(path)), timeout);
+  static Future<dynamic> delete(String path, {Duration timeout = const Duration(seconds: 25)}) => _send(() => _c.delete(apiUri(path), headers: _h()), timeout);
 
   static Future<dynamic> _send(Future<http.Response> Function() go, Duration timeout) async {
     http.Response r;

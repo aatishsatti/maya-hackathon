@@ -87,3 +87,10 @@ test('with the switch off the server behaves as before (nothing is locked), so t
   const s = await startServer({ MAYA_FAMILY_LOGIN: 'off' });
   try { assert.equal((await J(s.base, '/api/care/overview')).status, 200); assert.equal((await J(s.base, '/api/profiles')).status, 200); } finally { s.stop(); }
 });
+
+test('the family live stream is per family: only that family\'s seniors reach it (login on); with login off it is everyone\'s as before', () => {
+  const care = require('../care');
+  const got = (owns) => { const seen = []; const res = { write: (s) => { seen.push(s); return true; } }; const off = care.attachFamily(res, owns); care.pushFamily('refresh', { id: 'aaaaaaaa' }); care.pushFamily('refresh', { id: 'bbbbbbbb' }); off(); return seen.join(''); };
+  const mine = got((id) => id === 'aaaaaaaa'); assert.match(mine, /aaaaaaaa/); assert.doesNotMatch(mine, /bbbbbbbb/);
+  const all = got(null); assert.match(all, /aaaaaaaa/); assert.match(all, /bbbbbbbb/);
+});
