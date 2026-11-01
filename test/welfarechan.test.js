@@ -85,7 +85,7 @@ test('App only: a text is a notice in the app, a voice note is Maya\'s voice in 
 });
 
 test('App only, a CALL: the app rings (kind welfare) once; a closed app with no push cannot be rung and the entry says Not sent and why', async () => {
-  quiet(); const { id } = linked(true); const app = openApp(id); const r = await chan.run(id, { via: 'call', channel: 'app' }); await settle(); assert.equal(r.delivered[0].ringing, true);
+  quiet(); const { id } = linked(true); const app = openApp(id); const r = await chan.run(id, { via: 'call', channel: 'app' }); await settleT(); assert.equal(r.delivered[0].ringing, true);
   assert.ok(app.ev.some(([k, d]) => k === 'incoming' && d.kind === 'welfare'), 'the app rings'); assert.equal(calls().length, 0, 'WhatsApp does not ring'); assert.equal(welfare(id)[0].where, 'app'); assert.equal(welfare(id)[0].channel, 'call'); app.detach();
   quiet(); const b = linked(true); await assert.rejects(chan.run(b.id, { via: 'call', channel: 'app' }), (e) => { assert.equal(e.status, 409); assert.match(e.message, /closed.*Nothing rang/); return true; });
   const e = welfare(b.id)[0]; assert.deepEqual([e.where, e.status, e.label], ['app', 'failed', 'Not sent']); assert.match(e.note, /Not sent: .*closed phone cannot be rung/);
@@ -133,7 +133,7 @@ test('WhatsApp refuses the call (138012): the fixed text on WhatsApp stays as be
   try {
     const r = await chan.run(a.id, { via: 'call', channel: 'whatsapp' }); assert.equal(r.result.fallback, 'message'); assert.equal(sent().length, 1, 'the fixed text went on WhatsApp, as before');
     quiet(); const b = linked(false); const app = openApp(b.id); const all = JSON.parse(fs.readFileSync(LF(), 'utf8')); all[b.id].callMisses = 2; fs.writeFileSync(LF(), JSON.stringify(all));
-    const r2 = await chan.run(b.id, { via: 'call', channel: 'whatsapp' }); await settle(); assert.equal(r2.delivered[0].where, 'app'); assert.ok(app.ev.some(([k, d]) => k === 'incoming' && d.kind === 'welfare'), 'the app rings');
+    const r2 = await chan.run(b.id, { via: 'call', channel: 'whatsapp' }); await settleT(); assert.equal(r2.delivered[0].where, 'app'); assert.ok(app.ev.some(([k, d]) => k === 'incoming' && d.kind === 'welfare'), 'the app rings');
     const w = welfare(b.id); assert.equal(w.filter((e) => e.status === 'paused').length, 0, 'no silent Paused'); assert.match(w.find((e) => e.where === 'app').note, /not answered|2 calls|unanswered/i); app.detach();
   } finally { wa.deps.callOut = keep; }
 });
@@ -206,7 +206,7 @@ test('The app welfare text or voice note is answered when they write or say anyt
 });
 
 test('An app welfare call that the senior answers: claimed as welfare, settled when the call ends', async () => {
-  quiet(); const { id } = linked(true); const app = openApp(id); await chan.run(id, { via: 'call', channel: 'app' }); await settle(); const inc = app.ev.find(([k]) => k === 'incoming')[1];
+  quiet(); const { id } = linked(true); const app = openApp(id); await chan.run(id, { via: 'call', channel: 'app' }); await settleT(); const inc = app.ev.find(([k]) => k === 'incoming')[1];
   const info = care.claim(id, inc.outreachId); assert.equal(info.kind, 'welfare'); assert.equal(welfare(id)[0].label, 'Picked up'); care.welfareCallEnded(id, info.notifId, info.startedAt); assert.equal(welfare(id)[0].status, 'noreply'); app.detach();
 });
 

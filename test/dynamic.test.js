@@ -263,7 +263,8 @@ test('Both + Call, WhatsApp rings first (more recent) and is NOT ANSWERED: the a
 test('Both + Call, answered on the first platform: the other is never rung', async () => {
   quiet(); const keep = wa.deps.callOut; let rang = 0; wa.deps.callOut = async (o) => { rang += 1; await o.place({ sdp_type: 'offer', sdp: 'x' }); return 'completed'; };
   const { id } = linked(true); const app = openApp(id);
-  try { add(id, { deliver: 'call', channel: 'both' }); care.tick(Date.now() + 5000); await settle(); const o = [...care.outreaches.values()].find((x) => x.profileId === id); assert.ok(o && o.alt, 'WhatsApp is the standby'); assert.ok(care.claim(id, o.id), 'they pick up the app ring'); await wait(80); } finally { wa.deps.callOut = keep; app.detach(); }
+  try { add(id, { deliver: 'call', channel: 'both' }); care.tick(Date.now() + 5000); await settleT();   // the ring starts on a zero-delay timer: wait on the real clock, not just on setImmediate
+    const o = [...care.outreaches.values()].find((x) => x.profileId === id); assert.ok(o && o.alt, 'WhatsApp is the standby'); assert.ok(care.claim(id, o.id), 'they pick up the app ring'); await wait(80); } finally { wa.deps.callOut = keep; app.detach(); }
   assert.equal(rang, 0, 'answered: WhatsApp never rang');
 });
 
