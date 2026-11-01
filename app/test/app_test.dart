@@ -223,22 +223,30 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('welfare check options: Every hour, Every day, Every 3 days, Every week and Custom with a number and a unit; nothing is greyed out as unavailable', (t) async {
+    testWidgets('welfare check options: Every day, Every 2 days, Every week, Every 2 weeks; no minute or hour preset; the custom interval is under Advanced and warns; only Start shows with no schedule', (t) async {
       await phone(t, 360, 800);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
       await t.tap(find.text('Welfare').last);
       await t.pump(const Duration(milliseconds: 400));
       await t.pump(const Duration(milliseconds: 400));
-      await t.scrollUntilVisible(find.text('Every hour'), 200, scrollable: find.byType(Scrollable).last);
-      await t.tap(find.text('Every hour'));
+      await t.scrollUntilVisible(find.text('Every day'), 200, scrollable: find.byType(Scrollable).last);
+      await t.tap(find.text('Every day'));
       await t.pumpAndSettle(const Duration(milliseconds: 100));
-      for (final o in const ['Every day', 'Every 3 days', 'Every week']) {
+      for (final o in const ['Every 2 days', 'Every week', 'Every 2 weeks']) {
         expect(find.text(o), findsWidgets);
       }
+      expect(find.text('Every hour'), findsNothing);
+      expect(find.textContaining('minutes'), findsNothing);
       expect(find.textContaining('not available yet'), findsNothing);
-      await t.tap(find.textContaining('Custom').last);
+      expect(find.byKey(const Key('schedStart')), findsOneWidget);
+      expect(find.byKey(const Key('schedStop')), findsNothing);
+      await t.tap(find.text('Every day').last);
       await t.pumpAndSettle(const Duration(milliseconds: 100));
+      await t.scrollUntilVisible(find.text('Advanced: a custom interval'), 200, scrollable: find.byType(Scrollable).last);
+      await t.tap(find.text('Advanced: a custom interval'));
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(find.textContaining('Too frequent will pause for flooding'), findsOneWidget);
       expect(find.text('How many?'), findsOneWidget);
       expect(find.text('Unit'), findsOneWidget);
       await t.pumpWidget(const SizedBox());

@@ -68,7 +68,7 @@ class _RemindersTabState extends State<RemindersTab> {
                             if (r.held) const Pill('Held for quiet hours', tone: kToneWait),
                             if (r.stateLabel != null) Pill(r.stateLabel!, tone: kToneInfo),
                           ]),
-                          if (r.dueAt != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Next: ${dayTime(r.dueAt!)}${r.repeat != 'none' ? ' · repeats ${r.repeat}' : ''}', style: const TextStyle(fontSize: 13, color: kSoft))),
+                          if (r.dueAt != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Next: ${dayTime(r.dueAt!)}${r.repeat != 'none' ? ' · repeats ${r.every == 2 ? 'every 2 ${r.repeat == 'weekly' ? 'weeks' : 'days'}' : r.repeat}' : ''}', style: const TextStyle(fontSize: 13, color: kSoft))),
                         ]),
                       ),
                       IconButton(
@@ -137,7 +137,7 @@ class _AddSheetState extends State<_AddSheet> {
             initialValue: _repeat,
             isExpanded: true,
             decoration: const InputDecoration(labelText: 'Repeat'),
-            items: const [DropdownMenuItem(value: 'none', child: Text('Once')), DropdownMenuItem(value: 'daily', child: Text('Every day')), DropdownMenuItem(value: 'weekly', child: Text('Every week'))],
+            items: const [DropdownMenuItem(value: 'none', child: Text('Once')), DropdownMenuItem(value: 'daily', child: Text('Every day')), DropdownMenuItem(value: 'daily2', child: Text('Every 2 days')), DropdownMenuItem(value: 'weekly', child: Text('Every week')), DropdownMenuItem(value: 'weekly2', child: Text('Every 2 weeks'))],
             onChanged: (v) => setState(() => _repeat = v ?? 'none'),
           ),
           sectionLabel('Where it goes'),
@@ -154,7 +154,7 @@ class _AddSheetState extends State<_AddSheet> {
                 : () async {
                     setState(() => _busy = true);
                     final nav = Navigator.of(context);
-                    final ok = await act(context, () => Api.postJson('/api/care/${widget.data.profileId}/reminders', {'task': _task.text, 'dueAt': _at.millisecondsSinceEpoch, 'repeat': _repeat, if (_deliver != null) 'deliver': _deliver, if (_channel != null) 'channel': _channel}), done: 'Reminder added.');
+                    final ok = await act(context, () => Api.postJson('/api/care/${widget.data.profileId}/reminders', {'task': _task.text, 'dueAt': _at.millisecondsSinceEpoch, 'repeat': _repeat.replaceAll(RegExp(r'2$'), ''), if (_repeat.endsWith('2')) 'every': 2, if (_deliver != null) 'deliver': _deliver, if (_channel != null) 'channel': _channel}), done: 'Reminder added.');
                     if (!mounted) return;
                     setState(() => _busy = false);
                     if (ok) {

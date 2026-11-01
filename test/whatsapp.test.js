@@ -1614,7 +1614,7 @@ test('schedule: validation (5 minutes to 12 weeks, call/text/voice; every hour, 
   const o = outside(); for (const via of ['text', 'voice', 'call']) { assert.equal(sched(o.id, { via, everyMin: 60 }).status, 'running', `a ${via} schedule starts with the window closed: a closed window is rescued by a call, round by round`); care.welfareScheduleStop(o.id); }
   const un = senior(); assert.throws(() => sched(un), (e) => { assert.equal(e.status, 429); assert.match(e.message, /WhatsApp is not linked for them/); assert.match(e.message, /Nothing was scheduled/); return true; });
   const t0 = Date.now(); const s = sched(id, { everyMin: 60, via: 'call' }); assert.deepEqual([s.status, s.everyMin, s.via, s.fired, s.planned], ['running', 60, 'call', 0, 24]); assert.ok(s.next >= t0 + 3600000 && s.next < Date.now() + 3600000 + 5, 'the first check is one interval away'); assert.ok(s.until - s.startedAt === 24 * 3600000);
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.doesNotMatch(html, /not available yet/); for (const v of ['60', '1440', '4320', '10080']) assert.match(html, new RegExp(`<option value="${v}">`));
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.doesNotMatch(html, /not available yet/); for (const v of ['1440', '2880', '10080', '20160']) assert.match(html, new RegExp(`<option value="${v}">`)); for (const v of ['60', '4320', 'custom']) assert.doesNotMatch(html, new RegExp(`<option value="${v}">`), 'no hour or custom preset is promoted');
   assert.match(html, /id="schedVia"[\s\S]*?data-v="call"[\s\S]*?data-v="text"[\s\S]*?data-v="voice"/); assert.ok(care.welfareScheduleStop(id)); assert.equal(care.welfareScheduleView(id).status, 'ended');
 });
 
@@ -1812,4 +1812,47 @@ test('welfare reply: a scheduled text check the person replies to flips THAT ent
   await wa.handleWebhook(incoming(s.phone, 'STOP')); assert.equal(welfareEntries(s.id)[0].status, 'delivered', 'STOP is not a reply'); clearCalls();
   // a family message is not a welfare check: a reply does not flip it
   const f = inWindow(); await wa.sendOut(f.id, { kind: 'text', text: 'dinner at six', who: 'family' }); wa.onStatus({ id: wa.linkOf(f.id).sent.at(-1).id, status: 'delivered' }); reset(PLAIN); await wa.handleWebhook(incoming(f.phone, 'ok')); assert.equal(wa.activityOf(f.id).entries.find((q) => q.type === 'message').status, 'delivered'); clearCalls(); stopAllSchedules();
+});
+
+// ---- the flood fix: day-based presets only, the custom interval is advanced and warns, a cap-paused schedule restarts today, the cap reason is exact ----
+test('schedule presets: Every day, Every 2 days, Every week, Every 2 weeks; no minute or hour option is promoted; the custom interval is hidden under Advanced with the flooding warning (page, app, server view)', () => {
+  assert.deepEqual(care.SCHEDULE_PRESETS.map((x) => [x.label, x.everyMin]), [['Every day', 1440], ['Every 2 days', 2880], ['Every week', 10080], ['Every 2 weeks', 20160]]); assert.ok(care.SCHEDULE_PRESETS.every((x) => x.everyMin >= 1440));
+  const { id } = inWindow(); assert.deepEqual(wa.view(id).schedulePresets, care.SCHEDULE_PRESETS); assert.match(wa.view(id).scheduleCustomWarning, /too frequent will pause for flooding/i);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); const sel = /<select id="schedEvery"[\s\S]*?<\/select>/.exec(html)[0]; assert.deepEqual([...sel.matchAll(/<option value="(\d+)"/g)].map((m) => m[1]), ['1440', '2880', '10080', '20160']); assert.doesNotMatch(sel, /minute|hour|custom/i);
+  assert.match(html, /<details id="schedAdvanced">[\s\S]*?id="schedCustom"[\s\S]*?<\/details>/); assert.match(html, /id="schedCustomWarn">Too frequent will pause for flooding/); assert.doesNotMatch(html, /Every hour|Every 3 days|Custom \(/);
+  const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_welfare.dart'), 'utf8'); for (const t of ['Every day', 'Every 2 days', 'Every week', 'Every 2 weeks', 'Advanced: a custom interval', 'Too frequent will pause for flooding']) assert.ok(dart.includes(t), t); assert.doesNotMatch(dart, /Every hour|Every 3 days|Every 5 minutes/);
+  // reminders: the family list has the same day-based choices and no minutes
+  assert.match(html, /<select id="repeat"[^>]*><option value="none">Once<\/option><option value="daily">Every day<\/option><option value="daily2">Every 2 days<\/option><option value="weekly">Every week<\/option><option value="weekly2">Every 2 weeks<\/option><\/select>/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_reminders.dart'), 'utf8'), /Every 2 days[\s\S]*Every 2 weeks/);
+  stopAllSchedules(); const c = care.addReminder(id, { task: 'tea', dueAt: Date.now() + 3600000, repeat: 'daily', every: 2 }); assert.equal(c.every, 2); const t0 = Date.now(); c.dueAt = t0 - 1; care.advanceDue ? care.advanceDue(c, t0) : 0;
+  assert.throws(() => care.addReminder(id, { task: 'tea', dueAt: Date.now() + 3600000, repeat: 'daily', every: 3 }), /every 2 days/); assert.throws(() => care.addReminder(id, { task: 'tea', dueAt: Date.now() + 3600000, repeat: 'hourly' }), /none, daily or weekly/);
+});
+
+test('schedule flood: a 5-minute test fills the cap and pauses with the exact "X / Y messages today"; restarted on a day preset it runs TODAY; a short interval gets no pardon', async () => {
+  stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0; const M = 60000; const { id } = inWindow(); sched(id, { everyMin: 5, via: 'text' }); let t = Date.now();
+  for (let i = 0; i < 10; i++) { shift(id, 11000); t += 5 * M + 1000; care.tick(t); await settle(); }
+  assert.equal(sent().length, 10, 'ten welfare texts went'); shift(id, 11000); t += 5 * M + 1000; care.tick(t); await waitFor(() => care.welfareScheduleView(id).status === 'paused'); await settle();
+  let v = care.welfareScheduleView(id); assert.equal(v.status, 'paused'); assert.equal(v.pauseCode, 'cap'); assert.match(v.note, /10 \/ 10 messages today/); assert.doesNotMatch(v.note, /^Enough messages/); assert.equal(sent().length, 10);
+  await refusal(wa.placeWelfare(id, 'text'), /Enough messages for today: 10 \/ 10/, { status: 429 });   // "Check in now" is refused too while the flood counts
+  // restarting on a short interval does not clear it, and the paused schedule is not running by itself
+  assert.equal(sched(id, { everyMin: 60, via: 'text' }).status, 'running'); await refusal(wa.placeWelfare(id, 'text'), /10 \/ 10/, { status: 429 }); care.welfareScheduleStop(id);
+  care.welfareScheduleStart(id, { everyMin: 5, via: 'text' }); care.get(id).welfareSchedule.status = 'paused'; care.get(id).welfareSchedule.pauseCode = 'cap'; await refusal(wa.placeWelfare(id, 'text'), /10 \/ 10/, { status: 429 });
+  // restart on a day-based preset: TODAY, no waiting for tomorrow
+  const r = care.welfareScheduleStart(id, { everyMin: 1440, via: 'text' }); assert.equal(r.status, 'running'); assert.equal(r.everyMin, 1440); assert.ok(r.next > Date.now() + 23 * 3600000);
+  shift(id, 11000); const ok = await wa.placeWelfare(id, 'text'); assert.equal(ok.sent, true, 'a text can go again today'); assert.equal(sent().length, 11);
+  assert.equal(wa.linkOf(id).sent.filter((m) => m.forgiven).length, 10, 'the flood stays in the record, it just stops counting'); assert.equal(care.welfareScheduleStop(id), true);
+});
+
+test('schedule flood: a normal day-based schedule is still capped (10 a day) and a pause for another reason is not forgiven', async () => {
+  stopAllSchedules(); reminderReset(); wa.deps.testCooldownMs = 0; const { id } = inWindow(); for (let i = 0; i < 10; i++) { shift(id, 11000); await wa.sendOut(id, { kind: 'text', text: `m${i}`, who: 'maya' }); }
+  shift(id, 11000); await refusal(wa.sendOut(id, { kind: 'text', text: 'x', who: 'maya' }), /Enough messages for today: 10 \/ 10 messages/, { status: 429 }); const e = await wa.sendOut(id, { kind: 'text', text: 'x' }).catch((x) => x); assert.deepEqual(e.cap, { count: 10, max: 10 });
+  sched(id, { everyMin: 1440 }); care.welfareScheduleStop(id); care.get(id).welfareSchedule.status = 'paused'; care.get(id).welfareSchedule.pauseCode = null; sched(id, { everyMin: 1440 }); assert.equal(wa.linkOf(id).sent.filter((m) => m.forgiven).length, 0, 'only a cap pause is forgiven');
+  care.welfareScheduleStop(id);
+});
+
+test('schedule buttons: Running shows Stop only, Paused shows Restart only, otherwise Start only; the state and next check sit at the top of the section (page and app)', () => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'), html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
+  assert.ok(html.indexOf('id="schedState"') < html.indexOf('id="schedEvery"') && html.indexOf('id="schedState"') > html.indexOf('id="schedHead"'), 'the state is right under the heading, above the pickers'); assert.match(html, /id="schedStop"[^>]*hidden/);
+  assert.match(js, /\$\('schedStart'\)\.hidden = live; \$\('schedStop'\)\.hidden = !live;/); assert.match(js, /st === 'Paused' \? 'Restart' : 'Start'/);
+  const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_welfare.dart'), 'utf8'); assert.match(dart, /if \(running\)\s+SizedBox\([^\n]*schedStop[\s\S]*?else\s+SizedBox\([^\n]*paused \? 'schedRestart' : 'schedStart'[\s\S]*?'Restart'/); assert.ok(dart.indexOf("Key('schedStatus')") < dart.indexOf('DropdownButtonFormField<String>'), 'status above the pickers'); assert.ok(dart.includes("'Running' : paused ? 'Paused' : 'Stopped'"));
 });

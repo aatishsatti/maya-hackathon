@@ -952,7 +952,7 @@ function appFacts(id, now = Date.now(), { family = true } = {}) {
 // ---------------------------------------------------------------- reminders (information only, as the family wrote them)
 const PERIOD = { hourly: 60 * MIN, daily: 24 * 60 * MIN, weekly: 7 * 24 * 60 * MIN };   // hourly: only a reminder the senior set by talking (setrem.js) uses it
 const DELIVER = ['call', 'text', 'voice'];   // the per-reminder picker; none = the old default (voice or text per person)
-function addReminder(id, { task, dueAt, repeat, deliver, channel }, internal = {}) {
+function addReminder(id, { task, dueAt, repeat, every, deliver, channel }, internal = {}) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   task = clip(task, 80);
@@ -962,9 +962,12 @@ function addReminder(id, { task, dueAt, repeat, deliver, channel }, internal = {
   repeat = repeat || 'none';
   if (repeat !== 'none' && !PERIOD[repeat]) throw Object.assign(new Error('Repeat must be none, daily or weekly.'), { status: 400 });
   if (repeat === 'hourly' && internal.by !== 'senior') throw Object.assign(new Error('Repeat must be none, daily or weekly.'), { status: 400 });   // the family page offers none / daily / weekly
+  // The family page offers Once, Every day, Every 2 days, Every week and Every 2 weeks: nothing shorter, no minutes.
+  if (internal.by !== 'senior') { every = every == null || every === '' ? 1 : Number(every); if (repeat !== 'none' && !(every === 1 || every === 2)) throw Object.assign(new Error('Repeat must be none, every day, every 2 days, every week or every 2 weeks.'), { status: 400 }); }
+  else every = internal.every;
   if (deliver != null && deliver !== '' && !DELIVER.includes(deliver)) throw Object.assign(new Error('Delivery must be call, text or voice note.'), { status: 400 });
   if (channel != null && channel !== '' && !CHANNELS.includes(channel)) throw Object.assign(new Error('Channel must be WhatsApp, the app or both.'), { status: 400 });
-  const r = { id: uid(), task, dueAt, repeat, active: null, last: null, created: Date.now(), ...(deliver ? { deliver } : {}), ...(channel ? { channel } : {}), ...(internal.by === 'senior' ? { by: 'senior', strict: true, origin: internal.origin || null, ...(internal.every > 1 ? { every: internal.every } : {}) } : {}) };
+  const r = { id: uid(), task, dueAt, repeat, active: null, last: null, created: Date.now(), ...(deliver ? { deliver } : {}), ...(channel ? { channel } : {}), ...(internal.by === 'senior' ? { by: 'senior', strict: true, origin: internal.origin || null, ...(internal.every > 1 ? { every: internal.every } : {}) } : (repeat !== 'none' && every === 2 ? { every: 2 } : {})) };
   p.reminders.push(r);
   save(id);
   pushFamily('refresh', { id });
@@ -1505,6 +1508,9 @@ function welfareScheduleView(id) {
   const p = get(id); const s = p && p.welfareSchedule; if (!s) return null;
   return { ...s, held: Boolean(s.held), planned: Math.max(1, Math.floor((s.until - s.startedAt) / (s.everyMin * 60000))) };
 }
+// Where the schedule list is offered (family page and app): the day-based presets only. A custom interval is an advanced option and warns; nothing under an hour is ever suggested.
+const SCHEDULE_PRESETS = [{ label: 'Every day', everyMin: 1440 }, { label: 'Every 2 days', everyMin: 2880 }, { label: 'Every week', everyMin: 10080 }, { label: 'Every 2 weeks', everyMin: 20160 }];
+const SCHEDULE_CUSTOM_WARNING = 'Too frequent will pause for flooding.';
 function welfareScheduleStart(id, { everyMin, every, unit, via } = {}) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
@@ -1514,6 +1520,9 @@ function welfareScheduleStart(id, { everyMin, every, unit, via } = {}) {
   if (!welfareSender) throw Object.assign(new Error('WhatsApp is not set up on this server.'), { status: 503 });
   const why = welfareSender.blocked(id, via); if (why) throw Object.assign(new Error(`${why} Nothing was scheduled.`), { status: 429 });
   const now = Date.now();
+  // A schedule that a too-frequent test paused for the daily cap restarts TODAY once the interval is day-based: that flood stops counting (whatsapp.js forgiveCap). A short interval gets no such pardon.
+  const was = p.welfareSchedule;
+  if (was && was.status === 'paused' && was.pauseCode === 'cap' && n >= 1440 && welfareSender.forgive) welfareSender.forgive(id);
   p.welfareSchedule = { everyMin: n, via, startedAt: now, until: now + (n >= 1440 ? SCHEDULE_LONG_MS : SCHEDULE_MS), next: now + n * 60000, fired: 0, status: 'running', note: null };
   save(id); pushFamily('refresh', { id });
   return welfareScheduleView(id);
@@ -1524,10 +1533,10 @@ function welfareScheduleStop(id, note = 'Stopped by you.') {
   s.status = 'ended'; s.note = note; save(id); pushFamily('refresh', { id });
   return true;
 }
-function welfareSchedulePause(id, why) {
+function welfareSchedulePause(id, why, code = null) {
   const p = get(id); const s = p && p.welfareSchedule;
   if (!s || s.status !== 'running') return;
-  s.status = 'paused'; s.note = String(why || 'A check could not be sent.').slice(0, 300); save(id); pushFamily('refresh', { id });
+  s.status = 'paused'; s.note = String(why || 'A check could not be sent.').slice(0, 300); if (code) s.pauseCode = code; else delete s.pauseCode; save(id); pushFamily('refresh', { id });
   console.log('welfare schedule', JSON.stringify({ event: 'paused', fired: s.fired }));   // counts only
 }
 function welfareTick(p, now) {
@@ -1545,7 +1554,9 @@ function welfareTick(p, now) {
   Promise.resolve().then(() => welfareSender.fire(id, via)).then((res) => {
     if (res && res.fallback) welfareSchedulePause(id, `The check could not go out as a ${via === 'call' ? 'call' : via === 'voice' ? 'voice note' : 'text'}: ${res.reason === 'meta' ? 'WhatsApp refused the call.' : 'two calls in a row were not answered.'} A message was sent instead, and the schedule is paused. Start it again when you are ready.`);
     pushFamily('refresh', { id });
-  }, (e) => { if (e && e.status === 409) { console.log('welfare schedule', JSON.stringify({ event: 'skipped: another call in progress' })); return; } welfareSchedulePause(id, `A check could not be sent: ${String((e && e.message) || 'error').slice(0, 200)}`); });
+  }, (e) => { if (e && e.status === 409) { console.log('welfare schedule', JSON.stringify({ event: 'skipped: another call in progress' })); return; }
+    if (e && e.cap) { welfareSchedulePause(id, `${e.cap.count} / ${e.cap.max} messages today: the daily limit was reached because checks came too often. Pick Every day or longer and press Restart.`, 'cap'); return; }
+    welfareSchedulePause(id, `A check could not be sent: ${String((e && e.message) || 'error').slice(0, 200)}`); });
 }
 
 function tick(now = Date.now()) {
@@ -1716,6 +1727,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareScheduleStart, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, sendMessage, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

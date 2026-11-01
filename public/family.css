@@ -202,3 +202,5 @@ html { scroll-behavior: smooth; }
 .panel.collapsed > :not(.sec-head) { display: none; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 .rules { margin: 0 0 12px; font-size: 14px; color: var(--soft); } .rules summary { cursor: pointer; font-weight: 600; color: var(--ink, inherit); } .rules ul { margin: 6px 0 0; padding-left: 20px; }
+.sched-status { margin: 0 0 10px; font-size: 16px; }
+#schedCustomWarn.warn { color: var(--miss, #b3261e); font-weight: 600; }

@@ -64,7 +64,7 @@
             <input id="task" placeholder="Task, e.g. medicine" maxlength="80" required aria-label="Task">
             <div class="form-row">
               <input id="at" type="datetime-local" required aria-label="When">
-              <select id="repeat" aria-label="Repeat"><option value="none">Once</option><option value="daily">Every day</option><option value="weekly">Every week</option></select>
+              <select id="repeat" aria-label="Repeat"><option value="none">Once</option><option value="daily">Every day</option><option value="daily2">Every 2 days</option><option value="weekly">Every week</option><option value="weekly2">Every 2 weeks</option></select>
             </div>
             <p class="hint" id="remQuietWarn" role="status" aria-live="polite" hidden></p>
             <label class="wa-label" id="deliverLabel">Deliver this reminder as</label>
@@ -153,19 +153,23 @@
             </div>
             <div class="wa-actions"><button id="waWelfareCall" class="btn primary" type="button">Check in with them now (test)</button></div>
             <h3 class="wa-sub" id="schedHead">Scheduled check-ins</h3>
+            <p class="sched-status" id="schedStatus" aria-live="polite"><strong id="schedState">Stopped</strong> <span id="schedNext"></span></p>
             <p class="hint" id="schedLine">No schedule is running.</p>
             <label class="wa-label" for="schedEvery">Check in</label>
             <select id="schedEvery" class="wa-wide">
-              <option value="60">Every hour</option>
               <option value="1440">Every day</option>
-              <option value="4320">Every 3 days</option>
+              <option value="2880">Every 2 days</option>
               <option value="10080">Every week</option>
-              <option value="custom">Custom (every other week is 2 weeks)</option>
+              <option value="20160">Every 2 weeks</option>
             </select>
-            <div id="schedCustomRow" hidden>
-              <input id="schedCustom" class="wa-wide" type="number" min="1" max="84" placeholder="How many?">
-              <select id="schedUnit" class="wa-wide" aria-label="Unit"><option value="hours">hours</option><option value="days" selected>days</option><option value="weeks">weeks</option></select>
-            </div>
+            <details id="schedAdvanced">
+              <summary>Advanced: a custom interval</summary>
+              <p class="hint" id="schedCustomWarn">Too frequent will pause for flooding. WhatsApp and Maya stop a phone from getting too many messages in a day.</p>
+              <div id="schedCustomRow">
+                <input id="schedCustom" class="wa-wide" type="number" min="1" max="84" placeholder="How many? (leave empty to use the choice above)">
+                <select id="schedUnit" class="wa-wide" aria-label="Unit"><option value="hours">hours</option><option value="days" selected>days</option><option value="weeks">weeks</option></select>
+              </div>
+            </details>
             <label class="wa-label" id="schedViaLabel">Check in by</label>
             <div id="schedVia" class="seg" role="radiogroup" aria-labelledby="schedViaLabel">
               <button type="button" role="radio" aria-checked="true" data-v="call">Call</button>
@@ -174,8 +178,8 @@
             </div>
             <p class="hint" id="schedPlan"></p>
             <div class="wa-actions">
-              <button id="schedStart" class="btn primary" type="button">Start the schedule (24 hours)</button>
-              <button id="schedStop" class="btn" type="button">Stop</button>
+              <button id="schedStart" class="btn primary" type="button">Start</button>
+              <button id="schedStop" class="btn" type="button" hidden>Stop</button>
             </div>
             <h3 class="wa-sub">Ring test with one fixed sentence</h3>
             <p class="hint">Rings once, Maya says one fixed sentence and hangs up. No reminder is used.</p>

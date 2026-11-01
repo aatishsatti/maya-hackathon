@@ -103,10 +103,10 @@ function update(profileId, fn) { const all = readLinks(); if (!all[profileId]) r
 // What the dashboard may know: the state, never a message word.
 function view(profileId) {
   const l = linkOf(profileId);
-  if (!l) return { linked: false, configured: configured(), activity: activityOf(profileId), welfareSchedule: require('./care').welfareScheduleView(profileId) };
+  if (!l) return { linked: false, configured: configured(), activity: activityOf(profileId), welfareSchedule: require('./care').welfareScheduleView(profileId), schedulePresets: require('./care').SCHEDULE_PRESETS, scheduleCustomWarning: require('./care').SCHEDULE_CUSTOM_WARNING };
   const open = Boolean(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS);
   const last = (l.sent || []).slice(-1)[0] || null;
-  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null, calls: { ...capInfo(l), blocked: callBlock(l) }, activity: activityOf(profileId), welfareSchedule: require('./care').welfareScheduleView(profileId) };
+  return { linked: true, configured: configured(), phoneEnd: l.phone.slice(-4), optIn: l.optIn, windowOpen: open, windowEndsAt: open ? l.lastInboundAt + WINDOW_MS : null, lastSent: last ? { at: last.at, kind: last.kind, via: last.via, status: last.status, error: last.error } : null, testCall: testCalls.get(profileId) || null, calls: { ...capInfo(l), blocked: callBlock(l) }, activity: activityOf(profileId), welfareSchedule: require('./care').welfareScheduleView(profileId), schedulePresets: require('./care').SCHEDULE_PRESETS, scheduleCustomWarning: require('./care').SCHEDULE_CUSTOM_WARNING };
 }
 
 // ---- webhook security ----
@@ -224,7 +224,8 @@ function guardOut(l, now, kind, useTemplate) {
   if (!l.optIn) throw new OutError('This person has not agreed to (or has stopped) messages from Maya on WhatsApp, so nothing was sent.', 403);
   const day = (l.sent || []).filter((x) => now - x.at < WINDOW_MS);
   if (day.length && now - day[day.length - 1].at < OUT_MIN_GAP_MS) throw new OutError('That was too soon after the last one. Please wait a few seconds.', 429);
-  if (day.length >= OUT_MAX_PER_DAY) throw new OutError('Enough messages for today. To avoid flooding their phone, please try again tomorrow.', 429);
+  const counted = day.filter((x) => !x.forgiven).length;   // a flood that was cleared by restarting the schedule on a day-based interval (forgiveCap) no longer counts
+  if (counted >= OUT_MAX_PER_DAY) throw new OutError(`Enough messages for today: ${counted} / ${OUT_MAX_PER_DAY} messages in the last 24 hours. To avoid flooding their phone, no more go until some are older than a day.`, 429, { cap: { count: counted, max: OUT_MAX_PER_DAY } });
   const open = Boolean(l.lastInboundAt && now - l.lastInboundAt < WINDOW_MS);
   if (open) return 'free';
   if (kind === 'voice') throw new OutError('They have not written to Maya on WhatsApp in the last 24 hours, and WhatsApp only allows a voice note inside that window. Nothing was sent.', 409, { windowClosed: true });
@@ -761,7 +762,14 @@ function placeCall(profileId, kind, spec) {
 require('./care').setWelfareSender({
   blocked: (profileId) => { const l = linkOf(profileId); if (!configured() || !l || !l.optIn) return 'WhatsApp is not linked for them.'; return null; },   // a closed window is not a block: a text or voice note check is rescued by a call (placeWelfare)
   fire: (profileId, via) => placeWelfare(profileId, via),
+  forgive: (profileId) => forgiveCap(profileId),
 });
+// The family restarted a schedule that a too-frequent test had paused for the daily cap, on a sane day-based interval: the messages of that flood stop counting toward the cap (they stay in Activity and keep their
+// 10 s spacing), so the family is not locked out for a day by a test. Returns how many were cleared.
+function forgiveCap(profileId) {
+  let n = 0; update(profileId, (x) => { for (const m of x.sent || []) if (!m.forgiven && Date.now() - m.at < WINDOW_MS && m.status !== 'failed') { m.forgiven = true; n += 1; } });
+  return n;
+}
 const placeTestCall = (profileId) => placeCall(profileId, 'test');
 const placeReminderCall = (profileId, spec) => placeCall(profileId, 'reminder', spec);
 const placeWelfareCall = (profileId, spec) => placeCall(profileId, 'welfare', spec);

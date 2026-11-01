@@ -18,8 +18,8 @@ class WelfareTab extends StatefulWidget {
 class _WelfareTabState extends State<WelfareTab> {
   String _via = 'call';
   String _schedVia = 'call';
-  String _every = '60';
-  final _custom = TextEditingController(text: '30');
+  String _every = '1440';
+  final _custom = TextEditingController();   // empty: the preset above is used. Typing here is the advanced custom interval.
   bool _busy = false;
   String? _result;
 
@@ -32,7 +32,8 @@ class _WelfareTabState extends State<WelfareTab> {
   }
 
   String _unit = 'days';
-  int get _everyMin => _every == 'custom' ? (int.tryParse(_custom.text) ?? 0) * (_unit == 'hours' ? 60 : _unit == 'days' ? 1440 : 10080) : int.parse(_every);
+  bool get _customOn => _custom.text.trim().isNotEmpty;
+  int get _everyMin => _customOn ? (int.tryParse(_custom.text.trim()) ?? 0) * (_unit == 'hours' ? 60 : _unit == 'days' ? 1440 : 10080) : int.parse(_every);
 
   Future<void> _checkNow() async {
     setState(() {
@@ -61,8 +62,9 @@ class _WelfareTabState extends State<WelfareTab> {
   }
 
   Future<void> _startSchedule() async {
+    final paused = d.schedule != null && d.schedule!['status'] == 'paused';
     setState(() => _busy = true);
-    final ok = await act(context, () => Api.postJson('/api/whatsapp/${d.profileId}/welfare-schedule', {'everyMin': _everyMin, 'via': _schedVia}), done: 'The schedule is running.');
+    final ok = await act(context, () => Api.postJson('/api/whatsapp/${d.profileId}/welfare-schedule', {'everyMin': _everyMin, 'via': _schedVia}), done: paused ? 'The schedule is running again.' : 'The schedule is running.');
     if (mounted) setState(() => _busy = false);
     if (ok) d.refresh(quiet: true);
   }
@@ -82,6 +84,9 @@ class _WelfareTabState extends State<WelfareTab> {
     final n = _everyMin;
     final via = _schedVia;
     final planned = n >= 5 && n <= 120960 ? ((n >= 1440 ? 90 * 1440 : 24 * 60) ~/ n).clamp(1, 288) : 0;
+    final paused = s != null && s['status'] == 'paused';
+    final stateWord = running ? 'Running' : paused ? 'Paused' : 'Stopped';
+    final nextText = running ? (s['held'] == true ? 'next check at ${q != null ? hh(q['end'] as num) : '07'}:00 (quiet hours)' : 'next check about ${clock((s['next'] as num).toInt())}') : paused ? '${s['note'] ?? ''}' : '';
     final line = s == null
         ? 'No schedule is running.'
         : s['status'] == 'running'
@@ -102,25 +107,32 @@ class _WelfareTabState extends State<WelfareTab> {
             if (_result != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_result!, style: const TextStyle(fontSize: 15))),
             const Divider(height: 28),
             sectionLabel('Scheduled check-ins'),
-            Text(line, style: const TextStyle(fontSize: 15)),
+            Text.rich(TextSpan(children: [TextSpan(text: stateWord, style: const TextStyle(fontWeight: FontWeight.w700)), if (nextText.isNotEmpty) TextSpan(text: ' · $nextText')]), key: const Key('schedStatus'), style: const TextStyle(fontSize: 16)),
+            const SizedBox(height: 4),
+            Text(line, style: const TextStyle(fontSize: 14, color: kSoft)),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: _every,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Check in'),
               items: const [
-                DropdownMenuItem(value: '60', child: Text('Every hour')),
                 DropdownMenuItem(value: '1440', child: Text('Every day')),
-                DropdownMenuItem(value: '4320', child: Text('Every 3 days')),
+                DropdownMenuItem(value: '2880', child: Text('Every 2 days')),
                 DropdownMenuItem(value: '10080', child: Text('Every week')),
-                DropdownMenuItem(value: 'custom', child: Text('Custom (every other week is 2 weeks)')),
+                DropdownMenuItem(value: '20160', child: Text('Every 2 weeks')),
               ],
-              onChanged: (v) => setState(() => _every = v ?? '60'),
+              onChanged: (v) => setState(() {
+                _every = v ?? '1440';
+                _custom.clear();
+              }),
             ),
-            if (_every == 'custom')
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Row(children: [
+            ExpansionTile(
+              key: const Key('schedAdvanced'),
+              tilePadding: EdgeInsets.zero,
+              title: const Text('Advanced: a custom interval', style: TextStyle(fontSize: 14, color: kSoft)),
+              children: [
+                Padding(padding: const EdgeInsets.only(bottom: 6), child: Text('Too frequent will pause for flooding. Maya stops a phone from getting too many messages in a day.', key: const Key('customWarn'), style: TextStyle(fontSize: 13, color: n < 1440 && _customOn ? Colors.red.shade700 : kSoft, fontWeight: n < 1440 && _customOn ? FontWeight.w600 : FontWeight.normal))),
+                Row(children: [
                   Expanded(child: TextField(controller: _custom, keyboardType: TextInputType.number, onChanged: (_) => setState(() {}), decoration: const InputDecoration(labelText: 'How many?'))),
                   const SizedBox(width: 10),
                   Expanded(
@@ -133,7 +145,8 @@ class _WelfareTabState extends State<WelfareTab> {
                     ),
                   ),
                 ]),
-              ),
+              ],
+            ),
             const SizedBox(height: 8),
             DeliveryPicker(value: _schedVia, onChanged: (v) => setState(() => _schedVia = v ?? 'call')),
             const SizedBox(height: 6),
@@ -144,11 +157,11 @@ class _WelfareTabState extends State<WelfareTab> {
               style: const TextStyle(fontSize: 13, color: kSoft),
             ),
             const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: FilledButton(onPressed: _busy || running ? null : _startSchedule, child: Text(n >= 1440 ? 'Start' : 'Start (24 hours)'))),
-              const SizedBox(width: 10),
-              Expanded(child: OutlinedButton(onPressed: running ? _stopSchedule : null, child: const Text('Stop'))),
-            ]),
+            // Running shows Stop only; Paused shows Restart only; otherwise Start only. Never both.
+            if (running)
+              SizedBox(width: double.infinity, child: OutlinedButton(key: const Key('schedStop'), onPressed: _busy ? null : _stopSchedule, child: const Text('Stop')))
+            else
+              SizedBox(width: double.infinity, child: FilledButton(key: Key(paused ? 'schedRestart' : 'schedStart'), onPressed: _busy ? null : _startSchedule, child: Text(paused ? 'Restart' : n >= 1440 ? 'Start' : 'Start (24 hours)'))),
             if (d.calls != null && callLimitText(d.calls).isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(callLimitText(d.calls), style: const TextStyle(fontSize: 13, color: kSoft))),
           ]),
         ),

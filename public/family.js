@@ -202,11 +202,12 @@
   const channelSeg = seg($('channelPick')), deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia'));
   // ---- scheduled check-ins: every hour / 2 h / 3 h / custom, by call, text or voice note, for 24 hours; the server runs it and pauses it by itself when a check cannot go out ----
   const UNIT_MIN = { hours: 60, days: 1440, weeks: 10080 };
-  const everyMin = () => { const v = $('schedEvery').value; return v === 'custom' ? Number($('schedCustom').value) * (UNIT_MIN[$('schedUnit').value] || NaN) : Number(v); };
+  // The list offers day-based presets only. The custom interval sits under Advanced and is used only when a number is typed there.
+  const everyMin = () => { const c = $('schedCustom').value.trim(); return c !== '' ? Number(c) * (UNIT_MIN[$('schedUnit').value] || NaN) : Number($('schedEvery').value); };
   const EVERY_TEXT = (n) => (n === 60 ? 'hour' : n === 1440 ? 'day' : n === 10080 ? 'week' : n % 10080 === 0 ? `${n / 10080} weeks` : n % 1440 === 0 ? `${n / 1440} days` : n % 60 === 0 ? `${n / 60} hours` : `${n} minutes`);
   function schedPlan() {
     const n = everyMin(), via = schedSeg.get() || 'call';
-    $('schedCustomRow').hidden = $('schedEvery').value !== 'custom';
+    $('schedCustomWarn').className = n < 1440 ? 'hint warn' : 'hint';
     if (!Number.isInteger(n) || n < 5 || n > 120960) { $('schedPlan').textContent = 'Choose a number of hours, days or weeks (up to 12 weeks).'; return; }
     const long = n >= 1440, count = Math.max(1, Math.floor((long ? 90 * 1440 : 24 * 60) / n)), what = via === 'call' ? 'calls' : via === 'voice' ? 'voice notes' : 'texts';
     $('schedPlan').textContent = `Up to ${count} ${what} in the next ${long ? '90 days' : '24 hours'}, one every ${EVERY_TEXT(n)}.${long ? ' It keeps going until you stop it.' : ''} ${quiet && quiet.tz ? `A check that falls between ${hh(quiet.start)}:00 and ${hh(quiet.end)}:00 (their night) is held until ${hh(quiet.end)}:00. ` : ''}${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}${via === 'call' ? '' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round, and tries the text or voice note again first the next time. '}It pauses by itself after 2 unanswered calls in a row or when WhatsApp refuses a call, and says why. Every check shows in Activity. You can stop it any time.`;
@@ -214,10 +215,13 @@
   function renderSchedule(s) {
     const live = Boolean(s && s.status === 'running');
     $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' && s.held ? `Held for quiet hours: the next check goes at ${quiet ? hh(quiet.end) : '07'}:00. Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'} every ${EVERY_TEXT(s.everyMin)}, ${s.fired} sent so far of about ${s.planned}. Ends ${t(s.until)}.` : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next about ${clock(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
-    $('schedStart').disabled = live; $('schedStop').disabled = !live;
+    // Running / Paused / Stopped + the next check at the top; Running shows Stop only, Paused shows Restart only, otherwise Start only.
+    const st = !s ? 'Stopped' : s.status === 'running' ? 'Running' : s.status === 'paused' ? 'Paused' : 'Stopped';
+    $('schedState').textContent = st; $('schedNext').textContent = live ? (s.held ? `· next check at ${quiet ? hh(quiet.end) : '07'}:00 (quiet hours)` : `· next check about ${clock(s.next)}`) : st === 'Paused' ? `· ${s.note || ''}` : '';
+    $('schedStart').hidden = live; $('schedStop').hidden = !live; $('schedStart').textContent = st === 'Paused' ? 'Restart' : 'Start'; $('schedStart').disabled = false; $('schedStop').disabled = false;
   }
   $('at').addEventListener('input', remQuietWarn); $('at').addEventListener('change', remQuietWarn);
-  $('schedEvery').addEventListener('change', schedPlan); $('schedCustom').addEventListener('input', schedPlan); $('schedUnit').addEventListener('change', schedPlan); $('schedVia').addEventListener('click', schedPlan); schedPlan();
+  $('schedEvery').addEventListener('change', () => { $('schedCustom').value = ''; schedPlan(); }); $('schedCustom').addEventListener('input', schedPlan); $('schedUnit').addEventListener('change', schedPlan); $('schedVia').addEventListener('click', schedPlan); schedPlan();
   $('schedStart').addEventListener('click', async () => {
     $('schedStart').disabled = true;
     try {
@@ -298,7 +302,7 @@
       if (tag) head.append(el('span', `pill ${tag[0]}`, tag[1]));
       const del = el('button', 'btn small danger', 'Delete'); del.addEventListener('click', () => api(`/api/care/${id}/reminders/${r.id}`, 'DELETE').then(() => { pendingAdds = pendingAdds.filter((x) => x.id !== r.id); load(); }).catch((e) => showErr(e.message))); head.append(del);
       c.append(head);
-      if (r.dueAt) c.append(el('div', 'meta', `Next: ${t(r.dueAt)}${r.repeat !== 'none' ? ` · repeats ${r.repeat}` : ''}`));
+      if (r.dueAt) c.append(el('div', 'meta', `Next: ${t(r.dueAt)}${r.repeat !== 'none' ? ` · repeats ${r.every === 2 ? `every 2 ${r.repeat === 'weekly' ? 'weeks' : 'days'}` : r.repeat}` : ''}`));
       if (cur) c.append(el('div', 'detail', `${r.active ? 'Now' : 'Last'} (${t(cur.dueAt)}): ${cur.label}${cur.attempts ? ` · ${cur.attempts} ${cur.attempts === 1 ? 'try' : 'tries'}` : ''}`));
       return c;
     };
@@ -476,7 +480,7 @@
   $('deliv').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { reminders: $('deliv').value }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('remForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    api(`/api/care/${id}/reminders`, 'POST', { task: $('task').value, dueAt: new Date($('at').value).getTime(), repeat: $('repeat').value, ...(deliverSeg.get() ? { deliver: deliverSeg.get() } : {}), ...(channelSeg.get() ? { channel: channelSeg.get() } : {}) })
+    api(`/api/care/${id}/reminders`, 'POST', { task: $('task').value, dueAt: new Date($('at').value).getTime(), repeat: $('repeat').value.replace(/2$/, ''), ...($('repeat').value.endsWith('2') ? { every: 2 } : {}), ...(deliverSeg.get() ? { deliver: deliverSeg.get() } : {}), ...(channelSeg.get() ? { channel: channelSeg.get() } : {}) })
       .then((j) => { if (j && j.reminder) pendingAdds.push({ ...j.reminder, addedAt: Date.now() }); $('task').value = ''; deliverSeg.set(null); channelSeg.set(null); showErr(''); load(); }).catch((x) => showErr(x.message));
   });
   $('msgForm').addEventListener('submit', (e) => {

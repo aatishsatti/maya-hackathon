@@ -59,7 +59,8 @@ class Reminder {
   final bool held, msg, finished;
   final String? stateLabel;
   final int? lastAt;
-  const Reminder({required this.id, required this.task, required this.repeat, this.dueAt, this.deliver, this.channel, this.by, this.held = false, this.msg = false, this.stateLabel, this.finished = false, this.lastAt});
+  final int every;
+  const Reminder({required this.id, required this.task, required this.repeat, this.every = 1, this.dueAt, this.deliver, this.channel, this.by, this.held = false, this.msg = false, this.stateLabel, this.finished = false, this.lastAt});
 
   static Reminder? from(dynamic j) {
     if (j is! Map || j['id'] is! String) return null;
@@ -68,6 +69,7 @@ class Reminder {
       id: j['id'] as String,
       task: '${j['task']}',
       repeat: '${j['repeat'] ?? 'none'}',
+      every: j['every'] is num ? (j['every'] as num).toInt() : 1,
       dueAt: j['dueAt'] is num ? (j['dueAt'] as num).toInt() : null,
       deliver: j['deliver'] is String ? j['deliver'] as String : null,
       channel: j['channel'] is String ? j['channel'] as String : null,

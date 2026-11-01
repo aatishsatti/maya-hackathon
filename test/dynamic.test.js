@@ -235,8 +235,8 @@ test('welfare options: Every hour, Every day, Every 3 days, Every week and Custo
 });
 
 test('the welfare options are on the web page and in the app: no disabled "not available yet" row, a number-and-unit custom choice', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); for (const v of ['60', '1440', '4320', '10080', 'custom']) assert.match(html, new RegExp(`<option value="${v}">`)); assert.match(html, /id="schedUnit"/); assert.doesNotMatch(html, /not available yet/);
-  const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_welfare.dart'), 'utf8'); for (const t of ['Every hour', 'Every day', 'Every 3 days', 'Every week', 'Custom']) assert.match(dart, new RegExp(t)); assert.doesNotMatch(dart, /not available yet/);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); for (const v of ['1440', '2880', '10080', '20160']) assert.match(html, new RegExp(`<option value="${v}">`)); assert.match(html, /id="schedUnit"/); assert.doesNotMatch(html, /not available yet/);
+  const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_welfare.dart'), 'utf8'); for (const t of ['Every day', 'Every 2 days', 'Every week', 'Every 2 weeks', 'Advanced']) assert.match(dart, new RegExp(t)); assert.doesNotMatch(dart, /not available yet/);
 });
 
 // ---------------------------------------------------------------- follow-up: Both + Call when the first ring is NOT ANSWERED
