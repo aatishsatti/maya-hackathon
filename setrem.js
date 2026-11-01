@@ -36,7 +36,9 @@ const validTz = (tz) => { try { new Intl.DateTimeFormat('en-US', { timeZone: tz 
 // ---------------------------------------------------------------- reading the words
 const IS_REQUEST = /\bremind me\b|\bset (?:me )?(?:up )?(?:a|an|another|the|some)?\s*(?:daily |hourly |new )?(?:reminder|alarm)s?\b|\b(?:i (?:need|want|would like)|can i (?:get|have)|could i have) (?:a |an )?(?:daily |hourly )?reminder\b/i;   // a QUESTION about reminders ("any reminders for me?") is not a request
 const NOT_A_SETUP = /\b(?:next time|when i (?:call|ring|phone) (?:you )?again|the next call)\b/i;   // "remind me next time I call" is the next-call reminder (recall.js), not this
-const isRequest = (text) => IS_REQUEST.test(String(text || '')) && !NOT_A_SETUP.test(String(text || ''));
+// "Call me back in ten minutes", "ring me tonight at 9": a promise to call. It is a real reminder by CALL, so the call really happens (or she says plainly that she cannot); she never just agrees.
+const CALLBACK = /\b(?:call|ring|phone) me (?:back|again)\b|\b(?:call|ring|phone) me (?:in|after|at|every|tomorrow|tonight|this|on)\b|\bgive me a (?:call|ring) (?:back|in|after|at|tomorrow|tonight|this|on)\b/i;
+const isRequest = (text) => (IS_REQUEST.test(String(text || '')) || CALLBACK.test(String(text || ''))) && !NOT_A_SETUP.test(String(text || ''));
 
 const norm = (s) => String(s || '').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
 
@@ -94,6 +96,7 @@ function resolveClock(c, daypart) {
   return { ok: true, h, mi };
 }
 
+const CALL_TASK = 'talk with Maya';   // what a promised call-back is "for" when they named nothing else
 const FILLER_TASK = /^(?:it|that|this|something|stuff|things?|a thing|me|you|please|thanks?|ok(?:ay)?|yes|no)$/i;
 // What to remind them of: the words after the LAST "remind me" / "reminder", with the time words already blanked out. Their own words, pronouns untouched.
 function readTask(rest) {
@@ -101,7 +104,7 @@ function readTask(rest) {
   const idx = [...t.matchAll(/\bremind(?:er)?s?(?:\s+me)?\b/gi)];
   if (idx.length) { const last = idx[idx.length - 1]; t = t.slice(last.index + last[0].length); }
   else t = t.replace(/^.*?\bset (?:me )?(?:a|an|another|the|some)?\s*(?:daily |hourly )?(?:reminder|alarm)s?\b/i, '');
-  t = t.replace(/^[\s,.:;-]+/, '').replace(/^(?:please\s+|and\s+|also\s+)+/i, '').replace(/^(?:to|that|about|of|for)\s+/i, '');
+  t = t.replace(/^[\s,.:;-]+/, '').replace(/^so\s+(?:that\s+)?(?:i|we)\s+(?:will|can|would|do|won'?t forget to|remember to|don'?t forget to)\s+/i, '').replace(/^(?:please\s+|and\s+|also\s+)+/i, '').replace(/^(?:to|that|about|of|for)\s+/i, '');
   t = t.replace(/^(?:i|we)\s+(?:need|have|has|must|should|want|ought|got)\s+to\s+/i, '').replace(/^(?:i|we)\s+(?:need|have|has|must|should|got)\s+(?=\S)/i, (m) => m);
   t = t.replace(/\b(?:please|thanks|thank you)\b[\s.!?,]*$/i, '').replace(/\s+(?:and|then|so)\s*$/i, '').replace(/[\s.!?,;:]+$/g, '').replace(/\s+/g, ' ').trim();
   return t;
@@ -142,11 +145,13 @@ function parseRequest(text, { now = Date.now(), tz = null, bare = false, base = 
   const spec = base ? { ...base } : { task: '', repeat: 'none', every: 1, dueAt: null, deliver: null, channel: null, relMs: null, clock: null, weekday: null, startWords: null };
   const td = takeDelivery(rest);
   let task = readTask(td.rest);
+  if (!base && CALLBACK.test(String(text || '')) && !/\bremind(?:er)?s?\b/i.test(String(text || ''))) { task = CALL_TASK; td.deliver = 'call'; }   // a callback has no other task
   const dl = { deliver: td.deliver, channel: td.channel };
   if (dl.deliver) spec.deliver = dl.deliver;
   if (dl.channel) spec.channel = dl.channel;
   // the task: delivery words that were the whole answer ("by text") are not a task
-  if (task && !(base && base.task)) {
+  if (task === CALL_TASK && !(base && base.task)) spec.task = task;
+  else if (task && !(base && base.task)) {
     const t2 = readDelivery(task); const onlyDelivery = (t2.deliver || t2.channel) && norm(task).split(' ').length <= 4 && !isRequest(text) && !bareTaskLooksReal(task);
     if (!onlyDelivery && !FILLER_TASK.test(task) && task.length >= 3) spec.task = task;
   }
@@ -216,7 +221,19 @@ function dayWords(ts, tz, now) {
   const n = Math.round((Date.UTC(a.y, a.m - 1, a.d) - Date.UTC(b.y, b.m - 1, b.d)) / DAY);
   return n === 0 ? 'today' : n === 1 ? 'tomorrow' : `on ${WEEKDAYS[a.wd][0].toUpperCase()}${WEEKDAYS[a.wd].slice(1)}`;
 }
-function whenWords(spec, { tz, now = Date.now() }) {
+const PARK_MS = 3 * HOUR;   // if the end of the call is never seen, the parked reminder still comes after this
+const waiting = new Map();   // profile id -> [{ rid, delay }]: reminders waiting for a call to end
+// Called when a call ends: what was asked for "in a minute" during it now happens, right after the hang-up (at least 20 seconds, or the delay they asked for if longer).
+function afterHangup(id) {
+  const w = waiting.get(id); if (!w) return 0; waiting.delete(id);
+  const care = require('./care'); let n = 0;
+  for (const x of w) if (care.rescheduleReminder(id, x.rid, Date.now() + x.delay)) n++;
+  return n;
+}
+const SHORT_MS = 10 * MIN;   // on a call, an ask for something this soon cannot be kept while the call is on: it happens right after the call ends
+const afterCall = (spec, ctx) => ctx && ctx.origin === 'call' && spec.repeat === 'none' && spec.relMs != null && spec.relMs <= SHORT_MS;
+function whenWords(spec, { tz, now = Date.now(), origin } = {}) {
+  if (afterCall(spec, { origin })) return 'right after you hang up the call';
   const wd = (i) => `${WEEKDAYS[i][0].toUpperCase()}${WEEKDAYS[i].slice(1)}`;
   const k = spec.every || 1;
   if (spec.repeat === 'hourly') {
@@ -234,11 +251,16 @@ const WHERE_WORDS = { whatsapp: 'on WhatsApp', app: 'in the Maya app' };
 // The sentence Maya says back before anything is saved. When the way and the place are already known they are in it.
 function confirmText(spec, ctx) {
   const when = whenWords(spec, ctx), what = `${toOrAbout(spec.task)} ${second(spec.task)}`;
+  if (spec.task === CALL_TASK) return afterCall(spec, ctx) ? 'So, I will call you right after you hang up this call. Is that right?' : `So, ${when}, I will call you for a chat. Is that right?`;
+  if (afterCall(spec, ctx)) return `So, I will remind you ${what} right after you hang up the call. Is that right?`;
   const how = spec.deliver ? `${VERB_PHRASE[spec.deliver]}${spec.channel ? ` ${WHERE_WORDS[spec.channel]}` : ''} and remind you` : 'remind you';
   return `So, ${when}, I will ${how} ${what}. Is that right?`;
 }
 const savedText = (spec, ctx) => {
   const when = whenWords(spec, ctx), what = `${toOrAbout(spec.task)} ${second(spec.task)}`;
+  const where = spec.channel ? ` ${WHERE_WORDS[spec.channel]}` : '';
+  if (spec.task === CALL_TASK) return afterCall(spec, ctx) ? `I will call you${where} right after you hang up this call.` : `${when[0].toUpperCase()}${when.slice(1)}, I will call you${where} for a chat.`;
+  if (afterCall(spec, ctx)) return `I will remind you ${what} right after you hang up the call.`;
   const how = `${VERB_PHRASE[spec.deliver]} ${WHERE_WORDS[spec.channel]} and remind you`;
   return `${when[0].toUpperCase()}${when.slice(1)}, I will ${how} ${what}.`;
 };
@@ -322,7 +344,10 @@ function save(id, st, ctx) {
   const spec = st.spec, care = require('./care');
   states.delete(id);
   try {
-    care.addSeniorReminder(id, { task: spec.task, dueAt: spec.dueAt, repeat: spec.repeat, every: spec.every, deliver: spec.deliver, channel: spec.channel, origin: st.origin });
+    // On a call, something this soon waits for the call to end (then it happens right after the hang-up). It is parked until then, with a safety time if the hang-up is never seen.
+    const park = afterCall(spec, { origin: st.origin });
+    const r = care.addSeniorReminder(id, { task: spec.task, dueAt: park ? Date.now() + PARK_MS : spec.dueAt, repeat: spec.repeat, every: spec.every, deliver: spec.deliver, channel: spec.channel, origin: st.origin });
+    if (park && r && r.id) { const w = waiting.get(id) || []; w.push({ rid: r.id, delay: Math.max(20000, spec.relMs) }); waiting.set(id, w); }
   } catch (e) {
     return note('setrem-not-saved', `The reminder could NOT be saved (${e.status === 409 ? 'they already have as many reminders set by talking as can be kept' : 'a problem on your side'}). Tell them kindly in one short sentence that you could not set it, and that their family can add reminders. Do not say it is set. ${COMMON}`);
   }
@@ -394,4 +419,4 @@ function step(id, heard, { origin, tz = null, now = Date.now(), waLinked = false
 const reset = (id) => { if (id) states.delete(id); else states.clear(); };
 const pending = (id) => { const s = states.get(id); return s ? { stage: s.stage, origin: s.origin, spec: s.spec } : null; };
 
-module.exports = { EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };
+module.exports = { afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };

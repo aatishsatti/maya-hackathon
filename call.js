@@ -594,6 +594,7 @@ class Call {
     if (!this.profile || !this.callStarted) return;
     const heavy = this.escalations > 0 || (this.prevDelivery && ['sad', 'lonely', 'grief', 'anxious'].includes(this.prevDelivery.emotion));
     memory.endCall(this.profile.id, this.callId, { heavy: Boolean(heavy) });
+    try { require('./setrem').afterHangup(this.profile.id); } catch (e) { /* a reminder asked for on this call stays parked and still comes */ }   // what was asked for "in a minute" on this call happens right after it
   }
 
   onBrowser(data, isBinary) {
