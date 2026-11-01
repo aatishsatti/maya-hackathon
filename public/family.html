@@ -11,7 +11,6 @@
 <header class="bar">
   <div class="bar-in">
     <div class="brand"><span id="famOrb" class="fam-orb" aria-hidden="true"></span>Maya <span>Family</span></div>
-    <div class="who" style="gap:8px 16px"><a class="btn small" href="/login.html#add">Add a family member</a><button id="logoutBtn" class="btn small" type="button">Log out</button></div>
     <div id="whoBox" class="who" hidden>
       <label for="who">Switch person</label>
       <select id="who"></select>
@@ -26,24 +25,34 @@
     <div id="chips" class="chips" role="group" aria-label="Switch person"></div>
   </div>
 </div>
-<main class="wrap">
-  <p class="note">Information only. Maya never diagnoses or recommends. Flags are yellow and show here only. Alerts are red and send a notification that opens this page. Calls and notifications reach the senior's page and this page only while they are open; there is no phone push yet.</p>
+<main class="wrap dash">
   <p id="err" class="err" role="alert" hidden></p>
   <div id="body" hidden>
-    <nav id="tabs" class="tabs" aria-label="Jump to a section">
-      <a class="tab" href="#waPanel">WhatsApp</a>
-      <a class="tab" href="#remPanel">Reminders</a>
-      <a class="tab" href="#welfareHead">Check In With Them</a>
-      <a class="tab" href="#activityPanel">Activity</a>
-    </nav>
-    <section class="panel">
-      <div class="panel-head"><h2>Mode</h2><span id="modeNow" class="pill pill-ok"></span></div>
-      <p class="hint">Set per senior. Safety alerts ignore the mode and quiet hours.</p>
-      <div id="modes" class="modes"></div>
+    <!-- SUMMARY FIRST: one screen, no scrolling to understand. Everything else opens on a tap. -->
+    <section id="summary" class="summary" aria-label="Summary">
+      <div class="sum-hero">
+        <div id="sumStatus" class="sum-status ok"><span class="dot2"></span><b id="sumStatusWord">OK</b></div>
+        <p id="sumLine" class="sum-line"></p>
+      </div>
+      <button id="sumAlerts" class="sum-alert" type="button" data-open="mAlerts" hidden></button>
+      <div class="sum-grid">
+        <button class="sum-card" type="button" data-open="mCheck"><span class="sum-label">Next check</span><b id="sumNext">Not set</b><small id="sumNextSub">Tap to set check-ins</small></button>
+        <button class="sum-card" type="button" data-open="mRem"><span class="sum-label">Reminders today</span><b id="sumRem">0</b><small id="sumRemSub">Tap to see or add</small></button>
+      </div>
+      <div class="sum-recent">
+        <div class="sum-recent-head"><h2>Latest</h2><button class="link2" type="button" data-open="mAct">See all activity</button></div>
+        <div id="sumAct" class="act-list"></div>
+      </div>
     </section>
+    <nav class="sections" aria-label="Sections">
+      <button type="button" data-open="mCheck">Check In With Them</button>
+      <button type="button" data-open="mRem">Reminders</button>
+      <button type="button" data-open="mAct">Activity</button>
+      <button type="button" data-open="mFamily">Family Members</button>
+      <button type="button" data-open="mSet">Settings</button>
+    </nav>
 
-    <div class="grid">
-      <div class="col">
+    <div class="modal" id="mAlerts" hidden role="dialog" aria-modal="true" aria-labelledby="mAlertsT"><div class="modal-card"><header class="modal-head"><h2 id="mAlertsT">Alerts and flags</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
         <section>
           <div class="sec-head"><h2>Alerts</h2><span class="sec-sub">Red. Opens this page.</span></div>
           <div id="alerts" class="stack"></div>
@@ -52,81 +61,13 @@
           <div class="sec-head"><h2>Flags</h2><span class="sec-sub">Yellow. Dashboard only.</span></div>
           <div id="flags" class="stack"></div>
         </section>
-        <section>
-          <div class="sec-head"><h2>What changed</h2><span class="sec-sub">From daily counts only. Information, not advice.</span></div>
-          <div id="trend" class="stack"></div>
-        </section>
-      </div>
 
-      <div class="col">
-        <section class="panel" id="remPanel">
-          <div class="sec-head"><h2>Reminders</h2></div>
-          <form id="remForm" class="form">
-            <input id="task" placeholder="Task, e.g. medicine" maxlength="80" required aria-label="Task">
-            <div class="form-row">
-              <input id="at" type="datetime-local" required aria-label="When">
-              <select id="repeat" aria-label="Repeat"><option value="none">Once</option><option value="daily">Every day</option><option value="daily2">Every 2 days</option><option value="weekly">Every week</option><option value="weekly2">Every 2 weeks</option></select>
-            </div>
-            <p class="hint" id="remQuietWarn" role="status" aria-live="polite" hidden></p>
-            <label class="wa-label" id="deliverLabel">Deliver this reminder as</label>
-            <div id="deliverPick" class="seg" role="radiogroup" aria-labelledby="deliverLabel" data-clearable="1">
-              <button type="button" role="radio" aria-checked="false" data-v="call">Call</button>
-              <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
-              <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
-            </div>
-            <label class="wa-label" id="channelLabel">Where it goes</label>
-            <div id="channelPick" class="seg" role="radiogroup" aria-labelledby="channelLabel" data-clearable="1">
-              <button type="button" role="radio" aria-checked="false" data-v="whatsapp">WhatsApp</button>
-              <button type="button" role="radio" aria-checked="false" data-v="app">Maya app</button>
-              <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
-            </div>
-            <p class="hint" id="channelHint">Not chosen: Maya uses the setting below. The Maya app has no limits. WhatsApp has rules (below). If WhatsApp cannot deliver, the app covers it and Activity says why. "Both" sends text and voice notes to both; a call goes where they were last active first, then the other, never two rings at once.</p>
-            <details class="rules" open><summary>WhatsApp rules, in plain words</summary><ul id="waRulesA"></ul></details>
-            <p class="hint" id="deliverHint">Not chosen: Maya uses the setting below (a voice note or text). Tap a choice again to clear it.</p>
-            <button class="btn primary" type="submit">Add reminder</button>
-          </form>
-          <div class="form-row">
-            <label for="deliv" class="hint">On WhatsApp, send reminders as</label>
-            <select id="deliv" aria-label="Send reminders on WhatsApp as"><option value="voice">A voice note in Maya's voice</option><option value="text">Text</option></select>
-          </div>
-          <div class="form-row">
-            <label for="delivChan" class="hint">When no choice is made, reminders go</label>
-            <select id="delivChan" aria-label="Where reminders go by default"><option value="whatsapp">On WhatsApp</option><option value="app">In the Maya app</option><option value="both">On both</option></select>
-          </div>
-          <details class="rules"><summary>WhatsApp rules, in plain words</summary><ul id="waRulesB"></ul></details>
-          <div class="form-row" id="tzRow" hidden>
-            <label for="tzIn" class="hint">Time zone: it could not be worked out automatically. Please choose theirs, so "at 8" and quiet hours use their own time.</label>
-            <input id="tzIn" list="tzList" placeholder="For example Europe/London" autocomplete="off"><datalist id="tzList"></datalist>
-            <button type="button" class="btn small" id="tzSave">Save time zone</button>
-          </div>
-          <p class="hint" id="tzKnown" hidden></p>
-          <p class="hint">A reminder goes on WhatsApp only while they have written to Maya in the last 24 hours. Every reminder shows what really happened to it: sent, delivered, read, answered, or missed. Maya is a companion, not medical care: a reminder can fail or arrive late, so never rely on it for medicine.</p>
-          <div id="reminders" class="stack"></div>
-        </section>
+    </div></div></div>
 
-        <section class="panel" id="waPanel">
-          <div class="sec-head"><h2>WhatsApp</h2><span id="waState" class="pill pill-plain"></span></div>
-          <p id="waLine" class="hint"></p>
-          <form id="waLink" class="form" hidden>
-            <input id="waPhone" inputmode="tel" placeholder="Their WhatsApp number with country code, e.g. 447700900123" maxlength="20" required aria-label="WhatsApp number">
-            <label class="hint" style="margin:0"><input id="waOpt" type="checkbox"> They have agreed to hear from Maya on WhatsApp</label>
-            <button class="btn primary" type="submit">Link this number</button>
-          </form>
+    <div class="modal" id="mCheck" hidden role="dialog" aria-modal="true" aria-labelledby="mCheckT"><div class="modal-card"><header class="modal-head"><h2 id="mCheckT">Check In With Them</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+      <p id="checkLocked" class="hint" hidden>Check-ins start once their WhatsApp is linked. Open Settings, then link their number.</p>
           <div id="waTest" class="wa-call" hidden>
-            <h3 class="wa-sub">Call them with a reminder (test)</h3>
-            <p class="hint">Rings their WhatsApp once. Maya says the reminder in her own words, listens, and ends the call herself. Needs their call permission.</p>
-            <label class="wa-label" for="waRemPick">A reminder you already set</label>
-            <select id="waRemPick" class="wa-wide"><option value="">No saved reminder: use what I type</option></select>
-            <label class="wa-label" for="waRemText">Or type one for this test</label>
-            <input id="waRemText" class="wa-wide" placeholder="e.g. take your tablets" maxlength="80">
-            <p class="hint wa-source" id="waRemSource" role="status" aria-live="polite"></p>
-            <div class="wa-actions">
-              <button id="waRemClear" class="btn" type="button">Clear choice</button>
-              <button id="waRemCall" class="btn primary" type="button">Call them with this reminder (test)</button>
-            </div>
-            <p class="hint" id="waCap" role="status" aria-live="polite"></p>
-            <p class="hint" id="waTestLine" role="status" aria-live="polite"></p>
-            <h3 class="wa-sub" id="welfareHead">Check In With Them</h3>
+            <h3 class="wa-sub" id="welfareHead" hidden>Check In With Them</h3>
             <p class="hint">Maya says it is a welfare check and asks how they are. As a call she then talks with them (needs their call permission); as a text or a voice note she sends the same short words, only while they have written in the last 24 hours. No reminder is used.</p>
             <div id="waWelfareVia" class="seg" role="radiogroup" aria-label="Check in by">
               <button type="button" role="radio" aria-checked="true" data-v="call">Call</button>
@@ -139,7 +80,6 @@
               <button type="button" role="radio" aria-checked="true" data-v="whatsapp">WhatsApp</button>
               <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
             </div>
-            <div class="wa-actions"><button id="waWelfareCall" class="btn primary" type="button">Check in with them now (test)</button></div>
             <h3 class="wa-sub" id="schedHead">Scheduled check-ins</h3>
             <p class="sched-status" id="schedStatus" aria-live="polite"><strong id="schedState">Stopped</strong> <span id="schedNext"></span></p>
             <p class="hint" id="schedLine">No schedule is running.</p>
@@ -176,13 +116,59 @@
               <button id="schedStart" class="btn primary" type="button">Start</button>
               <button id="schedStop" class="btn" type="button" hidden>Stop</button>
             </div>
-            <h3 class="wa-sub">Ring test with one fixed sentence</h3>
-            <p class="hint">Rings once, Maya says one fixed sentence and hangs up. No reminder is used.</p>
-            <div class="wa-actions"><button id="waTestCall" class="btn" type="button">Call them now (test)</button></div>
           </div>
-          <p class="hint" id="waNote" hidden>Maya does not call on her own. The test button above is the only call she places. Words are never stored here.</p>
+
+    </div></div></div>
+
+    <div class="modal" id="mRem" hidden role="dialog" aria-modal="true" aria-labelledby="mRemT"><div class="modal-card"><header class="modal-head"><h2 id="mRemT">Reminders</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+        <section class="panel" id="remPanel">
+          <form id="remForm" class="form">
+            <input id="task" placeholder="Task, e.g. medicine" maxlength="80" required aria-label="Task">
+            <div class="form-row">
+              <input id="at" type="datetime-local" required aria-label="When">
+              <select id="repeat" aria-label="Repeat"><option value="none">Once</option><option value="daily">Every day</option><option value="daily2">Every 2 days</option><option value="weekly">Every week</option><option value="weekly2">Every 2 weeks</option></select>
+            </div>
+            <p class="hint" id="remQuietWarn" role="status" aria-live="polite" hidden></p>
+            <label class="wa-label" id="deliverLabel">Deliver this reminder as</label>
+            <div id="deliverPick" class="seg" role="radiogroup" aria-labelledby="deliverLabel" data-clearable="1">
+              <button type="button" role="radio" aria-checked="false" data-v="call">Call</button>
+              <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
+              <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
+            </div>
+            <label class="wa-label" id="channelLabel">Where it goes</label>
+            <div id="channelPick" class="seg" role="radiogroup" aria-labelledby="channelLabel" data-clearable="1">
+              <button type="button" role="radio" aria-checked="false" data-v="whatsapp">WhatsApp</button>
+              <button type="button" role="radio" aria-checked="false" data-v="app">Maya app</button>
+              <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
+            </div>
+            <p class="hint" id="channelHint">Not chosen: Maya uses the setting below. The Maya app has no limits. WhatsApp has rules (below). If WhatsApp cannot deliver, the app covers it and Activity says why. "Both" sends text and voice notes to both; a call goes where they were last active first, then the other, never two rings at once.</p>
+            <details class="rules"><summary>WhatsApp rules, in plain words</summary><ul id="waRulesA"></ul></details>
+            <p class="hint" id="deliverHint">Not chosen: Maya uses the setting below (a voice note or text). Tap a choice again to clear it.</p>
+            <button class="btn primary" type="submit">Add reminder</button>
+          </form>
+          <div class="form-row">
+            <label for="deliv" class="hint">On WhatsApp, send reminders as</label>
+            <select id="deliv" aria-label="Send reminders on WhatsApp as"><option value="voice">A voice note in Maya's voice</option><option value="text">Text</option></select>
+          </div>
+          <div class="form-row">
+            <label for="delivChan" class="hint">When no choice is made, reminders go</label>
+            <select id="delivChan" aria-label="Where reminders go by default"><option value="whatsapp">On WhatsApp</option><option value="app">In the Maya app</option><option value="both">On both</option></select>
+          </div>
+          <details class="rules"><summary>WhatsApp rules, in plain words</summary><ul id="waRulesB"></ul></details>
+          <div class="form-row" id="tzRow" hidden>
+            <label for="tzIn" class="hint">Time zone: it could not be worked out automatically. Please choose theirs, so "at 8" and quiet hours use their own time.</label>
+            <input id="tzIn" list="tzList" placeholder="For example Europe/London" autocomplete="off"><datalist id="tzList"></datalist>
+            <button type="button" class="btn small" id="tzSave">Save time zone</button>
+          </div>
+          <p class="hint" id="tzKnown" hidden></p>
+          <p class="hint">A reminder goes on WhatsApp only while they have written to Maya in the last 24 hours. Every reminder shows what really happened to it: sent, delivered, read, answered, or missed. Maya is a companion, not medical care: a reminder can fail or arrive late, so never rely on it for medicine.</p>
+          <div id="reminders" class="stack"></div>
         </section>
 
+
+    </div></div></div>
+
+    <div class="modal" id="mAct" hidden role="dialog" aria-modal="true" aria-labelledby="mActT"><div class="modal-card"><header class="modal-head"><h2 id="mActT">Activity</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
         <section class="panel" id="activityPanel">
           <div class="sec-head"><h2>Activity</h2><span class="sec-sub">Reminders, check-ins and calls, last 30 days</span></div>
           <div id="actSummary" class="act-cards" aria-label="Summary"></div>
@@ -195,19 +181,51 @@
           </div>
         </section>
 
+
+        <section>
+          <div class="sec-head"><h2>What changed</h2><span class="sec-sub">From daily counts only. Information, not advice.</span></div>
+          <div id="trend" class="stack"></div>
+        </section>
+
         <div class="log-wrap">
           <details class="log">
             <summary>Notification log</summary>
             <div id="notifs" class="stack"></div>
           </details>
         </div>
-      </div>
-    </div>
+
+    </div></div></div>
+
+    <div class="modal" id="mFamily" hidden role="dialog" aria-modal="true" aria-labelledby="mFamilyT"><div class="modal-card"><header class="modal-head"><h2 id="mFamilyT">Family Members</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+      <p class="hint">The people Maya talks with, for your family account. Tap a name to look at them.</p>
+      <div id="famList" class="stack"></div>
+      <div class="wa-actions"><a class="btn primary" href="/login.html#add">Add a family member</a><button id="logoutBtn2" class="btn" type="button">Log out</button></div>
+    </div></div></div>
+
+    <div class="modal" id="mSet" hidden role="dialog" aria-modal="true" aria-labelledby="mSetT"><div class="modal-card"><header class="modal-head"><h2 id="mSetT">Settings</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+    <section class="panel">
+      <div class="panel-head"><h2>Mode</h2><span id="modeNow" class="pill pill-ok"></span></div>
+      <p class="hint">Set per senior. Safety alerts ignore the mode and quiet hours.</p>
+      <div id="modes" class="modes"></div>
+    </section>
+
+
+        <section class="panel" id="waPanel">
+          <div class="sec-head"><h2>WhatsApp</h2><span id="waState" class="pill pill-plain"></span></div>
+          <p id="waLine" class="hint"></p>
+          <form id="waLink" class="form" hidden>
+            <input id="waPhone" inputmode="tel" placeholder="Their WhatsApp number with country code, e.g. 447700900123" maxlength="20" required aria-label="WhatsApp number">
+            <label class="hint" style="margin:0"><input id="waOpt" type="checkbox"> They have agreed to hear from Maya on WhatsApp</label>
+            <button class="btn primary" type="submit">Link this number</button>
+          </form>
+          <p class="hint" id="waNote" hidden>Maya does not call on her own. Words are never stored here.</p>
+        </section>
+
+    </div></div></div>
   </div>
 </main>
-<p style="text-align:center;font-size:14px;margin:12px"><a href="/privacy">Privacy</a></p>
+<p class="privacy-foot"><a href="/privacy">Privacy</a></p>
 <script src="family.js"></script>
 <script src="orb.js"></script>
-<script>document.getElementById("logoutBtn").addEventListener("click",()=>fetch("/api/family/logout",{method:"POST"}).finally(()=>location.replace("/login.html")))</script>
 </body>
 </html>

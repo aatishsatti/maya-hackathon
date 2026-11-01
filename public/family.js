@@ -2,7 +2,8 @@
 // Status words are the same everywhere: Sent, Delivered, Seen/Played, Replied, Hasn't replied yet, Not replied yet.
 (() => {
   'use strict';
-  const $ = (id) => document.getElementById(id);
+  // An element the page no longer has (the old test buttons are gone from the dashboard) is a detached stand-in, so nothing here ever throws on it.
+  const $ = (id) => document.getElementById(id) || document.createElement('span');
   let id = null;
   let timer = null;
   const store = { get() { try { return localStorage.getItem('mayaFamilySenior'); } catch { return null; } }, set(v) { try { localStorage.setItem('mayaFamilySenior', v); } catch { /* ignore */ } } };
@@ -139,6 +140,8 @@
     return c;
   }
   let lastName = 'them';
+  let lastView = null, lastSched = null;   // what the summary is built from
+  const later = (fn) => { try { Promise.resolve().then(fn); } catch (e) { /* no promises here */ } };
   async function loadTrend() {
     const mine = id;
     try { const tr = await api(`/api/care/${mine}/trend`); if (mine === id) $('trend').replaceChildren(trendCard(tr, lastName)); }
@@ -175,6 +178,7 @@
     return row;
   }
   function renderActivity(a) {
+    later(renderSummary);
     if (a) { act.entries = a.entries || []; act.summary = a.summary || null; }
     $('actSummary').replaceChildren(...ACT_CARDS.map(([k, label]) => { const c = el('div', 'act-card'); c.append(el('b', '', String(act.summary ? act.summary[k] || 0 : 0)), el('span', '', label)); return c; }));
     $('actFilters').replaceChildren(...ACT_FILTERS.map(([k, label]) => { const b = el('button', `chip${act.filter === k ? ' on' : ''}`, label); b.type = 'button'; b.setAttribute && b.setAttribute('aria-pressed', String(act.filter === k)); b.addEventListener('click', () => { act.filter = k; act.page = 0; renderActivity(); }); return b; }));
@@ -218,6 +222,7 @@
     $('schedPlan').textContent = `Up to ${count} ${what} in the next ${long ? '90 days' : '24 hours'}, one every ${EVERY_TEXT(n)}.${long ? ' It keeps going until you stop it.' : ''} ${quiet && quiet.tz ? `A check that falls between ${hh(quiet.start)}:00 and ${hh(quiet.end)}:00 (their night) is held until ${hh(quiet.end)}:00. ` : ''}${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}${via === 'call' ? '' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round, and tries the text or voice note again first the next time. '}It pauses by itself after 2 unanswered calls in a row or when WhatsApp refuses a call, and says why. Every check shows in Activity. You can stop it any time.`;
   }
   function renderSchedule(s) {
+    lastSched = s || null; later(renderSummary);
     const live = Boolean(s && s.status === 'running');
     $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' && s.held ? `Held for quiet hours: the next check is ${dateTime(s.next)}. Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'}${whereText(s)} every ${EVERY_TEXT(s.everyMin)}, ${s.fired} sent so far of about ${s.planned}. Ends ${t(s.until)}.` : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'}${whereText(s)} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next check: ${dateTime(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
     // Running / Paused / Stopped + the next check at the top; Running shows Stop only, Paused shows Restart only, otherwise Start only.
@@ -257,7 +262,6 @@
     if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   if (document.querySelectorAll) {
-    foldable([...document.querySelectorAll('section.panel')]);
     for (const a of [...document.querySelectorAll('#tabs .tab')]) a.addEventListener('click', (e) => { e.preventDefault(); jump(String(a.getAttribute('href')).slice(1)); });
     if (typeof IntersectionObserver === 'function') {   // the tab of the section in view is marked
       const tabs = [...document.querySelectorAll('#tabs .tab')], seen = new Map();
@@ -272,7 +276,7 @@
   const NOTE_PILL = (label) => (/^Replied/.test(label) ? 'pill-ok' : /^Hasn't/.test(label) ? 'pill-wait' : /^(Seen|Played)/.test(label) ? 'pill-info' : 'pill-plain');
 
   function render(v) {
-    $('body').hidden = false;
+    $('body').hidden = false; lastView = v;
     lastName = v.name || 'them'; quiet = v.quiet || null; remQuietWarn(); schedPlan();
     $('presence').textContent = `${v.inCall ? 'On a call with Maya now' : v.appOpen ? 'App is open' : 'App is not open (Maya cannot ring)'} · Last seen ${t(v.lastSeen && v.lastSeen.at)} · ${v.callCount || 0} ${v.callCount === 1 ? 'call' : 'calls'}`;
     $('modeNow').textContent = v.modes[v.mode].label;
@@ -477,6 +481,64 @@
   });
   es.addEventListener('refresh', (e) => { if (JSON.parse(e.data).id === id) load(); });
   if (window.Notification && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+
+  // ---- The summary: one screen, a status, the next check, today's reminders, an alert only when there is one, the latest few rows. Everything else opens on a tap. ----
+  function renderSummary() {
+    try { renderSummaryNow(); } catch (e) { /* the summary is a convenience: it never stops the page */ }
+  }
+  function renderSummaryNow() {
+    const v = lastView; if (!v) return;
+    $('checkLocked').hidden = !$('waTest').hidden;   // check-ins need their WhatsApp linked first: say so instead of showing an empty popup
+    const active = (a) => (a || []).filter((f) => f.status === 'active');
+    const sc = v.scams || [], alerts = [...active(v.alerts), ...active(sc.filter((x) => x.level === 'alert'))], flags = [...active(v.flags), ...active(sc.filter((x) => x.level !== 'alert'))];
+    const need = alerts.length + flags.length > 0;
+    $('sumStatus').className = `sum-status ${alerts.length ? 'alert' : need ? 'flag' : 'ok'}`;
+    $('sumStatusWord').textContent = need ? 'Needs attention' : 'OK';
+    $('sumLine').textContent = `${v.name || 'They'}: ${$('presence').textContent || ''}`.replace(/\s+/g, ' ').trim();
+    const al = $('sumAlerts');
+    al.hidden = !need;
+    if (need) al.textContent = alerts.length ? `${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'}${flags.length ? ` and ${flags.length} ${flags.length === 1 ? 'flag' : 'flags'}` : ''}: tap to read` : `${flags.length} ${flags.length === 1 ? 'flag' : 'flags'}: tap to read`;
+    al.className = `sum-alert ${alerts.length ? 'alert' : 'flag'}`;
+    // next check: always a date and a time; paused / stopped say since when
+    const s = lastSched;
+    if (s && s.status === 'running') { $('sumNext').textContent = dateTime(s.next); $('sumNextSub').textContent = s.held ? 'Running, held for quiet hours' : 'Running'; }
+    else if (s && s.status === 'paused') { $('sumNext').textContent = 'Paused'; $('sumNextSub').textContent = `Paused since ${dateTime(s.statusAt || s.startedAt)}. Tap to restart`; }
+    else if (s) { $('sumNext').textContent = 'Stopped'; $('sumNextSub').textContent = `Stopped since ${dateTime(s.statusAt || s.startedAt)}. Tap to start`; }
+    else { $('sumNext').textContent = 'Not set'; $('sumNextSub').textContent = 'Tap to set check-ins'; }
+    // reminders today: a count first, the list on a tap
+    const today = new Date(), same = (ms) => { const d = new Date(ms); return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate(); };
+    const todays = (v.reminders || []).filter((r) => r.active || (r.dueAt != null && same(r.dueAt))).sort((x, y) => (x.dueAt || 0) - (y.dueAt || 0));
+    $('sumRem').textContent = String(todays.length);
+    const nextR = todays.find((r) => r.dueAt != null && r.dueAt > Date.now());
+    $('sumRemSub').textContent = todays.length ? (nextR ? `Next ${clock(nextR.dueAt)}: ${nextR.task}` : 'Tap to see them') : 'None today. Tap to add';
+    // latest rows (Seen / Answered labels stay as they are in Activity)
+    const rows = act.entries.slice(0, 4), out = []; let last = null;
+    for (const e of rows) { const g = dayGroup(e.at); if (g !== last) { out.push(el('div', 'act-day', g)); last = g; } out.push(actRow(e, g)); }
+    list($('sumAct'), out, 'Nothing yet. Reminders, check-ins and messages show here.');
+  }
+  // ---- sections open in a popup with a Close that goes back to the summary ----
+  let opener = null;
+  function openModal(mid, from) { const m = document.getElementById(mid); if (!m) return; for (const x of document.querySelectorAll('.modal')) x.hidden = x !== m; opener = from || null; document.body.classList.add('modal-open'); m.querySelector('.modal-body').scrollTop = 0; const c = m.querySelector('[data-close]'); if (c) c.focus({ preventScroll: true }); if (mid === 'mFamily') loadFamily(); }
+  function closeModal() { for (const x of document.querySelectorAll('.modal')) x.hidden = true; document.body.classList.remove('modal-open'); if (opener && opener.focus) opener.focus({ preventScroll: true }); }
+  if (document.addEventListener) {
+  document.addEventListener('click', (e) => {
+    const t = e.target && e.target.closest ? e.target : null; if (!t) return;
+    const o = t.closest('[data-open]'); if (o) { openModal(o.getAttribute('data-open'), o); return; }
+    if (t.closest('[data-close]') || (t.classList && t.classList.contains('modal'))) closeModal();
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  }
+  // Family Members: the people on this family's account; a tap looks at them.
+  async function loadFamily() {
+    const box = $('famList');
+    try {
+      const ses = await fetch('/api/family/session').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      const me = ses && ses.username ? await fetch('/api/family/me').then((r) => (r.ok ? r.json() : null)) : null;
+      const ps = me ? me.seniors : people;
+      box.replaceChildren(...(ps || []).map((p) => { const b = el('button', `btn big${p.id === id ? ' on' : ''}`, p.name); b.type = 'button'; b.addEventListener('click', () => { $('who').value = p.id; pick(p.id); closeModal(); }); return b; }));
+    } catch { box.replaceChildren(el('div', 'empty', 'Could not load the family.')); }
+  }
+  if ($('logoutBtn2').addEventListener) $('logoutBtn2').addEventListener('click', () => fetch('/api/family/logout', { method: 'POST' }).finally(() => location.replace('/login.html')));
 
   api('/api/profiles').then((b) => {
     const ps = b.profiles || [];

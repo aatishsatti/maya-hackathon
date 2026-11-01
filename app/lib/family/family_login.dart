@@ -80,7 +80,8 @@ class _FamilyLoginState extends State<FamilyLogin> {
 /// The family's own people: one dashboard each. Also where a family member is added and the family logs out.
 class FamilyHome extends StatefulWidget {
   final bool addFirst; // right after signing up
-  const FamilyHome({super.key, this.addFirst = false});
+  final bool embedded; // inside the dashboard's Family Members page: no header of its own
+  const FamilyHome({super.key, this.addFirst = false, this.embedded = false});
   @override
   State<FamilyHome> createState() => _FamilyHomeState();
 }
@@ -132,7 +133,7 @@ class _FamilyHomeState extends State<FamilyHome> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Your family'), actions: [TextButton(onPressed: _logout, child: const Text('Log out'))]),
+      appBar: widget.embedded ? null : AppBar(title: const Text('Your family'), actions: [TextButton(onPressed: _logout, child: const Text('Log out'))]),
       body: SafeArea(
         child: _seniors == null
             ? Center(child: _error == null ? const CircularProgressIndicator() : Padding(padding: const EdgeInsets.all(24), child: Text(_error!, style: const TextStyle(fontSize: 16, color: kAlert))))
@@ -156,6 +157,7 @@ class _FamilyHomeState extends State<FamilyHome> {
                     ),
                   ),
                 OutlinedButton(style: OutlinedButton.styleFrom(minimumSize: const Size(48, 56)), onPressed: _add, child: const Text('Add a family member')),
+                if (widget.embedded) Padding(padding: const EdgeInsets.only(top: 12), child: TextButton(onPressed: _logout, child: const Text('Log out', style: TextStyle(fontSize: 16, color: kSoft)))),
               ]),
       ),
     );

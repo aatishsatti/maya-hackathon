@@ -80,6 +80,15 @@ http.Client fakeServer() => MockClient((req) async {
       return http.Response(jsonEncode(body), 200, headers: {'content-type': 'application/json'});
     });
 
+/// Opens a dashboard section by its name (the summary can scroll on a small phone).
+Future<void> openSection(WidgetTester t, String name) async {
+  await t.scrollUntilVisible(find.text(name).last, 200, scrollable: find.byType(Scrollable).first);
+  await t.ensureVisible(find.text(name).last);
+  await t.pump();
+  await t.tap(find.text(name).last);
+  await t.pump(const Duration(milliseconds: 500));
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -185,24 +194,35 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('the dashboard shows the five cards from the server, the activity list and the five tabs', (t) async {
+    testWidgets('the dashboard is a SUMMARY first (status, next check, reminders today, latest rows) and five sections that open on a tap with a Close; the activity cards are inside Activity', (t) async {
       await phone(t, 360, 640);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump();
       await t.pump(const Duration(milliseconds: 400));
       expect(t.takeException(), isNull);
+      expect(find.text('OK'), findsOneWidget, reason: 'the status at a glance');
+      expect(find.text('NEXT CHECK'), findsOneWidget);
+      expect(find.text('REMINDERS TODAY'), findsOneWidget);
+      await t.scrollUntilVisible(find.text('Latest'), 200, scrollable: find.byType(Scrollable).first);
+      expect(find.text('Latest'), findsOneWidget);
+      for (final sec in const ['Check In With Them', 'Reminders', 'Activity', 'Family Members', 'Settings']) {
+        expect(find.text(sec), findsWidgets);
+      }
+      expect(find.text('Sent'), findsNothing, reason: 'the activity cards are not on the summary');
+      expect(find.byType(RefreshIndicator), findsNothing);
+      await openSection(t, 'Activity');
+      await t.pump(const Duration(milliseconds: 500));
       for (final label in const ['Sent', 'Delivered', 'Read', 'Answered', 'Missed']) {
         expect(find.text(label), findsWidgets);
       }
       expect(find.text('7'), findsOneWidget); // the server's own count, not invented
-      expect(find.text('Take your tablets'), findsOneWidget);
-      expect(find.text('Read'), findsWidgets);
-      for (final tab in const ['Activity', 'Reminders', 'Check In', 'Setup']) {
-        expect(find.text(tab), findsWidgets);
-      }
-      expect(find.text('Message'), findsNothing, reason: 'Send a message is gone: no Message tab');
-      // the cards and the filters do not scroll with the list
-      expect(find.byType(RefreshIndicator), findsOneWidget);
+      expect(find.text('Take your tablets'), findsWidgets);
+      expect(find.text('Close'), findsOneWidget);
+      await t.tap(find.text('Close'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 900));
+      expect(find.text('Close'), findsNothing, reason: 'Close goes back to the summary');
+      expect(find.text('Latest'), findsWidgets);
       await t.pumpWidget(const SizedBox());
     });
 
@@ -210,7 +230,7 @@ void main() {
       await phone(t, 360, 700);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Check In').last);
+      await openSection(t, 'Check In With Them');
       await t.pump(const Duration(milliseconds: 400));
       expect(find.byType(DeliveryPicker), findsWidgets);
       for (final o in const ['Call', 'Text', 'Voice note']) {
@@ -221,7 +241,10 @@ void main() {
       for (final o in const ['Maya app', 'WhatsApp', 'Both']) {
         expect(find.text(o), findsWidgets);
       }
-      await t.tap(find.text('Reminders').last);
+      await t.tap(find.text('Close'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 900));
+      await openSection(t, 'Reminders');
       await t.pump(const Duration(milliseconds: 400));
       await t.tap(find.text('Add a reminder'));
       await t.pumpAndSettle(const Duration(milliseconds: 100));
@@ -238,7 +261,7 @@ void main() {
       await phone(t, 360, 700);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Reminders').last);
+      await openSection(t, 'Reminders');
       await t.pump(const Duration(milliseconds: 400));
       await t.pump(const Duration(milliseconds: 400)); // the old tab fades out over 180 ms, over the second frame
       expect(t.takeException(), isNull);
@@ -255,7 +278,7 @@ void main() {
       await phone(t, 360, 800);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Reminders').last);
+      await openSection(t, 'Reminders');
       await t.pump(const Duration(milliseconds: 400));
       await t.tap(find.text('Add a reminder'));
       await t.pumpAndSettle(const Duration(milliseconds: 100));
@@ -271,7 +294,7 @@ void main() {
       await phone(t, 360, 800);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Check In').last);
+      await openSection(t, 'Check In With Them');
       await t.pump(const Duration(milliseconds: 400));
       await t.pump(const Duration(milliseconds: 400));
       await t.scrollUntilVisible(find.text('Every day'), 200, scrollable: find.byType(Scrollable).last);
@@ -300,7 +323,7 @@ void main() {
       await phone(t, 360, 700);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Reminders').last);
+      await openSection(t, 'Reminders');
       await t.pump(const Duration(milliseconds: 400));
       await t.pump(const Duration(milliseconds: 400));
       expect(t.takeException(), isNull);
@@ -315,6 +338,8 @@ void main() {
       await phone(t, 360, 700);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
+      await openSection(t, 'Activity');
+      await t.pump(const Duration(milliseconds: 600));
       expect(find.text('Calls'), findsOneWidget);
       expect(find.text('Talked, 4 min'), findsOneWidget);
       expect(find.text('WhatsApp'), findsWidgets);
@@ -329,7 +354,7 @@ void main() {
       await phone(t, 360, 700);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Setup').last);
+      await openSection(t, 'Settings');
       await t.pump(const Duration(milliseconds: 400));
       expect(find.textContaining('When no choice is made'), findsOneWidget);
       expect(find.text('Maya app'), findsWidgets);
@@ -532,18 +557,15 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('the dashboard keeps its header, cards and tabs on a small phone; only the activity list scrolls', (t) async {
+    testWidgets('on a small phone the summary shows the status and the first card without any menu, there is no tab bar and no long page of cards', (t) async {
       await phone(t, 320, 480);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump();
       await t.pump(const Duration(milliseconds: 400));
       expect(t.takeException(), isNull);
-      expect(find.byType(SingleChildScrollView), findsNothing);
-      expect(find.byType(NavigationBar), findsOneWidget);
-      expect(t.getRect(find.byType(NavigationBar)).bottom, lessThanOrEqualTo(480));
-      // the list is the one vertical scroller on this tab
-      final lists = verticalLists(t);
-      expect(lists, 1);
+      expect(find.byType(NavigationBar), findsNothing, reason: 'sections are popups, not tabs');
+      expect(find.text('OK'), findsOneWidget);
+      expect(t.getRect(find.text('NEXT CHECK')).bottom, lessThanOrEqualTo(480));
       await t.pumpWidget(const SizedBox());
     });
   });
