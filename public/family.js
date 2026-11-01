@@ -306,14 +306,15 @@
       if (r.deliver) head.append(el('span', 'pill pill-plain', ACT_CHAN[r.deliver] || r.deliver));   // this reminder's own pick
       if (r.channel) head.append(el('span', 'pill pill-plain', ACT_WHERE[r.channel] || r.channel));
       if (r.by === 'senior') head.append(el('span', 'pill pill-plain', 'Set by talking'));   // they asked Maya for it themselves, on a call or in a chat
-      if (r.held) head.append(el('span', 'pill pill-wait', 'Held for quiet hours'));
+      if (r.held || r.waitUntil) head.append(el('span', 'pill pill-wait', 'Waiting until morning'));   // quiet hours: held, or due at night
       const tag = cur && REM_PILL[cur.state];
       if (tag) head.append(el('span', `pill ${tag[0]}`, tag[1]));
       c.className = 'item tap'; if (c.setAttribute) { c.setAttribute('role', 'button'); c.setAttribute('tabindex', '0'); c.setAttribute('aria-label', `Edit ${r.task}`); }
       head.append(el('span', 'edit-hint', 'Edit'));
       c.addEventListener('click', () => openEdit(r)); if (c.addEventListener) c.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEdit(r); } });
       c.append(head);
-      if (r.dueAt) c.append(el('div', 'meta', `Next: ${t(r.dueAt)}${r.repeat !== 'none' ? ` · repeats ${r.every === 2 ? `every 2 ${r.repeat === 'weekly' ? 'weeks' : 'days'}` : r.repeat}` : ''}`));
+      if (r.waitUntil) c.append(el('div', 'meta', `Waiting until morning (quiet hours): goes at ${t(r.waitUntil)}${r.repeat !== 'none' ? ` · repeats ${r.every === 2 ? `every 2 ${r.repeat === 'weekly' ? 'weeks' : 'days'}` : r.repeat}` : ''}`));
+      else if (r.dueAt) c.append(el('div', 'meta', `Next: ${t(r.dueAt)}${r.repeat !== 'none' ? ` · repeats ${r.every === 2 ? `every 2 ${r.repeat === 'weekly' ? 'weeks' : 'days'}` : r.repeat}` : ''}`));
       if (cur) c.append(el('div', 'detail', `${r.active ? 'Now' : 'Last'} (${t(cur.dueAt)}): ${cur.label}${cur.attempts ? ` · ${cur.attempts} ${cur.attempts === 1 ? 'try' : 'tries'}` : ''}`));
       return c;
     };

@@ -865,7 +865,8 @@ class _MyReminder {
   final int every;
   final String? deliver, channel;
   final bool going;
-  const _MyReminder({required this.id, required this.task, required this.repeat, required this.every, this.dueAt, this.deliver, this.channel, this.going = false});
+  final int? waitUntil;   // quiet hours: when it will go (7 in the morning); null for an ordinary reminder
+  const _MyReminder({required this.id, required this.task, required this.repeat, required this.every, this.dueAt, this.deliver, this.channel, this.going = false, this.waitUntil});
 
   static _MyReminder? from(dynamic j) {
     if (j is! Map || j['id'] is! String) return null;
@@ -878,8 +879,11 @@ class _MyReminder {
       deliver: j['deliver'] is String ? j['deliver'] as String : null,
       channel: j['channel'] is String ? j['channel'] as String : null,
       going: j['going'] == true,
+      waitUntil: j['waitUntil'] is num ? (j['waitUntil'] as num).toInt() : null,
     );
   }
+
+  String get whenText => waitUntil != null ? 'Waiting until morning · ${_whenText(waitUntil)}' : _whenText(dueAt);
 
   String get repeatText {
     String n(String one, String many) => every <= 1 ? 'Every $one' : 'Every $every $many';
@@ -1091,7 +1095,7 @@ class _SeniorMenuState extends State<_SeniorMenu> {
           else if (_reminders.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('You have no reminders yet. Tell Maya, for example: "Remind me to take my tablets at 8 tonight."', style: TextStyle(fontSize: 18, color: kSoft, height: 1.4)))
           else
             for (final r in _reminders)
-              _row(Icons.alarm, r.task, '${_whenText(r.dueAt)} · ${r.repeatText}', () => setState(() {
+              _row(Icons.alarm, r.task, '${r.whenText} · ${r.repeatText}', () => setState(() {
                     _open = r;
                     _page = _MenuPage.reminder;
                   })),
@@ -1102,7 +1106,7 @@ class _SeniorMenuState extends State<_SeniorMenu> {
           _title('Reminder', back: true),
           _errorLine(),
           _fact('What', r.task),
-          _fact('When', r.going ? 'Going out now' : _whenText(r.dueAt)),
+          _fact('When', r.going ? 'Going out now' : r.waitUntil != null ? 'Waiting until morning. It is quiet hours, so Maya will remind you at ${_whenText(r.waitUntil)}.' : _whenText(r.dueAt)),
           _fact('How often', r.repeatText),
           _fact('How it reaches you', '${r.howText}. ${r.channelText}.'),
           const SizedBox(height: 4),

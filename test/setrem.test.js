@@ -250,3 +250,42 @@ test('a WhatsApp reply to a senior-set reminder is told to Maya as THEIR reminde
   assert.match(f.text, /a reminder they asked you for themselves: "take your medicine"/); assert.doesNotMatch(f.text, /from their family/);
   const g = reminderFacts({ waiting: { by: null, task: 'take your pills mom', minutesAgo: 3, via: 'text', nudged: false, others: 0 }, answered: null, missed: null }); assert.match(g.text, /from their family/);
 });
+
+// Quiet hours stay (the test above): a senior-set reminder is HELD at night. Maya must say so honestly when she says it back and when it is saved, and the menus show it as waiting until morning.
+test('quiet hours: Maya says plainly it is quiet hours and that she will remind at 7 in the morning (not "right after you hang up"); the reminder shows as Waiting until morning', async () => {
+  quiet(); const { id } = linked(true); care.get(id).tz = 'Asia/Kolkata';
+  const real = Date.now, at = Date.parse('2026-11-01T22:31:00Z');   // 04:01 in Kolkata
+  Date.now = () => at;
+  try {
+    const say = talker(id, 'call'); setrem.reset && setrem.reset(id);
+    let r = await say('Call me in one minute to remind me to take my headache medicine.');
+    const texts = [r.text];
+    for (const reply of ['Yes, that is right.', 'The Maya app is fine.', 'A phone call please.']) { if (r.labels.includes('setrem-saved')) break; r = await say(reply); texts.push(r.text); }
+    const all = texts.join('\n');
+    assert.match(all, /quiet hours/i, 'she says it is quiet hours');
+    assert.match(all, /7 in the morning/, 'and that she will remind at 7 in the morning');
+    assert.doesNotMatch(all, /right after you hang up/i, 'never the false promise');
+    assert.ok(r.labels.includes('setrem-saved'), `saved, got ${r.labels.join(',')}`);
+    assert.match(r.text, /quiet hours/i);
+    assert.equal(mine(id).length, 1, 'kept, not refused');
+    setrem.afterHangup(id);   // the call ends: what was asked for "in a minute" is brought forward to a minute after the hang-up, which is at night
+    const menu = care.seniorMenu(id).reminders[0];
+    assert.ok(menu.waitUntil > at, 'My Reminders: Waiting until morning, with the 07:00 release time');
+    assert.equal(new Date(menu.waitUntil).toISOString(), '2026-11-02T01:30:00.000Z', '7:00 am in Kolkata');
+    const fam = care.view(id).reminders[0];
+    assert.equal(fam.waitUntil, menu.waitUntil, 'the dashboard shows the same');
+  } finally { Date.now = real; }
+});
+
+test('quiet hours: an ordinary daytime reminder is not shown as waiting, and Maya adds nothing about quiet hours', async () => {
+  quiet(); const { id } = linked(true); care.get(id).tz = 'Asia/Kolkata';
+  const real = Date.now, at = Date.parse('2026-11-01T06:30:00Z');   // noon in Kolkata
+  Date.now = () => at;
+  try {
+    const say = talker(id, 'whatsapp');
+    const a = await say('Remind me in 1 hour to take my medicine.');
+    assert.doesNotMatch(a.text, /quiet hours/i);
+    await say('Yes, that is right.'); const c = await say('A voice note please.'); has(c, 'setrem-saved'); assert.doesNotMatch(c.text, /quiet hours/i);
+    assert.equal(care.seniorMenu(id).reminders[0].waitUntil, null);
+  } finally { Date.now = real; }
+});

@@ -15,6 +15,9 @@ let n = 0; const person = () => memory.createProfile(`Rema${String.fromCharCode(
 const NIGHT = 'I have to take my medicine every night at 9 pm. Can you call me and remind me every night so I will take my medicine?';
 const say = (id, text, origin) => setrem.step(id, text, { origin, tz: TZ });
 
+// These three tests are about the DAYTIME wording ("right after you hang up"). At night (22:00 to 07:00 where they are) Maya says it is quiet hours instead (see setrem.test.js), so they run with the clock at midday.
+const atNoon = (fn) => () => { const real = Date.now, d = new Date(real()); d.setUTCHours(12, 0, 0, 0); const off = d.getTime() - real(); Date.now = () => real() + off; try { return fn(); } finally { Date.now = real; } };
+
 test('a natural recurring ask in the senior\'s own words becomes ONE plain daily call at 9 pm, whichever door it came by', () => {
   for (const origin of ['app', 'call', 'whatsapp']) {   // typed chat and a voice note both arrive as app / whatsapp text, a live call as call: the same system
     const id = person();
@@ -26,7 +29,7 @@ test('a natural recurring ask in the senior\'s own words becomes ONE plain daily
   }
 });
 
-test('in-call ask: "remind me in a minute" is NOT agreed as a timer and NOT refused: she says she will remind them right after they hang up', () => {
+test('in-call ask: "remind me in a minute" is NOT agreed as a timer and NOT refused: she says she will remind them right after they hang up', atNoon(() => {
   const id = person();
   const r = say(id, 'Remind me in one minute to take my pills', 'call');
   assert.equal(r.label, 'setrem-confirm');
@@ -43,9 +46,9 @@ test('in-call ask: "remind me in a minute" is NOT agreed as a timer and NOT refu
   const after = care.get(id).reminders.find((x) => x.id === rem.id);
   assert.ok(after.dueAt >= t0 + 5000 && after.dueAt <= t0 + 70000, 'due within about a minute of the hang-up');
   assert.equal(setrem.afterHangup(id), 0, 'once only');
-});
+}));
 
-test('a promise to call back is a real call reminder: "call me back in 5 minutes" is understood, said back, and saved as a CALL', () => {
+test('a promise to call back is a real call reminder: "call me back in 5 minutes" is understood, said back, and saved as a CALL', atNoon(() => {
   const id = person();
   const r = say(id, 'Can you call me back in 5 minutes', 'app');
   assert.equal(r.label, 'setrem-confirm'); assert.match(r.text, /in 5 minutes, I will call you for a chat/);
@@ -53,9 +56,9 @@ test('a promise to call back is a real call reminder: "call me back in 5 minutes
   const rem = care.get(id).reminders.find((x) => x.by === 'senior');
   assert.equal(rem.deliver, 'call'); assert.equal(rem.channel, 'app');
   assert.ok(Math.abs(rem.dueAt - (Date.now() + 5 * 60000)) < 20000, 'it is due in 5 minutes: the call is really scheduled');
-});
+}));
 
-test('callback asked ON a call: "call me back in a minute" means right after this call, and it really calls', () => {
+test('callback asked ON a call: "call me back in a minute" means right after this call, and it really calls', atNoon(() => {
   const id = person();
   const r = say(id, 'Call me back in a minute', 'call');
   assert.match(r.text, /I will call you right after you hang up this call/);
@@ -63,7 +66,7 @@ test('callback asked ON a call: "call me back in a minute" means right after thi
   assert.equal(sv.label, 'setrem-saved');
   assert.equal(setrem.afterHangup(id), 1);
   assert.equal(care.get(id).reminders.find((x) => x.by === 'senior').deliver, 'call');
-});
+}));
 
 test('a longer ask on a call keeps its real time (not parked): "every night at 9" is not an after-hang-up timer', () => {
   assert.equal(setrem.afterCall(setrem.parseRequest('remind me every night at 9 pm to take my pills', { tz: TZ }), { origin: 'call' }), false);

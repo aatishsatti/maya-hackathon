@@ -126,7 +126,7 @@ void main() {
       addTearDown(Store.forgetForTest);   // the next test starts from its own saved values
       Api.testClient = MockClient((req) async {
         if (req.url.path == '/api/senior/abcdef12/menu') {
-          return http.Response(jsonEncode({'name': 'Rosa', 'tz': 'Europe/London', 'mode': 'standard', 'reminders': [{'id': 'm1', 'task': 'Call my sister', 'dueAt': DateTime.now().add(const Duration(hours: 3)).millisecondsSinceEpoch, 'repeat': 'daily', 'every': 1, 'deliver': 'voice', 'channel': 'app', 'going': false}]}), 200, headers: {'content-type': 'application/json'});
+          return http.Response(jsonEncode({'name': 'Rosa', 'tz': 'Europe/London', 'mode': 'standard', 'reminders': [{'id': 'm1', 'task': 'Call my sister', 'dueAt': DateTime.now().add(const Duration(hours: 3)).millisecondsSinceEpoch, 'repeat': 'daily', 'every': 1, 'deliver': 'voice', 'channel': 'app', 'going': false}, {'id': 'm2', 'task': 'Take my headache medicine', 'dueAt': DateTime.now().millisecondsSinceEpoch - 60000, 'repeat': 'none', 'every': 1, 'deliver': 'call', 'channel': 'app', 'going': false, 'held': true, 'waitUntil': DateTime.now().add(const Duration(hours: 3)).millisecondsSinceEpoch}]}), 200, headers: {'content-type': 'application/json'});
         }
         return http.Response(jsonEncode({'messages': []}), 200, headers: {'content-type': 'application/json'});
       });
@@ -144,6 +144,7 @@ void main() {
       await t.pumpAndSettle();
       expect(find.text('Call my sister'), findsOneWidget);
       expect(find.textContaining('Every day'), findsOneWidget);
+      expect(find.textContaining('Waiting until morning'), findsOneWidget, reason: 'a reminder held for quiet hours is not shown as a normal due one');
       await t.tap(find.text('Call my sister'));
       await t.pumpAndSettle();
       expect(find.text('Stop this reminder'), findsOneWidget);

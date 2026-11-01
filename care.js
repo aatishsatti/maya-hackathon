@@ -130,6 +130,24 @@ function inQuietHours(ts, tz) {
   return cfg.quietStart > cfg.quietEnd ? (h >= cfg.quietStart || h < cfg.quietEnd) : (h >= cfg.quietStart && h < cfg.quietEnd);
 }
 
+// When quiet hours next END after ts where they are (the 07:00 a held reminder is released at), or null with no known time zone. Shown as "Waiting until morning".
+function quietEndsAt(ts, tz) {
+  const st = require('./setrem');
+  if (!tz || !inQuietHours(ts, tz)) return null;
+  const p = st.partsIn(ts, tz);
+  for (let add = 0; add <= 1; add++) {
+    const d = new Date(Date.UTC(p.y, p.m - 1, p.d + add));
+    const at = st.zonedEpoch(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), cfg.quietEnd, 0, tz);
+    if (at > ts) return at;
+  }
+  return null;
+}
+// A reminder that is held for the night, or whose time falls in the quiet hours: when it will be released. null = it is an ordinary reminder.
+function waitingUntil(p, r, now = Date.now()) {
+  if (!p || !p.tz || r.active || r.dueAt == null) return null;
+  return quietEndsAt(r.held ? now : Math.max(r.dueAt, 0), p.tz);
+}
+
 // ---------------------------------------------------------------- dynamic lines (3-day no-repeat)
 const norm = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 function similar(a, b) {
@@ -1039,7 +1057,7 @@ function seniorMenu(id) {
   const p = get(id); if (!p) return null;
   const mine = (r) => r.by === 'senior' && (r.dueAt != null || r.active);
   return { name: nameOf(id), tz: p.tz || null, mode: p.mode,
-    reminders: p.reminders.filter(mine).sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity)).map((r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, every: r.every || 1, deliver: r.deliver || null, channel: r.channel || null, going: Boolean(r.active) })) };
+    reminders: p.reminders.filter(mine).sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity)).map((r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, every: r.every || 1, deliver: r.deliver || null, channel: r.channel || null, going: Boolean(r.active), held: Boolean(r.held), waitUntil: waitingUntil(p, r) })) };
 }
 // The senior stops one of THEIR OWN reminders. A family reminder is not theirs to stop here (false).
 function stopSeniorReminder(id, rid) {
@@ -1888,7 +1906,7 @@ function view(id) {
   if (!p) return null;
   const seen = lastSeen(p);
   const fl = (f) => ({ ...f, name: nameOf(id), timeline: timeline(p, f) });
-  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, channel: r.channel || null, msg: Boolean(r.msg), held: Boolean(r.held), every: r.every || 1, by: r.by || null, origin: r.origin || null,
+  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, channel: r.channel || null, msg: Boolean(r.msg), held: Boolean(r.held), waitUntil: waitingUntil(p, r), every: r.every || 1, by: r.by || null, origin: r.origin || null,
     active: r.active && { ...r.active, label: occLabel(r.active) },
     last: r.last && { ...r.last, label: occLabel(r.last) } });
   return {
@@ -1924,6 +1942,6 @@ module.exports = {
   familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, addSeniorReminder, quietEndsAt, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

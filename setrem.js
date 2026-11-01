@@ -246,11 +246,25 @@ function whenWords(spec, { tz, now = Date.now(), origin } = {}) {
   if (spec.relMs != null) return `in ${dur(spec.relMs)}`;
   return `${dayWords(spec.dueAt, tz, now)} at ${clockWords(spec.dueAt, tz)}`;
 }
+// Quiet hours: nothing is rung, texted or sent at night (care.js tick), so a reminder whose first time falls in them is HELD until they end. Maya must say so, plainly, when she says it back and when it is saved.
+// Returns { at: when it will really go (the end of the quiet hours), words: "7 in the morning" } or null (an ordinary reminder, or no time zone known).
+const hourWords = (h) => `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? ' in the morning' : h < 17 ? ' in the afternoon' : ' in the evening'}`;
+function quietHold(spec, { tz, now = Date.now(), origin } = {}) {
+  if (!tz || !validTz(tz) || spec.task == null) return null;
+  const care = require('./care');
+  const first = afterCall(spec, { origin }) ? now + Math.max(20000, spec.relMs) : spec.dueAt;   // after a call it goes 20 seconds or the asked delay after the hang-up
+  if (!Number.isFinite(first)) return null;
+  const at = care.quietEndsAt(first, tz);
+  return at ? { at, words: hourWords(care.cfg.quietEnd), start: care.cfg.quietStart, end: care.cfg.quietEnd } : null;
+}
+const quietClause = (spec, q) => spec.repeat === 'none' ? `it is quiet hours until ${q.words}, so I will remind you at ${q.words} instead` : `it is quiet hours until ${q.words}, so when one falls at night I will wait and remind you at ${q.words}`;
 const VERB_PHRASE = { call: 'call you', text: 'send you a text', voice: 'send you a voice note' };
 const WHERE_WORDS = { whatsapp: 'on WhatsApp', app: 'in the Maya app' };
 // The sentence Maya says back before anything is saved. When the way and the place are already known they are in it.
 function confirmText(spec, ctx) {
   const when = whenWords(spec, ctx), what = `${toOrAbout(spec.task)} ${second(spec.task)}`;
+  const q = quietHold(spec, ctx);
+  if (q) return spec.task === CALL_TASK ? `So, ${quietClause(spec, q)}, and I will call you for a chat. Is that right?` : `So, ${quietClause(spec, q)}, ${what}. Is that right?`;
   if (spec.task === CALL_TASK) return afterCall(spec, ctx) ? 'So, I will call you right after you hang up this call. Is that right?' : `So, ${when}, I will call you for a chat. Is that right?`;
   if (afterCall(spec, ctx)) return `So, I will remind you ${what} right after you hang up the call. Is that right?`;
   const how = spec.deliver ? `${VERB_PHRASE[spec.deliver]}${spec.channel ? ` ${WHERE_WORDS[spec.channel]}` : ''} and remind you` : 'remind you';
@@ -258,6 +272,8 @@ function confirmText(spec, ctx) {
 }
 const savedText = (spec, ctx) => {
   const when = whenWords(spec, ctx), what = `${toOrAbout(spec.task)} ${second(spec.task)}`;
+  const q = quietHold(spec, ctx);
+  if (q) return spec.task === CALL_TASK ? `${quietClause(spec, q)[0].toUpperCase()}${quietClause(spec, q).slice(1)}, and I will call you for a chat.` : `${quietClause(spec, q)[0].toUpperCase()}${quietClause(spec, q).slice(1)}, ${what}.`;
   const where = spec.channel ? ` ${WHERE_WORDS[spec.channel]}` : '';
   if (spec.task === CALL_TASK) return afterCall(spec, ctx) ? `I will call you${where} right after you hang up this call.` : `${when[0].toUpperCase()}${when.slice(1)}, I will call you${where} for a chat.`;
   if (afterCall(spec, ctx)) return `I will remind you ${what} right after you hang up the call.`;
@@ -352,8 +368,10 @@ function save(id, st, ctx) {
     return note('setrem-not-saved', `The reminder could NOT be saved (${e.status === 409 ? 'they already have as many reminders set by talking as can be kept' : 'a problem on your side'}). Tell them kindly in one short sentence that you could not set it, and that their family can add reminders. Do not say it is set. ${COMMON}`);
   }
   console.log('setrem', JSON.stringify({ event: 'saved', repeat: spec.repeat, every: spec.every || 1, deliver: spec.deliver, channel: spec.channel, origin: st.origin }));   // kinds only: never the task
-  const stay = st.origin === 'call' ? ' They do NOT need to stay on the call: you will reach them at the time even after they hang up, so they can hang up whenever they like.' : '';
-  return note('setrem-saved', `The reminder is now SAVED (it is a real future reminder, not a timer): "${savedText(spec, ctx)}" Tell them in one short sentence that it is set, naming how often or when, how you will reach them and where, in fresh words.${stay} Promise nothing else, and do not offer more. ${COMMON.replace(' Do not say anything is saved or set unless this fact says it is.', '')}`);
+  const q = quietHold(spec, { ...ctx, origin: st.origin });
+  const quietSay = q ? ` IMPORTANT: it falls in quiet hours (${String(q.start).padStart(2, '0')}:00 to ${String(q.end).padStart(2, '0')}:00 where they are), when Maya never rings, texts or sends anything. Say that plainly in your own words: that it is quiet hours, and that you will remind them at ${q.words}, not before. Do not say you will remind them right away or right after the call.` : '';
+  const stay = q ? '' : st.origin === 'call' ? ' They do NOT need to stay on the call: you will reach them at the time even after they hang up, so they can hang up whenever they like.' : '';
+  return note('setrem-saved', `The reminder is now SAVED (it is a real future reminder, not a timer): "${savedText(spec, ctx)}" Tell them in one short sentence that it is set, naming how often or when, how you will reach them and where, in fresh words.${stay} Promise nothing else, and do not offer more.${quietSay} ${COMMON.replace(' Do not say anything is saved or set unless this fact says it is.', '').replace('At most two short sentences', q ? 'At most three short sentences' : 'At most two short sentences')}`);
 }
 
 // The next thing they said, while a set-up is open. Returns a note or null when the words are not part of it.
@@ -419,4 +437,4 @@ function step(id, heard, { origin, tz = null, now = Date.now(), waLinked = false
 const reset = (id) => { if (id) states.delete(id); else states.clear(); };
 const pending = (id) => { const s = states.get(id); return s ? { stage: s.stage, origin: s.origin, spec: s.spec } : null; };
 
-module.exports = { afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };
+module.exports = { quietHold, hourWords, savedText, afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };

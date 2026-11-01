@@ -77,10 +77,11 @@ class _RemindersTabState extends State<RemindersTab> {
                             if (r.channel != null) Pill(_whereLabel[r.channel] ?? r.channel!),
                             if (r.deliver != null) Pill(_howLabel[r.deliver] ?? r.deliver!),
                             if (r.by == 'senior') const Pill('Set by talking'),
-                            if (r.held) const Pill('Held for quiet hours', tone: kToneWait),
+                            if (r.held || r.waitUntil != null) const Pill('Waiting until morning', tone: kToneWait),
                             if (r.stateLabel != null) Pill(r.stateLabel!, tone: kToneInfo),
                           ]),
-                          if (r.dueAt != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Next: ${dayTime(r.dueAt!)}${r.repeat != 'none' ? ' · repeats ${r.every == 2 ? 'every 2 ${r.repeat == 'weekly' ? 'weeks' : 'days'}' : r.repeat}' : ''}', style: const TextStyle(fontSize: 13, color: kSoft))),
+                          if (r.waitUntil != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Waiting until morning (quiet hours): goes at ${dayTime(r.waitUntil!)}', style: const TextStyle(fontSize: 13, color: kSoft)))
+                          else if (r.dueAt != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Next: ${dayTime(r.dueAt!)}${r.repeat != 'none' ? ' · repeats ${r.every == 2 ? 'every 2 ${r.repeat == 'weekly' ? 'weeks' : 'days'}' : r.repeat}' : ''}', style: const TextStyle(fontSize: 13, color: kSoft))),
                         ]),
                       ),
                       const Padding(padding: EdgeInsets.only(left: 8, top: 4), child: Icon(Icons.chevron_right, color: kSoft)),
