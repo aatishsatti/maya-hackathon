@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../models.dart';
+import '../services/audio_route.dart';
 import '../theme.dart';
 import '../widgets/pressable.dart';
 
@@ -262,24 +263,59 @@ class _VoiceBubbleState extends State<VoiceBubble> {
     return p;
   }
 
+  // Chat voice notes play on the speaker, fresh every time: whatever a call left behind is released first. If the sound does not start (or the player fails) it tries once more
+  // with a new player, and if that fails too the note says so in words and a tap tries again. It is never silent.
   Future<void> _toggle() async {
     HapticFeedback.selectionClick();
+    final p0 = _p;
+    if (_playing && p0 != null) {
+      try {
+        await p0.pause();
+      } catch (_) {}
+      if (mounted) setState(() => _playing = false);
+      return;
+    }
+    if (mounted) setState(() => _err = null);
+    final ok = await _start(fresh: false) || await _start(fresh: true);
+    if (!ok && mounted) {
+      setState(() {
+        _playing = false;
+        _err = 'This voice note did not play. Tap the play button to try again.';
+      });
+    }
+  }
+
+  /// Starts (or resumes) the note and waits to hear that it really moves. true when it is playing.
+  Future<bool> _start({required bool fresh}) async {
     try {
-      final p = _player();
-      if (_playing) {
-        await p.pause();
-        setState(() => _playing = false);
-      } else {
-        setState(() => _err = null);
-        if (_pos > Duration.zero && _pos < _dur) {
-          await p.resume();
-        } else {
-          await p.play(UrlSource(widget.url));
+      await AudioRoute.prepareChatPlayback();
+      if (fresh) {
+        for (final s in _subs) {
+          s.cancel();
         }
-        setState(() => _playing = true);
+        _subs.clear();
+        final old = _p;
+        _p = null;
+        await old?.dispose();
       }
+      final p = _player();
+      await p.setAudioContext(AudioRoute.chatContext);
+      await p.setVolume(1.0);
+      if (!fresh && _pos > Duration.zero && _pos < _dur) {
+        await p.resume();
+      } else {
+        await p.play(UrlSource(widget.url));
+      }
+      if (mounted) setState(() => _playing = true);
+      final from = _pos;
+      for (var i = 0; i < 12; i++) {   // up to three seconds for the sound to begin to move
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!mounted || !_playing) return mounted;   // paused by the person, or the note finished
+        if (_pos > from || _pos > const Duration(milliseconds: 150)) return true;
+      }
+      return false;
     } catch (_) {
-      if (mounted) setState(() => _err = 'This voice note could not be played.');
+      return false;
     }
   }
 

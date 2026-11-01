@@ -145,6 +145,7 @@ class CallSession extends ChangeNotifier {
   WebSocket? _ws;
   MicSource? _mic;
   late final AudioRouteSink _route = route ?? AudioRoute();
+  bool _routeCounted = false;
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<bool>? _idleSub;
   Timer? _heartbeat, _thinkWatch, _retryTimer, _attemptTimer;
@@ -180,6 +181,10 @@ class CallSession extends ChangeNotifier {
         return;
       }
       final player = _player = voice ?? await _realPlayer();
+      if (!_routeCounted) {
+        _routeCounted = true;
+        AudioRoute.callStarted();
+      }
       await _route.setSpeaker(true); // on answer: the loudspeaker, before Maya says a word (an app-open call and a call answered from a closed app both start here)
       _idleSub = player.idle.listen((_) {
         if (!_speaking || ended) return;
@@ -449,7 +454,12 @@ class CallSession extends ChangeNotifier {
     _micSub?.cancel();
     _idleSub?.cancel();
     unawaited(_mic?.stop());
-    unawaited(_route.release());
+    if (_routeCounted) {
+      _routeCounted = false;
+      AudioRoute.callEnded();
+    }
+    // the call's audio is let go completely, THEN the player goes back to the chat setting (speaker, media), so a voice note after the call is never stuck on the call's route
+    unawaited(_route.release().whenComplete(AudioRoute.useChatContext));
     try {
       _ws?.close(1000);
     } catch (_) {}

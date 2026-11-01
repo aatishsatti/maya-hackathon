@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -56,10 +55,8 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   String? _playId; // the voice note that opens playing (its notification was tapped)
   Timer? _playClear;
   CallSession? _live; // the call on screen, so the system call screen's hang-up can end it
-  bool _inChat = false; // the chat page is open (otherwise the home page)
   bool _callRouteOpen = false; // the call page is on screen (a call set aside to the chat has none)
   String? _liveOutreach;
-  bool _unread = false; // Maya wrote while the home page was showing
 
   @override
   void initState() {
@@ -129,7 +126,6 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     });
     // A text or a voice-note notification was tapped: the chat opens on it, and a voice note plays.
     _nativeOpened ??= NativeCall.instance.opened.listen((o) async {
-      if (mounted) setState(() => _inChat = true);   // the notification opens the chat itself, not the home page
       await _loadThread();
       if (!mounted || o.via != 'voice') return;
       String? id = o.messageId.isEmpty ? null : o.messageId;
@@ -213,10 +209,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
       case 'chat':
         final m = ChatMessage.from(e.data['message']);
         if (m != null && !_messages.any((x) => x.id == m.id)) {
-          setState(() {
-            _messages.add(m);
-            if (!_inChat) _unread = true;
-          });
+          setState(() => _messages.add(m));
           HapticFeedback.selectionClick();
         }
         break;
@@ -281,10 +274,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
       transitionsBuilder: (_, a, _, child) => FadeTransition(opacity: a, child: child),
     ));
     _callRouteOpen = false;
-    if (result == 'chat' && !session.ended && mounted) {
-      setState(() => _inChat = true);
-      return;
-    }
+    if (result == 'chat' && !session.ended && mounted) return;   // the chat is the page underneath: the call stays live and the "Back to call" bar shows
     _finishCall();
   }
 
@@ -577,24 +567,18 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: !_inChat,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) setState(() => _inChat = false);   // back from the chat goes to the home page
-      },
-      child: Scaffold(
+    return Scaffold(
         resizeToAvoidBottomInset: true,
         backgroundColor: kChatTop,
         body: DecoratedBox(
           decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [kChatTop, kChatBottom])),
           child: SafeArea(
             child: Stack(children: [
-              _inChat ? _chatPage() : _homePage(),
+              _chatPage(),
               if (_incoming != null) IncomingCallCard(kind: '${_incoming!['kind'] ?? ''}', onAccept: _acceptIncoming, onDecline: _declineIncoming),
             ]),
           ),
         ),
-      ),
     );
   }
 
@@ -607,28 +591,11 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     return _BackToCallBar(onTap: _backToCall);
   }
 
-  // The home page: the big Call button in the middle (the main place to call), one way into the chat, and the Family link. Nothing scrolls.
-  Widget _homePage() {
-    return LayoutBuilder(builder: (context, box) {
-      final callSize = math.min(box.maxWidth * 0.62, box.maxHeight * 0.34).clamp(112.0, 250.0);
-      return Column(children: [
-        SizedBox(height: 60, child: Center(child: Text(_title, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, letterSpacing: -0.4, color: kInk)))),
-        _backBar(),
-        Expanded(child: Center(child: _CallButton(size: callSize, onTap: _ready ? (_live != null ? _backToCall : () => _startCall()) : null))),
-        _ChatEntry(unread: _unread, onTap: () => setState(() {
-              _inChat = true;
-              _unread = false;
-            })),
-        SizedBox(height: 56, child: Center(child: TextButton(onPressed: _openFamily, child: const Text('Family', style: TextStyle(fontSize: 15, color: kSoft, fontWeight: FontWeight.w700))))),
-      ]);
-    });
-  }
-
-  // The chat page: a small phone icon in the header (always there, never in the message list), the messages, the box.
+  // The chat is the whole app: the person opens Maya and is in the conversation. A small phone icon in the header (top right, one tap to call), the messages, the box, the Family link at the bottom.
   Widget _chatPage() {
     final kb = MediaQuery.of(context).viewInsets.bottom > 0;
     return Column(children: [
-      _ChatHeader(title: _title, onBack: () => setState(() => _inChat = false), onCall: _ready ? (_live != null ? _backToCall : () => _startCall()) : null),
+      _ChatHeader(title: _title, onCall: _ready ? (_live != null ? _backToCall : () => _startCall()) : null),
       _backBar(),
       Expanded(child: ClipRect(child: ChatView(messages: _messages, controller: _scroll, playId: _playId))),
       if (_notice != null)
@@ -651,18 +618,16 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   }
 }
 
-/// The chat page's header: back to the home page, the name, and the one small phone icon (the second place to call).
+/// The chat's header: the name, and the one small phone icon at the top right (the way to call).
 class _ChatHeader extends StatelessWidget {
   final String title;
-  final VoidCallback onBack;
   final VoidCallback? onCall;
-  const _ChatHeader({required this.title, required this.onBack, required this.onCall});
+  const _ChatHeader({required this.title, required this.onCall});
   @override
   Widget build(BuildContext context) => SizedBox(
         height: 64,
         child: Row(children: [
-          const SizedBox(width: 6),
-          Pressable(onTap: onBack, semanticLabel: 'Back to home', child: const SizedBox(width: 52, height: 52, child: Icon(Icons.arrow_back_ios_new, size: 22, color: kInk))),
+          const SizedBox(width: 64),   // balances the phone icon so the name is centred
           Expanded(child: Center(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, letterSpacing: -0.4, color: kInk)))),
           Pressable(
             onTap: onCall,
@@ -671,33 +636,6 @@ class _ChatHeader extends StatelessWidget {
           ),
           const SizedBox(width: 16),
         ]),
-      );
-}
-
-/// On the home page: the way into the chat, in words.
-class _ChatEntry extends StatelessWidget {
-  final bool unread;
-  final VoidCallback onTap;
-  const _ChatEntry({required this.unread, required this.onTap});
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 4, 24, 10),
-        child: Pressable(
-          onTap: onTap,
-          semanticLabel: 'Chat with Maya',
-          child: Container(
-            height: 64,
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(32), border: Border.all(color: const Color(0xFFE2E7F6), width: 1.4)),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Stack(clipBehavior: Clip.none, children: [
-                const Icon(Icons.chat_bubble_outline, color: kTrust, size: 26),
-                if (unread) Positioned(right: -3, top: -3, child: Container(width: 11, height: 11, decoration: BoxDecoration(color: kTrust, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)))),
-              ]),
-              const SizedBox(width: 12),
-              const Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: Text('Chat with Maya', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: kInk)))),
-            ]),
-          ),
-        ),
       );
 }
 
@@ -727,60 +665,6 @@ class _BackToCallBar extends StatelessWidget {
           ),
         ),
       );
-}
-
-class _CallButton extends StatefulWidget {
-  final double size;
-  final VoidCallback? onTap;
-  const _CallButton({required this.size, this.onTap});
-  @override
-  State<_CallButton> createState() => _CallButtonState();
-}
-
-class _CallButtonState extends State<_CallButton> with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 2200))..repeat();
-  @override
-  void dispose() {
-    _pulse.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.size;
-    return Semantics(
-      label: 'Call Maya',
-      button: true,
-      child: Pressable(
-        onTap: widget.onTap,
-        pressedScale: 0.94,
-        child: SizedBox(
-          width: s + 40,
-          height: s + 40,
-          child: Stack(alignment: Alignment.center, children: [
-            AnimatedBuilder(
-              animation: _pulse,
-              builder: (context, _) => Container(
-                width: s + 40 * _pulse.value,
-                height: s + 40 * _pulse.value,
-                decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: kAccent.withValues(alpha: 0.28 * (1 - _pulse.value)), width: 3)),
-              ),
-            ),
-            Container(
-              width: s,
-              height: s,
-              decoration: const BoxDecoration(shape: BoxShape.circle, color: kAccent),
-              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(Icons.call, color: Colors.white, size: s * 0.34),
-                SizedBox(height: s * 0.04),
-                Text('Call Maya', style: TextStyle(color: Colors.white, fontSize: (s * 0.12).clamp(15, 22), fontWeight: FontWeight.w700)),
-              ]),
-            ),
-          ]),
-        ),
-      ),
-    );
-  }
 }
 
 /// The box at the bottom. You write in it, or you tap the blue microphone to record a voice note; tap it again to send. While recording the box becomes a blue bar: a bin to throw it away,

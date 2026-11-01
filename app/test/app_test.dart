@@ -85,21 +85,25 @@ void main() {
   });
 
   group('senior side', () {
-    testWidgets('the big Call button is on the first screen: no login, no password, no menu', (t) async {
+    testWidgets('the app opens straight into the chat: no home page, no big Call button, a small phone icon top right, Family at the bottom, no login, no menu', (t) async {
       await phone(t, 360, 740);
       await t.pumpWidget(const MayaApp());
       await t.pump(const Duration(milliseconds: 300));
-      expect(find.text('Call Maya'), findsOneWidget);
-      expect(find.bySemanticsLabel('Call Maya'), findsWidgets);
-      expect(find.text('Family'), findsOneWidget); // the small link
+      expect(find.text('Call Maya'), findsNothing, reason: 'no big Call button');
+      expect(find.text('Chat with Maya'), findsNothing, reason: 'no Call-or-Chat gate: she is already in the chat');
+      expect(find.byType(TextField), findsOneWidget, reason: 'the writing box is there at once');
+      expect(find.bySemanticsLabel('Call Maya'), findsOneWidget, reason: 'the small phone icon in the header');
+      expect(find.byIcon(Icons.call), findsOneWidget);
+      expect(t.getSize(find.byIcon(Icons.call)).width, lessThan(60));
+      final icon = t.getRect(find.byIcon(Icons.call));
+      expect(icon.top, lessThan(80));
+      expect(icon.right, greaterThan(360 - 80), reason: 'top right');
+      expect(find.text('Family'), findsOneWidget);
       expect(find.byType(Drawer), findsNothing);
       expect(find.byType(AppBar), findsNothing);
+      expect(find.byIcon(Icons.arrow_back_ios_new), findsNothing, reason: 'nothing to go back to');
       expect(find.textContaining(RegExp('password|log ?in|sign ?up', caseSensitive: false)), findsNothing);
-      final size = t.getSize(find.text('Call Maya'));
-      expect(size.height, greaterThan(10));
-      // the Call button is big and every tap target is at least 48 logical pixels
-      final callBox = t.getRect(find.ancestor(of: find.text('Call Maya'), matching: find.byType(Container)).first);
-      expect(callBox.width, greaterThanOrEqualTo(104));
+      await t.pumpWidget(const SizedBox());
     });
 
     testWidgets('the senior screen fits without scrolling on a small and a normal phone, and only the chat can scroll', (t) async {
@@ -109,7 +113,7 @@ void main() {
         await t.pump(const Duration(milliseconds: 300));
         expect(t.takeException(), isNull, reason: 'no overflow at ${s.width}x${s.height}');
         expect(find.byType(SingleChildScrollView), findsNothing, reason: 'no page that scrolls');
-        expect(find.text('Call Maya'), findsOneWidget);
+        expect(find.bySemanticsLabel('Call Maya'), findsOneWidget);
         // the whole screen stays inside the window
         final r = t.getRect(find.text('Family'));
         expect(r.bottom, lessThanOrEqualTo(s.height));
@@ -122,8 +126,6 @@ void main() {
       await phone(t, 320, 480);
       await t.pumpWidget(const MayaApp());
       await t.pump(const Duration(milliseconds: 300));
-      await t.tap(find.text('Chat with Maya'));
-      await t.pump(const Duration(milliseconds: 400));
       t.view.viewInsets = const FakeViewPadding(bottom: 250 * 3);
       addTearDown(t.view.resetViewInsets);
       await t.pump(const Duration(milliseconds: 400));
@@ -393,8 +395,6 @@ void main() {
       await phone(t, 390, 844);
       await t.pumpWidget(const MayaApp());
       await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Chat with Maya'));
-      await t.pump(const Duration(milliseconds: 400));
       expect(find.bySemanticsLabel('Record a voice note'), findsOneWidget);
       expect(find.byIcon(Icons.mic), findsOneWidget);
       await t.enterText(find.byType(TextField), 'Hello Maya');
@@ -416,34 +416,9 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('home has the big Call button, one way into the chat and the Family link; the chat page has the small phone icon in its header and NO big Call circle in the messages', (t) async {
-      await phone(t, 390, 844);
-      await t.pumpWidget(const MayaApp());
-      await t.pump(const Duration(milliseconds: 400));
-      expect(find.text('Call Maya'), findsOneWidget);
-      expect(find.text('Chat with Maya'), findsOneWidget);
-      expect(find.text('Family'), findsOneWidget);
-      expect(find.byIcon(Icons.call), findsOneWidget, reason: 'only the big button on the home page');
-      expect(t.getSize(find.byIcon(Icons.call)).width, greaterThanOrEqualTo(40));
-      await t.tap(find.text('Chat with Maya'));
-      await t.pump(const Duration(milliseconds: 400));
-      expect(find.text('Call Maya'), findsNothing, reason: 'no big Call circle in the chat');
-      expect(find.bySemanticsLabel('Call Maya'), findsOneWidget, reason: 'the small phone icon in the header');
-      expect(find.byIcon(Icons.call), findsOneWidget);
-      expect(t.getSize(find.byIcon(Icons.call)).width, lessThan(60), reason: 'a small icon, not the big circle');
-      expect(find.text('Family'), findsOneWidget, reason: 'Family stays at the bottom of the chat');
-      expect(t.getRect(find.byIcon(Icons.call)).top, lessThan(80), reason: 'always visible at the top, never scrolled away');
-      await t.tap(find.bySemanticsLabel('Back to home'));
-      await t.pump(const Duration(milliseconds: 400));
-      expect(find.text('Call Maya'), findsOneWidget);
-      await t.pumpWidget(const SizedBox());
-    });
-
     testWidgets('the paperclip opens a sheet with three plain choices, in words, and Cancel closes it', (t) async {
       await phone(t, 390, 844);
       await t.pumpWidget(const MayaApp());
-      await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('Chat with Maya'));
       await t.pump(const Duration(milliseconds: 400));
       await t.tap(find.byIcon(Icons.attach_file));
       await t.pump(const Duration(milliseconds: 100));
