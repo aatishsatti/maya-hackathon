@@ -120,6 +120,47 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
+    testWidgets('the senior menu: a 44px+ button opens a sheet with four plain choices; My Reminders shows only their own; Sign out forgets the link and keeps nothing of the family', (t) async {
+      SharedPreferences.setMockInitialValues({'profileId': 'abcdef12', 'profileName': 'Rosa'});
+      Store.forgetForTest();
+      addTearDown(Store.forgetForTest);   // the next test starts from its own saved values
+      Api.testClient = MockClient((req) async {
+        if (req.url.path == '/api/senior/abcdef12/menu') {
+          return http.Response(jsonEncode({'name': 'Rosa', 'tz': 'Europe/London', 'mode': 'standard', 'reminders': [{'id': 'm1', 'task': 'Call my sister', 'dueAt': DateTime.now().add(const Duration(hours: 3)).millisecondsSinceEpoch, 'repeat': 'daily', 'every': 1, 'deliver': 'voice', 'channel': 'app', 'going': false}]}), 200, headers: {'content-type': 'application/json'});
+        }
+        return http.Response(jsonEncode({'messages': []}), 200, headers: {'content-type': 'application/json'});
+      });
+      await phone(t, 360, 740);
+      await t.pumpWidget(const MayaApp(home: SeniorScreen()));
+      await t.pump(const Duration(milliseconds: 300));
+      expect(t.getSize(find.bySemanticsLabel('Menu')).width, greaterThanOrEqualTo(44));
+      expect(find.text('Family'), findsNothing);
+      await t.tap(find.bySemanticsLabel('Menu'));
+      await t.pumpAndSettle();
+      for (final x in const ['My Reminders', 'My Profile', 'Help / About Maya', 'Sign out']) {
+        expect(find.text(x), findsOneWidget);
+      }
+      await t.tap(find.text('My Reminders'));
+      await t.pumpAndSettle();
+      expect(find.text('Call my sister'), findsOneWidget);
+      expect(find.textContaining('Every day'), findsOneWidget);
+      await t.tap(find.text('Call my sister'));
+      await t.pumpAndSettle();
+      expect(find.text('Stop this reminder'), findsOneWidget);
+      await t.tap(find.byIcon(Icons.arrow_back));
+      await t.pumpAndSettle();
+      await t.tap(find.byIcon(Icons.arrow_back));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Sign out'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Sign out').last);
+      await t.pumpAndSettle();
+      expect(await Store.profileId(), isNull, reason: 'the phone forgot the senior link');
+      expect(find.text('Enter code'), findsWidgets, reason: 'back at the start screen');
+      await t.pump(const Duration(seconds: 5));   // the stopped live stream's last pause ends
+      await t.pumpWidget(const SizedBox());
+    });
+
     testWidgets('the senior screen fits without scrolling on a small and a normal phone, and only the chat can scroll', (t) async {
       for (final s in const [Size(320, 480), Size(360, 640), Size(390, 844)]) {
         await phone(t, s.width, s.height);
@@ -183,6 +224,7 @@ void main() {
       expect(find.text('Family'), findsNothing, reason: 'the family has its own login, not a button in the senior chat');
       expect(find.textContaining('Kali'), findsWidgets);
       await t.pumpWidget(const SizedBox());
+      await t.pump(const Duration(seconds: 5));   // the closed screen's live stream finishes its last pause (no timer left over)
     });
 
     testWidgets('family login and signup: a username and a password, the same account as on the web', (t) async {

@@ -1032,6 +1032,19 @@ function deleteReminder(id, rid) {
   save(id);
   return p.reminders.length < n;
 }
+// The senior's own menu (the app's My Reminders and My Profile): ONLY what the person set by talking to Maya, never the family's reminders, schedules, flags or alerts.
+function seniorMenu(id) {
+  const p = get(id); if (!p) return null;
+  const mine = (r) => r.by === 'senior' && (r.dueAt != null || r.active);
+  return { name: nameOf(id), tz: p.tz || null, mode: p.mode,
+    reminders: p.reminders.filter(mine).sort((a, b) => (a.dueAt || Infinity) - (b.dueAt || Infinity)).map((r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, every: r.every || 1, deliver: r.deliver || null, channel: r.channel || null, going: Boolean(r.active) })) };
+}
+// The senior stops one of THEIR OWN reminders. A family reminder is not theirs to stop here (false).
+function stopSeniorReminder(id, rid) {
+  const p = get(id), r = p && p.reminders.find((x) => x.id === rid);
+  if (!r || r.by !== 'senior') return false;
+  return deleteReminder(id, rid);
+}
 function findReminder(id, rid) { const p = get(id); return p && p.reminders.find((r) => r.id === rid); }
 
 function finishOccurrence(p, rid, state, extra = {}) {
@@ -1909,6 +1922,6 @@ module.exports = {
   familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, addSeniorReminder, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

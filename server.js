@@ -282,6 +282,14 @@ async function handleApi(req, res, url) {
   // The senior door asks who this phone is by the id in its link (the id is the key: it is never listed anywhere). Name only.
   const who = /^\/api\/senior\/([a-f0-9]{8})$/.exec(url.pathname);
   if (who && req.method === 'GET') { const p = memory.load(who[1]); return p ? sendJson(res, 200, { profile: { id: p.id, name: p.name } }) : sendJson(res, 404, { error: 'Not found' }); }
+  // The senior's own menu: their reminders (only the ones they set) and basic details. No login (the id is the key), never the family's data. Stopping one removes only a reminder they set.
+  const menu = /^\/api\/senior\/([a-f0-9]{8})\/(menu|reminders\/[\w-]+)$/.exec(url.pathname);
+  if (menu) {
+    if (!sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
+    if (menu[2] === 'menu' && req.method === 'GET') { const m = care.seniorMenu(menu[1]); return m ? sendJson(res, 200, m) : sendJson(res, 404, { error: 'Not found' }); }
+    if (menu[2] !== 'menu' && req.method === 'DELETE') return care.stopSeniorReminder(menu[1], menu[2].split('/')[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
   if (url.pathname === '/api/profiles' && req.method === 'GET') {
     if (!familyLoginOn()) return sendJson(res, 200, { profiles: memory.listProfiles() });
     const u = familyOf(req); if (!u) return sendJson(res, 401, { error: 'Please log in as family.' });   // nobody can list everyone's seniors

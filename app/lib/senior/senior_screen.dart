@@ -16,12 +16,13 @@ import '../services/native_call.dart';
 import '../services/store.dart';
 import '../services/tz.dart';
 import '../theme.dart';
+import '../start/start_gate.dart';
 import '../widgets/pressable.dart';
 import 'call_screen.dart';
 import 'chat_view.dart';
 
-/// The senior's whole app: one screen, no login, no menu. A big Call button in the middle, the chat below it, and a small
-/// Family link at the bottom. Nothing on this screen scrolls except the chat, inside its own area.
+/// The senior's whole app: one screen, no login. The chat, a small phone icon to call, and one small menu button (My Reminders, My Profile, Sign out, Help).
+/// There is no Family button here. Nothing on this screen scrolls except the chat, inside its own area.
 class SeniorScreen extends StatefulWidget {
   const SeniorScreen({super.key});
   @override
@@ -550,6 +551,35 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     );
   }
 
+  // The menu: one sheet over the chat (never a new page, never the family's dashboard).
+  Future<void> _openMenu() async {
+    final id = _pid;
+    if (id == null) return;
+    final out = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.white,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (_) => _SeniorMenu(profileId: id, fallbackName: _name),
+    );
+    if (out == true) await _signOut();
+  }
+
+  // Sign out: this phone forgets the senior link and goes back to the start screen. The server profile and the chat thread are untouched; the link or the code brings it all back.
+  Future<void> _signOut() async {
+    _live?.hangUp();
+    _eventSub?.cancel();
+    _eventSub = null;
+    _events?.stop();
+    _events = null;
+    _ringTimer?.cancel();
+    await Store.clearProfile();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute<void>(builder: (_) => const StartScreen()), (r) => false);
+  }
+
   String get _title => _name == null ? 'Maya' : 'Maya and $_name';
 
   // A call set aside to the chat is still running: one tap returns to it.
@@ -562,7 +592,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   // The chat is the whole app: the person opens Maya and is in the conversation. A small phone icon in the header (top right, one tap to call), the messages, the box, the Family link at the bottom.
   Widget _chatPage() {
     return Column(children: [
-      _ChatHeader(title: _title, onCall: _ready ? (_live != null ? _backToCall : () => _startCall()) : null),
+      _ChatHeader(title: _title, onCall: _ready ? (_live != null ? _backToCall : () => _startCall()) : null, onMenu: _ready ? _openMenu : null),
       _backBar(),
       Expanded(child: ClipRect(child: ChatView(messages: _messages, controller: _scroll, playId: _playId))),
       if (_notice != null)
@@ -587,13 +617,19 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
 /// The chat's header: the name, and the one small phone icon at the top right (the way to call).
 class _ChatHeader extends StatelessWidget {
   final String title;
-  final VoidCallback? onCall;
-  const _ChatHeader({required this.title, required this.onCall});
+  final VoidCallback? onCall, onMenu;
+  const _ChatHeader({required this.title, required this.onCall, required this.onMenu});
   @override
   Widget build(BuildContext context) => SizedBox(
         height: 64,
         child: Row(children: [
-          const SizedBox(width: 64),   // balances the phone icon so the name is centred
+          const SizedBox(width: 16),
+          Pressable(
+            onTap: onMenu,
+            semanticLabel: 'Menu',
+            child: Container(width: 48, height: 48, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white, border: Border.all(color: const Color(0xFFD7DEF7))), child: const Icon(Icons.menu, color: kTrust, size: 26)),
+          ),
+          const SizedBox(width: 16),   // balances the phone icon so the name is centred
           Expanded(child: Center(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, letterSpacing: -0.4, color: kInk)))),
           Pressable(
             onTap: onCall,
@@ -816,5 +852,298 @@ class IncomingCallCard extends StatelessWidget {
             ),
           ),
         ]),
+      );
+}
+
+// ---------------------------------------------------------------- the senior's menu
+
+/// A reminder the person set themselves (from the server's senior menu route: never the family's).
+class _MyReminder {
+  final String id, task, repeat;
+  final int? dueAt;
+  final int every;
+  final String? deliver, channel;
+  final bool going;
+  const _MyReminder({required this.id, required this.task, required this.repeat, required this.every, this.dueAt, this.deliver, this.channel, this.going = false});
+
+  static _MyReminder? from(dynamic j) {
+    if (j is! Map || j['id'] is! String) return null;
+    return _MyReminder(
+      id: j['id'] as String,
+      task: '${j['task']}',
+      repeat: '${j['repeat'] ?? 'none'}',
+      every: j['every'] is num ? (j['every'] as num).toInt() : 1,
+      dueAt: j['dueAt'] is num ? (j['dueAt'] as num).toInt() : null,
+      deliver: j['deliver'] is String ? j['deliver'] as String : null,
+      channel: j['channel'] is String ? j['channel'] as String : null,
+      going: j['going'] == true,
+    );
+  }
+
+  String get repeatText {
+    String n(String one, String many) => every <= 1 ? 'Every $one' : 'Every $every $many';
+    switch (repeat) {
+      case 'hourly':
+        return n('hour', 'hours');
+      case 'daily':
+        return n('day', 'days');
+      case 'weekly':
+        return n('week', 'weeks');
+      default:
+        return 'Just once';
+    }
+  }
+
+  String get channelText => channel == 'whatsapp' ? 'On WhatsApp' : channel == 'app' ? 'In the Maya app' : 'In the Maya app or WhatsApp';
+  String get howText => deliver == 'call' ? 'A phone call' : deliver == 'text' ? 'A message' : deliver == 'voice' ? 'A voice note' : 'Maya decides';
+}
+
+String _whenText(int? ms) {
+  if (ms == null) return 'No time set';
+  final t = DateTime.fromMillisecondsSinceEpoch(ms);
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final days = DateTime(t.year, t.month, t.day).difference(today).inDays;
+  const wd = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const mo = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+  final time = '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour < 12 ? 'AM' : 'PM'}';
+  final day = days == 0 ? 'Today' : days == 1 ? 'Tomorrow' : days > 1 && days < 7 ? wd[t.weekday - 1] : '${wd[t.weekday - 1]} ${t.day} ${mo[t.month - 1]}';
+  return '$day at $time';
+}
+
+enum _MenuPage { home, reminders, reminder, profile, help }
+
+/// The menu sheet. Four plain choices; each one opens inside the same sheet with a Back. Pops `true` when the person signs out.
+class _SeniorMenu extends StatefulWidget {
+  final String profileId;
+  final String? fallbackName;
+  const _SeniorMenu({required this.profileId, required this.fallbackName});
+  @override
+  State<_SeniorMenu> createState() => _SeniorMenuState();
+}
+
+class _SeniorMenuState extends State<_SeniorMenu> {
+  _MenuPage _page = _MenuPage.home;
+  bool _loading = false, _stopping = false;
+  String? _error;
+  List<_MyReminder> _reminders = const [];
+  _MyReminder? _open;
+  String? _name, _tz, _mode;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = widget.fallbackName;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final j = await Api.get('/api/senior/${widget.profileId}/menu');
+      if (!mounted) return;
+      final list = (j is Map && j['reminders'] is List) ? (j['reminders'] as List).map(_MyReminder.from).whereType<_MyReminder>().toList() : <_MyReminder>[];
+      setState(() {
+        _reminders = list;
+        if (j is Map) {
+          if (j['name'] is String) _name = j['name'] as String;
+          _tz = j['tz'] is String ? j['tz'] as String : null;
+          _mode = j['mode'] is String ? j['mode'] as String : null;
+        }
+        _loading = false;
+      });
+    } on ApiError catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _stop(_MyReminder r) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Stop this reminder?'),
+        content: Text('Maya will no longer remind you: ${r.task}', style: const TextStyle(fontSize: 18, height: 1.35)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep it', style: TextStyle(fontSize: 18))),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Stop it', style: TextStyle(fontSize: 18, color: kAlert))),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    setState(() {
+      _stopping = true;
+      _error = null;
+    });
+    try {
+      await Api.delete('/api/senior/${widget.profileId}/reminders/${r.id}');
+      if (!mounted) return;
+      setState(() {
+        _reminders = _reminders.where((x) => x.id != r.id).toList();
+        _page = _MenuPage.reminders;
+        _stopping = false;
+      });
+    } on ApiError catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _stopping = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _signOutAsk() async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Sign out?'),
+        content: const Text('This phone will forget you. Your reminders and your chat with Maya are kept. To come back, tap Enter code, or open the link your family sent you.', style: TextStyle(fontSize: 18, height: 1.35)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Stay', style: TextStyle(fontSize: 18))),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Sign out', style: TextStyle(fontSize: 18, color: kAlert))),
+        ],
+      ),
+    );
+    if (yes == true && mounted) Navigator.of(context).pop(true);
+  }
+
+  String get _modeText {
+    switch (_mode) {
+      case 'cautious':
+        return 'Cautious: Maya keeps a closer eye and tells your family gently if something seems wrong.';
+      case 'ultra':
+        return 'Extra careful: Maya tells your family every time she cannot reach you.';
+      case 'standard':
+        return 'Standard: Maya tells your family only when something really needs them.';
+      default:
+        return 'Not available right now';
+    }
+  }
+
+  Widget _title(String t, {bool back = false}) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(children: [
+          if (back)
+            Pressable(onTap: () => setState(() => _page = _page == _MenuPage.reminder ? _MenuPage.reminders : _MenuPage.home), semanticLabel: 'Back', child: const SizedBox(width: 48, height: 48, child: Icon(Icons.arrow_back, color: kTrust, size: 26))),
+          Expanded(child: Text(t, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.5, color: kInk))),
+        ]),
+      );
+
+  Widget _row(IconData icon, String title, String sub, VoidCallback onTap, {Color color = kTrust}) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Pressable(
+          onTap: onTap,
+          semanticLabel: title,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 64),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(color: kChatTop, borderRadius: BorderRadius.circular(18), border: Border.all(color: const Color(0xFFE2E7F6))),
+            child: Row(children: [
+              Icon(icon, color: color, size: 28),
+              const SizedBox(width: 14),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: color == kAlert ? kAlert : kInk)),
+                Text(sub, style: const TextStyle(fontSize: 15, color: kSoft, height: 1.3)),
+              ])),
+              const Icon(Icons.chevron_right, color: kSoft, size: 24),
+            ]),
+          ),
+        ),
+      );
+
+  Widget _fact(String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 15, color: kSoft, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 2),
+          Text(value, style: const TextStyle(fontSize: 20, color: kInk, height: 1.3)),
+        ]),
+      );
+
+  Widget _errorLine() => _error == null ? const SizedBox.shrink() : Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(_error!, style: const TextStyle(fontSize: 16, color: kAlert)));
+
+  Widget _body() {
+    switch (_page) {
+      case _MenuPage.home:
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _title('Menu'),
+          _row(Icons.alarm, 'My Reminders', 'What Maya reminds you about', () => setState(() => _page = _MenuPage.reminders)),
+          _row(Icons.person_outline, 'My Profile', 'Your name and details', () => setState(() => _page = _MenuPage.profile)),
+          _row(Icons.help_outline, 'Help / About Maya', 'Who Maya is, and how to call', () => setState(() => _page = _MenuPage.help)),
+          _row(Icons.logout, 'Sign out', 'This phone forgets you', _signOutAsk, color: kAlert),
+        ]);
+      case _MenuPage.reminders:
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _title('My Reminders', back: true),
+          _errorLine(),
+          if (_loading) const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()))
+          else if (_error != null) TextButton(onPressed: _load, child: const Text('Try again', style: TextStyle(fontSize: 18)))
+          else if (_reminders.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('You have no reminders yet. Tell Maya, for example: "Remind me to take my tablets at 8 tonight."', style: TextStyle(fontSize: 18, color: kSoft, height: 1.4)))
+          else
+            for (final r in _reminders)
+              _row(Icons.alarm, r.task, '${_whenText(r.dueAt)} · ${r.repeatText}', () => setState(() {
+                    _open = r;
+                    _page = _MenuPage.reminder;
+                  })),
+        ]);
+      case _MenuPage.reminder:
+        final r = _open!;
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _title('Reminder', back: true),
+          _errorLine(),
+          _fact('What', r.task),
+          _fact('When', r.going ? 'Going out now' : _whenText(r.dueAt)),
+          _fact('How often', r.repeatText),
+          _fact('How it reaches you', '${r.howText}. ${r.channelText}.'),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: OutlinedButton.icon(
+              onPressed: _stopping || r.going ? null : () => _stop(r),
+              style: OutlinedButton.styleFrom(foregroundColor: kAlert, side: const BorderSide(color: kAlert, width: 1.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+              icon: const Icon(Icons.stop_circle_outlined, size: 24),
+              label: Text(r.going ? 'Going out now' : 'Stop this reminder', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ]);
+      case _MenuPage.profile:
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _title('My Profile', back: true),
+          _errorLine(),
+          _fact('Name', _name ?? 'Not available'),
+          _fact('Your time zone', _tz ?? 'Not set yet'),
+          _fact('How Maya looks after you', _loading ? 'Loading...' : _modeText),
+          const Text('To change any of these, ask your family.', style: TextStyle(fontSize: 16, color: kSoft, height: 1.35)),
+        ]);
+      case _MenuPage.help:
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _title('Help / About Maya', back: true),
+          const Text('Maya is your friendly companion, made by the Maya team.', style: TextStyle(fontSize: 20, color: kInk, height: 1.4)),
+          const SizedBox(height: 16),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(width: 48, height: 48, decoration: const BoxDecoration(shape: BoxShape.circle, color: kTrustSoft), child: const Icon(Icons.call, color: kTrust, size: 24)),
+            const SizedBox(width: 14),
+            const Expanded(child: Text('To talk to Maya, tap the blue phone button at the top right of the chat. To write to her, use the box at the bottom.', style: TextStyle(fontSize: 18, color: kInk, height: 1.4))),
+          ]),
+        ]);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: SingleChildScrollView(   // with very large text the sheet scrolls instead of being cut off
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: _body(),
+        ),
       );
 }
