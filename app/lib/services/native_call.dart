@@ -17,8 +17,9 @@ class NativeCall {
   NativeCall._();
   static final NativeCall instance = NativeCall._();
 
-  /// Tests replace the channel; nothing else does.
+  /// Tests replace the channel and the platform; nothing else does.
   static MethodChannel channel = const MethodChannel('maya/native_call');
+  static bool isIOS = Platform.isIOS;
 
   final _accepted = StreamController<String>.broadcast();
   final _ended = StreamController<String>.broadcast();
@@ -31,6 +32,20 @@ class NativeCall {
 
   String? _profile;
   bool _started = false;
+  final _kinds = <String, String>{};   // outreach id -> callback | reminder | welfare, from the push that rang
+  Completer<void>? _audio;             // completes when iOS has turned the call audio on (CallKit's didActivate)
+  bool _audioOn = false;
+
+  /// What kind of call rang (the reason the live call is joined with). Reminder when the native side did not say.
+  String kindOf(String outreachId) => _kinds.remove(outreachId) ?? 'reminder';
+
+  /// After Accept on the iOS call screen, the microphone must be opened only once iOS has switched the call audio on,
+  /// or it is silent when the phone was locked. Android has no such step. Waits at most [timeout], then goes on anyway.
+  Future<void> audioReady({Duration timeout = const Duration(seconds: 3)}) async {
+    if (!isIOS || _audioOn) return;
+    final c = _audio ??= Completer<void>();
+    await c.future.timeout(timeout, onTimeout: () {});
+  }
 
   /// Call once the profile is known. Safe to call again for another profile.
   Future<void> start(String profileId) async {
@@ -68,7 +83,15 @@ class NativeCall {
         break;
       case 'accepted':
         CallLog.add('native: accepted on the system call screen');
+        _audioOn = false;
+        _audio = null;
+        if (a['kind'] is String) _kinds['${a['outreachId']}'] = a['kind'] as String;
         _accepted.add('${a['outreachId']}');
+        break;
+      case 'audioActive':
+        _audioOn = true;
+        final w = _audio;
+        if (w != null && !w.isCompleted) w.complete();
         break;
       case 'declined':
         CallLog.add('native: declined on the system call screen');

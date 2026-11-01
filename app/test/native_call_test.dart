@@ -68,4 +68,46 @@ void main() {
     await NativeCall.instance.start('abc12345');
     await NativeCall.instance.dismiss('x');
   });
+
+  test('Accept carries what rang (welfare / reminder / callback) so the live call is joined with the right reason; unknown is a reminder, and it is read once', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, (c) async => null);
+    await NativeCall.instance.start('abc12345');
+    await fromNative('accepted', {'outreachId': 'w1', 'kind': 'welfare'});
+    await fromNative('accepted', {'outreachId': 'c1', 'kind': 'callback'});
+    await fromNative('accepted', {'outreachId': 'r1'});
+    expect(NativeCall.instance.kindOf('w1'), 'welfare');
+    expect(NativeCall.instance.kindOf('w1'), 'reminder', reason: 'read once');
+    expect(NativeCall.instance.kindOf('c1'), 'callback');
+    expect(NativeCall.instance.kindOf('r1'), 'reminder');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, null);
+  });
+
+  test('iOS: after Accept the microphone waits for the call audio (CallKit activated it); if it never says, it goes on after the timeout; Android and in-app rings do not wait', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, (c) async => null);
+    await NativeCall.instance.start('abc12345');
+    NativeCall.isIOS = true;
+    try {
+      await fromNative('accepted', {'outreachId': 'o9', 'kind': 'reminder'});
+      var done = false;
+      final w = NativeCall.instance.audioReady().then((_) => done = true);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(done, isFalse, reason: 'still waiting for the call audio');
+      await fromNative('audioActive', {});
+      await w;
+      expect(done, isTrue);
+      await NativeCall.instance.audioReady();   // already on: no wait
+      await fromNative('accepted', {'outreachId': 'o10'});
+      final t0 = DateTime.now();
+      await NativeCall.instance.audioReady(timeout: const Duration(milliseconds: 120));
+      expect(DateTime.now().difference(t0).inMilliseconds, greaterThanOrEqualTo(100), reason: 'no audio event: it waited, then went on');
+      NativeCall.isIOS = false;
+      final t1 = DateTime.now();
+      await fromNative('accepted', {'outreachId': 'o11'});
+      await NativeCall.instance.audioReady(timeout: const Duration(seconds: 5));
+      expect(DateTime.now().difference(t1).inMilliseconds, lessThan(500), reason: 'Android: no wait');
+    } finally {
+      NativeCall.isIOS = false;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, null);
+    }
+  });
 }

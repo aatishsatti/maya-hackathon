@@ -112,3 +112,39 @@ test('quiet hours hold the push: a Call reminder due at night sends no push; at 
 test('push.js with no keys sends nothing and says so; labels only', async () => {
   const k = push.deps.configured; push.deps.configured = null; try { assert.equal(push.configured('ios'), false); const r = await push.send({ platform: 'ios', token: TOKEN }, { type: 'incoming' }); assert.deepEqual(r, { ok: false, reason: 'not_configured' }); } finally { push.deps.configured = k; }
 });
+
+// ---- closed-app ringing for a welfare check (the same phone-call ring as a reminder): lock screen ring, Accept joins as a welfare call, an unanswered ring is taken down ----
+const sleepW = (ms) => new Promise((r) => setTimeout(r, ms));
+test('welfare ring, app CLOSED: ONE push (kind welfare, outreach id, ring time, no words), Accept claims it as a welfare call, once; the open app is rung by the app and gets no push', async () => {
+  quiet(); reset(); const { id } = linked(true); device(id);
+  const r = care.welfareAppRing(id); assert.equal(r.ok, true); await settleT();
+  assert.equal(pushes.length, 1, 'one push'); assert.deepEqual([pushes[0].type, pushes[0].kind], ['incoming', 'welfare']); assert.ok(pushes[0].outreachId); assert.equal(typeof pushes[0].ringMs, 'number');
+  assert.doesNotMatch(JSON.stringify(pushes[0]), /check in|How are you|family|Rosa/i, 'no words in a push');
+  const info = care.claim(id, pushes[0].outreachId); assert.equal(info.kind, 'welfare', 'Accept joins as a welfare call'); assert.equal(care.claim(id, pushes[0].outreachId), null, 'and only once'); quiet();
+  reset(); const b = linked(true); device(b.id); const app = openApp(b.id); assert.equal(care.welfareAppRing(b.id).ok, true); await settleT();
+  assert.ok(app.ev.some(([k, d]) => k === 'incoming' && d.kind === 'welfare')); assert.equal(pushes.length, 0, 'an open app is rung by the app, not by a push'); app.detach(); quiet();
+});
+
+test('welfare ring unanswered: an Android phone is told to take the ring down (an "end" data message) so it clears from the lock screen; the entry says Couldn\'t reach; iOS gets no second push (CallKit is cleared on the phone by the ring timer)', async () => {
+  const keepRing = care.cfg.ringMs; care.cfg.ringMs = 60;
+  try {
+    quiet(); reset(); const a = linked(true); device(a.id, 'android'); assert.equal(care.welfareAppRing(a.id).ok, true); await sleepW(300); await settleT();
+    assert.deepEqual(pushes.map((p) => [p.platform, p.type]), [['android', 'incoming'], ['android', 'end']], 'rung, then taken down'); assert.equal(pushes[1].outreachId, pushes[0].outreachId);
+    const w = wa.activityOf(a.id).entries.find((e) => e.type === 'welfare'); assert.equal(w.status, 'unreached'); quiet();
+    reset(); const i = linked(true); device(i.id, 'ios'); assert.equal(care.welfareAppRing(i.id).ok, true); await sleepW(300); await settleT();
+    assert.deepEqual(pushes.map((p) => [p.platform, p.type]), [['ios', 'incoming']], 'iOS: one push only; a VoIP push must always show a call, so the end is done on the phone'); quiet();
+  } finally { care.cfg.ringMs = keepRing; }
+});
+
+test('the native call code: lock-screen ring and clean-up, as written (Android full-screen notification that repeats until answered and times out; iOS CallKit that is answered with call audio and cleared when unanswered)', () => {
+  const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const kt = read('app', 'android', 'app', 'src', 'main', 'kotlin', 'com', 'mayateam', 'maya_app', 'NativeCalls.kt'), act = read('app', 'android', 'app', 'src', 'main', 'kotlin', 'com', 'mayateam', 'maya_app', 'MainActivity.kt'), man = read('app', 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+  assert.match(kt, /setFullScreenIntent/); assert.match(kt, /FLAG_INSISTENT/); assert.match(kt, /setTimeoutAfter\(ringMs\)/); assert.match(kt, /"end" -> NativeCalls\.cancel/); assert.match(kt, /CATEGORY_CALL/); assert.match(kt, /EXTRA_KIND/);
+  assert.match(act, /setShowWhenLocked\(true\)/); assert.match(act, /RECORD_AUDIO/); assert.match(act, /canUseFullScreenIntent/); assert.match(act, /"kind" to/);
+  for (const perm of ['USE_FULL_SCREEN_INTENT', 'RECORD_AUDIO', 'POST_NOTIFICATIONS']) assert.match(man, new RegExp(perm));
+  const sw = read('app', 'ios', 'Runner', 'AppDelegate.swift'), plist = read('app', 'ios', 'Runner', 'Info.plist'), ent = read('app', 'ios', 'Runner', 'Runner.entitlements'), pbx = read('app', 'ios', 'Runner.xcodeproj', 'project.pbxproj');
+  assert.match(sw, /reportNewIncomingCall/); assert.match(sw, /\.unanswered/); assert.match(sw, /setCategory\(\.playAndRecord, mode: \.voiceChat/); assert.match(sw, /emit\("audioActive"/); assert.match(sw, /"kind": kinds\[oid\]/);
+  assert.match(plist, /<string>voip<\/string>/); assert.match(plist, /<string>audio<\/string>/); assert.match(plist, /NSMicrophoneUsageDescription/); assert.match(ent, /aps-environment/);
+  assert.equal((pbx.match(/CODE_SIGN_ENTITLEMENTS = Runner\/Runner\.entitlements;/g) || []).length, 3, 'Debug, Release and Profile'); assert.match(pbx, /Runner\.entitlements \*\//);
+  assert.doesNotMatch(kt + act + sw + man + plist, /AIza|-----BEGIN|private_key|[0-9a-f]{32,}/, 'no key in the repository');
+});

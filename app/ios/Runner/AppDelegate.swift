@@ -15,6 +15,7 @@ final class NativeCall: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
   private let provider: CXProvider
   private let controller = CXCallController()
   private var ringing: [UUID: String] = [:]   // call -> outreach id, until answered
+  private var kinds: [String: String] = [:]   // outreach id -> callback | reminder | welfare (the reason the call is joined with)
   private var active: [UUID: String] = [:]    // answered
   private var queue: [(String, [String: Any])] = []
   private var lastToken: String?
@@ -57,7 +58,7 @@ final class NativeCall: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         for (n, d) in q { self.emit(n, d) }
         result(nil)
       case "dismiss":   // the app is open and rings in its own screen: take the system call screen down
-        if let oid = a["outreachId"] as? String { self.end(outreach: oid, reason: .answeredElsewhere) }
+        if let oid = a["outreachId"] as? String { self.end(outreach: oid, reason: .answeredElsewhere); self.kinds[oid] = nil }
         result(nil)
       case "callEnded":   // the live call finished inside the app: end the system call too
         if let oid = a["outreachId"] as? String { self.requestEnd(outreach: oid) }
@@ -118,9 +119,11 @@ final class NativeCall: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         self?.provider.reportCall(with: u, endedAt: nil, reason: .failed)
       } else if let oid = oid {
         self?.ringing[u] = oid
+        self?.kinds[oid] = (d["kind"] as? String) ?? "reminder"
         // no answer in the ring time: the call screen goes away by itself
         DispatchQueue.main.asyncAfter(deadline: .now() + ringMs / 1000.0) { [weak self] in
-          if self?.ringing[u] != nil { self?.ringing[u] = nil; self?.provider.reportCall(with: u, endedAt: nil, reason: .unanswered) }
+          // CallKit never stops a ring by itself, so this is what clears the call screen (lock screen included) when nobody answers
+          if self?.ringing[u] != nil { self?.ringing[u] = nil; self?.kinds[oid] = nil; self?.provider.reportCall(with: u, endedAt: nil, reason: .unanswered) }
         }
       }
       completion()
@@ -128,29 +131,35 @@ final class NativeCall: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
   }
 
   // MARK: CallKit
-  func providerDidReset(_ provider: CXProvider) { ringing.removeAll(); active.removeAll() }
+  func providerDidReset(_ provider: CXProvider) { ringing.removeAll(); active.removeAll(); kinds.removeAll() }
 
   func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
     if let oid = ringing[action.callUUID] {
       ringing[action.callUUID] = nil; active[action.callUUID] = oid
-      emit("accepted", ["outreachId": oid])
+      // The call audio: a call and a microphone (the same category a phone call uses). iOS turns it on for us right after this action (didActivate below);
+      // Dart starts the microphone only then, because a microphone opened before that is silent when the phone was locked.
+      let session = AVAudioSession.sharedInstance()
+      try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
+      emit("accepted", ["outreachId": oid, "kind": kinds[oid] ?? "reminder"])
     }
     action.fulfill()
   }
 
   func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
     if let oid = ringing[action.callUUID] {          // Decline
-      ringing[action.callUUID] = nil
+      ringing[action.callUUID] = nil; kinds[oid] = nil
       declineToServer(oid)
       emit("declined", ["outreachId": oid])
     } else if let oid = active[action.callUUID] {    // hung up from the system screen
-      active[action.callUUID] = nil
+      active[action.callUUID] = nil; kinds[oid] = nil
       emit("ended", ["outreachId": oid])
     }
     action.fulfill()
   }
 
-  func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {}
+  func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+    emit("audioActive", [:])   // the system call audio is on: the microphone and the speaker can be used now
+  }
   func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {}
 }
 

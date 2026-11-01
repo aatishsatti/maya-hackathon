@@ -26,6 +26,7 @@ import kotlin.concurrent.thread
 object NativeCalls {
     const val EXTRA_ACTION = "maya_action"
     const val EXTRA_OUTREACH = "maya_outreach"
+    const val EXTRA_KIND = "maya_kind"   // callback | reminder | welfare: the reason the call is joined with
     private const val CHANNEL = "maya_calls"
     private val main = Handler(Looper.getMainLooper())
     private var ch: MethodChannel? = null
@@ -43,7 +44,7 @@ object NativeCalls {
 
     private fun idOf(oid: String) = oid.hashCode()
 
-    fun show(ctx: Context, oid: String, ringMs: Long) {
+    fun show(ctx: Context, oid: String, ringMs: Long, kind: String) {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             val c = NotificationChannel(CHANNEL, "Maya calls", NotificationManager.IMPORTANCE_HIGH)
@@ -52,7 +53,7 @@ object NativeCalls {
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         fun open(action: String, code: Int): PendingIntent {
-            val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_ACTION, action).putExtra(EXTRA_OUTREACH, oid)
+            val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_ACTION, action).putExtra(EXTRA_OUTREACH, oid).putExtra(EXTRA_KIND, kind)
             return PendingIntent.getActivity(ctx, idOf(oid) + code, i, flags)
         }
         val decline = PendingIntent.getBroadcast(ctx, idOf(oid) + 3, Intent(ctx, DeclineReceiver::class.java).putExtra(EXTRA_OUTREACH, oid), flags)
@@ -62,7 +63,9 @@ object NativeCalls {
             .addAction(Notification.Action.Builder(null, "Decline", decline).build())
             .addAction(Notification.Action.Builder(null, "Accept", open("accept", 2)).build())
         if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(ringMs)
-        nm.notify(idOf(oid), b.build())
+        val n = b.build()
+        n.flags = n.flags or Notification.FLAG_INSISTENT   // the ringtone repeats until the call is answered, declined or times out, like a phone call (a plain notification sound plays once)
+        nm.notify(idOf(oid), n)
     }
 
     fun cancel(ctx: Context, oid: String) { (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(idOf(oid)) }
@@ -94,7 +97,7 @@ class MayaMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(m: RemoteMessage) {
         val d = m.data; val oid = d["outreachId"] ?: return
         when (d["type"]) {
-            "incoming" -> NativeCalls.show(this, oid, (d["ringMs"]?.toLongOrNull() ?: 30000L))
+            "incoming" -> NativeCalls.show(this, oid, (d["ringMs"]?.toLongOrNull() ?: 30000L), d["kind"] ?: "reminder")
             "end" -> NativeCalls.cancel(this, oid)
         }
     }

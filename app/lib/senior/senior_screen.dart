@@ -91,13 +91,29 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
 
   // A ring that reached a CLOSED phone (a push -> the system call screen): Accept joins the same live call as an in-app Accept.
   void _listenNative(String id) {
-    _nativeAccept ??= NativeCall.instance.accepted.listen((oid) {
+    _nativeAccept ??= NativeCall.instance.accepted.listen((oid) async {
       if (!mounted || _inCall) return;
       _dropIncoming();
-      _startCall(reason: 'reminder', outreachId: oid);
+      final kind = NativeCall.instance.kindOf(oid);   // callback | reminder | welfare: what rang
+      await NativeCall.instance.audioReady();         // iOS: the call audio is on before the microphone opens
+      if (!mounted || _inCall) return;
+      _startCall(reason: kind, outreachId: oid);
     });
     _nativeEnd ??= NativeCall.instance.ended.listen((_) => _live?.hangUp());
     NativeCall.instance.start(id);
+    if (Platform.isIOS) _primeMic();
+  }
+
+  // The microphone question can only be asked with the phone in hand: on a lock screen there is no room for it, so an Accept would open a silent call.
+  // Asking here, while the app is open, means a closed-app ring that is answered can talk at once. (Android asks natively, in MainActivity.)
+  Future<void> _primeMic() async {
+    try {
+      final r = AudioRecorder();
+      await r.hasPermission();
+      await r.dispose();
+    } catch (_) {
+      // no microphone plugin (tests, desktop): nothing to ask
+    }
   }
 
   void _attach(String id) {
