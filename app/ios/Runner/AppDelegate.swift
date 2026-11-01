@@ -51,6 +51,12 @@ final class NativeCall: NSObject, PKPushRegistryDelegate, CXProviderDelegate {
         UserDefaults.standard.set(a["profile"] as? String ?? "", forKey: "maya_profile")
         self.startPush()
         result(nil)
+      case "unlink":   // sign out of a senior: forget the profile and drop the VoIP registration, so no ring for them can reach this phone
+        UserDefaults.standard.set("", forKey: "maya_profile")
+        self.registry?.desiredPushTypes = []
+        self.registry = nil
+        self.lastToken = nil
+        result(nil)
       case "ready":
         self.channel = ch
         if let t = self.lastToken { self.emit("token", ["platform": "ios", "token": t]) }

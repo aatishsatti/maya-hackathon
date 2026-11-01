@@ -82,6 +82,28 @@ object NativeCalls {
         }
     }
 
+    // Sign out of a senior. The profile and the family token are forgotten, every notification is taken down, and the push token is DELETED at Google: an old push for the person can no longer reach this phone.
+    fun unlink(ctx: Context) {
+        configure(ctx, ctx.getSharedPreferences("maya_native", 0).getString("base", "") ?: "", "", "")
+        (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
+        thread { try { FirebaseMessaging.getInstance().deleteToken() } catch (e: Exception) { /* no Firebase here: no token to delete */ } }
+    }
+
+    // A push for a person this phone is no longer linked to (signed out, or linked to someone else): show nothing, and ask the server to forget this phone for that person.
+    fun ignoreStale(ctx: Context, forProfile: String?): Boolean {
+        val mine = ctx.getSharedPreferences("maya_native", 0).getString("profile", "") ?: ""
+        if (forProfile == null || forProfile == mine) return false
+        val base = ctx.getSharedPreferences("maya_native", 0).getString("base", "") ?: ""
+        if (base.isNotEmpty() && Regex("^[a-f0-9]{8}$").matches(forProfile)) thread {
+            try {
+                val t = com.google.android.gms.tasks.Tasks.await(FirebaseMessaging.getInstance().token)
+                val c = URL(base + "/api/care/" + forProfile + "/device/" + java.net.URLEncoder.encode(t, "UTF-8")).openConnection() as HttpURLConnection
+                c.requestMethod = "DELETE"; c.connectTimeout = 8000; c.readTimeout = 8000; c.responseCode; c.disconnect()
+            } catch (e: Exception) { /* the next push will try again */ }
+        }
+        return true
+    }
+
     fun fetchToken() {
         try { FirebaseMessaging.getInstance().token.addOnSuccessListener { t -> emit("token", mapOf("platform" to "android", "token" to t)) } }
         catch (e: Exception) { emit("unavailable", mapOf("platform" to "android", "reason" to "firebase_not_configured")) }   // no google-services.json: a label, nothing else
@@ -254,6 +276,7 @@ class MayaMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) { NativeCalls.emit("token", mapOf("platform" to "android", "token" to token)) }
     override fun onMessageReceived(m: RemoteMessage) {
         val d = m.data
+        if (d["type"] != "family_call" && NativeCalls.ignoreStale(this, d["profile"])) return   // this phone is no longer linked to that person
         if (d["type"] == "family_call") { NativeCalls.showFamilyCall(this, d["seniorId"] ?: return, d["episodeId"] ?: return, d["kind"] ?: "missed"); return }
         if (d["type"] == "message") { NativeCalls.showMessage(this, d["via"] ?: "text", d["what"] ?: "reminder", d["messageId"]); return }
         val oid = d["outreachId"] ?: return

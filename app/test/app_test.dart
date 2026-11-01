@@ -154,6 +154,7 @@ void main() {
       await t.tap(find.text('Sign out'));
       await t.pumpAndSettle();
       await t.tap(find.text('Sign out').last);
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));   // the native unlink answers on the real event loop
       await t.pumpAndSettle();
       expect(await Store.profileId(), isNull, reason: 'the phone forgot the senior link');
       expect(find.text('Enter code'), findsWidgets, reason: 'back at the start screen');

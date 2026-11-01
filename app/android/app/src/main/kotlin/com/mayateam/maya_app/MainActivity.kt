@@ -28,6 +28,7 @@ class MainActivity : FlutterActivity() {
                     NativeCalls.fetchToken()
                     result.success(null)
                 }
+                "unlink" -> { NativeCalls.unlink(this); result.success(null) }   // sign out of a senior: forget the profile, take down rings, delete the push token
                 "ready" -> { NativeCalls.attach(ch); result.success(null) }
                 "dismiss", "callEnded" -> { NativeCalls.dismiss(this, call.argument<String>("outreachId")); result.success(null) }
                 else -> result.notImplemented()

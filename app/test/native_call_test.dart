@@ -63,6 +63,31 @@ void main() {
     Api.testClient = null;
   });
 
+  test('sign out: the server is told to forget this phone\'s token, the native side unlinks, and a later token goes nowhere', () async {
+    final told = <String>[];
+    final reqs = <http.Request>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, (c) async {
+      told.add(c.method);
+      return null;
+    });
+    Api.testClient = MockClient((req) async {
+      reqs.add(req);
+      return http.Response('{"ok":true}', 200);
+    });
+    await NativeCall.instance.start('abc12345');
+    await fromNative('token', {'platform': 'android', 'token': 'TOKEN0123456789abcdef:APA-x'});
+    reqs.clear();
+    await NativeCall.instance.unlink();
+    expect(reqs.single.method, 'DELETE');
+    expect(reqs.single.url.path, '/api/care/abc12345/device/${Uri.encodeComponent('TOKEN0123456789abcdef:APA-x')}');
+    expect(told.last, 'unlink');
+    reqs.clear();
+    await fromNative('token', {'platform': 'android', 'token': 'ANOTHER0123456789abcdef'});
+    expect(reqs, isEmpty, reason: 'signed out: no token is registered for anyone');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, null);
+    Api.testClient = null;
+  });
+
   test('a phone with no native side (tests, desktop) is not an error', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(NativeCall.channel, null);
     await NativeCall.instance.start('abc12345');

@@ -452,6 +452,8 @@ function registerDevice(id, { platform, token }) {
   const p = get(id); if (!p) { const e = new Error('Not found'); e.status = 404; throw e; }
   if (!DEVICE_PLATFORMS.includes(platform)) { const e = new Error('The platform must be ios or android.'); e.status = 400; throw e; }
   if (typeof token !== 'string' || !/^[\w:\-.]{16,4096}$/.test(token)) { const e = new Error('That is not a push token.'); e.status = 400; throw e; }
+  // One phone belongs to ONE senior: the same token on any other profile is dropped (a phone that was signed out of one senior and linked to another must not ring the old one).
+  for (const q of cache.values()) if (q.id !== id && (q.devices || []).some((d) => d.token === token)) { q.devices = q.devices.filter((d) => d.token !== token); save(q.id); }
   p.devices = (p.devices || []).filter((d) => d.token !== token && d.platform !== platform);   // one phone per platform: the newest registration wins
   p.devices.push({ platform, token, at: Date.now() });
   save(id); console.log('push', JSON.stringify({ event: 'device registered', platform }));
@@ -471,7 +473,7 @@ function ringByPush(o) {
   const all = (p && p.devices) || [], devs = all.filter((d) => push.configured(d.platform));
   if (!devs.length) { console.log('push', JSON.stringify({ event: 'not tried', reason: all.length ? 'not_configured' : 'no_device' })); return; }   // nothing to push to: the ring goes on as it always did (retries, then unanswered)
   o.pushed = true;
-  const payload = { type: 'incoming', outreachId: o.id, kind: o.kind, ringMs: cfg.ringMs };
+  const payload = { type: 'incoming', outreachId: o.id, kind: o.kind, ringMs: cfg.ringMs, profile: o.profileId };   // profile: so a phone that was signed out of this person can ignore the ring and ask the server to forget it
   Promise.all(devs.map((d) => push.send(d, payload).then((r) => ({ d, r })))).then((rs) => {
     for (const { d, r } of rs) if (r.gone) removeDevice(o.profileId, d.token);   // the phone no longer has the app: forget it
     if (!rs.some((x) => x.r.ok)) pushFailed(o, attempt, (rs[0] && rs[0].r.reason) || 'failed');
@@ -1355,7 +1357,7 @@ function pushMessage(id, { via, what, notifId = null, messageId = null }) {
   const p = get(id);
   const all = (p && p.devices) || [], devs = all.filter((d) => d.platform === 'android' && push.configured('android'));
   if (!devs.length) { console.log('push', JSON.stringify({ event: 'message not tried', reason: all.length ? (all.some((d) => d.platform === 'android') ? 'not_configured' : 'ios_not_supported') : 'no_device' })); return 0; }
-  const payload = { type: 'message', via, what, ...(notifId ? { notifId } : {}), ...(messageId ? { messageId } : {}) };
+  const payload = { type: 'message', via, what, profile: id, ...(notifId ? { notifId } : {}), ...(messageId ? { messageId } : {}) };
   Promise.all(devs.map((d) => push.send(d, payload).then((r) => ({ d, r })))).then((rs) => { for (const { d, r } of rs) if (r.gone) removeDevice(id, d.token); });
   return devs.length;
 }

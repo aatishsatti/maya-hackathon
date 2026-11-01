@@ -44,6 +44,7 @@ class NativeCall {
   Stream<String> get ended => _ended.stream;
 
   String? _profile;
+  String? _lastToken;   // this phone's push token, as the native side last told us (so a sign-out can take it off the server)
   bool _started = false;
   final _kinds = <String, String>{};   // outreach id -> callback | reminder | welfare, from the push that rang
   Completer<void>? _audio;             // completes when iOS has turned the call audio on (CallKit's didActivate)
@@ -78,6 +79,31 @@ class NativeCall {
     }
   }
 
+  /// SIGN OUT of a senior: this phone must not be rung for that person any more. The server forgets this phone's push token, the native side forgets the profile
+  /// and the push registration (Android: the token is deleted at Google, so an old push cannot arrive; iOS: the VoIP registration is dropped), and any ring on screen is taken down.
+  /// Nothing here deletes the person's profile or chat on the server. Safe to call when nothing was started.
+  Future<void> unlink() async {
+    final id = _profile, token = _lastToken;
+    _profile = null;
+    _lastToken = null;
+    _familyToken = null;
+    if (id != null && token != null) {
+      try {
+        await Api.delete('/api/care/$id/device/${Uri.encodeComponent(token)}');
+        CallLog.add('native: push token removed from the server');
+      } catch (_) {
+        CallLog.add('native: push token not removed from the server');   // the native side still kills the token below, so the server finds it dead on its next try
+      }
+    }
+    try {
+      await channel.invokeMethod('unlink');
+    } on MissingPluginException {
+      // a platform without the native side (tests, desktop): nothing to do
+    } on PlatformException catch (e) {
+      CallLog.add('native: unlink failed: ${e.code}');
+    }
+  }
+
   /// Call once the profile is known. Safe to call again for another profile.
   Future<void> start(String profileId) async {
     _profile = profileId;
@@ -101,6 +127,7 @@ class NativeCall {
       case 'token':
         final id = _profile;
         final token = '${a['token'] ?? ''}';
+        if (token.isNotEmpty) _lastToken = token;
         if (id == null && _familyToken != null && token.isNotEmpty) {   // a family phone
           try {
             await Api.postJson('/api/family/device', {'platform': a['platform'] ?? (Platform.isIOS ? 'ios' : 'android'), 'token': token});

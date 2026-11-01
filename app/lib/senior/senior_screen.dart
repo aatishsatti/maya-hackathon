@@ -575,6 +575,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     _events?.stop();
     _events = null;
     _ringTimer?.cancel();
+    await NativeCall.instance.unlink();   // the server stops ringing this phone for this person
     await Store.clearProfile();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute<void>(builder: (_) => const StartScreen()), (r) => false);

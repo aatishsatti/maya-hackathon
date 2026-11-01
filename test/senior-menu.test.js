@@ -22,3 +22,14 @@ test('seniorMenu lists only reminders the senior set; stopping a family one is r
   assert.deepEqual(care.seniorMenu(id).reminders, []);
   assert.equal(care.seniorMenu('00000000'), null);
 });
+
+test('a push token belongs to one senior: linking the phone to another person drops it from the old one; pushes say whose they are', () => {
+  const a = memory.createProfile('Tokena', 'female').id, b = memory.createProfile('Tokenb', 'male').id;
+  const token = 'K'.repeat(64);
+  care.registerDevice(a, { platform: 'android', token });
+  assert.equal(care.get(a).devices.length, 1);
+  care.registerDevice(b, { platform: 'android', token });
+  assert.equal(care.get(a).devices.length, 0, 'the old senior no longer rings this phone');
+  assert.equal(care.get(b).devices.length, 1);
+  assert.equal(care.removeDevice(b, token), true, 'sign out removes it');
+});
