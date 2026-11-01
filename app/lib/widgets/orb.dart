@@ -7,7 +7,8 @@ import 'package:flutter/material.dart';
 enum OrbState { connecting, listening, thinking, speaking }
 
 /// Maya's presence on the call page: a sphere of fine particles in trust blue and teal, turning slowly.
-/// EVERY particle moves, all the time, each at its own rhythm; how far they move follows the voices:
+/// EVERY particle moves, all the time, each at its own rhythm. How far and how fast they move follows the SOUND itself, frame by frame (the loudness of the senior's voice and of Maya's, read
+/// live), on top of a resting level set by who is speaking:
 ///   Maya speaking  - the whole surface swells and ripples
 ///   you speaking   - the surface answers just as strongly (a touch smaller)
 ///   thinking       - a steady shimmer
@@ -20,7 +21,10 @@ class MayaOrb extends StatefulWidget {
 
   /// The person is speaking right now (their words are arriving).
   final bool youSpeaking;
-  const MayaOrb({super.key, required this.state, this.size = 240, this.youSpeaking = false});
+
+  /// The loudness right now, 0 to 1, read on every frame (both voices). Null: the resting levels only.
+  final double Function()? level;
+  const MayaOrb({super.key, required this.state, this.size = 240, this.youSpeaking = false, this.level});
 
   @override
   State<MayaOrb> createState() => _MayaOrbState();
@@ -29,6 +33,9 @@ class MayaOrb extends StatefulWidget {
 class _MayaOrbState extends State<MayaOrb> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 120))..repeat();
   late final _Cloud _cloud = _Cloud(3400);
+  DateTime _last = DateTime.now();
+  double _phase = 0; // runs faster when it is louder, so the ripples keep pace with the voice
+  double _eff = 0.2; // the smoothed amount of movement: quick to rise, slower to settle
 
   @override
   void dispose() {
@@ -36,18 +43,18 @@ class _MayaOrbState extends State<MayaOrb> with SingleTickerProviderStateMixin {
     super.dispose();
   }
 
-  // how far the particles move (0 is still, 1 is the full swell)
-  double get _level {
-    if (widget.youSpeaking) return 0.86;
+  // the resting movement (0 is still, 1 is the full swell) for who is speaking; the live sound adds to it
+  double get _rest {
+    if (widget.youSpeaking) return 0.34;
     switch (widget.state) {
       case OrbState.speaking:
-        return 1.0;
+        return 0.30;
       case OrbState.thinking:
-        return 0.46;
+        return 0.30;
       case OrbState.listening:
-        return 0.26;
+        return 0.16;
       case OrbState.connecting:
-        return 0.14;
+        return 0.10;
     }
   }
 
@@ -63,14 +70,23 @@ class _MayaOrbState extends State<MayaOrb> with SingleTickerProviderStateMixin {
           };
     return Semantics(
       label: label,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween(end: _level),
-        duration: const Duration(milliseconds: 300),
-        builder: (context, level, _) => RepaintBoundary(
-          child: SizedBox(
-            width: widget.size,
-            height: widget.size,
-            child: AnimatedBuilder(animation: _c, builder: (context, _) => CustomPaint(painter: _OrbPainter(_cloud, _c.value * 120, level, widget.youSpeaking))),
+      child: RepaintBoundary(
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: AnimatedBuilder(
+            animation: _c,
+            builder: (context, _) {
+              // one step per frame: the live loudness is read now, smoothed (up quickly, down gently), and moves the whole cloud
+              final now = DateTime.now();
+              final dt = math.min(0.1, now.difference(_last).inMicroseconds / 1e6);
+              _last = now;
+              final heard = widget.level == null ? 0.0 : widget.level!().clamp(0.0, 1.0);
+              final target = math.min(1.0, _rest + heard * 0.85);
+              _eff += (target - _eff) * (target > _eff ? 0.55 : 0.14);
+              _phase += dt * (1.0 + 2.4 * _eff);
+              return CustomPaint(painter: _OrbPainter(_cloud, _phase, _eff, widget.youSpeaking));
+            },
           ),
         ),
       ),
@@ -78,7 +94,6 @@ class _MayaOrbState extends State<MayaOrb> with SingleTickerProviderStateMixin {
   }
 }
 
-/// The particles: points spread evenly over a sphere, each with its own rhythm. Made once.
 class _Cloud {
   final int n;
   late final Float32List x, y, z, ph1, ph2, f1, f2;
@@ -127,7 +142,7 @@ class _OrbPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final n = cloud.n;
     final c = Offset(size.width / 2, size.height / 2);
-    final base = size.shortestSide / 2 * 0.80; // room for the particles to swell outward
+    final base = size.shortestSide / 2 * 0.80 * (1 + 0.035 * math.sin(t * 0.9) + 0.09 * level); // the whole body breathes, and swells with the sound; room is left for the particles to rise
     if (_buf[0].length != n * 2) {
       for (var i = 0; i < 12; i++) {
         _buf[i] = Float32List(n * 2);
@@ -136,7 +151,7 @@ class _OrbPainter extends CustomPainter {
     final counts = List<int>.filled(12, 0);
     final ay = t * 0.16, ax = 0.42; // slow turn, a little tilt
     final cy = math.cos(ay), sy = math.sin(ay), cx = math.cos(ax), sx = math.sin(ax);
-    final swell = 0.03 + 0.12 * level; // how far a particle may leave the surface
+    final swell = 0.03 + 0.20 * level; // how far a particle may leave the surface: the louder, the further
     for (var i = 0; i < n; i++) {
       // every particle moves, all the time: slow waves run over the whole surface (so neighbours move together, as one body), and each particle adds a small rhythm of its own
       final x0 = cloud.x[i], y0 = cloud.y[i], z0 = cloud.z[i];

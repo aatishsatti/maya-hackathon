@@ -16,6 +16,10 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>Maya</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Maya needs your photos so she can read a photo or a letter you send her.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Maya needs the camera so you can take a photo of a letter or a message and show it to her.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Maya needs the microphone to hear you when you talk to her or send a voice note.</string>
 	<key>UIBackgroundModes</key>

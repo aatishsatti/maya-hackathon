@@ -21,7 +21,10 @@ const Color _textOnCard = Colors.white;
 /// The call. One screen, never scrolls.
 class CallScreen extends StatefulWidget {
   final CallSession session;
-  const CallScreen({super.key, required this.session});
+
+  /// Coming back to a call that is already running (from the chat's "Back to call" bar): the call is not started again.
+  final bool resume;
+  const CallScreen({super.key, required this.session, this.resume = false});
   @override
   State<CallScreen> createState() => _CallScreenState();
 }
@@ -38,14 +41,13 @@ class _CallScreenState extends State<CallScreen> {
     super.initState();
     s.addListener(_changed);
     _read();
-    if (s.autoStart) s.start();
+    if (s.autoStart && !widget.resume) s.start();
   }
 
   @override
   void dispose() {
     _youTimer?.cancel();
-    s.removeListener(_changed);
-    s.dispose();
+    s.removeListener(_changed);   // the call itself belongs to whoever opened this page (it may only be set aside, to the chat): it is closed there
     super.dispose();
   }
 
@@ -119,9 +121,11 @@ class _CallScreenState extends State<CallScreen> {
                 flex: 6,
                 child: LayoutBuilder(builder: (context, box) {
                   final size = math.min(box.maxWidth * 0.8, box.maxHeight);
-                  return Center(child: MayaOrb(state: s.orb, size: size, youSpeaking: _youSpeaking));
+                  return Center(child: MayaOrb(state: s.orb, size: size, youSpeaking: _youSpeaking, level: s.levels.read));
                 }),
               ),
+              // "Go back to chat": above the controls and well apart from them, so it is never tapped by mistake for End call. The call goes on.
+              if (!failed && !s.ended) Padding(padding: const EdgeInsets.only(bottom: 22), child: _BackToChat(onTap: () => Navigator.of(context).pop('chat'))),
               // the controls, at the bottom, on the same page
               Padding(padding: const EdgeInsets.fromLTRB(24, 4, 24, 20), child: _Controls(s: s, failed: failed)),
             ]),
@@ -193,6 +197,27 @@ class CallBackdrop extends StatelessWidget {
       ),
     ]);
   }
+}
+
+/// "Go back to chat", in words: a calm outlined pill. It opens the chat and does NOT end the call (the chat then shows a "Back to call" bar).
+class _BackToChat extends StatelessWidget {
+  final VoidCallback onTap;
+  const _BackToChat({required this.onTap});
+  @override
+  Widget build(BuildContext context) => Pressable(
+        onTap: onTap,
+        semanticLabel: 'Go back to chat',
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 50, minWidth: 220),
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+          decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(30), border: Border.all(color: Colors.white.withValues(alpha: 0.55), width: 1.2)),
+          child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: const [
+            Icon(Icons.chat_bubble_outline, color: Colors.white, size: 22),
+            SizedBox(width: 10),
+            Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: Text('Go back to chat', style: TextStyle(fontSize: 17, color: Colors.white, fontWeight: FontWeight.w500)))),
+          ]),
+        ),
+      );
 }
 
 /// The controls, floating on the page itself (no card): Mute on the left, Speaker on the right, End call a red pill centred beneath on the orb's axis.

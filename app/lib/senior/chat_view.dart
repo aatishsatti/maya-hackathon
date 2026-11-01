@@ -71,8 +71,14 @@ class _Bubble extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (m.text.isNotEmpty) Text(m.text, style: const TextStyle(fontSize: 18, height: 1.35, color: kInk, fontWeight: FontWeight.w400)),
-              if (m.kind == 'image') const Text('Photo', style: TextStyle(fontSize: 17, color: kInk)),
+              if (m.kind == 'file') _FileRow(name: m.text) else if (m.text.isNotEmpty) Text(m.text, style: const TextStyle(fontSize: 18, height: 1.35, color: kInk, fontWeight: FontWeight.w400)),
+              if (m.kind == 'image')
+                Padding(
+                  padding: EdgeInsets.only(top: m.text.isNotEmpty ? 8 : 0),
+                  child: m.mediaUrl != null
+                      ? ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network(m.mediaUrl!, height: 180, width: double.infinity, fit: BoxFit.cover, errorBuilder: (_, _, _) => const _FileRow(name: 'Photo')))
+                      : const _FileRow(name: 'Photo', icon: Icons.photo_outlined),
+                ),
               if (voice && m.mediaUrl != null) Padding(padding: EdgeInsets.only(top: m.text.isNotEmpty ? 8 : 0), child: VoiceBubble(url: m.mediaUrl!, autoPlay: autoPlay)),
               if (voice && m.mediaUrl == null) Padding(padding: EdgeInsets.only(top: m.text.isNotEmpty ? 8 : 0), child: _Pending(sending: m.pending)),
               if (m.voiceError != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text(m.voiceError!, style: const TextStyle(fontSize: 13, color: kAlert))),
@@ -82,6 +88,77 @@ class _Bubble extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A document or a photo the person sent: the name, with its icon.
+class _FileRow extends StatelessWidget {
+  final String name;
+  final IconData icon;
+  const _FileRow({required this.name, this.icon = Icons.picture_as_pdf_outlined});
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 44, height: 44, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white), child: Icon(icon, color: kTrust, size: 24)),
+        const SizedBox(width: 12),
+        Flexible(child: Text(name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, height: 1.3, color: kInk, fontWeight: FontWeight.w500))),
+      ]);
+}
+
+/// The sheet behind the paperclip: three plain choices, in words. It answers 'image', 'pdf' or 'camera' (or nothing when the person closes it).
+Future<String?> showAttachSheet(BuildContext context) => showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (_) => const AttachSheet(),
+    );
+
+class AttachSheet extends StatelessWidget {
+  const AttachSheet({super.key});
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: SingleChildScrollView(   // with very large text the sheet scrolls instead of being cut off
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Send Maya something', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: -0.5, color: kInk)),
+            const SizedBox(height: 4),
+            const Text('A photo or a letter. She will tell you what it says.', style: TextStyle(fontSize: 16, color: kSoft, height: 1.35)),
+            const SizedBox(height: 16),
+            const _AttachTile(icon: Icons.photo_library_outlined, title: 'Attach image', sub: 'A photo from your phone', result: 'image'),
+            const SizedBox(height: 10),
+            const _AttachTile(icon: Icons.picture_as_pdf_outlined, title: 'Attach file (PDF)', sub: 'A letter, a bill or a message', result: 'pdf'),
+            const SizedBox(height: 10),
+            const _AttachTile(icon: Icons.photo_camera_outlined, title: 'Take photo', sub: 'Use the camera now', result: 'camera'),
+            const SizedBox(height: 6),
+            Center(child: TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel', style: TextStyle(fontSize: 17, color: kSoft, fontWeight: FontWeight.w600)))),
+          ]),
+        ),
+      );
+}
+
+class _AttachTile extends StatelessWidget {
+  final IconData icon;
+  final String title, sub, result;
+  const _AttachTile({required this.icon, required this.title, required this.sub, required this.result});
+  @override
+  Widget build(BuildContext context) => Pressable(
+        onTap: () => Navigator.of(context).pop(result),
+        semanticLabel: title,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 72),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(color: kTrustSoft.withValues(alpha: 0.6), borderRadius: BorderRadius.circular(20), border: Border.all(color: const Color(0xFFDDE3F8))),
+          child: Row(children: [
+            Container(width: 52, height: 52, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white), child: Icon(icon, color: kTrust, size: 28)),
+            const SizedBox(width: 14),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: kInk)),
+              Text(sub, style: const TextStyle(fontSize: 15, color: kSoft)),
+            ])),
+            const Icon(Icons.chevron_right, color: kSoft),
+          ]),
+        ),
+      );
 }
 
 /// A voice note on its way (no sound file yet): the play button waits, the waveform rests.

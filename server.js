@@ -24,6 +24,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const MAX_VOICE_NOTE_BYTES = 12 * 1024 * 1024; // a WAV voice note (Meta takes up to 10 minutes / 32 MB; the app sends 24 kHz mono)
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_PDF_BYTES = 8 * 1024 * 1024;
 const MAX_WEBHOOK_BYTES = 1024 * 1024;
 
 const TYPES = {
@@ -142,6 +143,7 @@ async function handleChat(req, res, url) {
     }
     if (what === 'voicenote') return sendJson(res, 200, await chat.sendVoiceNote(pid, await readBody(req, MAX_VOICE_NOTE_BYTES), tz));
     if (what === 'image') return sendJson(res, 200, await chat.sendImage(pid, await readBody(req, MAX_IMAGE_BYTES), url.searchParams.get('caption'), tz));
+    if (what === 'pdf') return sendJson(res, 200, await chat.sendPdf(pid, await readBody(req, MAX_PDF_BYTES), url.searchParams.get('name'), tz));   // a PDF the person sends: its words are read and answered, the file is not kept
   } catch (e) {
     if (!e.status) console.error('chat error:', e.message); // message only, never the person's words
     return sendJson(res, e.status || 500, { error: e.message });

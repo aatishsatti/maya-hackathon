@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
@@ -53,6 +56,10 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   String? _playId; // the voice note that opens playing (its notification was tapped)
   Timer? _playClear;
   CallSession? _live; // the call on screen, so the system call screen's hang-up can end it
+  bool _inChat = false; // the chat page is open (otherwise the home page)
+  bool _callRouteOpen = false; // the call page is on screen (a call set aside to the chat has none)
+  String? _liveOutreach;
+  bool _unread = false; // Maya wrote while the home page was showing
 
   @override
   void initState() {
@@ -75,6 +82,11 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     _recTimer?.cancel();
     _ampSub?.cancel();
     _rec?.dispose();
+    final call = _live;
+    if (call != null) {
+      call.removeListener(_liveChanged);
+      call.dispose();   // the app is closing: the call ends with it
+    }
     _scroll.dispose();
     _text.dispose();
     _focus.dispose();
@@ -117,6 +129,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     });
     // A text or a voice-note notification was tapped: the chat opens on it, and a voice note plays.
     _nativeOpened ??= NativeCall.instance.opened.listen((o) async {
+      if (mounted) setState(() => _inChat = true);   // the notification opens the chat itself, not the home page
       await _loadThread();
       if (!mounted || o.via != 'voice') return;
       String? id = o.messageId.isEmpty ? null : o.messageId;
@@ -200,7 +213,10 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
       case 'chat':
         final m = ChatMessage.from(e.data['message']);
         if (m != null && !_messages.any((x) => x.id == m.id)) {
-          setState(() => _messages.add(m));
+          setState(() {
+            _messages.add(m);
+            if (!_inChat) _unread = true;
+          });
           HapticFeedback.selectionClick();
         }
         break;
@@ -250,16 +266,138 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     if (id == null || !mounted || _inCall) return;
     _inCall = true;
     final session = _live = CallSession(profileId: id, reason: reason, outreachId: outreachId);
-    await Navigator.of(context).push(PageRouteBuilder<void>(
+    _liveOutreach = outreachId;
+    session.addListener(_liveChanged);
+    await _showCall(session, resume: false);
+  }
+
+  // The call page. "Go back to chat" closes only the page: the call keeps running, and the chat shows a "Back to call" bar. Any other way out means the call is over.
+  Future<void> _showCall(CallSession session, {required bool resume}) async {
+    _callRouteOpen = true;
+    final result = await Navigator.of(context).push<String>(PageRouteBuilder<String>(
       transitionDuration: const Duration(milliseconds: 240),
       reverseTransitionDuration: const Duration(milliseconds: 200),
-      pageBuilder: (_, _, _) => CallScreen(session: session),
+      pageBuilder: (_, _, _) => CallScreen(session: session, resume: resume),
       transitionsBuilder: (_, a, _, child) => FadeTransition(opacity: a, child: child),
     ));
-    _inCall = false;
+    _callRouteOpen = false;
+    if (result == 'chat' && !session.ended && mounted) {
+      setState(() => _inChat = true);
+      return;
+    }
+    _finishCall();
+  }
+
+  Future<void> _backToCall() async {
+    final call = _live;
+    if (call == null || call.ended || _callRouteOpen || !mounted) return;
+    await _showCall(call, resume: true);
+  }
+
+  // The call ended while the chat was showing (Maya hung up, the line was lost, the phone's own call screen ended it).
+  void _liveChanged() {
+    final call = _live;
+    if (call != null && call.ended && !_callRouteOpen) _finishCall();
+  }
+
+  void _finishCall() {
+    final call = _live;
+    if (call == null) return;
+    call.removeListener(_liveChanged);
     _live = null;
-    if (outreachId != null) NativeCall.instance.callEnded(outreachId);
-    if (mounted) _loadThread();
+    _inCall = false;
+    call.dispose();
+    final oid = _liveOutreach;
+    _liveOutreach = null;
+    if (oid != null) NativeCall.instance.callEnded(oid);
+    if (mounted) {
+      setState(() {});
+      _loadThread();
+    }
+  }
+
+  // ---- attachments: a photo or a PDF, sent in the chat (also while a call is on) ----
+  Future<void> _attachSheet() async {
+    if (_busy != null) return;
+    final choice = await showAttachSheet(context);
+    if (choice == null || !mounted) return;
+    if (choice == 'pdf') {
+      await _sendPdf();
+    } else {
+      await _sendPhoto(choice == 'camera' ? ImageSource.camera : ImageSource.gallery);
+    }
+  }
+
+  Future<void> _sendPhoto(ImageSource source) async {
+    await _ensureProfile();
+    final id = _pid;
+    if (id == null) return;
+    XFile? f;
+    try {
+      f = await ImagePicker().pickImage(source: source, maxWidth: 1800, imageQuality: 85);
+    } catch (_) {
+      if (mounted) setState(() => _error = source == ImageSource.camera ? 'The camera could not open. Please check that Maya may use it in Settings.' : 'Your photos could not open. Please check that Maya may use them in Settings.');
+      return;
+    }
+    if (f == null || !mounted) return;
+    final Uint8List bytes = await f.readAsBytes();
+    await _sendAttachment(id, kind: 'image', label: '', busy: 'Maya is looking at your photo...', post: () async {
+      final tz = await Tz.name();
+      return Api.postBytes('/api/chat/$id/image', bytes, 'image/jpeg', query: tz == null ? null : {'tz': tz});
+    });
+  }
+
+  Future<void> _sendPdf() async {
+    await _ensureProfile();
+    final id = _pid;
+    if (id == null) return;
+    PlatformFile? f;
+    try {
+      final r = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: const ['pdf'], withData: true);
+      f = r?.files.single;
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Your files could not open. Please check that Maya may use them in Settings.');
+      return;
+    }
+    if (f == null || !mounted) return;
+    Uint8List? bytes = f.bytes;
+    if (bytes == null && f.path != null) bytes = await File(f.path!).readAsBytes();
+    if (bytes == null) {
+      setState(() => _error = 'Maya could not read that file. Please try another one.');
+      return;
+    }
+    if (bytes.length > 8 * 1024 * 1024) {
+      setState(() => _error = 'That PDF is too big for Maya. Please choose a smaller one.');
+      return;
+    }
+    final name = f.name;
+    final data = bytes;
+    await _sendAttachment(id, kind: 'file', label: 'PDF: $name', busy: 'Maya is reading your PDF...', post: () async {
+      final tz = await Tz.name();
+      return Api.postBytes('/api/chat/$id/pdf', data, 'application/pdf', query: {'name': name, 'tz': ?tz});
+    });
+  }
+
+  Future<void> _sendAttachment(String id, {required String kind, required String label, required String busy, required Future<dynamic> Function() post}) async {
+    final pending = ChatMessage(id: 'p${DateTime.now().microsecondsSinceEpoch}', role: 'senior', kind: kind, text: label, pending: true);
+    setState(() {
+      _messages.add(pending);
+      _busy = busy;
+      _error = null;
+    });
+    _toBottom();
+    try {
+      _apply(pending, await post());
+    } on ApiError catch (e) {
+      if (mounted) {
+        setState(() {
+          _messages.remove(pending);
+          _error = e.message;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
   }
 
   void _toBottom() {
@@ -439,56 +577,156 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      backgroundColor: kChatTop,
-      body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [kChatTop, kChatBottom])),
-        child: SafeArea(
-        child: Stack(children: [
-          LayoutBuilder(builder: (context, box) {
-            final kb = MediaQuery.of(context).viewInsets.bottom > 0;
-            final compact = kb || box.maxHeight < 440;
-            final callSize = compact ? 0.0 : (box.maxHeight * 0.26).clamp(104.0, 190.0);
-            return Column(children: [
-              if (!compact)
-                SizedBox(
-                  height: 52,
-                  child: Center(child: Text(_name == null ? 'Maya' : 'Maya and $_name', style: Theme.of(context).textTheme.titleMedium)),
-                ),
-              if (!compact)
-                SizedBox(
-                  height: callSize + 44,
-                  child: Center(child: _CallButton(size: callSize, onTap: _ready ? () => _startCall() : null)),
-                ),
-              Expanded(child: ClipRect(child: ChatView(messages: _messages, controller: _scroll, playId: _playId))),
-              if (_notice != null) _NoticeBar(text: '${_notice!['text']}', label: _notice!['kind'] == 'reminder' ? (_notice!['by'] == 'senior' ? 'Your reminder' : 'Reminder from your family') : _notice!['kind'] == 'welfare' ? 'Check-in from your family' : 'Message from your family', onClose: () {
-                Api.postJson('/api/care/$_pid/notifications/${_notice!['notifId']}/seen').catchError((_) => null);
-                setState(() => _notice = null);
-              }),
-              if (_busy != null) Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Text(_busy!, style: const TextStyle(fontSize: 15, color: kSoft))),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
-                  child: Row(children: [
-                    Expanded(child: Text(_error!, style: const TextStyle(fontSize: 15, color: kAlert))),
-                    TextButton(onPressed: () => setState(() => _error = null), child: const Text('OK')),
-                  ]),
-                ),
-              _Composer(controller: _text, focus: _focus, recording: _recording, seconds: _recSeconds, levels: _levels, busy: _busy != null, onSend: _sendText, onMic: _toggleRecord, onCancel: _cancelRecord),
-              if (!kb)
-                SizedBox(
-                  height: 48,
-                  child: Center(child: TextButton(onPressed: _openFamily, child: const Text('Family', style: TextStyle(fontSize: 15, color: kSoft)))),
-                ),
-            ]);
-          }),
-          if (_incoming != null) IncomingCallCard(kind: '${_incoming!['kind'] ?? ''}', onAccept: _acceptIncoming, onDecline: _declineIncoming),
-        ]),
-      ),
+    return PopScope(
+      canPop: !_inChat,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _inChat = false);   // back from the chat goes to the home page
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: true,
+        backgroundColor: kChatTop,
+        body: DecoratedBox(
+          decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [kChatTop, kChatBottom])),
+          child: SafeArea(
+            child: Stack(children: [
+              _inChat ? _chatPage() : _homePage(),
+              if (_incoming != null) IncomingCallCard(kind: '${_incoming!['kind'] ?? ''}', onAccept: _acceptIncoming, onDecline: _declineIncoming),
+            ]),
+          ),
+        ),
       ),
     );
   }
+
+  String get _title => _name == null ? 'Maya' : 'Maya and $_name';
+
+  // A call set aside to the chat is still running: one tap returns to it.
+  Widget _backBar() {
+    final call = _live;
+    if (call == null || call.ended || _callRouteOpen) return const SizedBox.shrink();
+    return _BackToCallBar(onTap: _backToCall);
+  }
+
+  // The home page: the big Call button in the middle (the main place to call), one way into the chat, and the Family link. Nothing scrolls.
+  Widget _homePage() {
+    return LayoutBuilder(builder: (context, box) {
+      final callSize = math.min(box.maxWidth * 0.62, box.maxHeight * 0.34).clamp(112.0, 250.0);
+      return Column(children: [
+        SizedBox(height: 60, child: Center(child: Text(_title, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, letterSpacing: -0.4, color: kInk)))),
+        _backBar(),
+        Expanded(child: Center(child: _CallButton(size: callSize, onTap: _ready ? (_live != null ? _backToCall : () => _startCall()) : null))),
+        _ChatEntry(unread: _unread, onTap: () => setState(() {
+              _inChat = true;
+              _unread = false;
+            })),
+        SizedBox(height: 56, child: Center(child: TextButton(onPressed: _openFamily, child: const Text('Family', style: TextStyle(fontSize: 15, color: kSoft, fontWeight: FontWeight.w700))))),
+      ]);
+    });
+  }
+
+  // The chat page: a small phone icon in the header (always there, never in the message list), the messages, the box.
+  Widget _chatPage() {
+    final kb = MediaQuery.of(context).viewInsets.bottom > 0;
+    return Column(children: [
+      _ChatHeader(title: _title, onBack: () => setState(() => _inChat = false), onCall: _ready ? (_live != null ? _backToCall : () => _startCall()) : null),
+      _backBar(),
+      Expanded(child: ClipRect(child: ChatView(messages: _messages, controller: _scroll, playId: _playId))),
+      if (_notice != null)
+        _NoticeBar(text: '${_notice!['text']}', label: _notice!['kind'] == 'reminder' ? (_notice!['by'] == 'senior' ? 'Your reminder' : 'Reminder from your family') : _notice!['kind'] == 'welfare' ? 'Check-in from your family' : 'Message from your family', onClose: () {
+          Api.postJson('/api/care/$_pid/notifications/${_notice!['notifId']}/seen').catchError((_) => null);
+          setState(() => _notice = null);
+        }),
+      if (_busy != null) Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Text(_busy!, style: const TextStyle(fontSize: 15, color: kSoft))),
+      if (_error != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
+          child: Row(children: [
+            Expanded(child: Text(_error!, style: const TextStyle(fontSize: 15, color: kAlert))),
+            TextButton(onPressed: () => setState(() => _error = null), child: const Text('OK')),
+          ]),
+        ),
+      _Composer(controller: _text, focus: _focus, recording: _recording, seconds: _recSeconds, levels: _levels, busy: _busy != null, onSend: _sendText, onMic: _toggleRecord, onCancel: _cancelRecord, onAttach: _attachSheet),
+      if (!kb) SizedBox(height: 44, child: Center(child: TextButton(onPressed: _openFamily, child: const Text('Family', style: TextStyle(fontSize: 15, color: kSoft, fontWeight: FontWeight.w700))))),
+    ]);
+  }
+}
+
+/// The chat page's header: back to the home page, the name, and the one small phone icon (the second place to call).
+class _ChatHeader extends StatelessWidget {
+  final String title;
+  final VoidCallback onBack;
+  final VoidCallback? onCall;
+  const _ChatHeader({required this.title, required this.onBack, required this.onCall});
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 64,
+        child: Row(children: [
+          const SizedBox(width: 6),
+          Pressable(onTap: onBack, semanticLabel: 'Back to home', child: const SizedBox(width: 52, height: 52, child: Icon(Icons.arrow_back_ios_new, size: 22, color: kInk))),
+          Expanded(child: Center(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, letterSpacing: -0.4, color: kInk)))),
+          Pressable(
+            onTap: onCall,
+            semanticLabel: 'Call Maya',
+            child: Container(width: 48, height: 48, decoration: BoxDecoration(shape: BoxShape.circle, color: kTrustSoft, border: Border.all(color: const Color(0xFFD7DEF7))), child: const Icon(Icons.call, color: kTrust, size: 24)),
+          ),
+          const SizedBox(width: 16),
+        ]),
+      );
+}
+
+/// On the home page: the way into the chat, in words.
+class _ChatEntry extends StatelessWidget {
+  final bool unread;
+  final VoidCallback onTap;
+  const _ChatEntry({required this.unread, required this.onTap});
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 4, 24, 10),
+        child: Pressable(
+          onTap: onTap,
+          semanticLabel: 'Chat with Maya',
+          child: Container(
+            height: 64,
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(32), border: Border.all(color: const Color(0xFFE2E7F6), width: 1.4)),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Stack(clipBehavior: Clip.none, children: [
+                const Icon(Icons.chat_bubble_outline, color: kTrust, size: 26),
+                if (unread) Positioned(right: -3, top: -3, child: Container(width: 11, height: 11, decoration: BoxDecoration(color: kTrust, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)))),
+              ]),
+              const SizedBox(width: 12),
+              const Flexible(child: FittedBox(fit: BoxFit.scaleDown, child: Text('Chat with Maya', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: kInk)))),
+            ]),
+          ),
+        ),
+      );
+}
+
+/// While a call is set aside to the chat: a small bar at the top, one tap back to the call.
+class _BackToCallBar extends StatelessWidget {
+  final VoidCallback onTap;
+  const _BackToCallBar({required this.onTap});
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
+        child: Pressable(
+          onTap: onTap,
+          semanticLabel: 'Back to call',
+          child: Container(
+            height: 52,
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(26), gradient: const LinearGradient(colors: [kTrust, kTrustDeep]), boxShadow: const [BoxShadow(color: Color(0x334D63D8), blurRadius: 16, offset: Offset(0, 6))]),
+            child: Row(children: [
+              const Icon(Icons.call, color: Colors.white, size: 22),
+              const SizedBox(width: 10),
+              const Text('Back to call', style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              Flexible(child: Text('Still connected', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: Colors.white.withValues(alpha: 0.85)))),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right, color: Colors.white, size: 24),
+            ]),
+          ),
+        ),
+      );
 }
 
 class _CallButton extends StatefulWidget {
@@ -553,8 +791,8 @@ class _Composer extends StatelessWidget {
   final bool recording, busy;
   final int seconds;
   final List<double> levels;
-  final VoidCallback onSend, onMic, onCancel;
-  const _Composer({required this.controller, required this.focus, required this.recording, required this.seconds, required this.levels, required this.busy, required this.onSend, required this.onMic, required this.onCancel});
+  final VoidCallback onSend, onMic, onCancel, onAttach;
+  const _Composer({required this.controller, required this.focus, required this.recording, required this.seconds, required this.levels, required this.busy, required this.onSend, required this.onMic, required this.onCancel, required this.onAttach});
 
   @override
   Widget build(BuildContext context) {
@@ -592,8 +830,11 @@ class _Composer extends StatelessWidget {
                   child: Container(
                     constraints: const BoxConstraints(minHeight: 56),
                     decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(28), border: Border.all(color: const Color(0xFFE2E7F6), width: 1.2)),
-                    padding: const EdgeInsets.symmetric(horizontal: 18),
-                    child: TextField(
+                    padding: const EdgeInsets.only(left: 4, right: 18),
+                    child: Row(children: [
+                      // the attachment button: a photo or a PDF (a sheet with three plain choices)
+                      Pressable(onTap: busy ? null : onAttach, semanticLabel: 'Attach a photo or a file', child: const SizedBox(width: 48, height: 48, child: Icon(Icons.attach_file, color: kTrust, size: 26))),
+                      Expanded(child: TextField(
                       controller: controller,
                       focusNode: focus,
                       minLines: 1,
@@ -602,7 +843,8 @@ class _Composer extends StatelessWidget {
                       onSubmitted: (_) => onSend(),
                       decoration: const InputDecoration(hintText: 'Write to Maya', filled: false, border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none, contentPadding: EdgeInsets.symmetric(vertical: 15)),
                       style: const TextStyle(fontSize: 18.5, color: kInk),
-                    ),
+                    )),
+                    ]),
                   ),
                 ),
                 const SizedBox(width: 10),

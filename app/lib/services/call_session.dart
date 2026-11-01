@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
 
@@ -50,6 +51,70 @@ class RecordMic implements MicSource {
   }
 }
 
+/// How loud the call is, right now, for the orb (0 is quiet, 1 is loud): the person's own voice from the microphone, and Maya's voice as it plays. Read once per frame.
+/// Maya's audio arrives faster than it is played, so what is kept is a loudness for each 20 ms of it, in playing order, and the reading follows the clock.
+class CallLevels {
+  double _mic = 0;
+  DateTime _micAt = DateTime.now();
+  final List<double> _env = [];
+  DateTime? _playStart;
+
+  static double _rms(Uint8List pcm, int from, int to) {
+    final bd = ByteData.sublistView(pcm);
+    var sum = 0.0, n = 0;
+    for (var i = from; i + 1 < to && i + 1 < pcm.length; i += 2) {
+      final v = bd.getInt16(i, Endian.little) / 32768.0;
+      sum += v * v;
+      n++;
+    }
+    return n == 0 ? 0 : math.sqrt(sum / n);
+  }
+
+  /// A piece of the microphone (16-bit samples).
+  void micChunk(Uint8List pcm) {
+    final now = DateTime.now();
+    _mic = math.max(_decayed(now), (_rms(pcm, 0, pcm.length) * 7).clamp(0.0, 1.0));
+    _micAt = now;
+  }
+
+  double _decayed(DateTime now) => _mic * math.exp(-now.difference(_micAt).inMilliseconds / 160.0);
+
+  /// A piece of Maya's voice (16-bit samples, 24 kHz): its loudness, 20 ms at a time.
+  void voiceChunk(Uint8List pcm) {
+    final now = DateTime.now();
+    final start = _playStart;
+    if (start == null || now.isAfter(start.add(Duration(milliseconds: _env.length * 20 + 300)))) {
+      _env.clear();
+      _playStart = now.add(const Duration(milliseconds: 280)); // the player starts a moment after the first piece arrives
+    }
+    const win = 24000 * 2 ~/ 50; // 20 ms of bytes
+    for (var i = 0; i < pcm.length; i += win) {
+      _env.add((_rms(pcm, i, math.min(i + win, pcm.length)) * 5.5).clamp(0.0, 1.0));
+    }
+  }
+
+  /// Maya stopped (interrupted or finished).
+  void voiceReset() {
+    _env.clear();
+    _playStart = null;
+  }
+
+  /// The loudness now: the louder of the two voices.
+  double read() {
+    final now = DateTime.now();
+    var voice = 0.0;
+    final start = _playStart;
+    if (start != null && _env.isNotEmpty) {
+      final i = now.difference(start).inMilliseconds ~/ 20;
+      if (i >= 0 && i < _env.length) {
+        final a = _env[i], b = i > 0 ? _env[i - 1] : a, c = i + 1 < _env.length ? _env[i + 1] : a;
+        voice = (a * 0.5 + b * 0.25 + c * 0.25);
+      }
+    }
+    return math.max(voice, _decayed(now)).clamp(0.0, 1.0);
+  }
+}
+
 /// One live call with Maya, over the server's /ws socket (the same one the web page uses).
 ///   app -> server: text {type:'start', sampleRate, localHour, tz, profileId, reason?, outreachId?} | {type:'mute', on} | {type:'ping'};
 ///                  binary = Float32 mono microphone frames (16 kHz here).
@@ -66,6 +131,7 @@ class CallSession extends ChangeNotifier {
   final Duration deadAfter, pingEvery; // how long the line may be silent, and how often it is pinged
   CallSession({required this.profileId, this.reason, this.outreachId, this.autoStart = true, this.mic, this.voice, this.route, this.deadAfter = const Duration(seconds: 12), this.pingEvery = const Duration(seconds: 5)});
 
+  final CallLevels levels = CallLevels(); // how loud each voice is, for the orb
   CallPhase phase = CallPhase.connecting;
   OrbState orb = OrbState.connecting;
   String caption = '';
@@ -181,6 +247,7 @@ class CallSession extends ChangeNotifier {
   void _onMic(Uint8List pcm16) {
     final ws = _ws;
     if (!_ready || muted || ws == null || ws.readyState != WebSocket.open) return;
+    levels.micChunk(pcm16);
     _carry.addAll(pcm16);
     final bytesPerFrame = frameSamples * 2;
     while (_carry.length >= bytesPerFrame) {
@@ -206,7 +273,11 @@ class CallSession extends ChangeNotifier {
       }
       _onEvent(ev);
     } else if (data is List<int>) {
-      if (_speaking) _player?.add(data is Uint8List ? data : Uint8List.fromList(data));
+      if (_speaking) {
+        final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+        levels.voiceChunk(bytes);
+        _player?.add(bytes);
+      }
     }
   }
 
@@ -249,7 +320,10 @@ class CallSession extends ChangeNotifier {
         _finish('The connection to Maya ended. Please call again.', 'the server no longer had the call (resumeFailed)');
         break;
       case 'speak':
-        if (ev['cont'] != true) _player?.stop();
+        if (ev['cont'] != true) {
+          _player?.stop();
+          levels.voiceReset();
+        }
         _speaking = true;
         if (ev['lead'] == true) {
           _setOrb(OrbState.thinking);
@@ -290,6 +364,7 @@ class CallSession extends ChangeNotifier {
         break;
       case 'stopped':
         _player?.stop();
+        levels.voiceReset();
         if (orb == OrbState.speaking) _setOrb(OrbState.listening);
         break;
       case 'hangup':

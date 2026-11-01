@@ -269,4 +269,29 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(AudioRoute.channel, null);
     }
   });
+
+  test('call levels: the microphone and Maya\'s voice each move the reading, quiet is quiet, and a loud sound fades by itself', () async {
+    final l = CallLevels();
+    expect(l.read(), 0);
+    Uint8List tone(int amp, int samples, int rate) {
+      final bd = ByteData(samples * 2);
+      for (var i = 0; i < samples; i++) {
+        bd.setInt16(i * 2, (amp * (i % 2 == 0 ? 1 : -1)), Endian.little);
+      }
+      return bd.buffer.asUint8List();
+    }
+    l.micChunk(tone(20, 1600, 16000));
+    expect(l.read(), lessThan(0.05), reason: 'a whisper of noise stays quiet');
+    l.micChunk(tone(9000, 1600, 16000));
+    final loud = l.read();
+    expect(loud, greaterThan(0.6), reason: 'a loud voice at the microphone');
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    expect(l.read(), lessThan(loud * 0.2), reason: 'it fades once the sound stops');
+    l.voiceChunk(tone(8000, 24000, 24000));   // a second of Maya
+    expect(l.read(), lessThan(0.05), reason: 'her voice is not playing yet: the reading follows the clock');
+    await Future<void>.delayed(const Duration(milliseconds: 420));
+    expect(l.read(), greaterThan(0.5), reason: 'her voice is playing, loud');
+    l.voiceReset();
+    expect(l.read(), lessThan(0.1), reason: 'interrupted: it stops at once');
+  });
 }

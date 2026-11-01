@@ -18,6 +18,7 @@ import 'package:maya_app/services/audio_route.dart';
 import 'package:maya_app/services/call_session.dart';
 import 'package:maya_app/services/voice_player.dart';
 import 'package:maya_app/widgets/delivery_picker.dart';
+import 'package:maya_app/widgets/orb.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 int verticalLists(WidgetTester t) => t.widgetList<Scrollable>(find.byType(Scrollable)).where((s) => s.axis == Axis.vertical).length;
@@ -117,12 +118,15 @@ void main() {
       }
     });
 
-    testWidgets('with the keyboard open on a small phone the screen still fits', (t) async {
+    testWidgets('with the keyboard open on a small phone the chat page still fits (the keyboard can only open in the chat)', (t) async {
       await phone(t, 320, 480);
-      t.view.viewInsets = const FakeViewPadding(bottom: 250 * 3);
-      addTearDown(t.view.resetViewInsets);
       await t.pumpWidget(const MayaApp());
       await t.pump(const Duration(milliseconds: 300));
+      await t.tap(find.text('Chat with Maya'));
+      await t.pump(const Duration(milliseconds: 400));
+      t.view.viewInsets = const FakeViewPadding(bottom: 250 * 3);
+      addTearDown(t.view.resetViewInsets);
+      await t.pump(const Duration(milliseconds: 400));
       expect(t.takeException(), isNull);
       expect(find.byType(TextField), findsOneWidget);
     });
@@ -389,6 +393,8 @@ void main() {
       await phone(t, 390, 844);
       await t.pumpWidget(const MayaApp());
       await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Chat with Maya'));
+      await t.pump(const Duration(milliseconds: 400));
       expect(find.bySemanticsLabel('Record a voice note'), findsOneWidget);
       expect(find.byIcon(Icons.mic), findsOneWidget);
       await t.enterText(find.byType(TextField), 'Hello Maya');
@@ -406,6 +412,113 @@ void main() {
       expect(find.byIcon(Icons.play_arrow), findsOneWidget);
       expect(find.bySemanticsLabel('Play the voice note'), findsOneWidget);
       expect(find.bySemanticsLabel('Voice note position'), findsOneWidget);
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('home has the big Call button, one way into the chat and the Family link; the chat page has the small phone icon in its header and NO big Call circle in the messages', (t) async {
+      await phone(t, 390, 844);
+      await t.pumpWidget(const MayaApp());
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.text('Call Maya'), findsOneWidget);
+      expect(find.text('Chat with Maya'), findsOneWidget);
+      expect(find.text('Family'), findsOneWidget);
+      expect(find.byIcon(Icons.call), findsOneWidget, reason: 'only the big button on the home page');
+      expect(t.getSize(find.byIcon(Icons.call)).width, greaterThanOrEqualTo(40));
+      await t.tap(find.text('Chat with Maya'));
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.text('Call Maya'), findsNothing, reason: 'no big Call circle in the chat');
+      expect(find.bySemanticsLabel('Call Maya'), findsOneWidget, reason: 'the small phone icon in the header');
+      expect(find.byIcon(Icons.call), findsOneWidget);
+      expect(t.getSize(find.byIcon(Icons.call)).width, lessThan(60), reason: 'a small icon, not the big circle');
+      expect(find.text('Family'), findsOneWidget, reason: 'Family stays at the bottom of the chat');
+      expect(t.getRect(find.byIcon(Icons.call)).top, lessThan(80), reason: 'always visible at the top, never scrolled away');
+      await t.tap(find.bySemanticsLabel('Back to home'));
+      await t.pump(const Duration(milliseconds: 400));
+      expect(find.text('Call Maya'), findsOneWidget);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('the paperclip opens a sheet with three plain choices, in words, and Cancel closes it', (t) async {
+      await phone(t, 390, 844);
+      await t.pumpWidget(const MayaApp());
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Chat with Maya'));
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.byIcon(Icons.attach_file));
+      await t.pump(const Duration(milliseconds: 100));
+      await t.pump(const Duration(milliseconds: 600));
+      for (final label in const ['Attach image', 'Attach file (PDF)', 'Take photo']) {
+        expect(find.text(label), findsOneWidget);
+        expect(t.getRect(find.text(label)).height, greaterThan(10));
+      }
+      await t.tap(find.text('Cancel'));
+      await t.pump(const Duration(milliseconds: 100));
+      await t.pump(const Duration(milliseconds: 600));
+      expect(find.text('Send Maya something'), findsNothing);
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('the attachment sheet answers image / pdf / camera', (t) async {
+      await phone(t, 390, 844);
+      String? got;
+      await t.pumpWidget(MaterialApp(home: Builder(builder: (c) => Scaffold(body: Center(child: TextButton(onPressed: () async => got = await showAttachSheet(c), child: const Text('open')))))));
+      for (final want in const [('Attach file (PDF)', 'pdf'), ('Take photo', 'camera'), ('Attach image', 'image')]) {
+        await t.tap(find.text('open'));
+        await t.pumpAndSettle(const Duration(milliseconds: 100));
+        await t.tap(find.text(want.$1));
+        await t.pumpAndSettle(const Duration(milliseconds: 100));
+        expect(got, want.$2);
+      }
+      await t.tap(find.text('open'));
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      await t.tap(find.text('Cancel'));
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(got, isNull, reason: 'closing it answers nothing');
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('on the call page "Go back to chat" is in words, apart from the controls; it leaves the page with the answer "chat" and does NOT end the call; End call still ends it', (t) async {
+      await phone(t, 390, 844);
+      final s = CallSession(profileId: 'abcdef12', autoStart: false, route: _NoRoute());
+      s.phase = CallPhase.live;
+      String? result;
+      var popped = false;
+      await t.pumpWidget(MaterialApp(home: Builder(builder: (c) => Scaffold(body: Center(child: TextButton(onPressed: () async { result = await Navigator.of(c).push<String>(MaterialPageRoute(builder: (_) => CallScreen(session: s, resume: true))); popped = true; }, child: const Text('go')))))));
+      await t.tap(find.text('go'));
+      await t.pump(const Duration(milliseconds: 100));
+      await t.pump(const Duration(milliseconds: 600));
+      expect(find.text('Go back to chat'), findsOneWidget);
+      final back = t.getRect(find.text('Go back to chat')), end = t.getRect(find.text('End call')), mute = t.getRect(find.text('Mute'));
+      expect(back.bottom, lessThan(mute.top - 16), reason: 'above the controls, with room: it cannot be tapped for End call');
+      expect(end.top - back.bottom, greaterThan(100));
+      await t.tap(find.text('Go back to chat'));
+      await t.pump(const Duration(milliseconds: 100));
+      await t.pump(const Duration(milliseconds: 600));
+      expect(popped, isTrue);
+      expect(result, 'chat');
+      expect(s.ended, isFalse, reason: 'the call keeps running');
+      await t.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('the orb reads the sound on every frame and moves with it: louder, further; every frame is drawn from the live level', (t) async {
+      await phone(t, 390, 844);
+      var reads = 0;
+      double loud = 0;
+      await t.pumpWidget(MaterialApp(home: Scaffold(body: Center(child: MayaOrb(state: OrbState.listening, size: 240, level: () {
+        reads++;
+        return loud;
+      })))));
+      for (var i = 0; i < 20; i++) {
+        await t.pump(const Duration(milliseconds: 16));
+      }
+      expect(reads, greaterThanOrEqualTo(20), reason: 'the level is read on every frame, not once');
+      loud = 1;
+      final before = reads;
+      for (var i = 0; i < 10; i++) {
+        await t.pump(const Duration(milliseconds: 16));
+      }
+      expect(reads - before, greaterThanOrEqualTo(10));
       expect(t.takeException(), isNull);
       await t.pumpWidget(const SizedBox());
     });
