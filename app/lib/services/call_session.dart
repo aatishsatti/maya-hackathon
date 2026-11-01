@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
 
 import '../config.dart';
+import 'audio_route.dart';
 import 'call_log.dart';
 import '../widgets/orb.dart';
 import 'tz.dart';
@@ -61,8 +62,9 @@ class CallSession extends ChangeNotifier {
   final bool autoStart; // false only in tests that look at the call screen without opening a line
   final MicSource? mic; // tests only
   final VoiceSink? voice; // tests only
+  final AudioRouteSink? route; // tests only
   final Duration deadAfter, pingEvery; // how long the line may be silent, and how often it is pinged
-  CallSession({required this.profileId, this.reason, this.outreachId, this.autoStart = true, this.mic, this.voice, this.deadAfter = const Duration(seconds: 12), this.pingEvery = const Duration(seconds: 5)});
+  CallSession({required this.profileId, this.reason, this.outreachId, this.autoStart = true, this.mic, this.voice, this.route, this.deadAfter = const Duration(seconds: 12), this.pingEvery = const Duration(seconds: 5)});
 
   CallPhase phase = CallPhase.connecting;
   OrbState orb = OrbState.connecting;
@@ -70,11 +72,13 @@ class CallSession extends ChangeNotifier {
   String? endMessage; // set when the call ended for a reason the person should read
   String endDetail = ''; // the plain facts of how it ended (a close code, a time), for the details view
   bool muted = false;
+  bool speakerOn = true; // a call starts on the loudspeaker; the person can switch to the earpiece and back at any time
   bool reconnecting = false;
   bool get ended => phase == CallPhase.ended;
 
   WebSocket? _ws;
   MicSource? _mic;
+  late final AudioRouteSink _route = route ?? AudioRoute();
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<bool>? _idleSub;
   Timer? _heartbeat, _thinkWatch, _retryTimer, _attemptTimer;
@@ -110,6 +114,7 @@ class CallSession extends ChangeNotifier {
         return;
       }
       final player = _player = voice ?? await _realPlayer();
+      await _route.setSpeaker(true); // on answer: the loudspeaker, before Maya says a word (an app-open call and a call answered from a closed app both start here)
       _idleSub = player.idle.listen((_) {
         if (!_speaking || ended) return;
         if (orb == OrbState.speaking) _setOrb(OrbState.listening); // her voice has finished playing
@@ -343,6 +348,14 @@ class CallSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Speaker on: the loudspeaker (the proximity sensor off, the screen stays on). Speaker off: the earpiece (the screen goes off at the ear). Works in the middle of a call; the line is not touched.
+  Future<void> setSpeaker(bool on) async {
+    if (ended) return;
+    speakerOn = on;
+    notifyListeners();
+    await _route.setSpeaker(on);
+  }
+
   /// The person hangs up.
   Future<void> hangUp() async => _finish(null, 'the person ended the call');
 
@@ -361,6 +374,7 @@ class CallSession extends ChangeNotifier {
     _micSub?.cancel();
     _idleSub?.cancel();
     unawaited(_mic?.stop());
+    unawaited(_route.release());
     try {
       _ws?.close(1000);
     } catch (_) {}

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:record/record.dart';
 import 'package:maya_app/config.dart';
+import 'package:maya_app/services/audio_route.dart';
 import 'package:maya_app/services/call_log.dart';
 import 'package:maya_app/services/call_session.dart';
 import 'package:maya_app/services/voice_player.dart';
@@ -103,6 +104,14 @@ class FakeVoice implements VoiceSink {
   Future<void> dispose() async {
     await _idle.close();
   }
+}
+
+class FakeRoute implements AudioRouteSink {
+  final List<String> calls = [];
+  @override
+  Future<void> setSpeaker(bool on) async => calls.add('speaker ${on ? 'on' : 'off'}');
+  @override
+  Future<void> release() async => calls.add('release');
 }
 
 CallSession session({Duration dead = const Duration(seconds: 12), Duration ping = const Duration(seconds: 5)}) => CallSession(profileId: 'abcdef12', mic: FakeMic(), voice: FakeVoice(), deadAfter: dead, pingEvery: ping);
@@ -210,5 +219,54 @@ void main() {
       expect([c.echoCancel, c.noiseSuppress, c.autoGain], [true, true, true]);
     }
     expect(ios.iosConfig.categoryOptions, [IosAudioCategoryOption.defaultToSpeaker, IosAudioCategoryOption.allowBluetooth]);
+  });
+
+  test('speaker: a call starts on the loudspeaker (before Maya says anything); toggling off and on mid-call changes only the route, the call and the microphone carry on; hanging up releases the route', () async {
+    final r = FakeRoute();
+    final s = CallSession(profileId: 'abcdef12', mic: FakeMic(), voice: FakeVoice(), route: r);
+    expect(s.speakerOn, isTrue);
+    await s.start();
+    await until(() => s.phase == CallPhase.live);
+    expect(r.calls, ['speaker on'], reason: 'on answer: the loudspeaker, set once, before the line opened');
+    await until(() => srv.frames > 3);
+    final sockets = srv.sockets.length;
+    await s.setSpeaker(false);
+    expect(s.speakerOn, isFalse);
+    final f0 = srv.frames;
+    await until(() => srv.frames > f0 + 3);
+    expect(s.phase, CallPhase.live, reason: 'the call was not dropped');
+    expect(srv.sockets.length, sockets, reason: 'no new line');
+    await s.setSpeaker(true);
+    expect(s.speakerOn, isTrue);
+    expect(r.calls, ['speaker on', 'speaker off', 'speaker on']);
+    await s.hangUp();
+    expect(r.calls.last, 'release');
+    await s.setSpeaker(false);
+    expect(r.calls.where((c) => c == 'speaker off').length, 1, reason: 'nothing is routed after the call ended');
+    s.dispose();
+  });
+
+  test('the audio route is Android only: elsewhere it does nothing, and an unanswered native side is not an error', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    final told = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(AudioRoute.channel, (c) async {
+      told.add('${c.method} ${c.arguments}');
+      return null;
+    });
+    try {
+      AudioRoute.android = false;
+      await AudioRoute().setSpeaker(true);
+      await AudioRoute().release();
+      expect(told, isEmpty, reason: 'iOS is untouched');
+      AudioRoute.android = true;
+      await AudioRoute().setSpeaker(false);
+      await AudioRoute().release();
+      expect(told, ['speaker {on: false}', 'release {}']);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(AudioRoute.channel, null);
+      await AudioRoute().setSpeaker(true);   // no native side: no error
+    } finally {
+      AudioRoute.android = Platform.isAndroid;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(AudioRoute.channel, null);
+    }
   });
 }

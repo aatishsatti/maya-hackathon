@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/audio_route.dart';
 import '../services/call_log.dart';
 import '../services/call_session.dart';
 import '../theme.dart';
@@ -106,23 +107,31 @@ class _CallScreenState extends State<CallScreen> {
                     TextButton(onPressed: () => showCallLog(context, headline: s.endDetail), child: const Text('Details', style: TextStyle(color: kSoft))),
                   ]
                   else
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        _RoundButton(
-                          label: s.muted ? 'Unmute' : 'Mute',
-                          icon: s.muted ? Icons.mic_off : Icons.mic,
-                          background: s.muted ? kInk : Colors.white,
-                          foreground: s.muted ? Colors.white : kInk,
-                          bordered: true,
-                          onTap: s.ended ? null : () => s.setMuted(!s.muted),
-                        ),
-                        _RoundButton(label: 'End call', icon: Icons.call_end, background: kAlert, foreground: Colors.white, size: 72, onTap: s.ended ? null : () {
-                          HapticFeedback.mediumImpact();
-                          s.hangUp();
-                        }),
-                      ],
-                    ),
+                    Builder(builder: (context) {
+                      final mute = _RoundButton(
+                        label: s.muted ? 'Unmute' : 'Mute',
+                        icon: s.muted ? Icons.mic_off : Icons.mic,
+                        background: s.muted ? kInk : Colors.white,
+                        foreground: s.muted ? Colors.white : kInk,
+                        bordered: true,
+                        onTap: s.ended ? null : () => s.setMuted(!s.muted),
+                      );
+                      final end = _RoundButton(label: 'End call', icon: Icons.call_end, background: kAlert, foreground: Colors.white, size: 72, onTap: s.ended ? null : () {
+                        HapticFeedback.mediumImpact();
+                        s.hangUp();
+                      });
+                      if (!AudioRoute.android) return Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [mute, end]);   // iOS: exactly as it was
+                      // Android: Mute, Speaker, End call share the width, always visible, labels shrink rather than overflow on a narrow phone or a large font
+                      final speaker = _RoundButton(
+                        label: s.speakerOn ? 'Speaker' : 'Earpiece',
+                        icon: s.speakerOn ? Icons.volume_up : Icons.hearing,
+                        background: s.speakerOn ? kInk : Colors.white,
+                        foreground: s.speakerOn ? Colors.white : kInk,
+                        bordered: true,
+                        onTap: s.ended ? null : () => s.setSpeaker(!s.speakerOn),
+                      );
+                      return Row(children: [Expanded(child: Center(child: mute)), Expanded(child: Center(child: speaker)), Expanded(child: Center(child: end))]);
+                    }),
                 ],
               ),
             );
@@ -157,7 +166,7 @@ class _RoundButton extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 6),
-      Text(label, style: const TextStyle(fontSize: 14, color: kSoft)),
+      FittedBox(fit: BoxFit.scaleDown, child: Text(label, style: const TextStyle(fontSize: 14, color: kSoft))),
     ]);
   }
 }

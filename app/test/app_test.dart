@@ -11,6 +11,7 @@ import 'package:maya_app/main.dart';
 import 'package:maya_app/models.dart';
 import 'package:maya_app/services/api.dart';
 import 'package:maya_app/senior/call_screen.dart';
+import 'package:maya_app/services/audio_route.dart';
 import 'package:maya_app/services/call_session.dart';
 import 'package:maya_app/services/voice_player.dart';
 import 'package:maya_app/widgets/delivery_picker.dart';
@@ -310,6 +311,40 @@ void main() {
       }
     });
 
+    testWidgets('the call screen has a Speaker button beside Mute and End call (Android): on at the start, Earpiece when switched, always visible and fitting on a small phone; iOS shows none', (t) async {
+      final keep = AudioRoute.android;
+      try {
+        AudioRoute.android = true;
+        for (final size in const [Size(320, 480), Size(390, 844)]) {
+          await phone(t, size.width, size.height);
+          await t.pumpWidget(MaterialApp(home: CallScreen(session: CallSession(profileId: 'abcdef12', autoStart: false, route: _NoRoute()))));
+          await t.pump(const Duration(milliseconds: 300));
+          expect(t.takeException(), isNull, reason: 'no overflow at ${size.width}x${size.height}');
+          expect(find.text('Speaker'), findsOneWidget);
+          expect(find.text('Mute'), findsOneWidget);
+          expect(find.text('End call'), findsOneWidget);
+          expect(t.getRect(find.text('Speaker')).bottom, lessThanOrEqualTo(size.height));
+          await t.tap(find.byIcon(Icons.volume_up));
+          await t.pump(const Duration(milliseconds: 300));
+          expect(find.text('Earpiece'), findsOneWidget);
+          expect(find.text('Speaker'), findsNothing);
+          await t.tap(find.byIcon(Icons.hearing));
+          await t.pump(const Duration(milliseconds: 300));
+          expect(find.text('Speaker'), findsOneWidget);
+          await t.pumpWidget(const SizedBox());
+        }
+        AudioRoute.android = false;
+        await phone(t, 390, 844);
+        await t.pumpWidget(MaterialApp(home: CallScreen(session: CallSession(profileId: 'abcdef12', autoStart: false))));
+        await t.pump(const Duration(milliseconds: 300));
+        expect(find.text('Speaker'), findsNothing);
+        expect(find.text('Earpiece'), findsNothing);
+        await t.pumpWidget(const SizedBox());
+      } finally {
+        AudioRoute.android = keep;
+      }
+    });
+
     testWidgets('the dashboard keeps its header, cards and tabs on a small phone; only the activity list scrolls', (t) async {
       await phone(t, 320, 480);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
@@ -352,4 +387,11 @@ void main() {
       expect(dayGroup(DateTime(2026, 11, 1, 8).millisecondsSinceEpoch, now), 'Upcoming');
     });
   });
+}
+
+class _NoRoute implements AudioRouteSink {
+  @override
+  Future<void> setSpeaker(bool on) async {}
+  @override
+  Future<void> release() async {}
 }

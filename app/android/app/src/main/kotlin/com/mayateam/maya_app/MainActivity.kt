@@ -3,6 +3,9 @@ package com.mayateam.maya_app
 import android.Manifest
 import android.content.Intent
 import android.app.NotificationManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.PowerManager
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
@@ -30,6 +33,13 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "maya/audio_route").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "speaker" -> { setSpeaker(call.argument<Boolean>("on") ?: true); result.success(null) }
+                "release" -> { releaseRoute(); result.success(null) }
+                else -> result.notImplemented()
+            }
+        }
         NativeCalls.attach(null)
         handle(intent)
     }
@@ -38,6 +48,47 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         if (intent?.getStringExtra(NativeCalls.EXTRA_ACTION) != null && Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true) }   // opened by the incoming call screen on a locked phone
     }
+
+    // ---- where a call's sound comes out, and the proximity sensor that goes with it ----
+    // Speaker ON : loudspeaker, proximity sensor OFF (the screen stays on).
+    // Speaker OFF: earpiece, proximity sensor ON (a PROXIMITY_SCREEN_OFF wake lock: the screen goes off at the ear and back on when the phone moves away).
+    // The call is an in-communication audio session while it lasts; releaseRoute() puts everything back.
+    private var proximity: PowerManager.WakeLock? = null
+
+    private fun setSpeaker(on: Boolean) {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        am.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (Build.VERSION.SDK_INT >= 31) {
+            val want = if (on) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+            val dev = am.availableCommunicationDevices.firstOrNull { it.type == want }
+            if (dev != null) am.setCommunicationDevice(dev) else if (on) @Suppress("DEPRECATION") { am.isSpeakerphoneOn = true } else am.clearCommunicationDevice()
+        } else {
+            @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = on }
+        }
+        setProximity(!on)
+    }
+
+    private fun setProximity(on: Boolean) {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (on) {
+            if (proximity == null && pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+                proximity = pm.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "maya:proximity").also { it.setReferenceCounted(false) }
+            }
+            proximity?.let { if (!it.isHeld) it.acquire() }
+        } else {
+            proximity?.let { if (it.isHeld) it.release() }
+        }
+    }
+
+    private fun releaseRoute() {
+        setProximity(false)
+        proximity = null
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice() else @Suppress("DEPRECATION") run { am.isSpeakerphoneOn = false }
+        am.mode = AudioManager.MODE_NORMAL
+    }
+
+    override fun onDestroy() { releaseRoute(); super.onDestroy() }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
