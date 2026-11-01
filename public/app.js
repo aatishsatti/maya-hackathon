@@ -132,8 +132,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   const statusEl = $('status');
   const captionEl = $('caption');
   const errorEl = $('error');
-  const callBtn = $('callBtn');       // the big Call button on the home page
-  const callBtns = [callBtn, $('callBtnHead')];   // and the small phone icon in the chat header: both start a call, or return to one that is live
+  const callBtns = [$('callBtnHead')];   // the small phone icon at the top right of the chat: starts a call, or returns to one that is live
   const modeNote = $('modeNote');
 
   let call = null;   // active call, or null
@@ -198,7 +197,6 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
 
   function setLive(live) {
     for (const b of callBtns) { b.dataset.live = String(live); b.setAttribute('aria-label', live ? 'Back to call' : 'Call Maya'); }
-    $('callBtnText').textContent = live ? 'Back to call' : 'Call Maya';
     if (window.mayaProfile) window.mayaProfile.setLive(live);
   }
 
@@ -716,7 +714,6 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     callState.end();
     setLive(false);
     setState('idle');
-    callBtn.disabled = false;
     showError(errorMsg || '');
     if (!errorMsg) captionEl.textContent = '';
   }

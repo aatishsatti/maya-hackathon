@@ -8,7 +8,7 @@
   <title>Maya</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body data-page="home">
+<body data-page="chat">
   <!-- One calm, see-through backdrop behind the call page and the incoming-call page. -->
   <div class="backdrop" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i></div>
 
@@ -33,31 +33,10 @@
 
   <main id="callScreen" class="shell" hidden>
 
-    <!-- HOME: the big Call button in the middle, one way into the chat, the Family link. Nothing scrolls. -->
-    <section id="pageHome" class="page home" aria-label="Maya">
-      <header class="head"><h1 id="titleHome" class="title">Maya</h1></header>
-      <button id="backBarHome" class="back-bar" type="button" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.250.2 2.450.57 3.600a1 1 0 0 1-.25 1Z"/></svg>
-        <b>Back to call</b><span>Still connected</span>
-      </button>
-      <div class="home-mid">
-        <button id="callBtn" class="call-big" type="button" aria-label="Call Maya" data-live="false">
-          <span class="ring" aria-hidden="true"></span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.250.2 2.450.57 3.600a1 1 0 0 1-.25 1Z"/></svg>
-          <span id="callBtnText">Call Maya</span>
-        </button>
-      </div>
-      <button id="chatEntry" class="chat-entry" type="button" aria-label="Chat with Maya">
-        <span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm0 14H5.200L4 17.200V4h16v12Z"/></svg><i id="unreadDot" class="dot" hidden></i></span>
-        <span>Chat with Maya</span>
-      </button>
-      <footer class="foot"><a class="family-link" href="/family.html">Family</a><button id="switchBtn" class="link-btn" type="button"></button><a class="family-link soft" href="/privacy">Privacy</a></footer>
-    </section>
-
     <!-- CHAT: like a voice-note messenger. The small phone icon in the header is the second place to call. -->
-    <section id="pageChat" class="page chat-page" aria-label="Chat with Maya">
+    <section id="pageChat" class="page chat-page" aria-label="Maya chat">
       <header class="chat-head">
-        <button id="chatBack" class="icon-btn plain" type="button" aria-label="Back to home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.400 5.400 14 4 6 12l8 8 1.400-1.400L8.800 12z"/></svg></button>
+        <span aria-hidden="true"></span>
         <h1 id="titleChat" class="title">Maya</h1>
         <button id="callBtnHead" class="icon-btn soft" type="button" aria-label="Call Maya" data-live="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.250.2 2.450.57 3.600a1 1 0 0 1-.25 1Z"/></svg></button>
       </header>
@@ -103,7 +82,7 @@
         <input id="camIn" type="file" accept="image/*" capture="environment" hidden>
         <input id="pdfIn" type="file" accept="application/pdf,.pdf" hidden>
       </form>
-      <footer class="foot"><a class="family-link" href="/family.html">Family</a></footer>
+      <footer class="foot"><a class="family-link soft" href="/privacy">Privacy</a></footer>
     </section>
 
     <!-- CALL: one see-through page. Words at the top, the particle orb in the middle, Mute and Speaker floating, a red End call pill beneath. -->

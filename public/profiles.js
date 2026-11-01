@@ -7,7 +7,7 @@
   const form = $('addForm');
   const err = $('pickError');
   let profiles = [];
-  const api = { id: null, name: null, setLive(live) { $('switchBtn').hidden = live; } };
+  const api = { id: null, name: null, setLive() {} };
   window.mayaProfile = api;
 
   const store = {
@@ -18,8 +18,7 @@
   function choose(p) {
     api.id = p.id; api.name = p.name;
     store.set(p.id);
-    $('switchBtn').textContent = `Talking with ${p.name}. Change`;
-    $('titleHome').textContent = $('titleChat').textContent = `Maya and ${p.name}`;
+        $('titleChat').textContent = `Maya and ${p.name}`;
     picker.hidden = true; callScreen.hidden = false;
     window.dispatchEvent(new Event('maya-profile'));
   }
@@ -55,7 +54,6 @@
 
   $('addBtn').addEventListener('click', () => { form.hidden = false; $('addBtn').hidden = true; $('nameIn').focus(); });
   $('cancelBtn').addEventListener('click', () => { if (profiles.length) showPicker(); });
-  $('switchBtn').addEventListener('click', showPicker);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     err.hidden = true;
@@ -77,9 +75,17 @@
     save.disabled = false; save.textContent = 'Save';
   });
 
-  fetch('/api/profiles').then((r) => r.json()).then((b) => {
-    profiles = b.profiles || [];
-    const saved = profiles.find((p) => p.id === store.get());
-    if (saved) choose(saved); else showPicker();
-  }).catch(() => { err.textContent = 'Could not load profiles.'; err.hidden = false; picker.hidden = false; });
+  // The senior door: this phone already knows who it is (the family's link set it), so it opens straight into the chat: no list, no login. Without a link there is
+  // only a plain line asking for one (the family adds people from the family page, after logging in).
+  const noLink = () => { picker.hidden = false; callScreen.hidden = true; $('profileList').replaceChildren(); $('addBtn').hidden = true; $('addForm').hidden = true; document.querySelector('.pick-title').textContent = 'Please open the Maya link your family sent you.'; };
+  const mine = store.get();
+  (mine ? fetch(`/api/senior/${mine}`).then((r) => (r.ok ? r.json() : null)) : Promise.resolve(null)).then((one) => {
+    if (one && one.profile) { profiles = [one.profile]; choose(one.profile); return null; }
+    return fetch('/api/profiles').then((r) => (r.ok ? r.json() : null)).then((b) => {   // only a server without family login still lists people (local development)
+      if (!b) { noLink(); return; }
+      profiles = b.profiles || [];
+      const saved = profiles.find((x) => x.id === mine);
+      if (saved) choose(saved); else showPicker();
+    });
+  }).catch(() => { err.textContent = 'Could not load. Please try again.'; err.hidden = false; picker.hidden = false; });
 })();

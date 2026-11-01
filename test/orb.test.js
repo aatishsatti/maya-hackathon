@@ -39,9 +39,11 @@ test('orb.js: nothing is drawn outside the particles (no shadow, no blur, no glo
   assert.ok(!/<video/.test(html) && !/id="orb"[^]*?<\/div>/.exec(html)[0].includes('<img'));
   assert.match(html, /id="orb"[^>]*>\s*<canvas>/);
 });
-test('senior page: one page at a time (home, chat, call); no card stacks, no pink, no purple, no gradient of purple', () => {
+test('senior page: it opens directly into the chat (no home page, no Family button), the call page on top; no pink, no purple', () => {
   const css = read('style.css'), html = read('index.html');
-  for (const id of ['pageHome', 'pageChat', 'pageCall']) assert.match(html, new RegExp(`id="${id}"`));
+  for (const id of ['pageChat', 'pageCall']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.doesNotMatch(html, /id="pageHome"|id="callBtn"|Chat with Maya|href="\/family\.html"/, 'no gate screen, no big Call button, no Family link for the senior');
+  assert.match(html, /<body data-page="chat">/);
   assert.match(css, /body\[data-page='call'\] \.call-page \{ display: flex; \}/);
   assert.ok(!/#(?:ff[0-9a-f]{2}[89a-f][0-9a-f]|e91e63|9c27b0|8e24aa|7b1fa2|6a1b9a)/i.test(css), 'no pink or purple');
   assert.match(css, /max-width: 500px/, 'a centred column about 500px wide, never stretched');
@@ -55,14 +57,16 @@ test('call page: Mute left, Speaker right, a red End call pill beneath, "Go back
 });
 test('chat page: paperclip sheet with Attach image / Attach file (PDF) / Take photo, "Write to Maya", recording bar with bin, gallery, wave, time and send', () => {
   const html = read('index.html');
-  for (const t of ['Attach image', 'Attach file (PDF)', 'Take photo', 'Write to Maya', 'Back to call', 'Chat with Maya', 'Go back to chat']) assert.ok(html.includes(t), t);
+  for (const t of ['Attach image', 'Attach file (PDF)', 'Take photo', 'Write to Maya', 'Back to call', 'Go back to chat']) assert.ok(html.includes(t), t);
   for (const id of ['recCancel', 'recGallery', 'recWave', 'recTime', 'recSend']) assert.match(html, new RegExp(`id="${id}"`));
 });
-test('home page: the Call button is on home and in the chat header only', () => {
+test('the Call button is the small phone icon in the chat header, top right, and nowhere else', () => {
   const html = read('index.html');
-  assert.equal((html.match(/id="callBtn"/g) || []).length, 1); assert.equal((html.match(/id="callBtnHead"/g) || []).length, 1);
-  assert.ok(html.indexOf('id="callBtn"') < html.indexOf('id="pageChat"') && html.indexOf('id="callBtnHead"') > html.indexOf('id="pageChat"') && html.indexOf('id="callBtnHead"') < html.indexOf('id="pageCall"'));
+  assert.equal((html.match(/id="callBtnHead"/g) || []).length, 1);
+  assert.ok(html.indexOf('id="callBtnHead"') > html.indexOf('id="pageChat"') && html.indexOf('id="callBtnHead"') < html.indexOf('id="pageCall"'));
+  assert.ok(html.indexOf('id="titleChat"') < html.indexOf('id="callBtnHead"'), 'the name first, the phone icon after it (top right)');
 });
+
 test('incoming ring: "Maya is calling", one line from the call kind only, Decline on the left and Accept on the right', () => {
   const js = read('inbox.js'), css = read('style.css');
   assert.match(js, /'incoming', 'Maya is calling'/);

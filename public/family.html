@@ -11,6 +11,7 @@
 <header class="bar">
   <div class="bar-in">
     <div class="brand"><span id="famOrb" class="fam-orb" aria-hidden="true"></span>Maya <span>Family</span></div>
+    <div class="who" style="gap:8px 16px"><a class="btn small" href="/login.html#add">Add a family member</a><button id="logoutBtn" class="btn small" type="button">Log out</button></div>
     <div id="whoBox" class="who" hidden>
       <label for="who">Switch person</label>
       <select id="who"></select>
@@ -207,5 +208,6 @@
 <p style="text-align:center;font-size:14px;margin:12px"><a href="/privacy">Privacy</a></p>
 <script src="family.js"></script>
 <script src="orb.js"></script>
+<script>document.getElementById("logoutBtn").addEventListener("click",()=>fetch("/api/family/logout",{method:"POST"}).finally(()=>location.replace("/login.html")))</script>
 </body>
 </html>

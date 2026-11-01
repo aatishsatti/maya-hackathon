@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Maya Family login</title>
+  <link rel="stylesheet" href="family.css">
+  <style>
+    .door { max-width: 460px; margin: 0 auto; padding: 32px 20px 64px; }
+    .door h1 { margin: 0 0 4px; font-size: 28px; font-weight: 800; letter-spacing: -0.4px; }
+    .door .sub { color: var(--soft); margin: 0 0 20px; }
+    .tabs2 { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tabs2 button { flex: 1; min-height: 48px; border-radius: 24px; border: 1.5px solid #d3daf3; background: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+    .tabs2 button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .door label { display: block; font-weight: 600; margin: 14px 0 6px; }
+    .door input[type=text], .door input[type=password], .door input[type=tel], .door select { width: 100%; min-height: 50px; font-size: 17px; border-radius: 14px; }
+    .door .btn.primary { width: 100%; min-height: 52px; margin-top: 20px; font-size: 17px; }
+    .door .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; font-weight: 400; }
+    .door .check input { width: 22px; height: 22px; margin-top: 2px; flex: none; }
+    .linkbox { display: flex; gap: 8px; margin: 10px 0 4px; }
+    .linkbox input { flex: 1; }
+    .note2 { color: var(--soft); font-size: 15px; }
+  </style>
+</head>
+<body>
+<main class="door">
+  <h1>Maya Family</h1>
+  <p class="sub">For the family only. The person Maya talks with never needs a login.</p>
+  <p id="err" class="err" role="alert" hidden></p>
+
+  <section id="enter">
+    <div class="tabs2" role="tablist"><button id="tabLogin" role="tab" aria-selected="true" type="button">Log in</button><button id="tabSignup" role="tab" aria-selected="false" type="button">Sign up</button></div>
+    <form id="authForm" autocomplete="on">
+      <label for="user">Username</label><input id="user" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label for="pass">Password</label><input id="pass" type="password" autocomplete="current-password" required>
+      <p id="passHint" class="note2" hidden>At least 8 characters.</p>
+      <button id="authBtn" class="btn primary" type="submit">Log in</button>
+    </form>
+  </section>
+
+  <section id="add" hidden>
+    <h2 id="addTitle">Add a family member</h2>
+    <p class="note2">Two minutes. Maya makes their chat and gives you a link to open on their phone.</p>
+    <form id="addForm">
+      <label for="sName">Their name</label><input id="sName" type="text" maxlength="30" required>
+      <label for="sPhone">Their phone or WhatsApp number (optional)</label><input id="sPhone" type="tel" placeholder="+44 7700 900123">
+      <label for="sTz">Their time zone</label><select id="sTz"></select>
+      <label for="sMode">How careful should Maya be?</label>
+      <select id="sMode"><option value="standard">Standard: the dashboard first</option><option value="cautious">Cautious: tell the family sooner</option><option value="ultra">Ultra Cautious: tell the family every time</option></select>
+      <label class="check"><input id="sConsent" type="checkbox"><span>I agree that Maya may call the family in the Maya app if they go quiet. Calls only say who has not responded, never what they said.</span></label>
+      <button class="btn primary" type="submit">Add them</button>
+    </form>
+  </section>
+
+  <section id="done" hidden>
+    <h2 id="doneTitle">Done</h2>
+    <p>Send this link to their phone. Opening it takes them straight to the chat: no sign up and no password.</p>
+    <div class="linkbox"><input id="seniorLink" type="text" readonly aria-label="The link for their phone"><button id="copyBtn" class="btn" type="button">Copy</button></div>
+    <p id="waNote" class="note2" hidden></p>
+    <button id="another" class="btn" type="button">Add another family member</button>
+    <button id="toDash" class="btn primary" type="button">Open the dashboard</button>
+  </section>
+</main>
+<script src="login.js"></script>
+</body>
+</html>

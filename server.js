@@ -11,6 +11,7 @@ const memory = require('./memory');
 const care = require('./care');
 const chat = require('./chat');
 const origin = require('./origin');
+const accounts = require('./accounts');
 const whatsapp = require('./whatsapp');
 
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* no .env: use defaults */ }
@@ -88,9 +89,12 @@ async function handleCare(req, res, url) {
   if (!sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
   const parts = url.pathname.split('/').filter(Boolean).slice(2); // after /api/care
   const [a, b, c, d] = parts;
-  if (req.method === 'GET' && a === 'overview') return sendJson(res, 200, { seniors: care.overview() });
-  if (req.method === 'GET' && a === 'events') return openStream(req, res, (r) => care.attachFamily(r));
+  if (req.method === 'GET' && a === 'overview') { if (!needFamily(req, res, null)) return; const mine = familyLoginOn() ? new Set(accounts.seniorsOf(familyOf(req))) : null; return sendJson(res, 200, { seniors: care.overview().filter((x) => !mine || mine.has(x.id)) }); }
+  if (req.method === 'GET' && a === 'events') { if (!needFamily(req, res, null)) return; return openStream(req, res, (r) => care.attachFamily(r)); }
   if (!/^[a-f0-9]{8}$/.test(a || '') || !care.get(a)) return sendJson(res, 404, { error: 'Not found' });
+  // The senior's own routes (the live stream, the push token, the activity ping, delivered / seen, declining a ring, the notification buttons) stay open: the senior has no login. Everything else here is the family's.
+  const seniorRoute = (b === 'events' || b === 'device' || b === 'activity' || b === 'notifications' || (b === 'outreach' && d === 'decline') || b === 'ack');
+  if (!seniorRoute && !needFamily(req, res, a)) return;
   if (req.method === 'GET' && !b) return sendJson(res, 200, care.view(a));
   if (req.method === 'GET' && b === 'trend' && !c) return sendJson(res, 200, care.trendView(a));   // family page only: plain facts built from daily numbers, see trends.js
   if (req.method === 'GET' && b === 'events') {
@@ -176,6 +180,7 @@ async function handleWhatsapp(req, res, url) {
   }
   if (!sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
   if (!/^[a-f0-9]{8}$/.test(a || '') || !memory.load(a)) return sendJson(res, 404, { error: 'Not found' });
+  if (!needFamily(req, res, a)) return;   // everything under /api/whatsapp/<id> is the family's
   try {
     if (req.method === 'GET' && !b) return sendJson(res, 200, whatsapp.view(a));
     if (req.method === 'DELETE' && !b) return sendJson(res, 200, { ok: whatsapp.unlink(a) });
@@ -199,22 +204,82 @@ async function handleWhatsapp(req, res, url) {
   return sendJson(res, 404, { error: 'Not found' });
 }
 
+// ---- Family accounts (accounts.js). The family door: a username and password, in the app and on the web. MAYA_FAMILY_LOGIN=on makes the family-only routes need it. ----
+const familyLoginOn = () => process.env.MAYA_FAMILY_LOGIN === 'on';
+const secureReq = (req) => (req.headers['x-forwarded-proto'] || '').split(',')[0] === 'https';
+// The signed-in family for this request (a username) or null.
+const familyOf = (req) => accounts.fromRequest(req);
+// A family-only route for senior `id` (or, with id null, any signed-in family). Sends the refusal itself and returns false when not allowed. With the switch off it lets everything through, as before.
+function needFamily(req, res, id) {
+  if (!familyLoginOn()) return true;
+  const u = familyOf(req);
+  if (!u) { sendJson(res, 401, { error: 'Please log in as family.' }); return false; }
+  if (id && !accounts.owns(u, id)) { sendJson(res, 403, { error: 'This is not one of your family members.' }); return false; }
+  return true;
+}
+async function handleFamily(req, res, url) {
+  const what = url.pathname.split('/')[3];
+  if (req.method !== 'GET' && !sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
+  const fail = (e) => sendJson(res, e.status || 500, { error: e.message });
+  if (req.method === 'POST' && (what === 'signup' || what === 'login')) {
+    const body = await readJson(req, 2048); if (!body) return sendJson(res, 400, { error: 'Bad request' });
+    try {
+      const r = what === 'signup' ? accounts.signup(body.username, body.password) : accounts.login(body.username, body.password);
+      res.setHeader('Set-Cookie', accounts.cookie(r.token, secureReq(req)));
+      return sendJson(res, 200, { username: r.username, token: r.token });
+    } catch (e) { return fail(e); }
+  }
+  if (req.method === 'POST' && what === 'logout') { res.setHeader('Set-Cookie', accounts.clearCookie(secureReq(req))); return sendJson(res, 200, { ok: true }); }
+  if (req.method === 'GET' && what === 'session') return sendJson(res, 200, { username: familyOf(req) });   // asked by the login page: never an error when nobody is signed in
+  const u = familyOf(req);
+  if (!u) return sendJson(res, 401, { error: 'Please log in as family.' });
+  if (req.method === 'GET' && what === 'me') {
+    const seniors = accounts.seniorsOf(u).map((id) => memory.load(id)).filter(Boolean).map((p) => ({ id: p.id, name: p.name, mode: care.view(p.id).mode }));
+    return sendJson(res, 200, { username: u, seniors });
+  }
+  // Add a family member: Maya makes the senior's profile, links it to this family, and gives the senior link (chat only, no login).
+  if (req.method === 'POST' && what === 'seniors') {
+    const body = await readJson(req, 4096); if (!body) return sendJson(res, 400, { error: 'Bad request' });
+    if (body.consent !== true) return sendJson(res, 400, { error: 'Please confirm that Maya may call the family if they go quiet.' });
+    try {
+      const profile = memory.createProfile(body.name, body.gender || 'prefer-not');
+      accounts.addSenior(u, profile.id);
+      if (typeof body.tz === 'string' && body.tz) { try { care.setTimezone(profile.id, body.tz, 'manual'); } catch { /* an unknown zone is learned later */ } }
+      if (['standard', 'cautious', 'ultra'].includes(String(body.mode))) { try { care.setMode(profile.id, body.mode); } catch { /* the default stays */ } }
+      let whatsappNote = null;
+      if (body.phone) { try { whatsapp.link(profile.id, String(body.phone), true); } catch (e) { whatsappNote = String(e.message || 'not linked').slice(0, 120); } }
+      const host = req.headers['x-forwarded-host'] || req.headers.host;
+      return sendJson(res, 200, { profile, link: `${secureReq(req) ? 'https' : 'http'}://${host}/s/${profile.id}`, whatsapp: whatsappNote });
+    } catch (e) { return fail(e); }
+  }
+  return sendJson(res, 404, { error: 'Not found' });
+}
+
 async function handleApi(req, res, url) {
+  if (url.pathname.startsWith('/api/family/')) return handleFamily(req, res, url);
   if (url.pathname === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { mode: MODE, commit: COMMIT });
   }
   // TEMPORARY (render-test branch): hosting diagnostic, no secrets, cached 60 s. Removed before the final version. See diag.js.
   if (url.pathname === '/api/diag' && req.method === 'GET') return MODE === 'real' ? sendJson(res, 200, url.searchParams.get('asr') === '1' ? await require('./diag').getAsr() : await require('./diag').get()) : sendJson(res, 404, { error: 'Not found' });
   // Profiles (family setup). Names and gender only; each profile has its own memory file.
-  if (url.pathname === '/api/profiles' && req.method === 'GET') return sendJson(res, 200, { profiles: memory.listProfiles() });
+  // The senior door asks who this phone is by the id in its link (the id is the key: it is never listed anywhere). Name only.
+  const who = /^\/api\/senior\/([a-f0-9]{8})$/.exec(url.pathname);
+  if (who && req.method === 'GET') { const p = memory.load(who[1]); return p ? sendJson(res, 200, { profile: { id: p.id, name: p.name } }) : sendJson(res, 404, { error: 'Not found' }); }
+  if (url.pathname === '/api/profiles' && req.method === 'GET') {
+    if (!familyLoginOn()) return sendJson(res, 200, { profiles: memory.listProfiles() });
+    const u = familyOf(req); if (!u) return sendJson(res, 401, { error: 'Please log in as family.' });   // nobody can list everyone's seniors
+    return sendJson(res, 200, { profiles: memory.listProfiles().filter((p) => accounts.owns(u, p.id)) });
+  }
   if (url.pathname === '/api/profiles' && req.method === 'POST') {
+    if (familyLoginOn()) return sendJson(res, 403, { error: 'A family member is added from the family page, after logging in.' });
     let body;
     try { body = JSON.parse((await readBody(req, 2048)).toString('utf8')); } catch { return sendJson(res, 400, { error: 'Bad request' }); }
     try { return sendJson(res, 200, { profile: memory.createProfile(body.name, body.gender) }); }
     catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
   }
   const del = /^\/api\/profiles\/([a-f0-9]{8})$/.exec(url.pathname);
-  if (del && req.method === 'DELETE') { care.remove(del[1]); chat.forget(del[1]); whatsapp.unlink(del[1]); return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); }
+  if (del && req.method === 'DELETE') { if (!needFamily(req, res, del[1])) return; accounts.removeSenior(del[1]); care.remove(del[1]); chat.forget(del[1]); whatsapp.unlink(del[1]); return memory.deleteProfile(del[1]) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); }
   if (url.pathname.startsWith('/api/whatsapp/')) return handleWhatsapp(req, res, url);
   if (url.pathname.startsWith('/api/care')) return handleCare(req, res, url);
   if (url.pathname.startsWith('/api/chat/')) return handleChat(req, res, url);
@@ -235,6 +300,13 @@ async function handleApi(req, res, url) {
 }
 
 function serveStatic(req, res, url) {
+  // The senior door: a link /s/<id> opens the chat only (no login, no password). It remembers who this phone is, then goes to the chat.
+  const sl = /^\/s\/([a-f0-9]{8})$/.exec(url.pathname);
+  if (sl) {
+    if (!memory.load(sl[1])) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('This link is not right. Please ask your family for a new one.'); }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(`<!doctype html><meta charset="utf-8"><title>Maya</title><script>try{localStorage.setItem('mayaProfile','${sl[1]}')}catch(e){}location.replace('/')</script>`);
+  }
   const rel = url.pathname === '/' ? '/index.html' : url.pathname === '/privacy' ? '/privacy.html' : decodeURIComponent(url.pathname);
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep)) { res.writeHead(403); return res.end('Forbidden'); }

@@ -12,6 +12,7 @@
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   async function api(path, method, body) {
     const r = await fetch(path, { method: method || 'GET', headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+    if (r.status === 401) { location.replace('/login.html'); throw new Error('Please log in.'); }   // the family door: not signed in    const j = await r.json().catch(() => ({}));
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`);
     return j;
@@ -337,6 +338,7 @@
   const WA_STATUS = { sending: 'Sending', sent: 'Sent', delivered: 'Delivered', read: 'Seen', failed: 'Not delivered' };
   async function waCall(path, method, body) {
     const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+    if (r.status === 401) { location.replace('/login.html'); throw new Error('Please log in.'); }   // the family door: not signed in    const j = await r.json().catch(() => ({}));
     const j = await r.json().catch(() => ({}));
     return { ok: r.ok, j };
   }
