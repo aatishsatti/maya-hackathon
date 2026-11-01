@@ -346,6 +346,7 @@ async function sendText(profileId, text, tz, opts = {}) {
   const s = session(profileId, tz);
   care.touch(profileId, opts.source === 'whatsapp' ? 'whatsapp' : 'app'); // whatsapp.js: the same chat, a different door
   if (opts.source !== 'whatsapp') care.chatNote(profileId, 'text');   // an Activity entry for the app chat (a WhatsApp reply is not one: it answers a check or a reminder)
+  if (opts.source !== 'whatsapp') care.welfareReplyApp(profileId);   // anything they write answers a welfare check that came to the app
   if (opts.source !== 'whatsapp' && require('./call').isAck(t)) care.reminderAckApp(profileId);   // "okay" to a reminder that came to the app: answered
   const you = s.push({ role: 'senior', kind: 'text', text: t });
   // A reconfirm question is open: this message may settle it (a plain yes / no to the family question does not). Otherwise the usual scam check.
@@ -397,6 +398,7 @@ async function sendVoiceNote(profileId, wav, tz, opts = {}) {
   const s = session(profileId, tz);
   care.touch(profileId, opts.source === 'whatsapp' ? 'whatsapp' : 'app');
   if (opts.source !== 'whatsapp') care.chatNote(profileId, 'voice');
+  if (opts.source !== 'whatsapp') care.welfareReplyApp(profileId);   // a voice note answers a welfare check that came to the app
   let words;
   try { words = await deps.transcribe(wav); } catch (e) { throw new ChatError(e.message); }
   if (!words) throw new ChatError('I could not hear any words in that voice note. Please try recording it again.', 422);

@@ -17,6 +17,9 @@ class WelfareTab extends StatefulWidget {
 
 class _WelfareTabState extends State<WelfareTab> {
   String _via = 'call';
+  String _where = 'whatsapp';        // Where it goes for a check-in now: app | whatsapp | both
+  String _schedWhere = 'whatsapp';  // and for the schedule
+  bool _whereSet = false;
   String _schedVia = 'call';
   String _every = '1440';
   final _custom = TextEditingController();   // empty: the preset above is used. Typing here is the advanced custom interval.
@@ -41,9 +44,23 @@ class _WelfareTabState extends State<WelfareTab> {
       _result = null;
     });
     try {
-      final r = await Api.postJson('/api/whatsapp/${d.profileId}/welfare-call', {'via': _via});
+      final r = await Api.postJson('/api/whatsapp/${d.profileId}/welfare-call', {'via': _via, 'channel': _where});
       String text;
-      if (r is Map && r['calledInstead'] == true) {
+      if (r is Map && r['channel'] != null) {
+        // the welfare channel: the server says in one line what happened and where
+        final result = r['result'];
+        if (r['summary'] is String) {
+          text = r['summary'] as String;
+        } else if (result is Map && result['calledInstead'] == true) {
+          text = 'The 24 hour window is closed, so a text or voice note cannot go: Maya is calling instead. Their phone should ring now.';
+        } else if (result is Map && result['sent'] == true) {
+          text = 'Sent on WhatsApp as a ${result['via'] == 'voice' ? 'voice note' : 'text'}.';
+        } else if (result is Map && result['placed'] == false) {
+          text = 'Nothing rang. ${callLimitText(result['calls'] is Map ? Map<String, dynamic>.from(result['calls'] as Map) : null)} A WhatsApp message was sent instead.';
+        } else {
+          text = 'WhatsApp took the call: their phone should ring now.';
+        }
+      } else if (r is Map && r['calledInstead'] == true) {
         text = 'The 24 hour window is closed, so a text or voice note cannot go: Maya is calling instead. Their phone should ring now.';
       } else if (r is Map && r['sent'] == true) {
         text = 'Sent as a ${r['via'] == 'voice' ? 'voice note' : 'text'}. No call was placed.';
@@ -64,7 +81,7 @@ class _WelfareTabState extends State<WelfareTab> {
   Future<void> _startSchedule() async {
     final paused = d.schedule != null && d.schedule!['status'] == 'paused';
     setState(() => _busy = true);
-    final ok = await act(context, () => Api.postJson('/api/whatsapp/${d.profileId}/welfare-schedule', {'everyMin': _everyMin, 'via': _schedVia}), done: paused ? 'The schedule is running again.' : 'The schedule is running.');
+    final ok = await act(context, () => Api.postJson('/api/whatsapp/${d.profileId}/welfare-schedule', {'everyMin': _everyMin, 'via': _schedVia, 'channel': _schedWhere}), done: paused ? 'The schedule is running again.' : 'The schedule is running.');
     if (mounted) setState(() => _busy = false);
     if (ok) d.refresh(quiet: true);
   }
@@ -78,6 +95,14 @@ class _WelfareTabState extends State<WelfareTab> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_whereSet && d.care['delivery'] is Map) {
+      final ch = (d.care['delivery'] as Map)['channel'];
+      if (ch is String && const ['app', 'whatsapp', 'both'].contains(ch)) {
+        _where = ch;
+        _schedWhere = ch;
+      }
+      _whereSet = true;
+    }
     final s = d.schedule;
     final running = s != null && s['status'] == 'running';
     final q = d.quiet;
@@ -90,7 +115,7 @@ class _WelfareTabState extends State<WelfareTab> {
     final line = s == null
         ? 'No schedule is running.'
         : s['status'] == 'running'
-            ? '${s['held'] == true ? 'Held for quiet hours: the next check goes at ${q != null ? hh(q['end'] as num) : '07'}:00. ' : ''}Running: a check-in by ${s['via'] == 'call' ? 'call' : s['via'] == 'voice' ? 'voice note' : 'text'} every ${_everyText((s['everyMin'] as num).toInt())}, ${s['fired']} sent so far of about ${s['planned']}. Next about ${clock((s['next'] as num).toInt())}.'
+            ? '${s['held'] == true ? 'Held for quiet hours: the next check goes at ${q != null ? hh(q['end'] as num) : '07'}:00. ' : ''}Running: a check-in by ${s['via'] == 'call' ? 'call' : s['via'] == 'voice' ? 'voice note' : 'text'}${s['channel'] == 'app' ? ' in the Maya app' : s['channel'] == 'both' ? ' on WhatsApp and in the app' : s['channel'] == 'whatsapp' ? ' on WhatsApp' : ''} every ${_everyText((s['everyMin'] as num).toInt())}, ${s['fired']} sent so far of about ${s['planned']}. Next about ${clock((s['next'] as num).toInt())}.'
             : '${s['status'] == 'paused' ? 'Paused' : 'Ended'}: ${s['note'] ?? ''}';
     return LayoutBuilder(builder: (context, box) {
       return SingleChildScrollView(
@@ -102,6 +127,10 @@ class _WelfareTabState extends State<WelfareTab> {
             const Text('Maya says it is a welfare check and asks how they are. As a call she then talks with them; as a text or voice note she sends the same short words.', style: TextStyle(fontSize: 14, color: kSoft)),
             const SizedBox(height: 8),
             DeliveryPicker(value: _via, onChanged: (v) => setState(() => _via = v ?? 'call')),
+            const SizedBox(height: 8),
+            const Text('Where it goes', style: TextStyle(fontSize: 14, color: kSoft)),
+            const SizedBox(height: 4),
+            WherePicker(value: _where, onChanged: (v) => setState(() => _where = v)),
             const SizedBox(height: 8),
             FilledButton(onPressed: _busy ? null : _checkNow, child: Text(_busy ? 'Working...' : 'Check in now')),
             if (_result != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_result!, style: const TextStyle(fontSize: 15))),
@@ -149,6 +178,12 @@ class _WelfareTabState extends State<WelfareTab> {
             ),
             const SizedBox(height: 8),
             DeliveryPicker(value: _schedVia, onChanged: (v) => setState(() => _schedVia = v ?? 'call')),
+            const SizedBox(height: 8),
+            const Text('Where it goes', style: TextStyle(fontSize: 14, color: kSoft)),
+            const SizedBox(height: 4),
+            WherePicker(value: _schedWhere, onChanged: (v) => setState(() => _schedWhere = v)),
+            const SizedBox(height: 4),
+            const Text('The Maya app has no WhatsApp limits. If WhatsApp cannot deliver, the app covers it and Activity says why. Both sends texts and voice notes to both; a call rings one place at a time.', style: TextStyle(fontSize: 13, color: kSoft)),
             const SizedBox(height: 6),
             Text(
               planned == 0

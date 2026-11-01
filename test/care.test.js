@@ -345,13 +345,9 @@ test('6 notifications: Sent -> Delivered -> Seen -> Replied; Close marks Seen; n
   assert.equal(care.markNotif(id, nt.id, 'bogus'), false);
 });
 
-test('6 family message: delivered when the open page acknowledges, Seen on Close', () => {
-  const id = newSenior();
-  const ev = page(id);
-  const nt = care.sendMessage(id, 'Dinner at 6');
-  assert.equal(ev[0].ev, 'notice');
-  care.markNotif(id, nt.id, 'delivered'); care.markNotif(id, nt.id, 'seen');
-  assert.equal(care.view(id).notifications.find((x) => x.id === nt.id).label, 'Seen · Not replied yet');
+test('6 the standalone Send-a-message feature is gone: no care.sendMessage, no /messages route', () => {
+  assert.equal(care.sendMessage, undefined);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /b === 'messages'|b === 'send'/);
 });
 
 test('7 dashboard view: flags and alerts separate; no transcript/topic fields anywhere', async () => {

@@ -148,12 +148,12 @@
 
   // Reminder state -> short pill. Done and Missed are the two the family cares about; the full sentence stays below it.
   // ---- Activity: counts, a paged list grouped by day, filtered by type. Everything shown comes from the server's activity list (the family's own reminder words, never the person's). ----
-  const ACT_TYPE = { reminder: 'Reminder', welfare: 'Welfare check', message: 'Message', call: 'Call with Maya', chat: 'Chat' };
+  const ACT_TYPE = { reminder: 'Reminder', welfare: 'Welfare check', call: 'Call with Maya', chat: 'Chat' };
   const ACT_WHERE = { app: 'App', whatsapp: 'WhatsApp', both: 'App + WhatsApp' };
   const ACT_CHAN = { call: 'Call', text: 'Text', voice: 'Voice note' };
   const ACT_PILL = { scheduled: 'pill-plain', sent: 'pill-info', delivered: 'pill-info', read: 'pill-info', answered: 'pill-ok', noreply: 'pill-wait', completed: 'pill-ok', unreached: 'pill-miss', missed: 'pill-miss', paused: 'pill-wait', failed: 'pill-miss' };
   const ACT_ICON = { reminder: '\u25F7', welfare: '\u2661', message: '\u2709', call: '\u260E', chat: '\u270E' };   // plain type glyphs in a circle: a clock, a heart, an envelope (no pictures, no markup insertion)
-  const ACT_FILTERS = [['all', 'All'], ['reminder', 'Reminders'], ['welfare', 'Welfare'], ['message', 'Messages'], ['call', 'Calls']];
+  const ACT_FILTERS = [['all', 'All'], ['reminder', 'Reminders'], ['welfare', 'Welfare'], ['call', 'Calls']];
   const ACT_CARDS = [['sent', 'Sent'], ['delivered', 'Delivered'], ['read', 'Read'], ['answered', 'Answered'], ['missed', 'Missed']];
   const ACT_PAGE = 8;
   const act = { entries: [], summary: null, filter: 'all', page: 0 };
@@ -199,7 +199,10 @@
   const inQuietAt = (ms) => { if (!quiet || !quiet.tz || !Number.isFinite(ms)) return false; try { const h = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: quiet.tz }).format(new Date(ms))); return quiet.start > quiet.end ? (h >= quiet.start || h < quiet.end) : (h >= quiet.start && h < quiet.end); } catch { return false; } };
   function remQuietWarn() { const on = inQuietAt(new Date($('at').value).getTime()); $('remQuietWarn').hidden = !on; $('remQuietWarn').textContent = on ? `That time is in their quiet hours (${hh(quiet.start)}:00 to ${hh(quiet.end)}:00). The reminder is kept and will be held until ${hh(quiet.end)}:00: nothing is sent, texted or rung at night.` : ''; }
   let pendingAdds = [], showAllRem = false;
-  const channelSeg = seg($('channelPick')), deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia'));
+  const channelSeg = seg($('channelPick')), deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia')), welfareWhere = seg($('waWelfareWhere')), schedWhere = seg($('schedWhere'));
+  let whereFor = null;
+  const WHERE_TEXT = { app: 'in the Maya app', whatsapp: 'on WhatsApp', both: 'on WhatsApp and in the app' };
+  const whereText = (s) => (s && WHERE_TEXT[s.channel] ? ` ${WHERE_TEXT[s.channel]}` : '');
   // ---- scheduled check-ins: every hour / 2 h / 3 h / custom, by call, text or voice note, for 24 hours; the server runs it and pauses it by itself when a check cannot go out ----
   const UNIT_MIN = { hours: 60, days: 1440, weeks: 10080 };
   // The list offers day-based presets only. The custom interval sits under Advanced and is used only when a number is typed there.
@@ -214,7 +217,7 @@
   }
   function renderSchedule(s) {
     const live = Boolean(s && s.status === 'running');
-    $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' && s.held ? `Held for quiet hours: the next check goes at ${quiet ? hh(quiet.end) : '07'}:00. Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'} every ${EVERY_TEXT(s.everyMin)}, ${s.fired} sent so far of about ${s.planned}. Ends ${t(s.until)}.` : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next about ${clock(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
+    $('schedLine').textContent = !s ? 'No schedule is running.' : s.status === 'running' && s.held ? `Held for quiet hours: the next check goes at ${quiet ? hh(quiet.end) : '07'}:00. Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'}${whereText(s)} every ${EVERY_TEXT(s.everyMin)}, ${s.fired} sent so far of about ${s.planned}. Ends ${t(s.until)}.` : s.status === 'running' ? `Running: a check-in by ${s.via === 'call' ? 'call' : s.via === 'voice' ? 'voice note' : 'text'}${whereText(s)} every ${EVERY_TEXT(s.everyMin)}. ${s.fired} sent so far of about ${s.planned}. Next about ${clock(s.next)}. Ends ${t(s.until)}.` : `${s.status === 'paused' ? 'Paused' : 'Ended'}: ${s.note || ''}`.trim();
     // Running / Paused / Stopped + the next check at the top; Running shows Stop only, Paused shows Restart only, otherwise Start only.
     const st = !s ? 'Stopped' : s.status === 'running' ? 'Running' : s.status === 'paused' ? 'Paused' : 'Stopped';
     $('schedState').textContent = st; $('schedNext').textContent = live ? (s.held ? `· next check at ${quiet ? hh(quiet.end) : '07'}:00 (quiet hours)` : `· next check about ${clock(s.next)}`) : st === 'Paused' ? `· ${s.note || ''}` : '';
@@ -225,7 +228,7 @@
   $('schedStart').addEventListener('click', async () => {
     $('schedStart').disabled = true;
     try {
-      const r = await waCall(`/api/whatsapp/${id}/welfare-schedule`, 'POST', { everyMin: everyMin(), via: schedSeg.get() || 'call' });
+      const r = await waCall(`/api/whatsapp/${id}/welfare-schedule`, 'POST', { everyMin: everyMin(), via: schedSeg.get() || 'call', channel: schedWhere.get() || 'whatsapp' });
       if (!r.ok) { $('schedLine').textContent = r.j.error || 'Could not start the schedule.'; $('schedStart').disabled = false; return; }
       renderSchedule(r.j.schedule); load();
     } catch (e) { $('schedLine').textContent = `Could not reach the server: ${e.message}. Nothing was scheduled.`; $('schedStart').disabled = false; }
@@ -315,6 +318,7 @@
       $('tzRow').hidden = Boolean(tzq.tz); $('tzKnown').hidden = !tzq.tz; if (tzq.tz) $('tzKnown').textContent = `Time zone: ${tzq.tz} (found ${SRC[tzq.tzSource] || 'automatically'}).`; }
     if (v.delivery && document.activeElement !== $('deliv')) $('deliv').value = v.delivery.reminders;
     if (v.delivery && document.activeElement !== $('delivChan')) $('delivChan').value = v.delivery.channel || 'whatsapp';
+    if (v.delivery && whereFor !== id) { whereFor = id; const ch = v.delivery.channel || 'whatsapp'; welfareWhere.set(ch); schedWhere.set(ch); }   // the welfare pickers start at the person's own default, like a reminder's
     const nots = v.notifications.map((n) => {
       const c = el('div', 'item');
       const head = el('div', 'item-head');
@@ -330,7 +334,6 @@
   // ---- WhatsApp (whatsapp.js): link a number with the person's opt-in, send a note as text or a voice note. Every rule (opt-in, 24 h window, template, spam)
   // is enforced by the server; this only shows its answer and never decides. No message words are shown or kept here.
   const WA_STATUS = { sending: 'Sending', sent: 'Sent', delivered: 'Delivered', read: 'Seen', failed: 'Not delivered' };
-  let waSubmitKind = 'text';
   async function waCall(path, method, body) {
     const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
     const j = await r.json().catch(() => ({}));
@@ -343,23 +346,18 @@
     if (mine !== id) return;
     renderActivity(v.activity); renderSchedule(v.welfareSchedule);
     $('waLink').hidden = Boolean(v.linked && v.optIn);
-    $('waSend').hidden = !(v.linked && v.optIn);
     $('waNote').hidden = !v.linked;
     $('waTest').hidden = !(v.linked && v.optIn && v.configured);
-    $('waSendHead').hidden = $('waSend').hidden;
     $('waCap').textContent = capText(v.calls);
     if (v.testCall && !waTesting) $('waTestLine').textContent = `Last test call: ${TEST_STATE[v.testCall.state] || v.testCall.state} (${t(v.testCall.at)}).`;
-    const canFree = Boolean(v.linked && v.optIn && v.windowOpen);
-    for (const b of $('waSend').querySelectorAll ? $('waSend').querySelectorAll('button[data-kind]') : []) b.disabled = b.dataset && b.dataset.kind === 'call' ? false : !canFree;   // a call is not a free-text send: the window does not decide it (the call limits do)   // outside the 24 h window WhatsApp refuses free text and voice, so they cannot be pressed
-    $('waInvite').hidden = !(v.linked && v.optIn && !v.windowOpen);   // the only thing that can be sent outside the window; needs no typed note
     $('waState').textContent = !v.linked ? 'Not linked' : !v.optIn ? 'Opted out' : v.windowOpen ? 'Can message' : 'Waiting for them to write';
     $('waState').className = `pill ${v.linked && v.optIn && v.windowOpen ? 'pill-ok' : 'pill-plain'}`;
     const last = v.lastSent ? ` Last: ${v.lastSent.kind} ${t(v.lastSent.at)}, ${WA_STATUS[v.lastSent.status] || v.lastSent.status}${v.lastSent.error ? ` (code ${v.lastSent.error.code})` : ''}.` : '';
     $('waLine').textContent = !v.configured ? 'WhatsApp is not set up on this server yet.'
       : !v.linked ? 'Link their number once they have agreed to hear from Maya on WhatsApp.'
       : !v.optIn ? `They stopped messages from Maya (number ending ${v.phoneEnd}).`
-      : v.windowOpen ? `Number ending ${v.phoneEnd}. They wrote in the last 24 hours, so you can send a note.${last}`
-      : `Number ending ${v.phoneEnd}. They have not written in the last 24 hours, so WhatsApp only allows a standard invitation to reply.${last}`;
+      : v.windowOpen ? `Number ending ${v.phoneEnd}. They wrote in the last 24 hours, so texts and voice notes can go.${last}`
+      : `Number ending ${v.phoneEnd}. They have not written in the last 24 hours, so a reminder goes as WhatsApp's approved message and a text or voice note check-in is covered by a call.${last}`;
   }
   $('waLink').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -367,25 +365,6 @@
     if (!r.ok) return showErr(r.j.error || 'Could not link.');
     showErr(''); $('waPhone').value = ''; $('waOpt').checked = false; loadWa();
   });
-  $('waSend').addEventListener('click', (e) => { const b = e.target.closest('button[data-kind]'); if (b) waSubmitKind = b.dataset.kind; });
-  // The answer shows right here in the panel (not in the banner at the top of the page): "Sent" or the server's plain reason.
-  function waSay(msg, bad) { $('waResult').textContent = msg || ''; $('waResult').hidden = !msg; $('waResult').style.color = bad ? '#9c2f27' : ''; }
-  let waBusy = false;
-  async function waSend(useTemplate) {
-    if (waBusy) return;   // one click, one send
-    waBusy = true; $('waInvite').disabled = true;
-    const had = $('waText').value.trim();
-    waSay('Sending...');
-    try {
-      // The invitation is always a text-type template and carries no words of ours; a free send uses the button that was pressed.
-      const r = await waCall(`/api/whatsapp/${id}/send`, 'POST', useTemplate ? { kind: 'text', text: '', useTemplate: true } : { kind: waSubmitKind, text: $('waText').value, useTemplate: false });
-      if (!r.ok) { waSay(r.j.error || 'Could not send. Nothing was sent.', true); if (r.j.needsTemplate) $('waInvite').hidden = false; return; }
-      $('waText').value = '';
-      waSay(useTemplate ? `Invitation sent.${had ? ' Your own words were not sent: WhatsApp only allows the standard invitation until they write back.' : ''}` : waSubmitKind === 'call' ? (r.j.placed === false ? `Nothing rang. ${capText(r.j.calls)} It was sent as a text instead.` : 'WhatsApp took the call: their phone should ring now.') : 'Sent.');
-      loadWa();
-    } catch (e) { waSay(`Could not reach the server: ${e.message}. Nothing was sent.`, true); }
-    finally { waBusy = false; $('waInvite').disabled = false; }
-  }
   // "Call them now (test)": the server places ONE call and says a fixed sentence; this only shows what the server says really happened, polling its label for a minute.
   const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', finished: 'answered, the call finished and Maya hung up', ended: 'ended', failed: 'failed (see the server log)', paused: "WhatsApp refused it (its call limit): nothing rang" };
   const TEST_DONE = ['rejected', 'no answer', 'completed', 'finished', 'ended', 'failed', 'paused'];
@@ -419,7 +398,11 @@
     waTesting = true; for (const b of ['waTestCall', 'waRemCall', 'waWelfareCall']) $(b).disabled = true; $('waTestLine').textContent = 'Placing the call...';
     try {
       const r = await waCall(`/api/whatsapp/${id}/${path}`, 'POST', body);
-      if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; return; }
+      if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; load(); return; }
+      if (r.j.channel) {   // the welfare channel (App / WhatsApp / Both): the server says in one line what happened and where
+        if (r.j.summary) { $('waTestLine').textContent = r.j.summary; load(); return; }
+        r.j = r.j.result || {};
+      }
       if (r.j.calledInstead) { $('waTestLine').textContent = 'The 24 hour window is closed, so a text or voice note cannot go: Maya is calling instead. Their phone should ring now.'; load(); return; }
       if (r.j.sent) { $('waTestLine').textContent = `Sent as a ${r.j.via === 'voice' ? 'voice note' : 'text'}. No call was placed.`; load(); return; }
       if (r.j.placed === false) { $('waTestLine').textContent = `Nothing rang. ${capText(r.j.calls)} A WhatsApp message was sent instead.`; load(); return; }
@@ -436,7 +419,7 @@
     finally { waTesting = false; for (const b of ['waTestCall', 'waRemCall', 'waWelfareCall']) $(b).disabled = false; }
   }
   $('waTestCall').addEventListener('click', () => runCall('test-call'));
-  $('waWelfareCall').addEventListener('click', () => runCall('welfare-call', { via: welfareSeg.get() || 'call' }));   // Step 1: a welfare check call, no reminder
+  $('waWelfareCall').addEventListener('click', () => runCall('welfare-call', { via: welfareSeg.get() || 'call', channel: welfareWhere.get() || 'whatsapp' }));   // Step 1: a welfare check call, no reminder
   // C2: the family's reminder, delivered by the call. A reminder you already set wins over typed text.
   $('waRemPick').addEventListener('change', remSource); $('waRemText').addEventListener('input', remSource);
   $('waRemClear').addEventListener('click', () => { $('waRemPick').value = ''; $('waRemText').value = ''; remSource(); });
@@ -445,8 +428,6 @@
     if (!rid && !task) { $('waTestLine').textContent = 'Pick a reminder or type one first. Nothing rang.'; return; }
     runCall('reminder-call', rid ? { reminderId: rid } : { task });
   });
-  $('waSend').addEventListener('submit', (e) => { e.preventDefault(); waSend(false); });
-  $('waInvite').addEventListener('click', () => waSend(true));
 
   async function load() {
     if (!id) return;
@@ -482,10 +463,6 @@
     e.preventDefault();
     api(`/api/care/${id}/reminders`, 'POST', { task: $('task').value, dueAt: new Date($('at').value).getTime(), repeat: $('repeat').value.replace(/2$/, ''), ...($('repeat').value.endsWith('2') ? { every: 2 } : {}), ...(deliverSeg.get() ? { deliver: deliverSeg.get() } : {}), ...(channelSeg.get() ? { channel: channelSeg.get() } : {}) })
       .then((j) => { if (j && j.reminder) pendingAdds.push({ ...j.reminder, addedAt: Date.now() }); $('task').value = ''; deliverSeg.set(null); channelSeg.set(null); showErr(''); load(); }).catch((x) => showErr(x.message));
-  });
-  $('msgForm').addEventListener('submit', (e) => {
-    e.preventDefault();
-    api(`/api/care/${id}/messages`, 'POST', { text: $('msg').value }).then(() => { $('msg').value = ''; load(); }).catch((x) => showErr(x.message));
   });
 
   // Live push from the server (only reaches this page while it is open; there is no phone push provider yet).

@@ -378,7 +378,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
                   child: Center(child: _CallButton(size: callSize, onTap: _ready ? () => _startCall() : null)),
                 ),
               Expanded(child: ClipRect(child: ChatView(messages: _messages, controller: _scroll))),
-              if (_notice != null) _NoticeBar(text: '${_notice!['text']}', label: _notice!['kind'] == 'reminder' ? (_notice!['by'] == 'senior' ? 'Your reminder' : 'Reminder from your family') : 'Message from your family', onClose: () {
+              if (_notice != null) _NoticeBar(text: '${_notice!['text']}', label: _notice!['kind'] == 'reminder' ? (_notice!['by'] == 'senior' ? 'Your reminder' : 'Reminder from your family') : _notice!['kind'] == 'welfare' ? 'Check-in from your family' : 'Message from your family', onClose: () {
                 Api.postJson('/api/care/$_pid/notifications/${_notice!['notifId']}/seen').catchError((_) => null);
                 setState(() => _notice = null);
               }),

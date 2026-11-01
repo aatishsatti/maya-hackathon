@@ -601,7 +601,7 @@ const OCC = { calling: ['sent', 'Calling now', 1], answered: ['delivered', 'Pick
   wa_sending: ['sent', 'Sending', 1], wa_sent: ['sent', 'Sent', 1], wa_delivered: ['delivered', 'Delivered', 2], wa_read: ['read', 'Read', 3], wa_missed: ['missed', 'Missed', 2], wa_failed: ['failed', 'Not sent', 0] };   // [status, label, rank]: rank 1 left Maya, 2 arrived / picked up, 3 read, 4 answered
 const OUTMSG = { sending: ['sent', 'Sending', 1], sent: ['sent', 'Sent', 1], delivered: ['delivered', 'Delivered', 2], read: ['read', 'Read', 3], failed: ['failed', 'Not sent', 0] };
 const NOTE_LABEL = { Sent: ['sent', 'Sent', 1], Delivered: ['delivered', 'Delivered', 2], Seen: ['read', 'Read', 3], Played: ['read', 'Read', 3], Replied: ['answered', 'Answered', 4], "Hasn't replied yet": ['noreply', "Hasn't replied yet", 2], 'Seen · Not replied yet': ['noreply', "Hasn't replied yet", 3],
-  'Calling now': ['sent', 'Calling now', 1], 'Picked up, waiting for a reply': ['delivered', 'Picked up', 2], "Couldn't reach senior": ['unreached', "Couldn't reach", 0], Paused: ['paused', 'Paused', 0] };
+  'Calling now': ['sent', 'Calling now', 1], 'Picked up, waiting for a reply': ['delivered', 'Picked up', 2], "Couldn't reach senior": ['unreached', "Couldn't reach", 0], Paused: ['paused', 'Paused', 0], 'Not sent': ['failed', 'Not sent', 0] };
 const ACTIVITY_DAYS = 30, ACTIVITY_MAX = 300;
 const REPEAT_WORDS = { hourly: 'every hour', daily: 'every day', weekly: 'every week' };
 const seniorNote = (r, scheduled = false) => `Set by ${scheduled ? 'talking to Maya' : 'talking to Maya'}${REPEAT_WORDS[r.repeat] ? `, ${REPEAT_WORDS[r.repeat]}` : ''}. Their words are not shown here.`;   // times, counts and a label only
@@ -637,8 +637,15 @@ function activityOf(profileId) {
   for (const n of p.notifications || []) {
     if (n.to !== 'senior') continue;
     const lab = care.statusLabel(n), [status, label, rank] = NOTE_LABEL[lab] || ['sent', lab, 1];
-    if (n.kind === 'welfare') push({ id: `n:${n.id}`, type: 'welfare', where: 'whatsapp', channel: n.paused && n.via === 'call' && n.paused === 'window' ? 'text' : 'call', status: n.paused ? 'paused' : status, label: n.paused ? 'Paused' : label, rank: n.paused ? 0 : rank, at: n.times && n.times.sent, words: null,
-      ...(n.paused ? { note: n.pausedWhy || `The 24 hour window is closed and calls are paused (${PAUSED_WHY[n.paused] || 'calls are paused'}): nothing was sent.` } : n.instead === 'window' ? { note: 'The 24 hour window was closed, so Maya called instead.' } : {}) });
+    if (n.kind === 'welfare') {
+      const inApp = n.channel === 'app', failed = Boolean(n.failed);
+      const notes = [n.paused ? (n.pausedWhy || `The 24 hour window is closed and calls are paused (${PAUSED_WHY[n.paused] || 'calls are paused'}): nothing was sent.`) : null,
+        n.fellBackFrom ? `${n.fellBackFrom === 'whatsapp' ? 'WhatsApp' : 'The app'} could not deliver it${n.why ? `: ${n.why}` : ''} So it went to the ${inApp ? 'Maya app' : 'WhatsApp'} instead.` : failed && n.why ? `Not sent: ${n.why}` : null,
+        n.alsoTried ? `${n.alsoTried.channel === 'whatsapp' ? 'WhatsApp' : 'The Maya app'} rang first and was not answered, so ${inApp ? 'the Maya app' : 'WhatsApp'} was tried.` : null,
+        n.voiceUnavailable ? 'Her voice was not available, so it went as a text.' : null,
+        !n.paused && n.instead === 'window' ? 'The 24 hour window was closed, so Maya called instead.' : null].filter(Boolean);
+      push({ id: `n:${n.id}`, type: 'welfare', where: inApp ? 'app' : 'whatsapp', channel: n.paused && n.via === 'call' && n.paused === 'window' ? 'text' : (n.via || 'call'), status: n.paused ? 'paused' : failed ? 'failed' : status, label: n.paused ? 'Paused' : failed ? 'Not sent' : label, rank: n.paused || failed ? 0 : rank, at: n.times && n.times.sent, words: null, ...(notes.length ? { note: notes.join(' ') } : {}) });
+    }
     else if (n.kind === 'family_message') push({ id: `n:${n.id}`, type: 'message', where: 'app', channel: 'text', status, label, rank, at: n.times && n.times.sent, words: n.text });
   }
   for (const m of (l && l.sent) || []) {
@@ -706,7 +713,7 @@ function placeCall(profileId, kind, spec) {
   let rc = null;
   if (kind === 'reminder') { try { rc = care.reminderCallStart(profileId, spec); } catch (e) { return fail(e.message, e.status || 400); } }
   let wc = null;
-  if (kind === 'welfare') { try { wc = care.welfareCallStart(profileId, { instead: spec && spec.instead }); } catch (e) { return fail(e.message, e.status || 400); } }
+  if (kind === 'welfare') { try { wc = care.welfareCallStart(profileId, { instead: spec && spec.instead, alsoTried: spec && spec.alsoTried }); } catch (e) { return fail(e.message, e.status || 400); } }
   callBusy = true; lastTestAt = Date.now();
   const tail = end(l.phone), sig = new (require('node:events'))(), cur = { id: null, sig, profileId }; outboundNow.cur = cur;
   const what = kind === 'reminder' ? 'reminder call' : kind === 'welfare' ? 'welfare call' : 'test call';
@@ -714,7 +721,7 @@ function placeCall(profileId, kind, spec) {
   setTest(profileId, 'starting');
   let connected = false, placed = false;
   const settle = () => {
-    if (wc) { const st = care.welfareCallEnded(profileId, wc.nid, wc.startedAt); if (st) log(`activity entry: ${st === 'unreached' ? "Couldn't reach senior" : st === 'spoke' ? 'Replied' : "Hasn't replied yet"}`); return; }
+    if (wc) { const st = care.welfareCallEnded(profileId, wc.nid, wc.startedAt); if (st) log(`activity entry: ${st === 'unreached' ? "Couldn't reach senior" : st === 'spoke' ? 'Replied' : "Hasn't replied yet"}`); if (st && placed && spec && typeof spec.onEnd === 'function') { try { spec.onEnd(st); } catch (e) { log(`follow-up failed: ${sayWhy(e)}`); } } return; }
     if (!rc) return; const st = care.reminderCallEnded(profileId, rc.rid); if (st) log(`dashboard state: ${st === 'unanswered' ? "Couldn't reach" : "Hasn't replied yet"}`);
   };
   return new Promise((resolve, reject) => {
@@ -760,8 +767,8 @@ function placeCall(profileId, kind, spec) {
 }
 // The scheduled welfare checks do exactly what the picker does (placeWelfare); this tells care.js when a schedule may run at all: linked and opted in. The 24 h window only decides text or voice note: a closed window is rescued by a call, round by round.
 require('./care').setWelfareSender({
-  blocked: (profileId) => { const l = linkOf(profileId); if (!configured() || !l || !l.optIn) return 'WhatsApp is not linked for them.'; return null; },   // a closed window is not a block: a text or voice note check is rescued by a call (placeWelfare)
-  fire: (profileId, via) => placeWelfare(profileId, via),
+  blocked: (profileId, via, channel) => { if (channel === 'app' || channel === 'both') return null; const l = linkOf(profileId); if (!configured() || !l || !l.optIn) return 'WhatsApp is not linked for them.'; return null; },   // the app does not need WhatsApp; a 'both' check still reaches the app   // a closed window is not a block: a text or voice note check is rescued by a call (placeWelfare)
+  fire: (profileId, via, channel) => (channel ? require('./welfarechan').run(profileId, { via, channel }).then((r) => (r.result && r.result.fallback ? r.result : r)) : placeWelfare(profileId, via)),   // a channel: the welfare channel (welfarechan.js); none: WhatsApp only, as before
   forgive: (profileId) => forgiveCap(profileId),
 });
 // The family restarted a schedule that a too-frequent test had paused for the daily cap, on a sane day-based interval: the messages of that flood stop counting toward the cap (they stay in Activity and keep their
@@ -769,6 +776,12 @@ require('./care').setWelfareSender({
 function forgiveCap(profileId) {
   let n = 0; update(profileId, (x) => { for (const m of x.sent || []) if (!m.forgiven && Date.now() - m.at < WINDOW_MS && m.status !== 'failed') { m.forgiven = true; n += 1; } });
   return n;
+}
+// What the welfare channel needs to know about WhatsApp for a call (welfarechan.js): linked, their call permission, the 24 h window, and Maya's own pause. Nothing here places or sends anything.
+function welfareRoute(profileId) {
+  const l = linkOf(profileId);
+  if (!configured() || !l || !l.optIn) return { linked: false, permission: false, windowOpen: false, blocked: null };
+  return { linked: true, permission: !l.noCallPermission, windowOpen: Boolean(l.lastInboundAt && Date.now() - l.lastInboundAt < WINDOW_MS), blocked: callBlock(l) };
 }
 const placeTestCall = (profileId) => placeCall(profileId, 'test');
 const placeReminderCall = (profileId, spec) => placeCall(profileId, 'reminder', spec);
@@ -788,13 +801,6 @@ async function placeWelfare(profileId, via = 'call') {
   }
   const r = await sendOut(profileId, { kind: via, text: WELFARE_TEXT, who: 'maya' });
   return { placed: false, sent: true, via: r.kind };
-}
-// A family message chosen as a CALL: Maya rings and says it as the family's message (a one-off typed record that is shown under Messages). Up to 80 characters, the reminder limit.
-function placeMessageCall(profileId, text) {
-  const words = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
-  if (!words) return Promise.reject(new WaError('Please type a message first.', 400));
-  if (words.length > 80) return Promise.reject(new WaError('A message by call can be up to 80 characters. Shorten it or send it as text. Nothing was placed.', 400));
-  return placeCall(profileId, 'reminder', { task: words, message: true });
 }
 const WELFARE_TEXT = 'This is Maya. Your family asked me to check in on you. How are you today?';   // fixed and true for a dashboard-triggered check; used only when calls are paused
 
@@ -822,4 +828,4 @@ async function handleWebhook(payload) {
   return (await Promise.all(done)).flat(); // calls answer with one result per call
 }
 
-module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, placeWelfareCall, placeWelfare, placeMessageCall, activityOf, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };
+module.exports = { sendReminder, reminderWords, REMINDER_CAP, note, deps, configured, link, unlink, view, linkOf, findByPhone, cleanPhone, verifyChallenge, validSignature, noteArrival, handleWebhook, sendOut, onStatus, OutError, placeTestCall, placeReminderCall, placeWelfareCall, placeWelfare, welfareRoute, activityOf, FAMILY_PREFIX, sendTextTo, sendAudioTo, downloadMedia, mayaWords, NO_CALL_LINE, WaError, WINDOW_MS };

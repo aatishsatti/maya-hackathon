@@ -169,13 +169,12 @@ test('P10 the roster carries what the app knows: mode, quiet hours, last call + 
   const id = newSenior('cautious');
   const c1 = startCall(id); c1.userTurns = 2; c1.end(); // senior left
   care.addReminder(id, { task: 'meds', dueAt: Date.now() + 3600000, repeat: 'none' });
-  care.sendMessage(id, 'Call me when you can');
   care.touch(id, 'whatsapp', Date.now() - 3600000);
   const c = mkCall(id);
   const r = c.roster('');
   assert.match(r, /Mode set by their family: Cautious; quiet hours 22:00 to 7:00/);
   assert.match(r, /Last call with you: .*they ended it themselves/); assert.match(r, /Next family reminder: "meds"/);
-  assert.match(r, /1 family message waiting/); assert.match(r, /Last seen on WhatsApp \d+ minutes ago/);
+  assert.match(r, /Last seen on WhatsApp \d+ minutes ago/);
   assert.match(r, /never claim an action these facts do not say happened/);
   startCall(id).careNotes(HARM[0]);
   const facts = care.appFacts(id);

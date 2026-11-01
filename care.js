@@ -302,6 +302,7 @@ function advance(p, n, status) {
 }
 // Exactly one vocabulary, shared with the dashboard (and later WhatsApp).
 function statusLabel(n) {
+  if (n.failed) return 'Not sent';   // a welfare check that could not be delivered on a channel (the entry says why)
   if (n.paused) return 'Paused';   // a welfare check that was asked for while calls were paused and could not be sent another way
   if (n.calling) return 'Calling now';   // a welfare check call (existing labels only)
   if (n.unreached) return "Couldn't reach senior";
@@ -399,12 +400,13 @@ function ring(o) {
   console.log('care ring', JSON.stringify({ profile: o.profileId, kind: o.kind, attempt: o.attempts, appOpen: reached > 0 }));
   save(p.id);
   o.timer = setTimeout(() => ringTimeout(o), cfg.ringMs);
-  if (reached === 0 && o.kind === 'reminder') ringByPush(o);   // the app is closed: one push to the phone, which shows the native incoming call screen
+  if (reached === 0 && (o.kind === 'reminder' || o.kind === 'welfare')) ringByPush(o);   // the app is closed: one push to the phone, which shows the native incoming call screen
 }
 
 function ringTimeout(o) {
   if (outreaches.get(o.id) !== o) return;
   pushSenior(o.profileId, 'incomingEnd', { outreachId: o.id });
+  if (o.kind === 'welfare') { welfareRingEnded(o); return; }   // a welfare ring is one ring: nobody answered, the entry says so (no flag, as for a WhatsApp welfare call), and the other platform may be tried once
   if (o.alt && o.kind === 'reminder') { bothSecond(o); return; }   // 'Both' + Call: the app rang first and nobody answered: WhatsApp gets its one try, after this ring has ended (never two rings at once)
   if (o.single) { exhausted(o); return; }   // the app was the SECOND platform: one ring, then it is over
   if (o.attempts < cfg.maxAttempts) {
@@ -497,7 +499,7 @@ function claim(id, oid) {
   const o = outreaches.get(oid);
   const p = get(id);
   if (!o || !p || o.profileId !== id || o.state !== 'ringing') return null;
-  const info = { kind: o.kind, reminderId: o.reminderId, talked: o.talked, safety: o.safety };
+  const info = { kind: o.kind, reminderId: o.reminderId, talked: o.talked, safety: o.safety, notifId: o.notif.id, startedAt: o.startedAt };
   if (o.safety) { const f = safetyFlag(p); if (f) { f.callbackState = 'answered'; f.answers = (f.answers || 0) + 1; } } // answering does NOT close the ticket
   advance(p, o.notif, o.kind === 'reminder' || o.kind === 'welfare' ? 'seen' : 'replied');
   if (o.kind === 'welfare') { o.notif.calling = false; o.notif.pickedUp = true; }   // picked up: whether they spoke is settled when the call ends
@@ -1067,13 +1069,13 @@ function reminderCallStart(id, spec) {
 // ---- a welfare check call (whatsapp.js placeWelfareCall; Step 1) ----
 // One entry in the activity list (channel WhatsApp, kind welfare, no words), labelled with the existing words: Calling now -> Picked up, waiting for a reply -> Replied (they said at least one thing)
 // | Hasn't replied yet (picked up, nothing heard) | Couldn't reach senior (nobody picked up / rejected). A pretend ring (outreach kind welfare) lets the Call claim it as it does an app ring.
-function welfareCallStart(id, { instead } = {}) {
+function welfareCallStart(id, { instead, alsoTried } = {}) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   if (activeByProfile.get(id)) throw Object.assign(new Error('Maya is already trying to reach them.'), { status: 409 });
   const now = Date.now();
   const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: 'Maya called on WhatsApp to check how they are (welfare check).', ref: null });
-  n.channel = 'whatsapp'; n.via = 'call'; n.calling = true; if (instead) n.instead = instead;   // instead: the window was closed, so it is a call instead of the text or voice note that was asked for
+  n.channel = 'whatsapp'; n.via = 'call'; n.calling = true; if (instead) n.instead = instead; if (alsoTried) n.alsoTried = alsoTried;   // instead: the window was closed, so it is a call instead of the text or voice note that was asked for
   const o = { id: uid(), profileId: id, kind: 'welfare', reminderId: null, talked: false, safety: false, attempts: 1, state: 'ringing', timer: null, notif: n, startedAt: now };
   n.ref = o.id; outreaches.set(o.id, o); activeByProfile.set(id, o);
   save(id); pushFamily('refresh', { id });
@@ -1279,6 +1281,7 @@ function appNotifStatus(p, nid, status) {
 function appThreadOpened(id) {
   const p = get(id); if (!p) return false; let any = false;
   for (const r of p.reminders) for (const h of [r.active, r.last]) { const part = h && (h.channel === 'app' ? h : h.app); if (part && part.via === 'voice' && part.state === 'app_sent') { part.state = 'app_delivered'; part.deliveredAt = Date.now(); any = true; } }
+  for (const n of p.notifications) if (n.kind === 'welfare' && n.channel === 'app' && n.via === 'voice' && n.status === 'sent') { advance(p, n, 'delivered'); any = true; }   // a welfare voice note waiting in the chat has arrived
   if (any) { save(id); pushFamily('refresh', { id }); }
   return any;
 }
@@ -1290,6 +1293,75 @@ function reminderAckApp(id) {
   const a = waiting.active; if (a.app) a.app.state = 'app_done';
   finishOccurrence(p, waiting.id, 'done'); waLog({ event: 'answered', via: 'app' }); pushFamily('refresh', { id });
   return true;
+}
+
+// ---------------------------------------------------------------- the welfare check in the Maya app (the other half of "Where it goes": App / WhatsApp / Both; welfarechan.js decides where)
+// A welfare check is one notification of kind 'welfare'. channel says where it went ('app' | 'whatsapp'), via how ('text' | 'voice' | 'call'). Nothing the senior says is kept: a state and a time only.
+// fellBackFrom / why: WhatsApp could not deliver it, so it went to the app instead, and the entry says why. failed + why: it could not be delivered at all (the entry is the record, never a silent gap).
+const WELFARE_WORDS = 'This is Maya. Your family asked me to check in on you. How are you today?';
+function welfareEntry(id, { channel, via, failed = false, why = null, fellBackFrom = null, alsoTried = null }) {
+  const p = get(id); if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  const n = makeNotif(p, { to: 'senior', kind: 'welfare', text: failed ? 'A welfare check was not delivered.' : via === 'call' ? 'Maya is calling to check on you.' : WELFARE_WORDS, ref: null });
+  n.channel = channel; n.via = via;
+  if (failed) n.failed = true;
+  if (why) n.why = clip(why, 240);
+  if (fellBackFrom) n.fellBackFrom = fellBackFrom;
+  if (alsoTried) n.alsoTried = alsoTried;
+  save(id); pushFamily('refresh', { id });
+  return n;
+}
+// A text or a voice note in the app. A text is a notice (it reaches the open app at once, or the next time it opens); a voice note is Maya's voice in the chat. Never both.
+async function welfareAppSend(id, via, opts = {}) {
+  const p = get(id); if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  const n = welfareEntry(id, { channel: 'app', via, ...opts });
+  const asText = (voiceFailed) => { if (voiceFailed) { n.via = 'text'; n.voiceUnavailable = true; } pushSenior(id, 'notice', { notifId: n.id, kind: 'welfare', text: WELFARE_WORDS }); save(id); pushFamily('refresh', { id }); };
+  if (via === 'text') asText(false);
+  else {
+    try {
+      const res = await require('./chat').deliverVoiceNote(id, WELFARE_WORDS, WELFARE_WORDS);
+      n.messageId = res.message && res.message.id; if (res.reached > 0) advance(p, n, 'delivered'); save(id); pushFamily('refresh', { id });
+    } catch { asText(true); }   // her voice could not be made: the same words go as a text, and the entry says so
+  }
+  waLog({ event: 'welfare app sent', via: n.via });
+  return n;
+}
+// Why the app cannot be rung right now (null: it can). Open: it rings in the app; closed: a push rings the phone.
+function welfareAppRingBlock(id, now = Date.now()) {
+  if (!appOpen(id) && !pushReady(id)) return 'The Maya app is closed and a closed phone cannot be rung (no phone is registered for push, or push is not set up).';
+  if (liveCalls.has(id)) return 'They are in a call in the app right now.';
+  if (activeByProfile.get(id)) return 'Maya is already trying to reach them.';
+  if (inQuiet(id, now)) return `It is quiet hours (${String(cfg.quietStart).padStart(2, '0')}:00 to ${String(cfg.quietEnd).padStart(2, '0')}:00), so Maya will not ring.`;
+  return null;
+}
+// One ring of the app for a welfare check. opts.onUnanswered runs once, after this ring has ended, if nobody answered (the other platform's one try). Returns { ok, nid } or { ok: false, why }.
+function welfareAppRing(id, opts = {}) {
+  const why = welfareAppRingBlock(id); if (why) return { ok: false, why };
+  const o = startOutreach(id, { kind: 'welfare' }); if (!o) return { ok: false, why: 'Maya is already trying to reach them.' };
+  o.single = true; if (opts.onUnanswered) o.onUnanswered = opts.onUnanswered;
+  const n = o.notif; n.channel = 'app'; n.via = 'call'; if (opts.fellBackFrom) n.fellBackFrom = opts.fellBackFrom; if (opts.why) n.why = clip(opts.why, 240); if (opts.alsoTried) n.alsoTried = opts.alsoTried;
+  save(id); pushFamily('refresh', { id });
+  return { ok: true, nid: n.id };
+}
+function welfareRingEnded(o) {
+  const p = get(o.profileId); const n = o.notif;
+  closeOutreach(o, 'missed'); n.unreached = true; n.noReply = true; n.calling = false; save(o.profileId); pushFamily('refresh', { id: o.profileId });
+  const next = o.onUnanswered; o.onUnanswered = null;
+  if (next) { try { next(); } catch (e) { console.log('welfare', JSON.stringify({ event: 'other platform failed', message: String((e && e.message) || e).slice(0, 120) })); } }
+  void p;
+}
+// Anything they write or say in the app chat answers the newest welfare check that came to the app as a text or a voice note (the words are never kept).
+function welfareReplyApp(id) {
+  const p = get(id); if (!p) return false;
+  const n = p.notifications.find((x) => x.kind === 'welfare' && x.channel === 'app' && (x.via === 'text' || x.via === 'voice') && x.status !== 'replied' && !x.failed && Date.now() - x.times.sent < 24 * 3600000);
+  if (!n) return false;
+  advance(p, n, 'replied'); pushFamily('refresh', { id }); return true;
+}
+// A welfare entry that WhatsApp could not carry out, kept as the record of what happened to its half of a "Both" check.
+const welfareFailed = (id, channel, via, why) => welfareEntry(id, { channel, via, failed: true, why });
+// WhatsApp's own failed attempt that the app then covered: the paused / failed rows it wrote for this attempt are dropped, because the app entry carries the reason (no silent Paused beside it).
+function welfareDropSince(id, since) {
+  const p = get(id); if (!p) return;
+  p.notifications = p.notifications.filter((n) => !(n.kind === 'welfare' && n.channel === 'whatsapp' && (n.paused || n.failed) && n.times.sent >= since)); save(id);
 }
 function appTick(p, r, now) {
   const a = r.active; if (!a) return;
@@ -1513,19 +1585,20 @@ function welfareScheduleView(id) {
 // Where the schedule list is offered (family page and app): the day-based presets only. A custom interval is an advanced option and warns; nothing under an hour is ever suggested.
 const SCHEDULE_PRESETS = [{ label: 'Every day', everyMin: 1440 }, { label: 'Every 2 days', everyMin: 2880 }, { label: 'Every week', everyMin: 10080 }, { label: 'Every 2 weeks', everyMin: 20160 }];
 const SCHEDULE_CUSTOM_WARNING = 'Too frequent will pause for flooding.';
-function welfareScheduleStart(id, { everyMin, every, unit, via } = {}) {
+function welfareScheduleStart(id, { everyMin, every, unit, via, channel } = {}) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
   const n = unit != null ? Number(every) * (UNIT_MIN[unit] || NaN) : Number(everyMin);
   if (!Number.isInteger(n) || n < SCHEDULE_MIN || n > SCHEDULE_MAX) throw Object.assign(new Error('Choose how often: every hour, every day, every 3 days, every week, or a custom number of hours, days or weeks (up to 12 weeks).'), { status: 400 });
   if (!SCHEDULE_VIA.includes(via)) throw Object.assign(new Error('Choose a call, a text or a voice note.'), { status: 400 });
   if (!welfareSender) throw Object.assign(new Error('WhatsApp is not set up on this server.'), { status: 503 });
-  const why = welfareSender.blocked(id, via); if (why) throw Object.assign(new Error(`${why} Nothing was scheduled.`), { status: 429 });
+  if (channel != null && channel !== '' && !['app', 'whatsapp', 'both'].includes(channel)) throw Object.assign(new Error('Choose where it goes: the Maya app, WhatsApp or both.'), { status: 400 });
+  const why = welfareSender.blocked(id, via, channel || null); if (why) throw Object.assign(new Error(`${why} Nothing was scheduled.`), { status: 429 });
   const now = Date.now();
   // A schedule that a too-frequent test paused for the daily cap restarts TODAY once the interval is day-based: that flood stops counting (whatsapp.js forgiveCap). A short interval gets no such pardon.
   const was = p.welfareSchedule;
   if (was && was.status === 'paused' && was.pauseCode === 'cap' && n >= 1440 && welfareSender.forgive) welfareSender.forgive(id);
-  p.welfareSchedule = { everyMin: n, via, startedAt: now, until: now + (n >= 1440 ? SCHEDULE_LONG_MS : SCHEDULE_MS), next: now + n * 60000, fired: 0, status: 'running', note: null };
+  p.welfareSchedule = { everyMin: n, via, startedAt: now, until: now + (n >= 1440 ? SCHEDULE_LONG_MS : SCHEDULE_MS), next: now + n * 60000, fired: 0, status: 'running', note: null, ...(channel ? { channel } : {}) };
   save(id); pushFamily('refresh', { id });
   return welfareScheduleView(id);
 }
@@ -1548,12 +1621,12 @@ function welfareTick(p, now) {
   if (now < s.next || !welfareSender) return;
   if (inQuiet(p.id, now)) { if (!s.held) { s.held = true; save(p.id); pushFamily('refresh', { id: p.id }); console.log('welfare schedule', JSON.stringify({ event: 'held for quiet hours' })); } return; }   // the check is due but it is night: it goes when the quiet hours end
   s.held = false;
-  const id = p.id, via = s.via;
+  const id = p.id, via = s.via, channel = s.channel || null;
   s.next = now + s.everyMin * 60000; s.fired += 1; flushOne(id);   // recorded on disk BEFORE anything is sent
-  const why = welfareSender.blocked(id, via);
+  const why = welfareSender.blocked(id, via, channel);
   if (why) { welfareSchedulePause(id, why); return; }
   console.log('welfare schedule', JSON.stringify({ event: 'check', via, fired: s.fired }));
-  Promise.resolve().then(() => welfareSender.fire(id, via)).then((res) => {
+  Promise.resolve().then(() => welfareSender.fire(id, via, channel)).then((res) => {
     if (res && res.fallback) welfareSchedulePause(id, `The check could not go out as a ${via === 'call' ? 'call' : via === 'voice' ? 'voice note' : 'text'}: ${res.reason === 'meta' ? 'WhatsApp refused the call.' : 'two calls in a row were not answered.'} A message was sent instead, and the schedule is paused. Start it again when you are ready.`);
     pushFamily('refresh', { id });
   }, (e) => { if (e && e.status === 409) { console.log('welfare schedule', JSON.stringify({ event: 'skipped: another call in progress' })); return; }
@@ -1647,15 +1720,6 @@ function setMode(id, mode) {
   p.mode = mode; save(id);
   return mode;
 }
-function sendMessage(id, text) {
-  const p = get(id);
-  if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
-  text = clip(text, 300);
-  if (!text) throw Object.assign(new Error('Please type a message.'), { status: 400 });
-  const n = makeNotif(p, { to: 'senior', kind: 'family_message', text });
-  if (pushSenior(id, 'notice', { notifId: n.id, kind: n.kind, text })) { /* delivered when the page acknowledges it */ }
-  return n;
-}
 
 // One incident = one flag/alert. Its alert note, gentle note, call-back tries and resolution are steps of ONE timeline, so the
 // dashboard shows one card, never three or four look-alike notifications.
@@ -1729,6 +1793,6 @@ module.exports = {
   attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
-  setMode, sendMessage, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
+  addReminder, addSeniorReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, appThreadOpened, setWelfareSender, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

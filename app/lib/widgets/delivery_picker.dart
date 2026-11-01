@@ -51,3 +51,14 @@ class DeliveryPicker extends StatelessWidget {
     );
   }
 }
+
+/// Where a welfare check goes: the Maya app, WhatsApp or both (the same three choices as a reminder's channel).
+class WherePicker extends StatelessWidget {
+  final String value;
+  final ValueChanged<String> onChanged;
+  const WherePicker({super.key, required this.value, required this.onChanged});
+  static const choices = [('app', 'Maya app'), ('whatsapp', 'WhatsApp'), ('both', 'Both')];
+
+  @override
+  Widget build(BuildContext context) => DeliveryPicker(value: value, choices: choices, onChanged: (v) => onChanged(v ?? 'whatsapp'));
+}

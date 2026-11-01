@@ -374,7 +374,7 @@ test('never a live call: only text, audio and template ever leave; a call promis
   shift(id, 60000); await wa.sendOut(id, { kind: 'voice', text: 'ok' });
   const o = outside(); shift(o.id, 1); await wa.sendOut(o.id, { kind: 'text', useTemplate: true });
   assert.ok(sent().length >= 3 && sent().every((b) => ['text', 'audio', 'template'].includes(b.type)));
-  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)).sort(), ['placeMessageCall', 'placeReminderCall', 'placeTestCall', 'placeWelfareCall']); // the one test call (C1) is the only exception, and it never sends a message
+  assert.deepEqual(Object.keys(wa).filter((k) => typeof wa[k] === 'function' && /call|ring|dial|video/i.test(k)).sort(), ['placeReminderCall', 'placeTestCall', 'placeWelfareCall']); // the one test call (C1) is the only exception, and it never sends a message
   await refusal(wa.sendOut(id, { kind: 'call', text: 'x' }), /text message or a voice note/, { status: 400 });
   await refusal(wa.sendOut(id, { kind: 'text', text: 'x', who: 'stranger' }), /Bad sender/);
 });
@@ -1333,7 +1333,7 @@ test('the view reports the call limits exactly: Maya\'s own count of calls nobod
 
 test('the family page: the call section is its own column with headings, full-width fields and side-by-side large buttons (the live screenshot had a squeezed button and a sliver of a field)', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'), css = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.css'), 'utf8');
-  assert.match(html, /<h3 class="wa-sub" id="waSendHead"[^>]*>Send a message<\/h3>/); assert.match(html, /<h3 class="wa-sub">Call them with a reminder \(test\)<\/h3>/);
+  assert.doesNotMatch(html, /Send a message|waSend|waInvite|msgPanel/); assert.match(html, /<h3 class="wa-sub">Call them with a reminder \(test\)<\/h3>/);
   const call = html.slice(html.indexOf('id="waTest"'), html.indexOf('id="waNote"'));
   assert.match(call, /<select id="waRemPick" class="wa-wide">/); assert.match(call, /<input id="waRemText" class="wa-wide"/); assert.doesNotMatch(call, /form-row/, 'no squeezed flex row');
   assert.ok(call.indexOf('waRemSource') < call.indexOf('waRemClear'), 'the line that says which source wins sits under the fields'); assert.match(call, /class="wa-actions">\s*<button id="waRemClear"[^>]*>Clear choice<\/button>\s*<button id="waRemCall" class="btn primary"/);
@@ -1466,9 +1466,8 @@ test('activity page: summary cards, day groups (Today / Yesterday / Earlier), fi
   els.actOlder.handlers.click(); assert.match(els.actPage.textContent, /Page 2 of 2/); assert.equal(els.actOlder.disabled, true); assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 8, 'the other eight');
   const welfare = els.actFilters.children.find((b) => b.textContent === 'Welfare'); welfare.handlers.click();
   assert.deepEqual(list().map((t) => t.replace(/\s+/g, ' ')).filter((t) => /Welfare check/.test(t)).length, 1); assert.equal(els.actList.children.filter((c) => /act-row/.test(c.className)).length, 1); assert.equal(els.actPager.hidden, true);
-  const msg = els.actFilters.children.find((b) => b.textContent === 'Messages'); msg.handlers.click(); assert.match(list().join('|'), /Message.*Text.*Delivered/);
-  els.actFilters.children.find((b) => b.textContent === 'Reminders').handlers.click(); assert.ok(list().every((t) => !/Welfare check|Message/.test(t)));
-  assert.equal(els.actFilters.children.length, 5, 'All, Reminders, Welfare, Messages, Calls'); assert.ok(els.actFilters.children.some((b) => /chip on/.test(b.className)));
+  els.actFilters.children.find((b) => b.textContent === 'Reminders').handlers.click(); assert.ok(list().every((t) => !/Welfare check/.test(t)));
+  assert.equal(els.actFilters.children.length, 4, 'All, Reminders, Welfare, Calls: no Messages filter'); assert.ok(els.actFilters.children.some((b) => /chip on/.test(b.className)));
 });
 
 test('picker: a reminder\'s own Call / Text / Voice note beats the person-wide switch; no pick keeps the old default; a bad pick is refused', async () => {
@@ -1508,12 +1507,7 @@ test('picker: the welfare check as Call, Text or Voice note; the message as Call
   shift(id, 60000); assert.deepEqual(await wa.placeWelfare(id, 'voice'), { placed: false, sent: true, via: 'voice' }); assert.equal(sent()[1].type, 'audio'); assert.ok(spoken.includes('This is Maya. Your family asked me to check in on you. How are you today?'));
   assert.equal(wa.activityOf(id).entries.filter((e) => e.type === 'welfare').map((e) => e.channel).sort().join(), 'text,voice'); await assert.rejects(wa.placeWelfare(id, 'fax'), /Choose a call, a text or a voice note/);
   const o = outside(); callFail = { connect: { code: 138006, message: 'No approved call permission' } }; await assert.rejects(wa.placeWelfare(o.id, 'text'), (e) => { assert.match(e.message, /24 hour window is closed and the call could not be placed \(No approved call permission\)\. Nothing was sent/); return true; }); callFail = null;   // outside the window a call is tried instead; when it cannot be placed nothing is sent, with the reason (the rescue itself is tested under 'window closed')
-  clearCalls(); const long = 'x'.repeat(81); await assert.rejects(wa.placeMessageCall(id, long), /up to 80 characters/); await assert.rejects(wa.placeMessageCall(id, '   '), /type a message/); assert.equal(callPosts().length, 0);
-  await withConnectReply({ calls: [{ id: OUT_ID }] }, async () => {
-    assert.deepEqual(await wa.placeMessageCall(id, 'Dinner is at six'), { placed: true }); const rr = care.get(id).reminders.find((r) => r.msg); assert.equal(rr.task, 'Dinner is at six');
-    assert.equal(wa.activityOf(id).entries.find((e) => e.words === 'Dinner is at six').type, 'message'); await wa.handleWebhook(outStatus(phone, 'RINGING')); await wa.handleWebhook(outStatus(phone, 'REJECTED')); await sleepMs(150);
-  });
-  assert.equal(wa.activityOf(id).entries.find((e) => e.words === 'Dinner is at six').channel, 'call'); clearCalls();
+  clearCalls();
 });
 
 test('dashboard: no senior words in the list or the logs; the page file has the picker, the headings and the activity section', async () => {
@@ -1521,7 +1515,7 @@ test('dashboard: no senior words in the list or the logs; the page file has the 
   try { json = JSON.stringify(wa.activityOf(r.id)); assert.doesNotMatch(json + r.out, /Okay thanks|tablets|v=0|wacid/); assert.equal(wa.activityOf(r.id).entries.find((e) => e.type === 'welfare').words, null); assert.equal(wa.activityOf(r.id).entries.find((e) => e.type === 'welfare').label, 'Answered'); } finally { await r.dev.peer.close(); }
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
   for (const id of ['actSummary', 'actFilters', 'actList', 'actPager', 'deliverPick', 'waWelfareVia']) assert.match(html, new RegExp(`id="${id}"`), id);
-  assert.match(html, /<h2>Activity<\/h2>/); assert.match(html, /data-kind="call">Call and say it</); assert.match(html, /<details class="log">/); for (const v of ['call', 'text', 'voice']) assert.match(html, new RegExp(`id="deliverPick"[\\s\\S]*?data-v="${v}"`));
+  assert.match(html, /<h2>Activity<\/h2>/); assert.doesNotMatch(html, /data-kind="call">Call and say it</); assert.match(html, /<details class="log">/); for (const v of ['call', 'text', 'voice']) assert.match(html, new RegExp(`id="deliverPick"[\\s\\S]*?data-v="${v}"`));
 });
 
 test('live fix: "No, thank you." right after the reminder ends the call: the reminder\'s own fact rides along for four turns and used to count as "something in play"; a fact of weight (the family, safety) still stops it', async () => {
@@ -1661,8 +1655,8 @@ const navPage = (stored = {}) => {
     append(...k) { this.children.push(...k); } replaceChildren(...k) { this.children = k; } addEventListener(e, f) { this.handlers[e] = f; } setAttribute(k, v) { this.attrs[k] = v; } getAttribute(k) { return this.attrs[k]; } focus() {} scrollIntoView() { this.scrolled++; } click() { this.handlers.click && this.handlers.click({ preventDefault() {} }); }
     closest() { return this.panel || null; } text() { return [this.textContent, ...this.children.map((c) => (c.text ? c.text() : String(c)))].join(' '); } }
   const els = {}; const mkPanel = (id) => { const p = new E('section'); p.id = id; const head = new E('div'); p.heads = { '.sec-head': head }; p.querySelector = (s) => (s === '.fold' ? head.children.find((c) => /fold/.test(c.className)) : p.heads[s]); const set = new Set(); p.classList = { add: (c) => set.add(c), remove: (c) => set.delete(c), contains: (c) => set.has(c), toggle() {} }; p.head = head; els[id] = p; return p; };
-  const panels = ['waPanel', 'remPanel', 'msgPanel', 'activityPanel'].map(mkPanel);
-  const tabs = [['waPanel'], ['remPanel'], ['welfareHead'], ['msgPanel'], ['activityPanel']].map(([id]) => { const a = new E('a'); a.attrs.href = `#${id}`; return a; });
+  const panels = ['waPanel', 'remPanel', 'activityPanel'].map(mkPanel);
+  const tabs = [['waPanel'], ['remPanel'], ['welfareHead'], ['activityPanel']].map(([id]) => { const a = new E('a'); a.attrs.href = `#${id}`; return a; });
   const store = { ...stored };
   const document = { getElementById: (i) => (els[i] = els[i] || new E('x')), createElement: (t) => new E(t), querySelectorAll: (s) => (s === 'section.panel' ? panels : s === '#tabs .tab' ? tabs : []) };
   els.welfareHead = new E('h3'); els.welfareHead.panel = els.waPanel; els.remPanel.panel = els.remPanel;
@@ -1672,11 +1666,11 @@ const navPage = (stored = {}) => {
   sandbox.localStorage.setItem = (k, v) => { if (k === 'maya-folded') store.folded = v; };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'), sandbox); return { els, panels, tabs, store };
 };
-test('navigation: the five jump links point at real sections; the bar is sticky and scrolls sideways on a phone; no new section was added', () => {
+test('navigation: the four jump links (WhatsApp, Reminders, Welfare, Activity) point at real sections; there is no Send message tab; the bar is sticky and scrolls sideways on a phone; no new section was added', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'), css = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.css'), 'utf8');
   const nav = html.slice(html.indexOf('<nav id="tabs"'), html.indexOf('</nav>')); const targets = [...nav.matchAll(/<a class="tab" href="#(\w+)">([^<]+)<\/a>/g)].map((m) => [m[1], m[2]]);
-  assert.deepEqual(targets, [['waPanel', 'WhatsApp'], ['remPanel', 'Reminders'], ['welfareHead', 'Welfare'], ['msgPanel', 'Send message'], ['activityPanel', 'Activity']]); for (const [t] of targets) assert.match(html, new RegExp(`id="${t}"`), `the section ${t} exists`);
-  assert.match(css, /\.tabs \{[^}]*position: sticky[^}]*top: 0[^}]*overflow-x: auto/); assert.match(css, /\.tab \{[^}]*min-height: 44px/); assert.match(css, /\.panel\.collapsed > :not\(\.sec-head\) \{ display: none; \}/); assert.match(css, /scroll-margin-top/); assert.equal((html.match(/<section/g) || []).length, 8, 'no new section: the same page, easier to move around');
+  assert.deepEqual(targets, [['waPanel', 'WhatsApp'], ['remPanel', 'Reminders'], ['welfareHead', 'Welfare'], ['activityPanel', 'Activity']]); for (const [t] of targets) assert.match(html, new RegExp(`id="${t}"`), `the section ${t} exists`);
+  assert.match(css, /\.tabs \{[^}]*position: sticky[^}]*top: 0[^}]*overflow-x: auto/); assert.match(css, /\.tab \{[^}]*min-height: 44px/); assert.match(css, /\.panel\.collapsed > :not\(\.sec-head\) \{ display: none; \}/); assert.match(css, /scroll-margin-top/); assert.equal((html.match(/<section/g) || []).length, 7, 'no new section: the same page, easier to move around');
 });
 test('navigation: every panel gets a Hide / Show button that folds it and is remembered on this device; a jump opens a folded panel; a hidden target (not linked yet) falls back to the WhatsApp panel', () => {
   const a = navPage(); for (const p of a.panels) { const b = p.head.children.find((c) => /fold/.test(c.className)); assert.ok(b, `${p.id} has a fold button`); assert.equal(b.textContent, 'Hide'); assert.equal(b.attrs['aria-expanded'], 'true'); }

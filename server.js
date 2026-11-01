@@ -107,7 +107,6 @@ async function handleCare(req, res, url) {
     if (b === 'timezone') return sendJson(res, 200, { ok: care.setTimezone(a, body.tz, 'manual') });   // the dashboard asks for this ONLY when it could not be found automatically
     if (b === 'delivery') return sendJson(res, 200, { delivery: care.setDelivery(a, body) });   // how reminders reach them on WhatsApp: a voice note in Maya's voice or text
     if (b === 'reminders' && !c) return sendJson(res, 200, { reminder: care.addReminder(a, body) });
-    if (b === 'messages') return sendJson(res, 200, { notification: { id: care.sendMessage(a, body.text).id } });
     if (b === 'activity') return sendJson(res, 200, { ok: care.touch(a, 'app', Date.now(), /^[\w/+\-]{1,60}$/.test(body.tz || '') ? body.tz : null) });
     if (b === 'device') return sendJson(res, 200, care.registerDevice(a, body));   // the phone's push token (so Maya can ring it when the app is closed); never returned, never logged
     if (b === 'outreach' && c && d === 'decline') return care.decline(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
@@ -177,14 +176,14 @@ async function handleWhatsapp(req, res, url) {
   try {
     if (req.method === 'GET' && !b) return sendJson(res, 200, whatsapp.view(a));
     if (req.method === 'DELETE' && !b) return sendJson(res, 200, { ok: whatsapp.unlink(a) });
-    if (req.method === 'POST' && b === 'send') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); if (body.kind === 'call') return MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeMessageCall(a, body.text)); return sendJson(res, 200, await whatsapp.sendOut(a, { kind: body.kind, text: body.text, who: 'family', useTemplate: body.useTemplate === true })); }
     if (req.method === 'POST' && b === 'test-call') return MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeTestCall(a)); // TEMPORARY (render-test): one outbound test call, see wacall.callOut
     if (req.method === 'POST' && b === 'welfare-call') { // the welfare picker: call | text | voice (a call needs real mode)
       const body = (await readJson(req)) || {}, via = body.via === 'text' || body.via === 'voice' ? body.via : 'call';
+      if (typeof body.channel === 'string' && body.channel) return via === 'call' && MODE !== 'real' && body.channel !== 'app' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await require('./welfarechan').run(a, { via, channel: body.channel }));   // Where it goes: app | whatsapp | both
       return via === 'call' && MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeWelfare(a, via));
     } // TEMPORARY (render-test): Step 1, a one-off welfare check call
     if (b === 'welfare-schedule') {   // Step 2: scheduled welfare checks, started and stopped by the family
-      if (req.method === 'POST') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, { schedule: care.welfareScheduleStart(a, { everyMin: body.everyMin, every: body.every, unit: body.unit, via: body.via }) }); }
+      if (req.method === 'POST') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, { schedule: care.welfareScheduleStart(a, { everyMin: body.everyMin, every: body.every, unit: body.unit, via: body.via, channel: body.channel }) }); }
       if (req.method === 'DELETE') return sendJson(res, 200, { stopped: care.welfareScheduleStop(a) });
     }
     if (req.method === 'POST' && b === 'reminder-call') { // TEMPORARY (render-test): C2, a reminder delivered by an outbound call

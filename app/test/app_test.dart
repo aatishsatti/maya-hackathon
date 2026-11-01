@@ -153,15 +153,16 @@ void main() {
       expect(find.text('7'), findsOneWidget); // the server's own count, not invented
       expect(find.text('Take your tablets'), findsOneWidget);
       expect(find.text('Read'), findsWidgets);
-      for (final tab in const ['Activity', 'Reminders', 'Welfare', 'Message', 'Setup']) {
+      for (final tab in const ['Activity', 'Reminders', 'Welfare', 'Setup']) {
         expect(find.text(tab), findsWidgets);
       }
+      expect(find.text('Message'), findsNothing, reason: 'Send a message is gone: no Message tab');
       // the cards and the filters do not scroll with the list
       expect(find.byType(RefreshIndicator), findsOneWidget);
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('the Call / Text / Voice note picker is on the Welfare tab, the Reminder sheet and the Message tab', (t) async {
+    testWidgets('the Call / Text / Voice note picker and the Where it goes picker (Maya app / WhatsApp / Both) are on the Welfare tab; the Reminder sheet has both pickers too', (t) async {
       await phone(t, 360, 700);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
@@ -172,11 +173,10 @@ void main() {
         expect(find.text(o), findsWidgets);
       }
       expect(find.text('Check in now'), findsOneWidget);
-      await t.tap(find.text('Message').last);
-      await t.pump(const Duration(milliseconds: 400));
-      await t.tap(find.text('On WhatsApp'));
-      await t.pump(const Duration(milliseconds: 300));
-      expect(find.byType(DeliveryPicker), findsOneWidget);
+      expect(find.byType(WherePicker), findsWidgets, reason: 'welfare: where it goes, now and for the schedule');
+      for (final o in const ['Maya app', 'WhatsApp', 'Both']) {
+        expect(find.text(o), findsWidgets);
+      }
       await t.tap(find.text('Reminders').last);
       await t.pump(const Duration(milliseconds: 400));
       await t.tap(find.text('Add a reminder'));

@@ -32,7 +32,6 @@
       <a class="tab" href="#waPanel">WhatsApp</a>
       <a class="tab" href="#remPanel">Reminders</a>
       <a class="tab" href="#welfareHead">Welfare</a>
-      <a class="tab" href="#msgPanel">Send message</a>
       <a class="tab" href="#activityPanel">Activity</a>
     </nav>
     <section class="panel">
@@ -103,14 +102,6 @@
           <div id="reminders" class="stack"></div>
         </section>
 
-        <section class="panel" id="msgPanel">
-          <div class="sec-head"><h2>Send a message</h2></div>
-          <form id="msgForm" class="form">
-            <input id="msg" placeholder="A short note for them" maxlength="300" required aria-label="Message">
-            <button class="btn primary" type="submit">Send</button>
-          </form>
-        </section>
-
         <section class="panel" id="waPanel">
           <div class="sec-head"><h2>WhatsApp</h2><span id="waState" class="pill pill-plain"></span></div>
           <p id="waLine" class="hint"></p>
@@ -119,17 +110,6 @@
             <label class="hint" style="margin:0"><input id="waOpt" type="checkbox"> They have agreed to hear from Maya on WhatsApp</label>
             <button class="btn primary" type="submit">Link this number</button>
           </form>
-          <h3 class="wa-sub" id="waSendHead" hidden>Send a message</h3>
-          <form id="waSend" class="form" hidden>
-            <input id="waText" placeholder="A short note for them (Maya says it is from you)" maxlength="300" aria-label="WhatsApp message">
-            <div class="form-row">
-              <button class="btn primary" type="submit" data-kind="text">Send as text</button>
-              <button class="btn" type="submit" data-kind="voice">Send as voice note</button>
-              <button class="btn" type="submit" data-kind="call">Call and say it</button>
-            </div>
-            <button id="waInvite" class="btn primary" type="button" hidden>Send a standard invitation to reply</button>
-          </form>
-          <p id="waResult" class="hint" role="status" aria-live="polite" hidden></p>
           <div id="waTest" class="wa-call" hidden>
             <h3 class="wa-sub">Call them with a reminder (test)</h3>
             <p class="hint">Rings their WhatsApp once. Maya says the reminder in her own words, listens, and ends the call herself. Needs their call permission.</p>
@@ -150,6 +130,12 @@
               <button type="button" role="radio" aria-checked="true" data-v="call">Call</button>
               <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
               <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
+            </div>
+            <label class="wa-label" id="welfareWhereLabel">Where it goes</label>
+            <div id="waWelfareWhere" class="seg" role="radiogroup" aria-labelledby="welfareWhereLabel">
+              <button type="button" role="radio" aria-checked="false" data-v="app">Maya app</button>
+              <button type="button" role="radio" aria-checked="true" data-v="whatsapp">WhatsApp</button>
+              <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
             </div>
             <div class="wa-actions"><button id="waWelfareCall" class="btn primary" type="button">Check in with them now (test)</button></div>
             <h3 class="wa-sub" id="schedHead">Scheduled check-ins</h3>
@@ -176,6 +162,13 @@
               <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
               <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
             </div>
+            <label class="wa-label" id="schedWhereLabel">Where it goes</label>
+            <div id="schedWhere" class="seg" role="radiogroup" aria-labelledby="schedWhereLabel">
+              <button type="button" role="radio" aria-checked="false" data-v="app">Maya app</button>
+              <button type="button" role="radio" aria-checked="true" data-v="whatsapp">WhatsApp</button>
+              <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
+            </div>
+            <p class="hint" id="schedWhereHint">The Maya app has no WhatsApp limits. If WhatsApp cannot deliver, the app covers it and Activity says why. "Both" sends texts and voice notes to both; a call rings one place at a time, never two at once.</p>
             <p class="hint" id="schedPlan"></p>
             <div class="wa-actions">
               <button id="schedStart" class="btn primary" type="button">Start</button>
@@ -189,7 +182,7 @@
         </section>
 
         <section class="panel" id="activityPanel">
-          <div class="sec-head"><h2>Activity</h2><span class="sec-sub">Reminders, check-ins and messages, last 30 days</span></div>
+          <div class="sec-head"><h2>Activity</h2><span class="sec-sub">Reminders, check-ins and calls, last 30 days</span></div>
           <div id="actSummary" class="act-cards" aria-label="Summary"></div>
           <div id="actFilters" class="act-filters" role="group" aria-label="Show"></div>
           <div id="actList" class="act-list"></div>

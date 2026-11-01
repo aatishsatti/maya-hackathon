@@ -5,7 +5,6 @@ import '../services/store.dart';
 import '../theme.dart';
 import 'family_data.dart';
 import 'tab_activity.dart';
-import 'tab_message.dart';
 import 'tab_reminders.dart';
 import 'tab_setup.dart';
 import 'tab_welfare.dart';
@@ -57,7 +56,6 @@ class _FamilyDashboardState extends State<FamilyDashboard> {
           ActivityTab(data: d),
           RemindersTab(data: d),
           WelfareTab(data: d),
-          MessageTab(data: d),
           SetupTab(data: d, profile: _profile, onSwitch: _switch),
         ];
         return Scaffold(
@@ -86,7 +84,6 @@ class _FamilyDashboardState extends State<FamilyDashboard> {
               NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Activity'),
               NavigationDestination(icon: Icon(Icons.notifications_none), selectedIcon: Icon(Icons.notifications), label: 'Reminders'),
               NavigationDestination(icon: Icon(Icons.favorite_border), selectedIcon: Icon(Icons.favorite), label: 'Welfare'),
-              NavigationDestination(icon: Icon(Icons.mail_outline), selectedIcon: Icon(Icons.mail), label: 'Message'),
               NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Setup'),
             ],
           ),

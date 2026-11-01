@@ -571,6 +571,7 @@ class Call {
     this.closed = true;
     if (this.profile && this.awaitAck) care.reminderNoAck(this.profile.id, this.awaitAck);
     if (this.profile && this.registered) care.callEnded(this.profile.id, this, this.safety ? 'safety' : this.hungUpQuiet ? 'quiet' : 'left');
+    if (this.profile && this.outreach && this.outreach.kind === 'welfare' && this.outreach.notifId) care.welfareCallEnded(this.profile.id, this.outreach.notifId, this.outreach.startedAt);   // a welfare ring the app answered: settled when the call ends (spoke / no talk)
     if (this.profile && this.registered) care.safetyCut(this.profile.id, { kind: cutKind }); // an open ticket rings again whenever ANY call ends, whether or not this call had safety words
     this.saveMemory();
     clearTimeout(this.holdTimer);

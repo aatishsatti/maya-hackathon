@@ -6,7 +6,7 @@ import '../widgets/pill.dart';
 import 'common.dart';
 import 'family_data.dart';
 
-const _typeLabel = {'reminder': 'Reminder', 'welfare': 'Welfare check', 'message': 'Message', 'call': 'Call with Maya', 'chat': 'Chat'};
+const _typeLabel = {'reminder': 'Reminder', 'welfare': 'Welfare check', 'call': 'Call with Maya', 'chat': 'Chat'};
 const _whereLabel = {'app': 'App', 'whatsapp': 'WhatsApp', 'both': 'App + WhatsApp'};
 const _chanLabel = {'call': 'Call', 'text': 'Text', 'voice': 'Voice note'};
 const _typeIcon = {'reminder': Icons.notifications_none, 'welfare': Icons.favorite_border, 'message': Icons.mail_outline, 'call': Icons.call_outlined, 'chat': Icons.chat_bubble_outline};
@@ -55,7 +55,7 @@ class _ActivityTabState extends State<ActivityTab> {
         padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
         child: Row(children: [
           // five filters side by side: they fit one row at phone width, so nothing here scrolls sideways
-          for (final f in const [('all', 'All'), ('reminder', 'Reminders'), ('welfare', 'Welfare'), ('message', 'Messages'), ('call', 'Calls')])
+          for (final f in const [('all', 'All'), ('reminder', 'Reminders'), ('welfare', 'Welfare'), ('call', 'Calls')])
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 2),
