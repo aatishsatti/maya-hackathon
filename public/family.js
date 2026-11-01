@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   // An element the page no longer has (the old test buttons are gone from the dashboard) is a detached stand-in, so nothing here ever throws on it.
-  const $ = (id) => document.getElementById(id) || document.createElement('span');
+  const $ = (id) => document.getElementById(id) || document.createElement('input');
   let id = null;
   let timer = null;
   const store = { get() { try { return localStorage.getItem('mayaFamilySenior'); } catch { return null; } }, set(v) { try { localStorage.setItem('mayaFamilySenior', v); } catch { /* ignore */ } } };
@@ -196,7 +196,7 @@
     const btns = node.querySelectorAll ? [...(node.querySelectorAll('button') || [])] : [];
     const cur = () => btns.find((b) => b.getAttribute('aria-checked') === 'true');
     const set = (v) => { for (const b of btns) b.setAttribute('aria-checked', String(b.dataset.v === v)); };
-    node.addEventListener('click', (e) => { const b = e.target && e.target.closest ? e.target.closest('button') : null; if (!b) return; if (cur() === b && node.dataset.clearable) set(null); else set(b.dataset.v); });
+    node.addEventListener('click', (e) => { const b = e.target && e.target.closest ? e.target.closest('button') : null; if (!b) return; if (cur() === b && node.dataset.clearable) set(null); else set(b.dataset.v); later(renderSummary); });
     return { get: () => (cur() ? cur().dataset.v : null), set };
   }
   // ---- quiet hours (where THEY are): nothing is sent, texted or rung at night, so a time that falls in them is warned about (and still accepted: it is held, never dropped) ----
@@ -319,7 +319,7 @@
     if (finished.length > 5) { const b = el('button', 'btn', showAllRem ? 'Show fewer finished reminders' : `Show ${finished.length - 5} earlier finished reminders`); b.type = 'button'; b.addEventListener('click', () => { showAllRem = !showAllRem; load(); }); rem.push(b); }
     list($('reminders'), rem, 'No reminders yet.');
     fillRemPick(v.reminders);
-    for (const k of ['waRulesA', 'waRulesB']) $(k).replaceChildren(...(v.whatsappRules || []).map((x) => el('li', '', x)));   // Meta's rules in plain words, from the server: the family reads them before picking WhatsApp
+    lastRules = v.whatsappRules || lastRules;   // Meta's rules in plain words, from the server: the family reads them before picking WhatsApp
     { const tzq = v.quiet || {}, SRC = { device: "from their phone", ip: "from their internet connection", phone: "from their phone number's country", manual: 'set by you' };
       $('tzRow').hidden = Boolean(tzq.tz); $('tzKnown').hidden = !tzq.tz; if (tzq.tz) $('tzKnown').textContent = `Time zone: ${tzq.tz} (found ${SRC[tzq.tzSource] || 'automatically'}).`; }
     if (v.delivery && document.activeElement !== $('deliv')) $('deliv').value = v.delivery.reminders;
@@ -353,6 +353,7 @@
     if (mine !== id) return;
     renderActivity(v.activity); renderSchedule(v.welfareSchedule);
     $('waLink').hidden = Boolean(v.linked && v.optIn);
+    waWindowClosed = Boolean(v.linked && v.optIn && !v.windowOpen); later(renderSummary);
     $('waNote').hidden = !v.linked;
     $('waTest').hidden = !(v.linked && v.optIn && v.configured);
     $('waCap').textContent = capText(v.calls);
@@ -464,7 +465,7 @@
   $('who').addEventListener('change', () => pick($('who').value));
   try { if (typeof Intl.supportedValuesOf === 'function') $('tzList').replaceChildren(...Intl.supportedValuesOf('timeZone').map((z) => { const o = el('option', '', ''); o.value = z; return o; })); } catch (e) { /* the box still takes a typed name */ }
   $('tzSave').addEventListener('click', () => api(`/api/care/${id}/timezone`, 'POST', { tz: $('tzIn').value.trim() }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
-  $('delivChan').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { channel: $('delivChan').value }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
+  $('delivChan').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { channel: $('delivChan').value }).then(() => { later(renderSummary); showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('deliv').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { reminders: $('deliv').value }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('remForm').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -482,51 +483,135 @@
   es.addEventListener('refresh', (e) => { if (JSON.parse(e.data).id === id) load(); });
   if (window.Notification && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
 
-  // ---- The summary: one screen, a status, the next check, today's reminders, an alert only when there is one, the latest few rows. Everything else opens on a tap. ----
+  // ---- The summary: three facts and the latest rows. Everything else opens in a sheet on a tap. ----
+  let lastRules = [];
   function renderSummary() {
     try { renderSummaryNow(); } catch (e) { /* the summary is a convenience: it never stops the page */ }
   }
   function renderSummaryNow() {
     const v = lastView; if (!v) return;
-    $('checkLocked').hidden = !$('waTest').hidden;   // check-ins need their WhatsApp linked first: say so instead of showing an empty popup
+    $('skel').hidden = true;
+    $('checkLocked').hidden = !$('waTest').hidden;   // check-ins need their WhatsApp linked first: say so instead of showing an empty sheet
     const active = (a) => (a || []).filter((f) => f.status === 'active');
     const sc = v.scams || [], alerts = [...active(v.alerts), ...active(sc.filter((x) => x.level === 'alert'))], flags = [...active(v.flags), ...active(sc.filter((x) => x.level !== 'alert'))];
     const need = alerts.length + flags.length > 0;
-    $('sumStatus').className = `sum-status ${alerts.length ? 'alert' : need ? 'flag' : 'ok'}`;
+    $('sumStatus').className = `metric${alerts.length ? ' alert' : need ? ' flag' : ''}`;
     $('sumStatusWord').textContent = need ? 'Needs attention' : 'OK';
-    $('sumLine').textContent = `${v.name || 'They'}: ${$('presence').textContent || ''}`.replace(/\s+/g, ' ').trim();
+    $('sumStatusSub').textContent = alerts.length ? `${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'} open` : need ? `${flags.length} ${flags.length === 1 ? 'flag' : 'flags'} open` : 'Nothing needs you';
+    $('sumLine').textContent = ($('presence').textContent || '').replace(/\s+/g, ' ').trim();
     const al = $('sumAlerts');
-    al.hidden = !need;
-    if (need) al.textContent = alerts.length ? `${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'}${flags.length ? ` and ${flags.length} ${flags.length === 1 ? 'flag' : 'flags'}` : ''}: tap to read` : `${flags.length} ${flags.length === 1 ? 'flag' : 'flags'}: tap to read`;
-    al.className = `sum-alert ${alerts.length ? 'alert' : 'flag'}`;
-    // next check: always a date and a time; paused / stopped say since when
-    const s = lastSched;
-    if (s && s.status === 'running') { $('sumNext').textContent = dateTime(s.next); $('sumNextSub').textContent = s.held ? 'Running, held for quiet hours' : 'Running'; }
-    else if (s && s.status === 'paused') { $('sumNext').textContent = 'Paused'; $('sumNextSub').textContent = `Paused since ${dateTime(s.statusAt || s.startedAt)}. Tap to restart`; }
-    else if (s) { $('sumNext').textContent = 'Stopped'; $('sumNextSub').textContent = `Stopped since ${dateTime(s.statusAt || s.startedAt)}. Tap to start`; }
-    else { $('sumNext').textContent = 'Not set'; $('sumNextSub').textContent = 'Tap to set check-ins'; }
-    // reminders today: a count first, the list on a tap
+    al.hidden = !need;   // an alert box exists only when there is an alert
+    if (need) { al.className = `banner ${alerts.length ? 'alert' : 'flag'}`; al.textContent = alerts.length ? `${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'}${flags.length ? ` and ${flags.length} ${flags.length === 1 ? 'flag' : 'flags'}` : ''}. Read ${alerts.length === 1 && !flags.length ? 'it' : 'them'}` : `${flags.length} ${flags.length === 1 ? 'flag' : 'flags'}. Read ${flags.length === 1 ? 'it' : 'them'}`; }
+    // next check: a time big, the date beside it; paused / stopped say since when
+    const s = lastSched, dayOf = (ms) => new Date(ms).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+    let rowCheck = 'Not set';
+    if (s && s.status === 'running') { $('sumNext').textContent = clock(s.next); $('sumNextSub').textContent = `${dayOf(s.next)}${s.held ? ' · held for quiet hours' : ' · running'}`; rowCheck = 'Running'; }
+    else if (s && s.status === 'paused') { $('sumNext').textContent = 'Paused'; $('sumNextSub').textContent = `since ${dateTime(s.statusAt || s.startedAt)}`; rowCheck = 'Paused'; }
+    else if (s) { $('sumNext').textContent = 'Stopped'; $('sumNextSub').textContent = `since ${dateTime(s.statusAt || s.startedAt)}`; rowCheck = 'Stopped'; }
+    else { $('sumNext').textContent = 'Not set'; $('sumNextSub').textContent = 'Set up check-ins'; }
     const today = new Date(), same = (ms) => { const d = new Date(ms); return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate(); };
     const todays = (v.reminders || []).filter((r) => r.active || (r.dueAt != null && same(r.dueAt))).sort((x, y) => (x.dueAt || 0) - (y.dueAt || 0));
     $('sumRem').textContent = String(todays.length);
     const nextR = todays.find((r) => r.dueAt != null && r.dueAt > Date.now());
-    $('sumRemSub').textContent = todays.length ? (nextR ? `Next ${clock(nextR.dueAt)}: ${nextR.task}` : 'Tap to see them') : 'None today. Tap to add';
-    // latest rows (Seen / Answered labels stay as they are in Activity)
+    $('sumRemSub').textContent = todays.length ? (nextR ? `Next ${clock(nextR.dueAt)} · ${nextR.task}` : 'All done for today') : 'Add a reminder';
+    $('rowCheck').textContent = rowCheck; $('rowRem').textContent = todays.length ? `${todays.length} today` : '';
+    $('rowAct').textContent = ''; $('rowFam').textContent = people.length > 1 ? String(people.length) : ''; $('rowSet').textContent = v.modes && v.modes[v.mode] ? v.modes[v.mode].label : '';
+    lastRules = v.whatsappRules || lastRules;
+    // conditional information: only what the family is doing right now
+    const sel = (() => { try { return deliverChan(); } catch (e) { return null; } })();
+    $('waInfoBtn').hidden = !sel;
+    $('waWindowNote').hidden = !(sel && waWindowClosed);
+    if (sel && waWindowClosed) $('waWindowNote').textContent = "Their 24-hour WhatsApp window is closed. A text goes as WhatsApp's approved reminder message, and a voice note goes to the Maya app instead. Calls are not affected.";
+    $('schedBlock').hidden = !s;   // the check-in status space exists only while there is a schedule to show
+    $('schedHead').hidden = false;
     const rows = act.entries.slice(0, 4), out = []; let last = null;
     for (const e of rows) { const g = dayGroup(e.at); if (g !== last) { out.push(el('div', 'act-day', g)); last = g; } out.push(actRow(e, g)); }
-    list($('sumAct'), out, 'Nothing yet. Reminders, check-ins and messages show here.');
+    list($('sumAct'), out, 'Nothing yet. Reminders, check-ins and messages will show here.');
   }
-  // ---- sections open in a popup with a Close that goes back to the summary ----
-  let opener = null;
-  function openModal(mid, from) { const m = document.getElementById(mid); if (!m) return; for (const x of document.querySelectorAll('.modal')) x.hidden = x !== m; opener = from || null; document.body.classList.add('modal-open'); m.querySelector('.modal-body').scrollTop = 0; const c = m.querySelector('[data-close]'); if (c) c.focus({ preventScroll: true }); if (mid === 'mFamily') loadFamily(); }
-  function closeModal() { for (const x of document.querySelectorAll('.modal')) x.hidden = true; document.body.classList.remove('modal-open'); if (opener && opener.focus) opener.focus({ preventScroll: true }); }
+  // Does the family's choice involve WhatsApp right now? (the channel picked on the add form, else the default channel setting)
+  let waWindowClosed = false;
+  function deliverChan() {
+    const c = channelSeg.get(), d = $('delivChan').value;
+    const pick = c || d;
+    return pick === 'whatsapp' || pick === 'both' ? pick : null;
+  }
+  // ---- information on demand: a button opens a sheet; nothing is explained on the page until it is asked for ----
+  const INFO = {
+    wa: () => ({ title: 'How WhatsApp reminders work', body: [['ul', lastRules.length ? lastRules : ['Rules from WhatsApp are not available right now. Please try again in a moment.']]] }),
+    checkin: () => ({ title: 'How check-ins work', body: [
+      ['p', 'A check-in is Maya asking how they are. As a call she talks with them (WhatsApp needs their call permission). As a text or a voice note she sends the same short message.'],
+      ['p', 'Maya app has no WhatsApp limits. If WhatsApp cannot deliver, the app covers it and Activity says why. Both sends a text and a voice note to both places, and a call goes where they were last active first.'],
+      ['p', 'A custom interval shorter than a day may pause for flooding: WhatsApp and Maya stop a phone from getting too many messages in a day.'],
+      ...($('waCap').textContent ? [['p', $('waCap').textContent]] : [])] }),
+  };
+  function fillInfo(topic) {
+    const i = (INFO[topic] || INFO.wa)(), box = $('infoBody');
+    $('mInfoT').textContent = i.title;
+    box.replaceChildren(...i.body.map(([k, x]) => { if (k === 'ul') { const u = el('ul'); for (const t2 of x) u.append(el('li', '', t2)); return u; } return el('p', '', x); }));
+  }
+  // ---- sheets: one spring for everything (the same material), interruptible: tap again mid-move and it carries on from where it is ----
+  const SPRING = { k: 420, c: 36 };   // stiffness, damping: settles in about 0.35 s with a hair of overshoot
+  const calm = () => Boolean(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const phoneW = () => Boolean(window.matchMedia && matchMedia('(max-width: 640px)').matches);
+  const sheets = new Map();   // modal -> { p, v, to, raf, origin }
+  function paint(m, st) {
+    const card = m.querySelector('.modal-card'), p = st.p, h = card.offsetHeight || 400;
+    m.style.opacity = String(Math.max(0, Math.min(1, p)));
+    if (phoneW()) card.style.transform = `translate3d(0, ${(1 - p) * h}px, 0)`;
+    else card.style.transform = `translate3d(0, ${(1 - p) * 24}px, 0) scale(${0.97 + 0.03 * p})`;
+  }
+  function drive(m, to) {
+    let st = sheets.get(m); if (!st) { st = { p: 0, v: 0, to: 0, raf: 0 }; sheets.set(m, st); }
+    st.to = to; cancelAnimationFrame(st.raf);
+    if (calm() || typeof requestAnimationFrame !== 'function') { st.p = to; st.v = 0; paint(m, st); if (to === 0) m.hidden = true; return; }
+    let last = performance.now();
+    const step = (now) => {
+      const dt = Math.min(0.032, (now - last) / 1000); last = now;
+      for (let n = 0; n < 4; n++) { const h = dt / 4, a = -SPRING.k * (st.p - st.to) - SPRING.c * st.v; st.v += a * h; st.p += st.v * h; }   // semi-implicit Euler: stable at any frame rate
+      paint(m, st);
+      if (Math.abs(st.p - st.to) < 0.002 && Math.abs(st.v) < 0.02) { st.p = st.to; st.v = 0; paint(m, st); if (st.to === 0) m.hidden = true; return; }
+      st.raf = requestAnimationFrame(step);
+    };
+    st.raf = requestAnimationFrame(step);
+  }
+  const stack = [];
+  function openModal(mid, from, topic) {
+    const m = document.getElementById(mid); if (!m) return;
+    if (mid === 'mInfo') fillInfo(topic);
+    if (!stack.includes(m)) stack.push(m);
+    m.hidden = false; document.body.classList.add('modal-open');
+    const card = m.querySelector('.modal-card');
+    if (from && from.getBoundingClientRect && !phoneW()) { const r = from.getBoundingClientRect(), c = card.getBoundingClientRect(); card.style.transformOrigin = `${Math.round(r.left + r.width / 2 - c.left)}px ${Math.round(r.top + r.height / 2 - c.top)}px`; }   // it grows from what was tapped
+    m.querySelector('.modal-body').scrollTop = 0;
+    if (!sheets.get(m)) paint(m, { p: 0 });
+    drive(m, 1);
+    const c = m.querySelector('[data-close]'); if (c) c.focus({ preventScroll: true });
+    if (mid === 'mFamily') loadFamily();
+  }
+  function closeTop() {
+    const m = stack.pop(); if (!m) return;
+    drive(m, 0);
+    if (!stack.length) document.body.classList.remove('modal-open');
+    const back = stack[stack.length - 1]; if (back) { const c = back.querySelector('[data-close]'); if (c) c.focus({ preventScroll: true }); }
+  }
   if (document.addEventListener) {
-  document.addEventListener('click', (e) => {
-    const t = e.target && e.target.closest ? e.target : null; if (!t) return;
-    const o = t.closest('[data-open]'); if (o) { openModal(o.getAttribute('data-open'), o); return; }
-    if (t.closest('[data-close]') || (t.classList && t.classList.contains('modal'))) closeModal();
-  });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest ? e.target : null; if (!t) return;
+      const o = t.closest('[data-open]'); if (o) { openModal(o.getAttribute('data-open'), o); return; }
+      const i = t.closest('[data-info]'); if (i) { openModal('mInfo', i, i.getAttribute('data-info')); return; }
+      if (t.closest('[data-close]') || (t.classList && t.classList.contains('modal'))) closeTop();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTop(); });
+    // on a phone a sheet is dragged down to dismiss; letting go with speed (or past a third) closes it, otherwise the spring takes it back
+    let drag = null;
+    document.addEventListener('pointerdown', (e) => {
+      if (!phoneW() || !e.target.closest) return; const head = e.target.closest('.modal-head, .grab'); if (!head || e.target.closest('button')) return;
+      const m = head.closest('.modal'), st = sheets.get(m); if (!st) return;
+      cancelAnimationFrame(st.raf); drag = { m, st, y0: e.clientY, p0: st.p, t: performance.now(), y: e.clientY, h: m.querySelector('.modal-card').offsetHeight || 400 };
+    });
+    document.addEventListener('pointermove', (e) => { if (!drag) return; const dy = Math.max(0, e.clientY - drag.y0); drag.v = (e.clientY - drag.y) / Math.max(1, performance.now() - drag.t) * 1000 / drag.h; drag.y = e.clientY; drag.t = performance.now(); drag.st.p = Math.max(0, drag.p0 - dy / drag.h); drag.st.v = -(drag.v || 0); paint(drag.m, drag.st); });
+    const end = () => { if (!drag) return; const { m, st } = drag; drag = null; if (st.p < 0.66 || st.v < -1.2) { stack.splice(stack.indexOf(m), 1); drive(m, 0); if (!stack.length) document.body.classList.remove('modal-open'); } else drive(m, 1); };
+    document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
   }
   // Family Members: the people on this family's account; a tap looks at them.
   async function loadFamily() {

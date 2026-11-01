@@ -133,7 +133,7 @@ test('C9 an old answer never overwrites the card after switching to another pers
 
 test('C10 the page structure: one new section, no chart, graph, score or colour-only meaning; the senior app is untouched', () => {
   const html = fs.readFileSync(path.join(ROOT, 'public', 'family.html'), 'utf8');
-  assert.match(html, /<h2>What changed<\/h2>/); assert.match(html, /id="trend"/); assert.ok(!/<canvas|<svg|chart|graph|score/i.test(html + SRC));
+  assert.match(html, /<h2>What changed<\/h2>/); assert.match(html, /id="trend"/); assert.ok(!/<canvas|chart|graph|score/i.test(html + SRC), 'no chart, graph or score (small line icons on the section rows are not charts)');
   for (const f of ['app.js', 'inbox.js', 'profiles.js', 'index.html', 'orb.js', 'chat-ui.js', 'chat-client.js']) assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'public', f), 'utf8'), /\/trend|What changed|trendCard/, `${f} does not show trends`);
 });
 

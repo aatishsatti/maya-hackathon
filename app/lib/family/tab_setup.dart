@@ -5,7 +5,6 @@ import '../senior/call_screen.dart' show showCallLog;
 import '../services/api.dart';
 import '../theme.dart';
 import '../widgets/delivery_picker.dart';
-import '../widgets/whatsapp_rules.dart';
 import '../widgets/pill.dart';
 import 'common.dart';
 import 'family_data.dart';
@@ -113,7 +112,6 @@ class _SetupTabState extends State<SetupTab> {
           if (v != null && await act(context, () => Api.postJson('/api/care/${d.profileId}/delivery', {'channel': v}))) d.refresh(quiet: true);
         },
       ),
-      WhatsappRules(rules: WhatsappRules.from(d.care['whatsappRules'])),
       ..._timeZone(context),
       sectionLabel('Mode'),
       RadioGroup<String>(

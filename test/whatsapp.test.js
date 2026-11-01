@@ -1534,7 +1534,7 @@ test('dashboard: no senior words in the list or the logs; the page file has the 
   try { json = JSON.stringify(wa.activityOf(r.id)); assert.doesNotMatch(json + r.out, /Okay thanks|tablets|v=0|wacid/); assert.equal(wa.activityOf(r.id).entries.find((e) => e.type === 'welfare').words, null); assert.equal(wa.activityOf(r.id).entries.find((e) => e.type === 'welfare').label, 'Answered'); } finally { await r.dev.peer.close(); }
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
   for (const id of ['actSummary', 'actFilters', 'actList', 'actPager', 'deliverPick', 'waWelfareVia']) assert.match(html, new RegExp(`id="${id}"`), id);
-  assert.match(html, /<h2>Activity<\/h2>/); assert.doesNotMatch(html, /data-kind="call">Call and say it</); assert.match(html, /<details class="log">/); for (const v of ['call', 'text', 'voice']) assert.match(html, new RegExp(`id="deliverPick"[\\s\\S]*?data-v="${v}"`));
+  assert.match(html, /<h2>Activity<\/h2>/); assert.doesNotMatch(html, /data-kind="call">Call and say it</); assert.match(html, /<h3 class="wa-sub">Notifications<\/h3>\s*<div id="notifs"/); for (const v of ['call', 'text', 'voice']) assert.match(html, new RegExp(`id="deliverPick"[\\s\\S]*?data-v="${v}"`));
 });
 
 test('live fix: "No, thank you." right after the reminder ends the call: the reminder\'s own fact rides along for four turns and used to count as "something in play"; a fact of weight (the family, safety) still stops it', async () => {
@@ -1685,15 +1685,20 @@ const navPage = (stored = {}) => {
   sandbox.localStorage.setItem = (k, v) => { if (k === 'maya-folded') store.folded = v; };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'), sandbox); return { els, panels, tabs, store };
 };
-test('dashboard: a summary first (status, next check with date and time, reminders today, latest rows) and five sections that each open in a popup with a Close; nothing is a long scroll', () => {
+test('dashboard: a summary first (status, next check with date and time, reminders today, latest rows) and five sections that each open in a sheet with a Close; information only on demand', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'), css = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.css'), 'utf8');
-  for (const id of ['sumStatus', 'sumNext', 'sumRem', 'sumAct']) assert.match(html, new RegExp(`id="${id}"`));
-  const nav = html.slice(html.indexOf('<nav class="sections"'), html.indexOf('</nav>')); const names = [...nav.matchAll(/data-open="(\w+)">([^<]+)</g)].map((m) => [m[1], m[2]]);
+  for (const id of ['sumStatusWord', 'sumNext', 'sumRem', 'sumAct']) assert.match(html, new RegExp(`id="${id}"`));
+  const nav = html.slice(html.indexOf('<nav class="group"'), html.indexOf('</nav>')); const names = [...nav.matchAll(/data-open="(\w+)">.*?<span class="lab">([^<]+)</gs)].map((m) => [m[1], m[2]]);
   assert.deepEqual(names, [['mCheck', 'Check In With Them'], ['mRem', 'Reminders'], ['mAct', 'Activity'], ['mFamily', 'Family Members'], ['mSet', 'Settings']]);
   for (const [m] of names) { assert.match(html, new RegExp(`class="modal" id="${m}" hidden`)); }
-  assert.equal((html.match(/data-close/g) || []).length, 6, 'every popup (the five and the alerts one) has a Close');
-  assert.match(css, /\.modal \{[^}]*position: fixed/); assert.match(css, /\.sum-alert/);
   assert.match(html, /id="sumAlerts"[^>]*hidden/, 'an alert box shows only when there is an alert');
+  // information is on demand: no always-on WhatsApp rules, no collapsed arrow rows; a real button opens a sheet
+  assert.doesNotMatch(html, /<details class="rules"|<details class="log"|waRulesA|waRulesB|id="channelHint"|id="deliverHint"/);
+  assert.match(html, /id="waInfoBtn"[^>]*data-info="wa"[^>]*hidden/, 'the WhatsApp information button is hidden until WhatsApp is involved');
+  assert.match(html, /id="schedBlock" hidden/, 'the check-in running space does not exist until there is a schedule');
+  assert.match(html, /id="waWindowNote"[^>]*hidden/, 'the window-closed note shows only for a WhatsApp reminder with the window closed');
+  assert.match(css, /--t-cap: 13px; --t-body: 17px; --t-title: 28px/, 'three type sizes'); assert.match(css, /prefers-color-scheme: dark/); assert.match(css, /prefers-reduced-motion/);
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.match(js, /const SPRING = \{ k: \d+, c: \d+ \}/, 'one spring for every sheet');
 });
 
 // ---- fallback to a CALL when the 24 h window is closed (a rescue for this round; the pick is tried first again next time) ----

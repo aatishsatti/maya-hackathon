@@ -181,8 +181,8 @@ test('Both + Call: the app rings if it is open; otherwise where they were last a
 test('WhatsApp\'s rules are in the dashboard data in plain words (window, invitation, call limits, the app fallback), and on the web page and in the app', () => {
   quiet(); const { id } = linked(true); const rules = care.view(id).whatsappRules; assert.ok(Array.isArray(rules) && rules.length >= 5);
   const all = rules.join(' '); for (const re of [/24 hours/, /approved reminder message/, /Got it/, /template/, /allowed WhatsApp calls/, /limits how many calls/, /2 calls in a row/, /30 reminder messages/, /Maya app instead/, /last active/]) assert.match(all, re);
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waRulesA"/); assert.match(html, /id="waRulesB"/); assert.match(html, /WhatsApp rules, in plain words/);
-  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.match(js, /v\.whatsappRules/);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'); assert.match(html, /id="waInfoBtn"[^>]*>[^]*?How WhatsApp reminders work/); assert.doesNotMatch(html, /id="waRulesA"/, 'the rules are not on the page: a button opens them');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.match(js, /v\.whatsappRules/); assert.match(js, /wa: \(\) => \(\{ title: 'How WhatsApp reminders work'/);
   const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_reminders.dart'), 'utf8'); assert.match(dart, /WhatsappRules\(rules: WhatsappRules\.from\(widget\.data\.care\['whatsappRules'\]\)\)/);
 });
 

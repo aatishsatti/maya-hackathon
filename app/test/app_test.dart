@@ -201,8 +201,8 @@ void main() {
       await t.pump(const Duration(milliseconds: 400));
       expect(t.takeException(), isNull);
       expect(find.text('OK'), findsOneWidget, reason: 'the status at a glance');
-      expect(find.text('NEXT CHECK'), findsOneWidget);
-      expect(find.text('REMINDERS TODAY'), findsOneWidget);
+      expect(find.text('Next check'), findsOneWidget);
+      expect(find.text('Reminders today'), findsOneWidget);
       await t.scrollUntilVisible(find.text('Latest'), 200, scrollable: find.byType(Scrollable).first);
       expect(find.text('Latest'), findsOneWidget);
       for (final sec in const ['Check In With Them', 'Reminders', 'Activity', 'Family Members', 'Settings']) {
@@ -274,7 +274,7 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('WhatsApp\'s rules are shown in plain words in the Add sheet BEFORE the family picks WhatsApp', (t) async {
+    testWidgets('WhatsApp\'s rules are NOT on the page: the "How WhatsApp reminders work" button appears only once WhatsApp (or Both) is chosen, and opens them in a sheet with a Close', (t) async {
       await phone(t, 360, 800);
       await t.pumpWidget(const MaterialApp(home: FamilyDashboard(profile: Profile('abcdef12', 'Rosa'))));
       await t.pump(const Duration(milliseconds: 400));
@@ -282,8 +282,12 @@ void main() {
       await t.pump(const Duration(milliseconds: 400));
       await t.tap(find.text('Add a reminder'));
       await t.pumpAndSettle(const Duration(milliseconds: 100));
-      expect(find.text('WhatsApp rules, in plain words'), findsOneWidget);
-      await t.tap(find.text('WhatsApp rules, in plain words'));
+      expect(find.text('How WhatsApp reminders work'), findsNothing, reason: 'nothing chosen: no WhatsApp information');
+      expect(find.textContaining('within 24 hours after the person last wrote'), findsNothing);
+      await t.tap(find.text('WhatsApp').last);
+      await t.pumpAndSettle(const Duration(milliseconds: 100));
+      expect(find.text('How WhatsApp reminders work'), findsOneWidget);
+      await t.tap(find.text('How WhatsApp reminders work'));
       await t.pumpAndSettle(const Duration(milliseconds: 100));
       expect(find.textContaining('within 24 hours after the person last wrote'), findsOneWidget);
       expect(find.textContaining('Maya app instead'), findsOneWidget);
@@ -565,7 +569,7 @@ void main() {
       expect(t.takeException(), isNull);
       expect(find.byType(NavigationBar), findsNothing, reason: 'sections are popups, not tabs');
       expect(find.text('OK'), findsOneWidget);
-      expect(t.getRect(find.text('NEXT CHECK')).bottom, lessThanOrEqualTo(480));
+      expect(t.getRect(find.text('Next check')).bottom, lessThanOrEqualTo(480));
       await t.pumpWidget(const SizedBox());
     });
   });

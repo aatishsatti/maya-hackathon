@@ -143,9 +143,12 @@ class _WelfareTabState extends State<WelfareTab> {
             if (_result != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_result!, style: const TextStyle(fontSize: 15))),
             const Divider(height: 28),
             sectionLabel('Scheduled check-ins'),
-            Text.rich(TextSpan(children: [TextSpan(text: stateWord, style: const TextStyle(fontWeight: FontWeight.w700)), if (nextText.isNotEmpty) TextSpan(text: ' · $nextText')]), key: const Key('schedStatus'), style: const TextStyle(fontSize: 16)),
-            const SizedBox(height: 4),
-            Text(line, style: const TextStyle(fontSize: 14, color: kSoft)),
+            // the running / paused / stopped space exists only while there is a schedule to show
+            if (s != null) ...[
+              Text.rich(TextSpan(children: [TextSpan(text: stateWord, style: const TextStyle(fontWeight: FontWeight.w700)), if (nextText.isNotEmpty) TextSpan(text: ' · $nextText')]), key: const Key('schedStatus'), style: const TextStyle(fontSize: 16)),
+              const SizedBox(height: 4),
+              Text(line, style: const TextStyle(fontSize: 14, color: kSoft)),
+            ],
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
               initialValue: _every,

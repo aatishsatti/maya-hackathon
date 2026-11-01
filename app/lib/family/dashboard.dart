@@ -119,15 +119,6 @@ class _FamilyDashboardState extends State<FamilyDashboard> {
     final recent = d.activity.take(4).toList();
     final tone = hasAlert ? kToneMiss : need ? kToneWait : kToneOk;
     return ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-        decoration: BoxDecoration(color: tone.bg, borderRadius: BorderRadius.circular(40), border: Border.all(color: tone.line, width: 1.5)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: tone.ink)),
-          const SizedBox(width: 10),
-          Text(need ? 'Needs attention' : 'OK', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: tone.ink)),
-        ]),
-      ),
       if (need)
         Padding(
           padding: const EdgeInsets.only(top: 12),
@@ -141,17 +132,20 @@ class _FamilyDashboardState extends State<FamilyDashboard> {
             ),
           ),
         ),
-      const SizedBox(height: 14),
-      _SumCard(label: 'Next check', big: nextBig, sub: nextSub, onTap: () => _open('Check In With Them', () => WelfareTab(data: d))),
-      const SizedBox(height: 12),
-      _SumCard(label: 'Reminders today', big: '${todays.length}', sub: todays.isEmpty ? 'None today. Tap to add' : (nextR.isNotEmpty ? 'Next ${clock(nextR.first.dueAt!)}: ${nextR.first.task}' : 'Tap to see them'), onTap: () => _open('Reminders', () => RemindersTab(data: d))),
       const SizedBox(height: 16),
-      Wrap(spacing: 10, runSpacing: 10, children: [
-        _Chip('Check In With Them', () => _open('Check In With Them', () => WelfareTab(data: d))),
-        _Chip('Reminders', () => _open('Reminders', () => RemindersTab(data: d))),
-        _Chip('Activity', () => _open('Activity', () => ActivityTab(data: d))),
-        _Chip('Family Members', () => _open('Family Members', () => const FamilyHome(embedded: true))),
-        _Chip('Settings', () => _open('Settings', () => SetupTab(data: d, profile: _profile, onSwitch: _switch))),
+      _Group(children: [
+        _Metric(label: 'Status', big: need ? 'Needs attention' : 'OK', sub: alerts.isNotEmpty ? '${alerts.length} open' : 'Nothing needs you', dot: tone.ink),
+        _Metric(label: 'Next check', big: nextBig, sub: nextSub, onTap: () => _open('Check In With Them', () => WelfareTab(data: d))),
+        _Metric(label: 'Reminders today', big: '${todays.length}', sub: todays.isEmpty ? 'Add a reminder' : (nextR.isNotEmpty ? 'Next ${clock(nextR.first.dueAt!)} · ${nextR.first.task}' : 'All done for today'), onTap: () => _open('Reminders', () => RemindersTab(data: d))),
+      ]),
+      const SizedBox(height: 24),
+      const _Cap('Manage'),
+      _Group(children: [
+        _Row(Icons.favorite_border, 'Check In With Them', s == null ? 'Not set' : (s['status'] == 'running' ? 'Running' : s['status'] == 'paused' ? 'Paused' : 'Stopped'), () => _open('Check In With Them', () => WelfareTab(data: d))),
+        _Row(Icons.notifications_none, 'Reminders', todays.isEmpty ? '' : '${todays.length} today', () => _open('Reminders', () => RemindersTab(data: d))),
+        _Row(Icons.show_chart, 'Activity', '', () => _open('Activity', () => ActivityTab(data: d))),
+        _Row(Icons.people_outline, 'Family Members', '', () => _open('Family Members', () => const FamilyHome(embedded: true))),
+        _Row(Icons.tune, 'Settings', '', () => _open('Settings', () => SetupTab(data: d, profile: _profile, onSwitch: _switch))),
       ]),
       const SizedBox(height: 18),
       Row(children: [
@@ -174,43 +168,76 @@ class _FamilyDashboardState extends State<FamilyDashboard> {
   }
 }
 
-class _SumCard extends StatelessWidget {
+class _Cap extends StatelessWidget {
+  final String text;
+  const _Cap(this.text);
+  @override
+  Widget build(BuildContext context) => Padding(padding: const EdgeInsets.fromLTRB(4, 0, 4, 8), child: Text(text.toUpperCase(), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.8, color: kSoft)));
+}
+
+/// One surface with hairlines between its rows (not a stack of boxes).
+class _Group extends StatelessWidget {
+  final List<Widget> children;
+  const _Group({required this.children});
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: const [BoxShadow(color: Color(0x0F0E1230), blurRadius: 2, offset: Offset(0, 1)), BoxShadow(color: Color(0x140E1230), blurRadius: 32, offset: Offset(0, 12))]),
+        clipBehavior: Clip.antiAlias,
+        child: Column(children: [
+          for (var i = 0; i < children.length; i++) ...[if (i > 0) const Divider(height: 1, thickness: 1, color: Color(0x1A0E1220)), children[i]],
+        ]),
+      );
+}
+
+class _Metric extends StatelessWidget {
   final String label, big, sub;
-  final VoidCallback onTap;
-  const _SumCard({required this.label, required this.big, required this.sub, required this.onTap});
+  final Color? dot;
+  final VoidCallback? onTap;
+  const _Metric({required this.label, required this.big, required this.sub, this.dot, this.onTap});
   @override
   Widget build(BuildContext context) => Pressable(
         onTap: onTap,
         semanticLabel: label,
         child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(22), border: Border.all(color: const Color(0xFFE2E7F6), width: 1.4)),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label.toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 1, color: kSoft)),
-            const SizedBox(height: 4),
-            Text(big, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.4, color: kInk)),
-            const SizedBox(height: 2),
-            Text(sub, style: const TextStyle(fontSize: 15, color: kSoft)),
+          constraints: const BoxConstraints(minHeight: 72),
+          padding: const EdgeInsets.all(16),
+          color: Colors.transparent,
+          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: kSoft)),
+              const SizedBox(height: 4),
+              Text(sub, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: kSoft)),
+            ])),
+            const SizedBox(width: 16),
+            if (dot != null) Padding(padding: const EdgeInsets.only(right: 8), child: Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: dot))),
+            Flexible(child: Text(big, textAlign: TextAlign.right, style: const TextStyle(fontSize: 28, height: 1.15, fontWeight: FontWeight.w700, letterSpacing: -0.6, color: kInk))),
+            if (onTap != null) const Padding(padding: EdgeInsets.only(left: 8), child: Icon(Icons.chevron_right, color: kSoft, size: 20)),
           ]),
         ),
       );
 }
 
-class _Chip extends StatelessWidget {
-  final String label;
+class _Row extends StatelessWidget {
+  final IconData icon;
+  final String label, value;
   final VoidCallback onTap;
-  const _Chip(this.label, this.onTap);
+  const _Row(this.icon, this.label, this.value, this.onTap);
   @override
   Widget build(BuildContext context) => Pressable(
         onTap: onTap,
         semanticLabel: label,
         child: Container(
-          height: 52,
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(26), border: Border.all(color: const Color(0xFFD3DAF3), width: 1.5)),
-          child: Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: kInk)),
+          constraints: const BoxConstraints(minHeight: 56),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: Colors.transparent,
+          child: Row(children: [
+            Container(width: 32, height: 32, decoration: BoxDecoration(color: kTrustSoft, borderRadius: BorderRadius.circular(8)), child: Icon(icon, color: kTrust, size: 20)),
+            const SizedBox(width: 16),
+            Expanded(child: Text(label, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: kInk))),
+            if (value.isNotEmpty) Text(value, style: const TextStyle(fontSize: 17, color: kSoft)),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right, color: kSoft, size: 20),
+          ]),
         ),
       );
 }

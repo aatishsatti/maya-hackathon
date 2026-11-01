@@ -5,54 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="data:,">
   <title>Maya Family</title>
+  <meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="family.css">
 </head>
 <body>
-<header class="bar">
-  <div class="bar-in">
-    <div class="brand"><span id="famOrb" class="fam-orb" aria-hidden="true"></span>Maya <span>Family</span></div>
-    <div id="whoBox" class="who" hidden>
-      <label for="who">Switch person</label>
-      <select id="who"></select>
-      <span id="presence" class="presence"></span>
-    </div>
-  </div>
-</header>
-<div class="person" role="region" aria-label="Who this page is about">
-  <div class="person-in">
-    <p class="person-label">Showing</p>
-    <h2 id="whoName" class="person-name"></h2>
-    <div id="chips" class="chips" role="group" aria-label="Switch person"></div>
-  </div>
-</div>
-<main class="wrap dash">
+<header class="top"><div class="top-in">
+  <div class="brand"><span id="famOrb" class="fam-orb" aria-hidden="true"></span><span>Maya</span></div>
+  <div id="whoBox" class="who" hidden><label for="who" class="sr">Switch person</label><select id="who"></select></div>
+  <span id="presence" class="sr"></span>
+</div></header>
+<main class="dash">
   <p id="err" class="err" role="alert" hidden></p>
+  <div id="skel" class="skel" aria-hidden="true"><i class="s1"></i><i class="s2"></i><i class="s3"></i></div>
   <div id="body" hidden>
-    <!-- SUMMARY FIRST: one screen, no scrolling to understand. Everything else opens on a tap. -->
-    <section id="summary" class="summary" aria-label="Summary">
-      <div class="sum-hero">
-        <div id="sumStatus" class="sum-status ok"><span class="dot2"></span><b id="sumStatusWord">OK</b></div>
-        <p id="sumLine" class="sum-line"></p>
+    <section id="summary" aria-label="Summary">
+      <div class="head-row"><div><p class="cap">Showing</p><h1 id="whoName"></h1></div><div id="chips" class="chips" role="group" aria-label="Switch person" hidden></div></div>
+      <p id="sumLine" class="sub"></p>
+      <button id="sumAlerts" class="banner" type="button" data-open="mAlerts" hidden></button>
+      <div class="metrics">
+        <div id="sumStatus" class="metric"><span class="cap">Status</span><b id="sumStatusWord" class="val">OK</b><span id="sumStatusSub" class="cap"></span></div>
+        <button class="metric tap" type="button" data-open="mCheck"><span class="cap">Next check</span><b id="sumNext" class="val"></b><span id="sumNextSub" class="cap"></span></button>
+        <button class="metric tap" type="button" data-open="mRem"><span class="cap">Reminders today</span><b id="sumRem" class="val">0</b><span id="sumRemSub" class="cap"></span></button>
       </div>
-      <button id="sumAlerts" class="sum-alert" type="button" data-open="mAlerts" hidden></button>
-      <div class="sum-grid">
-        <button class="sum-card" type="button" data-open="mCheck"><span class="sum-label">Next check</span><b id="sumNext">Not set</b><small id="sumNextSub">Tap to set check-ins</small></button>
-        <button class="sum-card" type="button" data-open="mRem"><span class="sum-label">Reminders today</span><b id="sumRem">0</b><small id="sumRemSub">Tap to see or add</small></button>
-      </div>
-      <div class="sum-recent">
-        <div class="sum-recent-head"><h2>Latest</h2><button class="link2" type="button" data-open="mAct">See all activity</button></div>
-        <div id="sumAct" class="act-list"></div>
-      </div>
+      <div class="sec-title"><h2>Latest</h2><button class="link2" type="button" data-open="mAct">See all activity</button></div>
+      <div id="sumAct" class="group act-list"></div>
+      <div class="sec-title"><h2>Manage</h2></div>
+      <nav class="group" aria-label="Sections">
+        <button class="row" type="button" data-open="mCheck"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 5.6a5 5 0 0 0-7.1 0L12 7.3l-1.7-1.7a5 5 0 0 0-7.1 7.1L12 21.5l8.8-8.8a5 5 0 0 0 0-7.1Z"/></svg></span><span class="lab">Check In With Them</span><span id="rowCheck" class="val2"></span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button class="row" type="button" data-open="mRem"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9Z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span><span class="lab">Reminders</span><span id="rowRem" class="val2"></span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button class="row" type="button" data-open="mAct"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h4l2.5-6 3 12 2.5-6H20"/></svg></span><span class="lab">Activity</span><span id="rowAct" class="val2"></span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button class="row" type="button" data-open="mFamily"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 14c2 .6 3 2.3 3 5"/></svg></span><span class="lab">Family Members</span><span id="rowFam" class="val2"></span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button class="row" type="button" data-open="mSet"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/></svg></span><span class="lab">Settings</span><span id="rowSet" class="val2"></span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+      </nav>
     </section>
-    <nav class="sections" aria-label="Sections">
-      <button type="button" data-open="mCheck">Check In With Them</button>
-      <button type="button" data-open="mRem">Reminders</button>
-      <button type="button" data-open="mAct">Activity</button>
-      <button type="button" data-open="mFamily">Family Members</button>
-      <button type="button" data-open="mSet">Settings</button>
-    </nav>
 
-    <div class="modal" id="mAlerts" hidden role="dialog" aria-modal="true" aria-labelledby="mAlertsT"><div class="modal-card"><header class="modal-head"><h2 id="mAlertsT">Alerts and flags</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+    <div class="modal" id="mAlerts" hidden role="dialog" aria-modal="true" aria-labelledby="mAlertsT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mAlertsT">Alerts and flags</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
         <section>
           <div class="sec-head"><h2>Alerts</h2><span class="sec-sub">Red. Opens this page.</span></div>
           <div id="alerts" class="stack"></div>
@@ -63,8 +50,7 @@
         </section>
 
     </div></div></div>
-
-    <div class="modal" id="mCheck" hidden role="dialog" aria-modal="true" aria-labelledby="mCheckT"><div class="modal-card"><header class="modal-head"><h2 id="mCheckT">Check In With Them</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+    <div class="modal" id="mCheck" hidden role="dialog" aria-modal="true" aria-labelledby="mCheckT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mCheckT">Check In With Them</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
       <p id="checkLocked" class="hint" hidden>Check-ins start once their WhatsApp is linked. Open Settings, then link their number.</p>
           <div id="waTest" class="wa-call" hidden>
             <h3 class="wa-sub" id="welfareHead" hidden>Check In With Them</h3>
@@ -80,9 +66,9 @@
               <button type="button" role="radio" aria-checked="true" data-v="whatsapp">WhatsApp</button>
               <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
             </div>
-            <h3 class="wa-sub" id="schedHead">Scheduled check-ins</h3>
-            <p class="sched-status" id="schedStatus" aria-live="polite"><strong id="schedState">Stopped</strong> <span id="schedNext"></span></p>
-            <p class="hint" id="schedLine">No schedule is running.</p>
+            <h3 class="wa-sub" id="schedHead" hidden>Scheduled check-ins</h3>
+            <div id="schedBlock" hidden><p class="sched-status" id="schedStatus" aria-live="polite"><strong id="schedState">Stopped</strong> <span id="schedNext"></span></p>
+            <p class="hint" id="schedLine">No schedule is running.</p></div>
             <label class="wa-label" for="schedEvery">Check in</label>
             <select id="schedEvery" class="wa-wide">
               <option value="1440">Every day</option>
@@ -110,8 +96,8 @@
               <button type="button" role="radio" aria-checked="true" data-v="whatsapp">WhatsApp</button>
               <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
             </div>
-            <p class="hint" id="schedWhereHint">The Maya app has no WhatsApp limits. If WhatsApp cannot deliver, the app covers it and Activity says why. "Both" sends texts and voice notes to both; a call rings one place at a time, never two at once.</p>
             <p class="hint" id="schedPlan"></p>
+            <div><button id="checkInfoBtn" class="info-btn" type="button" data-info="checkin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>How check-ins work</button></div>
             <div class="wa-actions">
               <button id="schedStart" class="btn primary" type="button">Start</button>
               <button id="schedStop" class="btn" type="button" hidden>Stop</button>
@@ -119,8 +105,7 @@
           </div>
 
     </div></div></div>
-
-    <div class="modal" id="mRem" hidden role="dialog" aria-modal="true" aria-labelledby="mRemT"><div class="modal-card"><header class="modal-head"><h2 id="mRemT">Reminders</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+    <div class="modal" id="mRem" hidden role="dialog" aria-modal="true" aria-labelledby="mRemT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mRemT">Reminders</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
         <section class="panel" id="remPanel">
           <form id="remForm" class="form">
             <input id="task" placeholder="Task, e.g. medicine" maxlength="80" required aria-label="Task">
@@ -141,9 +126,8 @@
               <button type="button" role="radio" aria-checked="false" data-v="app">Maya app</button>
               <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
             </div>
-            <p class="hint" id="channelHint">Not chosen: Maya uses the setting below. The Maya app has no limits. WhatsApp has rules (below). If WhatsApp cannot deliver, the app covers it and Activity says why. "Both" sends text and voice notes to both; a call goes where they were last active first, then the other, never two rings at once.</p>
-            <details class="rules"><summary>WhatsApp rules, in plain words</summary><ul id="waRulesA"></ul></details>
-            <p class="hint" id="deliverHint">Not chosen: Maya uses the setting below (a voice note or text). Tap a choice again to clear it.</p>
+            <p id="waWindowNote" class="note-line" hidden></p>
+            <div><button id="waInfoBtn" class="info-btn" type="button" data-info="wa" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>How WhatsApp reminders work</button></div>
             <button class="btn primary" type="submit">Add reminder</button>
           </form>
           <div class="form-row">
@@ -154,21 +138,18 @@
             <label for="delivChan" class="hint">When no choice is made, reminders go</label>
             <select id="delivChan" aria-label="Where reminders go by default"><option value="whatsapp">On WhatsApp</option><option value="app">In the Maya app</option><option value="both">On both</option></select>
           </div>
-          <details class="rules"><summary>WhatsApp rules, in plain words</summary><ul id="waRulesB"></ul></details>
           <div class="form-row" id="tzRow" hidden>
             <label for="tzIn" class="hint">Time zone: it could not be worked out automatically. Please choose theirs, so "at 8" and quiet hours use their own time.</label>
             <input id="tzIn" list="tzList" placeholder="For example Europe/London" autocomplete="off"><datalist id="tzList"></datalist>
             <button type="button" class="btn small" id="tzSave">Save time zone</button>
           </div>
           <p class="hint" id="tzKnown" hidden></p>
-          <p class="hint">A reminder goes on WhatsApp only while they have written to Maya in the last 24 hours. Every reminder shows what really happened to it: sent, delivered, read, answered, or missed. Maya is a companion, not medical care: a reminder can fail or arrive late, so never rely on it for medicine.</p>
           <div id="reminders" class="stack"></div>
         </section>
 
 
     </div></div></div>
-
-    <div class="modal" id="mAct" hidden role="dialog" aria-modal="true" aria-labelledby="mActT"><div class="modal-card"><header class="modal-head"><h2 id="mActT">Activity</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+    <div class="modal" id="mAct" hidden role="dialog" aria-modal="true" aria-labelledby="mActT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mActT">Activity</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
         <section class="panel" id="activityPanel">
           <div class="sec-head"><h2>Activity</h2><span class="sec-sub">Reminders, check-ins and calls, last 30 days</span></div>
           <div id="actSummary" class="act-cards" aria-label="Summary"></div>
@@ -186,26 +167,19 @@
           <div class="sec-head"><h2>What changed</h2><span class="sec-sub">From daily counts only. Information, not advice.</span></div>
           <div id="trend" class="stack"></div>
         </section>
-
-        <div class="log-wrap">
-          <details class="log">
-            <summary>Notification log</summary>
-            <div id="notifs" class="stack"></div>
-          </details>
-        </div>
+      <h3 class="wa-sub">Notifications</h3>
+      <div id="notifs" class="stack"></div>
 
     </div></div></div>
-
-    <div class="modal" id="mFamily" hidden role="dialog" aria-modal="true" aria-labelledby="mFamilyT"><div class="modal-card"><header class="modal-head"><h2 id="mFamilyT">Family Members</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
-      <p class="hint">The people Maya talks with, for your family account. Tap a name to look at them.</p>
+    <div class="modal" id="mFamily" hidden role="dialog" aria-modal="true" aria-labelledby="mFamilyT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mFamilyT">Family Members</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+      
       <div id="famList" class="stack"></div>
       <div class="wa-actions"><a class="btn primary" href="/login.html#add">Add a family member</a><button id="logoutBtn2" class="btn" type="button">Log out</button></div>
     </div></div></div>
-
-    <div class="modal" id="mSet" hidden role="dialog" aria-modal="true" aria-labelledby="mSetT"><div class="modal-card"><header class="modal-head"><h2 id="mSetT">Settings</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+    <div class="modal" id="mSet" hidden role="dialog" aria-modal="true" aria-labelledby="mSetT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mSetT">Settings</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
     <section class="panel">
       <div class="panel-head"><h2>Mode</h2><span id="modeNow" class="pill pill-ok"></span></div>
-      <p class="hint">Set per senior. Safety alerts ignore the mode and quiet hours.</p>
+      <p class="hint">Safety alerts ignore the mode and quiet hours.</p>
       <div id="modes" class="modes"></div>
     </section>
 
@@ -222,6 +196,7 @@
         </section>
 
     </div></div></div>
+    <div class="modal info" id="mInfo" hidden role="dialog" aria-modal="true" aria-labelledby="mInfoT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mInfoT"></h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body"><div id="infoBody" class="info-body"></div>    </div></div></div>
   </div>
 </main>
 <p class="privacy-foot"><a href="/privacy">Privacy</a></p>
