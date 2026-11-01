@@ -104,6 +104,12 @@ async function handleCare(req, res, url) {
   }
   if (req.method === 'DELETE' && b === 'device' && c) return care.removeDevice(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
   if (req.method === 'DELETE' && b === 'reminders' && c) return care.deleteReminder(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
+  // The family's schedule upload: a PDF, a photo or a voice note arrives as raw bytes (nothing is stored); Maya reads it into items and sets NOTHING until the family ticks the ones they want.
+  if (req.method === 'POST' && b === 'schedule' && (c === 'pdf' || c === 'image' || c === 'voice')) {
+    if (MODE !== 'real') return sendJson(res, 503, { error: 'Reading a schedule needs real mode.' });
+    try { const buf = await readBody(req, c === 'pdf' ? MAX_PDF_BYTES : c === 'image' ? MAX_IMAGE_BYTES : MAX_VOICE_NOTE_BYTES); return sendJson(res, 200, { items: await require('./schedule').read(a, await chat.scheduleText(c, buf)) }); }
+    catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
+  }
   if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
   const body = await readJson(req);
   if (!body) return sendJson(res, 400, { error: 'Bad request' });
@@ -112,8 +118,12 @@ async function handleCare(req, res, url) {
     if (b === 'timezone') return sendJson(res, 200, { ok: care.setTimezone(a, body.tz, 'manual') });   // the dashboard asks for this ONLY when it could not be found automatically
     if (b === 'delivery') return sendJson(res, 200, { delivery: care.setDelivery(a, body) });   // how reminders reach them on WhatsApp: a voice note in Maya's voice or text
     if (b === 'reminders' && !c) return sendJson(res, 200, { reminder: care.addReminder(a, body) });
+    if (b === 'reminders' && c && !d) return sendJson(res, 200, { reminder: care.updateReminder(a, c, body) });   // the edit popup
     if (b === 'activity') return sendJson(res, 200, { ok: care.touch(a, 'app', Date.now(), /^[\w/+\-]{1,60}$/.test(body.tz || '') ? body.tz : null) });
     if (b === 'device') return sendJson(res, 200, care.registerDevice(a, body));   // the phone's push token (so Maya can ring it when the app is closed); never returned, never logged
+    if (b === 'schedule' && c === 'text') { if (MODE !== 'real') return sendJson(res, 503, { error: 'Reading a schedule needs real mode.' }); return sendJson(res, 200, { items: await require('./schedule').read(a, body.text) }); }
+    if (b === 'schedule' && c === 'set') return sendJson(res, 200, require('./schedule').setChosen(a, body.ids, { tz: (care.get(a) || {}).tz || null }));   // only the ticked ones
+    if (b === 'escalation' && c && d) return care.escalationAct(a, c, d) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });   // the family's answer to a ring: accepted, declined, seen
     if (b === 'ack') return care.notificationAck(a, body.what) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Nothing waiting' });   // the notification buttons Got it / I'm okay
     if (b === 'outreach' && c && d === 'decline') return care.decline(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
     if (b === 'notifications' && c && d === 'whatsapp') return care.whatsappStatus(a, c, body.status) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); // mock entry for WhatsApp receipts until Feature 6
@@ -243,7 +253,7 @@ async function handleFamily(req, res, url) {
     if (body.consent !== true) return sendJson(res, 400, { error: 'Please confirm that Maya may call the family if they go quiet.' });
     try {
       const profile = memory.createProfile(body.name, body.gender || 'prefer-not');
-      accounts.addSenior(u, profile.id);
+      accounts.addSenior(u, profile.id); care.setFamilyConsent(profile.id, true);   // the consent box was ticked: Maya may call the family if they go quiet
       if (typeof body.tz === 'string' && body.tz) { try { care.setTimezone(profile.id, body.tz, 'manual'); } catch { /* an unknown zone is learned later */ } }
       if (['standard', 'cautious', 'ultra'].includes(String(body.mode))) { try { care.setMode(profile.id, body.mode); } catch { /* the default stays */ } }
       let whatsappNote = null;

@@ -21,6 +21,7 @@
     <section id="summary" aria-label="Summary">
       <div class="head-row"><div><p class="cap">Showing</p><h1 id="whoName"></h1></div><div id="chips" class="chips" role="group" aria-label="Switch person" hidden></div></div>
       <p id="sumLine" class="sub"></p>
+      <div id="sumEsc" class="banner esc" hidden><span id="sumEscText"></span><span class="esc-actions"><span id="sumEscStatus" class="pill"></span><button id="sumEscSeen" class="btn small" type="button">Seen</button></span></div>
       <button id="sumAlerts" class="banner" type="button" data-open="mAlerts" hidden></button>
       <div class="metrics">
         <div id="sumStatus" class="metric"><span class="cap">Status</span><b id="sumStatusWord" class="val">OK</b><span id="sumStatusSub" class="cap"></span></div>
@@ -106,6 +107,7 @@
 
     </div></div></div>
     <div class="modal" id="mRem" hidden role="dialog" aria-modal="true" aria-labelledby="mRemT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mRemT">Reminders</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+      <div class="block"><button class="btn big" type="button" data-open="mSched">Upload a schedule</button></div>
         <section class="panel" id="remPanel">
           <form id="remForm" class="form">
             <input id="task" placeholder="Task, e.g. medicine" maxlength="80" required aria-label="Task">
@@ -196,10 +198,57 @@
         </section>
 
     </div></div></div>
+    <div class="modal" id="mSched" hidden role="dialog" aria-modal="true" aria-labelledby="mSchedT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mSchedT">Upload a schedule</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+      <p class="hint">Give Maya their schedule: medicine, doctor, meals, walks, calls. She reads it and shows what she found. Nothing is set until you tick it.</p>
+      <div id="schedSrc" class="seg" role="radiogroup" aria-label="How to give it">
+        <button type="button" role="radio" aria-checked="true" data-v="photo">Photo</button>
+        <button type="button" role="radio" aria-checked="false" data-v="pdf">PDF</button>
+        <button type="button" role="radio" aria-checked="false" data-v="text">Type it</button>
+        <button type="button" role="radio" aria-checked="false" data-v="voice">Voice</button>
+      </div>
+      <div id="schedPick">
+        <button id="schedChoose" class="btn big" type="button">Choose a photo</button>
+        <input id="schedFile" type="file" hidden>
+        <div id="schedTypeBox" hidden><textarea id="schedText" class="wa-wide" rows="5" maxlength="6000" aria-label="The schedule" placeholder="For example: blood pressure tablet at 8 am every day, walk at 5 pm, Dr Rao on Thursday at 10:30"></textarea><div class="wa-actions"><button id="schedRead" class="btn primary" type="button">Read it</button></div></div>
+        <div id="schedVoiceBox" hidden><div class="wa-actions"><button id="schedRec" class="btn primary" type="button">Start recording</button></div><p id="schedRecTime" class="hint" aria-live="polite"></p></div>
+      </div>
+      <p id="schedBusy" class="note-line" hidden>Maya is reading it...</p>
+      <p id="schedErr" class="err" role="alert" hidden></p>
+      <div id="schedFound" hidden>
+        <h3 class="wa-sub">What Maya found</h3>
+        <p class="hint">Tick the ones you want. Each becomes a call at its time, in the Maya app.</p>
+        <div id="schedItems" class="stack"></div>
+        <div class="wa-actions"><button id="schedSet" class="btn primary" type="button" disabled>Set reminders</button></div>
+      </div>
+      <p id="schedDone" class="note-line" hidden></p>
+    </div></div></div>
+    <div class="modal" id="mEdit" hidden role="dialog" aria-modal="true" aria-labelledby="mEditT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mEditT">Edit reminder</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+      <form id="editForm" class="form">
+        <label class="wa-label" for="editTask">What to remind them about</label>
+        <input id="editTask" maxlength="80" required>
+        <label class="wa-label" for="editAt">When</label>
+        <div class="form-row"><input id="editAt" type="datetime-local" required aria-label="When"><select id="editRepeat" aria-label="Repeat"><option value="none">Once</option><option value="daily">Every day</option><option value="daily2">Every 2 days</option><option value="weekly">Every week</option><option value="weekly2">Every 2 weeks</option></select></div>
+        <label class="wa-label" id="editDeliverLabel">Deliver as</label>
+        <div id="editDeliver" class="seg" role="radiogroup" aria-labelledby="editDeliverLabel" data-clearable="1"><button type="button" role="radio" aria-checked="false" data-v="call">Call</button><button type="button" role="radio" aria-checked="false" data-v="text">Text</button><button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button></div>
+        <label class="wa-label" id="editChannelLabel">Where it goes</label>
+        <div id="editChannel" class="seg" role="radiogroup" aria-labelledby="editChannelLabel" data-clearable="1"><button type="button" role="radio" aria-checked="false" data-v="whatsapp">WhatsApp</button><button type="button" role="radio" aria-checked="false" data-v="app">Maya app</button><button type="button" role="radio" aria-checked="false" data-v="both">Both</button></div>
+        <p id="editErr" class="err" role="alert" hidden></p>
+        <div class="wa-actions"><button class="btn primary" type="submit">Save changes</button></div>
+      </form>
+      <div class="block">
+        <button id="editStop" class="btn danger" type="button">Stop this reminder</button>
+        <p id="editStopAsk" class="note-line" hidden>Stop this reminder for good? <span class="wa-actions"><button id="editStopYes" class="btn danger" type="button">Yes, stop it</button><button id="editStopNo" class="btn" type="button">Keep it</button></span></p>
+      </div>
+    </div></div></div>
+    <div class="modal" id="mRing" hidden role="dialog" aria-modal="true" aria-labelledby="mRingT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mRingT">Maya is calling</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
+      <p id="ringText" class="sub"></p>
+      <div class="ring-actions"><button id="ringDecline" class="btn ring decline" type="button">Decline</button><button id="ringAccept" class="btn ring accept" type="button">Accept</button></div>
+    </div></div></div>
     <div class="modal info" id="mInfo" hidden role="dialog" aria-modal="true" aria-labelledby="mInfoT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mInfoT"></h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body"><div id="infoBody" class="info-body"></div>    </div></div></div>
   </div>
 </main>
 <p class="privacy-foot"><a href="/privacy">Privacy</a></p>
+<script src="chat-client.js"></script>
 <script src="family.js"></script>
 <script src="orb.js"></script>
 </body>

@@ -309,7 +309,9 @@
       if (r.held) head.append(el('span', 'pill pill-wait', 'Held for quiet hours'));
       const tag = cur && REM_PILL[cur.state];
       if (tag) head.append(el('span', `pill ${tag[0]}`, tag[1]));
-      const del = el('button', 'btn small danger', 'Delete'); del.addEventListener('click', () => api(`/api/care/${id}/reminders/${r.id}`, 'DELETE').then(() => { pendingAdds = pendingAdds.filter((x) => x.id !== r.id); load(); }).catch((e) => showErr(e.message))); head.append(del);
+      c.className = 'item tap'; if (c.setAttribute) { c.setAttribute('role', 'button'); c.setAttribute('tabindex', '0'); c.setAttribute('aria-label', `Edit ${r.task}`); }
+      head.append(el('span', 'edit-hint', 'Edit'));
+      c.addEventListener('click', () => openEdit(r)); if (c.addEventListener) c.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEdit(r); } });
       c.append(head);
       if (r.dueAt) c.append(el('div', 'meta', `Next: ${t(r.dueAt)}${r.repeat !== 'none' ? ` · repeats ${r.every === 2 ? `every 2 ${r.repeat === 'weekly' ? 'weeks' : 'days'}` : r.repeat}` : ''}`));
       if (cur) c.append(el('div', 'detail', `${r.active ? 'Now' : 'Last'} (${t(cur.dueAt)}): ${cur.label}${cur.attempts ? ` · ${cur.attempts} ${cur.attempts === 1 ? 'try' : 'tries'}` : ''}`));
@@ -480,6 +482,7 @@
     if (window.Notification && Notification.permission === 'granted') new Notification('Maya', { body: d.text });
     if (d.id === id) load();
   });
+  es.addEventListener('familyCall', (e) => { const d = JSON.parse(e.data); if (d.id === id) showRing(d); });
   es.addEventListener('refresh', (e) => { if (JSON.parse(e.data).id === id) load(); });
   if (window.Notification && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
 
@@ -490,7 +493,7 @@
   }
   function renderSummaryNow() {
     const v = lastView; if (!v) return;
-    $('skel').hidden = true;
+    $('skel').hidden = true; renderEsc(v);
     $('checkLocked').hidden = !$('waTest').hidden;   // check-ins need their WhatsApp linked first: say so instead of showing an empty sheet
     const active = (a) => (a || []).filter((f) => f.status === 'active');
     const sc = v.scams || [], alerts = [...active(v.alerts), ...active(sc.filter((x) => x.level === 'alert'))], flags = [...active(v.flags), ...active(sc.filter((x) => x.level !== 'alert'))];
@@ -624,6 +627,92 @@
     } catch { box.replaceChildren(el('div', 'empty', 'Could not load the family.')); }
   }
   if ($('logoutBtn2').addEventListener) $('logoutBtn2').addEventListener('click', () => fetch('/api/family/logout', { method: 'POST' }).finally(() => location.replace('/login.html')));
+
+
+  // ---- edit a reminder: a tap on it opens its sheet (change it, or stop it after a confirm) ----
+  let editing = null;
+  const localInput = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+  function openEdit(r) {
+    editing = r; const eDeliver = seg($('editDeliver')), eChannel = seg($('editChannel')); editSegs = { eDeliver, eChannel };
+    $('editTask').value = r.task || ''; $('editAt').value = localInput(r.dueAt || Date.now() + 3600000);
+    $('editRepeat').value = r.repeat === 'none' ? 'none' : `${r.repeat}${r.every === 2 ? '2' : ''}`;
+    if (![...$('editRepeat').children].some((o) => o.value === $('editRepeat').value)) { const o = el('option', null, `Every ${r.every || 1} ${r.repeat === 'hourly' ? 'hours' : r.repeat === 'weekly' ? 'weeks' : 'days'} (set by talking)`); o.value = $('editRepeat').value; $('editRepeat').append(o); }
+    eDeliver.set(r.deliver || null); eChannel.set(r.channel || null);
+    $('editErr').hidden = true; $('editStopAsk').hidden = true; $('editStop').hidden = false;
+    openModal('mEdit', null);
+  }
+  let editSegs = null;
+  if ($('editForm').addEventListener) {
+    $('editForm').addEventListener('submit', async (e) => {
+      e.preventDefault(); if (!editing) return;
+      const rep = $('editRepeat').value, body = { task: $('editTask').value, dueAt: new Date($('editAt').value).getTime(), repeat: rep.replace(/2$/, ''), ...(rep.endsWith('2') ? { every: 2 } : {}), ...(editSegs && editSegs.eDeliver.get() ? { deliver: editSegs.eDeliver.get() } : {}), ...(editSegs && editSegs.eChannel.get() ? { channel: editSegs.eChannel.get() } : {}) };
+      try { await api(`/api/care/${id}/reminders/${editing.id}`, 'POST', body); closeTop(); load(); } catch (ex) { $('editErr').textContent = ex.message; $('editErr').hidden = false; }
+    });
+    $('editStop').addEventListener('click', () => { $('editStopAsk').hidden = false; $('editStop').hidden = true; });   // stopping is destructive: asked once more
+    $('editStopNo').addEventListener('click', () => { $('editStopAsk').hidden = true; $('editStop').hidden = false; });
+    $('editStopYes').addEventListener('click', async () => { if (!editing) return; try { await api(`/api/care/${id}/reminders/${editing.id}`, 'DELETE'); pendingAdds = pendingAdds.filter((x) => x.id !== editing.id); closeTop(); load(); } catch (ex) { $('editErr').textContent = ex.message; $('editErr').hidden = false; } });
+  }
+
+  // ---- upload a schedule: a photo, a PDF, typed words or a voice note -> Maya reads it -> the family ticks what they want -> only those are set ----
+  let schedSource = 'photo', recorder = null, recTimer = null, foundItems = [];
+  const SRC_UI = { photo: ['Choose a photo', 'image/*'], pdf: ['Choose a PDF', 'application/pdf,.pdf'] };
+  const schedMsg = (m, err) => { $('schedErr').textContent = err ? m : ''; $('schedErr').hidden = !err; };
+  function schedSources() {
+    for (const b of $('schedSrc').querySelectorAll('button')) b.setAttribute('aria-checked', String(b.dataset.v === schedSource));
+    $('schedChoose').hidden = !SRC_UI[schedSource]; $('schedTypeBox').hidden = schedSource !== 'text'; $('schedVoiceBox').hidden = schedSource !== 'voice';
+    if (SRC_UI[schedSource]) { $('schedChoose').textContent = SRC_UI[schedSource][0]; $('schedFile').accept = SRC_UI[schedSource][1]; }
+  }
+  async function schedSend(promise) {
+    schedMsg('', false); $('schedFound').hidden = true; $('schedDone').hidden = true; $('schedBusy').hidden = false;
+    try { showFound((await promise).items || []); } catch (ex) { schedMsg(ex.message, true); }
+    $('schedBusy').hidden = true;
+  }
+  function showFound(items) {
+    foundItems = items;
+    if (!items.length) { schedMsg('Maya could not find anything with a clear time in that. You can type the schedule instead.', true); return; }
+    $('schedItems').replaceChildren(...items.map((it) => { const l = el('label', 'check-row'), c = el('input'); c.type = 'checkbox'; c.value = it.id; c.addEventListener('change', syncSet); const w = el('div'); w.append(el('b', '', it.task), el('span', '', it.when)); l.append(c, w); return l; }));
+    $('schedFound').hidden = false; syncSet();
+  }
+  const ticked = () => [...$('schedItems').querySelectorAll('input')].filter((x) => x.checked).map((x) => x.value);
+  function syncSet() { const n = ticked().length; $('schedSet').disabled = n === 0; $('schedSet').textContent = n ? `Set ${n} ${n === 1 ? 'reminder' : 'reminders'}` : 'Tick the ones you want'; }
+  if ($('schedSrc').addEventListener) {
+    $('schedSrc').addEventListener('click', (e) => { const b = e.target && e.target.closest ? e.target.closest('button') : null; if (!b) return; schedSource = b.dataset.v; schedSources(); });
+    $('schedChoose').addEventListener('click', () => { $('schedFile').value = ''; $('schedFile').click(); });
+    $('schedFile').addEventListener('change', () => {
+      const file = $('schedFile').files && $('schedFile').files[0]; if (!file) return;
+      schedSend(fetch(`/api/care/${id}/schedule/${schedSource === 'pdf' ? 'pdf' : 'image'}`, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file }).then(async (r) => { const j = await r.json().catch(() => ({})); if (r.status === 401) { location.replace('/login.html'); throw new Error('Please log in.'); } if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`); return j; }));
+    });
+    $('schedRead').addEventListener('click', () => { const text = $('schedText').value.trim(); if (!text) { schedMsg('Type the schedule first.', true); return; } schedSend(api(`/api/care/${id}/schedule/text`, 'POST', { text })); });
+    $('schedRec').addEventListener('click', async () => {
+      if (recorder) { clearInterval(recTimer); const r = recorder; recorder = null; $('schedRec').textContent = 'Start recording'; $('schedRecTime').textContent = ''; schedSend(r.stop().then((wav) => fetch(`/api/care/${id}/schedule/voice`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav }).then(async (x) => { const j = await x.json().catch(() => ({})); if (!x.ok) throw new Error(j.error || `Request failed (${x.status})`); return j; }))); return; }
+      try { recorder = await window.mayaChat.startRecording(); } catch { schedMsg('Maya could not use the microphone. Please allow microphone access and try again.', true); return; }
+      const t0 = Date.now(); $('schedRec').textContent = 'Stop and read it'; recTimer = setInterval(() => { $('schedRecTime').textContent = `Recording ${Math.floor((Date.now() - t0) / 1000)} s`; }, 500);
+    });
+    $('schedSet').addEventListener('click', async () => {
+      $('schedSet').disabled = true;
+      try {
+        const r = await api(`/api/care/${id}/schedule/set`, 'POST', { ids: ticked() });
+        $('schedFound').hidden = true; $('schedDone').hidden = false;
+        $('schedDone').textContent = `${r.set.length ? `Set ${r.set.length === 1 ? '1 reminder' : `${r.set.length} reminders`}: ${r.set.join('; ')}. ` : 'Nothing was set. '}${r.failed.length ? `Could not set: ${r.failed.join('; ')}. ` : ''}${r.skipped.length ? `Not set (not ticked): ${r.skipped.join('; ')}.` : ''}`.trim();
+        load();
+      } catch (ex) { schedMsg(ex.message, true); $('schedSet').disabled = false; }
+    });
+  }
+  try { schedSources(); } catch (e) { /* a page without the upload sheet */ }
+
+  // ---- the family is rung: a sheet with Decline (red, left) and Accept (green, right); the summary then says what happened until it is marked Seen ----
+  let ringing = null;
+  function showRing(d) { ringing = d; $('ringText').textContent = d.text; openModal('mRing', null); }
+  async function ringAct(act) { const d = ringing; if (d) { try { await api(`/api/care/${d.id}/escalation/${d.episodeId}/${act}`, 'POST', {}); } catch (e) { showErr(e.message); } } closeTop(); ringing = null; load(); }
+  if ($('ringAccept').addEventListener) { $('ringAccept').addEventListener('click', () => ringAct('accepted')); $('ringDecline').addEventListener('click', () => ringAct('declined')); }
+  const ESC_STATUS = { ringing: ['Ringing', 'pill-info'], no_answer: ['No answer', 'pill-wait'], accepted: ['You answered', 'pill-ok'], declined: ['Declined', 'pill-plain'], seen: ['Seen', 'pill-ok'] };
+  function renderEsc(v) {
+    const e = (v.escalations || []).find((x) => x.status !== 'seen' && Date.now() - x.startedAt < 3 * 86400000);
+    $('sumEsc').hidden = !e; if (!e) return;
+    $('sumEscText').textContent = `Maya rang the family: ${e.text.replace(/^This is Maya\. /, '')} (${dateTime(e.startedAt)})`;
+    const st = ESC_STATUS[e.status] || [e.status, 'pill-plain']; $('sumEscStatus').textContent = st[0]; $('sumEscStatus').className = `pill ${st[1]}`;
+    $('sumEscSeen').onclick = async () => { try { await api(`/api/care/${id}/escalation/${e.id}/seen`, 'POST', {}); load(); } catch (x) { showErr(x.message); } };
+  }
 
   api('/api/profiles').then((b) => {
     const ps = b.profiles || [];

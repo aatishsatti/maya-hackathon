@@ -622,6 +622,7 @@ function selfHarmAlert(id, { kind = 'self_harm', channel = 'call' } = {}) {
   f = { id: uid(), level: 'alert', mode: p.mode, createdAt: now, trigger: 'safety', safety: true, task: null, attempts: 0, lastCallAt: now, lastSeenAt: now, lastSeenSource: 'maya', status: 'active', resolvedAt: null, returnAt: null, notified: 'alert', quietHours: false, notifId: null, kind };
   p.flags.unshift(f);
   p.flags.length = Math.min(p.flags.length, 50);
+  if (p.familyCallConsent && !(p.escalations || []).some((e) => e.kind === 'safety' && e.status === 'ringing')) ringFamily(p, 'safety', now, now);   // Tier A: at once, whatever the mode and the hour
   p.seenToTell = 0;   // a new ticket is open: the old "your family has seen it" no longer describes things
   const name = nameOf(id);
   const stay = channel === 'chat' ? 'Maya is staying in the chat with them' : 'Maya is staying on the call with them';
@@ -978,6 +979,30 @@ function addReminder(id, { task, dueAt, repeat, every, deliver, channel }, inter
   p.reminders.push(r);
   save(id);
   pushFamily('refresh', { id });
+  return r;
+}
+// The family edits a reminder (the popup behind a tap on it): the same checks as adding one. One that is going out right now cannot be changed (409). Stopping it is deleteReminder.
+function updateReminder(id, rid, { task, dueAt, repeat, every, deliver, channel }) {
+  const p = get(id), r = p && p.reminders.find((x) => x.id === rid);
+  if (!r) throw Object.assign(new Error('That reminder is not there any more.'), { status: 404 });
+  if (r.active) throw Object.assign(new Error('That reminder is going out right now. Please try again in a moment.'), { status: 409 });
+  task = clip(task, 80);
+  if (!task) throw Object.assign(new Error('Please enter what Maya should remind them about.'), { status: 400 });
+  dueAt = Number(dueAt);
+  if (!Number.isFinite(dueAt) || dueAt < Date.now() - 60000) throw Object.assign(new Error('Please choose a time that has not passed.'), { status: 400 });
+  repeat = repeat || 'none';
+  const keepsOwn = r.by === 'senior' && repeat === r.repeat;   // one they set by talking may keep its own repeat (for example every few hours)
+  if (repeat !== 'none' && !PERIOD[repeat]) throw Object.assign(new Error('Repeat must be none, daily or weekly.'), { status: 400 });
+  if (repeat === 'hourly' && !keepsOwn) throw Object.assign(new Error('Repeat must be none, daily or weekly.'), { status: 400 });
+  if (keepsOwn && (every == null || every === '')) every = r.every || 1;
+  every = every == null || every === '' ? 1 : Number(every);
+  if (repeat !== 'none' && !keepsOwn && !(every === 1 || every === 2)) throw Object.assign(new Error('Repeat must be none, every day, every 2 days, every week or every 2 weeks.'), { status: 400 });
+  if (deliver != null && deliver !== '' && !DELIVER.includes(deliver)) throw Object.assign(new Error('Delivery must be call, text or voice note.'), { status: 400 });
+  if (channel != null && channel !== '' && !CHANNELS.includes(channel)) throw Object.assign(new Error('Channel must be WhatsApp, the app or both.'), { status: 400 });
+  r.task = task; r.dueAt = dueAt; r.repeat = repeat; r.every = repeat === 'none' ? 1 : every; r.held = false; r.releasedAt = null;
+  if (deliver) r.deliver = deliver; else delete r.deliver;
+  if (channel) r.channel = channel; else delete r.channel;
+  save(id); pushFamily('refresh', { id });
   return r;
 }
 // A reminder the senior set by talking (setrem.js): a real future reminder. 'strict' = at due time it goes EXACTLY as chosen (this delivery type, on this channel) and is never switched on its own:
@@ -1672,9 +1697,57 @@ function welfareTick(p, now) {
     welfareSchedulePause(id, `A check could not be sent: ${String((e && e.message) || 'error').slice(0, 200)}`); });
 }
 
+// ---- Escalation: Maya RINGS THE FAMILY (in the Maya app) when the person is not responding. Step 1 (the dashboard and a push, topic only) is as it was; this is step 2. ----
+// ONLY when: the family agreed at onboarding that Maya may call them (p.familyCallConsent); never for one missed reminder in Standard (see ESC); one call per episode (an episode is one stretch of
+// quiet: it ends when the person is next seen), so never one call per missed reminder; quiet hours (22:00 to 07:00 where they are) hold it, except a safety alert (Tier A), which rings at once.
+// The call says only WHO has not responded and since when, never anything the person said. Seen stops it. The words are fixed here, never written by the model.
+const ESC = { standard: { missed: 3, silentH: 48 }, cautious: { missed: 2, silentH: 24 }, ultra: { missed: 1, silentH: 24 } };
+const ESC_RING_MS = 45000;
+const MISS_STATES = new Set(['missed', 'app_missed', 'wa_missed', 'unanswered']);
+function escWords(kind, name, anchor) {
+  const day = anchor ? new Date(anchor).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'a while';
+  if (kind === 'safety') return `This is Maya. I am worried about ${name}'s safety. Please check in now.`;
+  if (kind === 'silent') return `This is Maya. ${name} has not talked to me since ${day}. Please check in.`;
+  return `This is Maya. ${name} has not responded to reminders. Please check in.`;
+}
+function ringFamily(p, kind, anchor, now = Date.now()) {
+  p.escalations = p.escalations || [];
+  const ep = { id: uid(), kind, anchor: anchor || null, startedAt: now, status: 'ringing', text: escWords(kind, nameOf(p.id), anchor) };
+  p.escalations.unshift(ep); p.escalations.length = Math.min(p.escalations.length, 20);
+  save(p.id);
+  const sent = pushFamily('familyCall', { id: p.id, episodeId: ep.id, kind, text: ep.text, at: now });
+  ep.reached = sent;
+  const t = setTimeout(() => { if (ep.status === 'ringing') { ep.status = 'no_answer'; save(p.id); pushFamily('refresh', { id: p.id }); } }, ESC_RING_MS); if (t.unref) t.unref();
+  pushFamily('refresh', { id: p.id });
+  console.log('escalation', JSON.stringify({ event: 'family rung', kind, reached: sent }));   // kinds and a count: never a name or words
+  return ep;
+}
+function escalationTick(p, now) {
+  if (!p.familyCallConsent) return;
+  const anchor = lastSeen(p).at;
+  if (!anchor) return;   // never seen: nothing to be quiet since
+  if (p.missAnchor !== anchor) { p.missAnchor = anchor; p.missStreak = 0; p.escSeen = {}; }   // the person was around: a new stretch begins
+  p.escSeen = p.escSeen || {};
+  for (const r of p.reminders) if (r.last && MISS_STATES.has(r.last.state) && r.last.at > anchor && (p.escSeen[r.id] || 0) < r.last.at) { p.escSeen[r.id] = r.last.at; p.missStreak = (p.missStreak || 0) + 1; }
+  const th = ESC[p.mode] || ESC.standard;
+  const kind = (p.missStreak || 0) >= th.missed ? 'missed' : now - anchor >= th.silentH * 3600000 ? 'silent' : null;
+  if (!kind) return;
+  if ((p.escalations || []).some((e) => e.anchor === anchor)) return;   // one call per stretch of quiet, whatever the reason
+  if (inQuiet(p.id, now)) return;   // held until the quiet hours end (it is tried again on the next tick)
+  ringFamily(p, kind, anchor, now);
+}
+// What the family did with the ring: accepted (talking / looking), declined, or seen (stops it for this episode). -> false when there is no such episode.
+function escalationAct(id, eid, act) {
+  const p = get(id), ep = p && (p.escalations || []).find((e) => e.id === eid);
+  if (!ep || !['accepted', 'declined', 'seen'].includes(act)) return false;
+  ep.status = act === 'seen' ? 'seen' : act; ep.actedAt = Date.now(); save(id); pushFamily('refresh', { id }); return true;
+}
+function setFamilyConsent(id, on) { const p = get(id); if (!p) return false; p.familyCallConsent = Boolean(on); save(id); return true; }
+
 function tick(now = Date.now()) {
   for (const p of cache.values()) {
     welfareTick(p, now);
+    try { escalationTick(p, now); } catch (e) { console.log('escalation', JSON.stringify({ event: 'error', message: String((e && e.message) || e).slice(0, 80) })); }
     for (const f of p.flags) if (f.status === 'active' && now - f.createdAt >= (f.safety ? cfg.expireCriticalMs : cfg.expireLightMs)) closeUnseen(p, f, now);
     for (const sc of p.scams || []) if (sc.status === 'active' && now - sc.createdAt >= cfg.expireLightMs) closeScamUnseen(p, sc, now); // scam: not an emergency, so the 2-day (light) rule
     for (const r of p.reminders) {
@@ -1808,6 +1881,8 @@ function view(id) {
     alerts: p.flags.filter((f) => f.level === 'alert').map(fl),
     scams: (p.scams || []).map((sc) => ({ ...sc, name: nameOf(id), timeline: scamTimeline(p, sc) })),
     reminders: p.reminders.map(rem),
+    escalations: (p.escalations || []).slice(0, 5).map((e) => ({ id: e.id, kind: e.kind, status: e.status, text: e.text, startedAt: e.startedAt, actedAt: e.actedAt || null })),
+    familyCallConsent: Boolean(p.familyCallConsent),
     notifications: p.notifications.filter((n) => !n.incident).slice(0, 30).map((n) => ({ id: n.id, to: n.to, kind: n.kind, text: n.text, channel: n.channel, status: n.status, label: statusLabel(n), times: n.times })),
   };
 }
@@ -1828,9 +1903,9 @@ module.exports = {
   trendEvent, trendTurn, trendView, localParts,
   linesWithin, touch, lastSeen, callStarted, callEnded, callCount, liveCalls, liveChats, pushSenior, lastCall, appFacts, safeAsked, closeUnseen, painMention, painCount,
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
-  attachSenior, attachFamily, pushFamily, appOpen,
+  escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, rescheduleReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  addReminder, addSeniorReminder, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

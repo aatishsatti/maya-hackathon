@@ -681,6 +681,14 @@ async function sendPdf(profileId, buf, name, tz, opts = {}) {
   return { messages: asked ? [you, answered, s.push({ role: 'maya', kind: 'text', text: asked })] : [you, answered], scam: level };
 }
 
+// The words of a schedule the FAMILY gives on the dashboard: from a PDF, a photo or a voice note (typed words need no reading). Nothing is kept: only the words go on to schedule.read.
+async function scheduleText(kind, buf) {
+  if (kind === 'pdf') { if (!isPdf(buf)) throw new ChatError('That file is not a PDF Maya can read.', 415); const r = pdfText(buf); if (!r.text) throw new ChatError(UNREADABLE_PDF, 422); return r.text; }
+  if (kind === 'image') { const mime = imageMime(buf); if (!mime) throw new ChatError('That is not a photo Maya can read (JPEG, PNG, GIF or WebP).', 415); try { return String(await deps.describe(buf, mime)); } catch (e) { throw new ChatError(e.message); } }
+  if (kind === 'voice') { try { return String(await deps.transcribe(buf)); } catch (e) { throw new ChatError(e.message); } }
+  throw new ChatError('Unknown source.', 400);
+}
+
 // A deleted profile takes its chat, photos and voice notes with it.
 function forget(profileId) {
   const s = sessions.get(profileId);
@@ -691,4 +699,4 @@ function forget(profileId) {
 // Test and shutdown helper: files every open chat into memory now.
 function endAll() { for (const [id, s] of sessions) { sessions.delete(id); s.finish(); } }
 
-module.exports = { loadThread, threadFile, continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deliverText, deps, sendText, sendVoiceNote, sendImage, sendPdf, pdfText, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
+module.exports = { scheduleText, loadThread, threadFile, continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deliverText, deps, sendText, sendVoiceNote, sendImage, sendPdf, pdfText, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };

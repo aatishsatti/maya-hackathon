@@ -38,7 +38,7 @@ function looksLikeSchedule(text) {
 }
 
 const h12 = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
-const whenOf = (it) => `${h12(it.time)}${it.repeat === 'daily' ? ' every day' : it.repeat === 'weekly' && it.weekday != null ? ` every ${WEEKDAYS[it.weekday]}` : ''}`;
+const whenOf = (it) => `${h12(it.time)}${it.repeat === 'daily' ? ' every day' : it.repeat === 'weekly' && it.weekday != null ? ` every ${WEEKDAYS[it.weekday]}` : it.weekday != null ? ` on ${WEEKDAYS[it.weekday]}` : ''}`;
 const lineOf = (it) => `${it.task} at ${whenOf(it)}`;
 
 // Checks what the reader returned, item by item. Anything unclear is left out, never guessed.
@@ -104,22 +104,24 @@ function mentions(t, items) {
   return found;
 }
 
+// One item -> one reminder (a call at its time, in the app). true when it was set.
+function createFor(profileId, it, { tz, now }) {
+  const care = require('./care'), setrem = require('./setrem');
+  const phrase = `remind me ${it.repeat === 'daily' ? 'every day' : it.repeat === 'weekly' ? `every ${WEEKDAYS[it.weekday].toLowerCase()}` : it.weekday != null ? `on ${WEEKDAYS[it.weekday].toLowerCase()}` : 'today'} at ${h12(it.time).toLowerCase()} to ${it.task}`;
+  const spec = setrem.parseRequest(phrase, { now, tz });
+  if (!spec.dueAt || spec.noTz) return false;
+  try { care.addSeniorReminder(profileId, { task: it.task, dueAt: spec.dueAt, repeat: spec.repeat, every: spec.every || 1, deliver: 'call', channel: 'app', origin: 'app' }); return true; } catch { return false; }
+}
+
 // Their answer: only the yes items become reminders (a call at that time, in the app), and Maya says exactly what was set and what was not.
 function answer(profileId, text, { tz = null, now = Date.now() } = {}) {
   const s = pending(profileId, now); if (!s) return null;
   const verdict = readAnswer(text, s.items); if (!verdict) return null;
-  const care = require('./care'), setrem = require('./setrem');
   const set = [], skipped = [], failed = [];
   for (const [id, v] of verdict) {
     const it = s.items.find((x) => x.id === id);
-    if (v !== 'yes') { it.status = v === 'no' ? 'no' : 'no'; skipped.push(it); continue; }
-    const phrase = `remind me ${it.repeat === 'daily' ? 'every day' : it.repeat === 'weekly' ? `every ${WEEKDAYS[it.weekday].toLowerCase()}` : 'today'} at ${h12(it.time).toLowerCase()} to ${it.task}`;
-    const spec = setrem.parseRequest(phrase, { now, tz });
-    if (!spec.dueAt || spec.noTz) { failed.push(it); continue; }
-    try {
-      care.addSeniorReminder(profileId, { task: it.task, dueAt: spec.dueAt, repeat: spec.repeat, every: spec.every || 1, deliver: 'call', channel: 'app', origin: 'app' });
-      it.status = 'set'; set.push(it);
-    } catch { failed.push(it); }
+    if (v !== 'yes') { it.status = 'no'; skipped.push(it); continue; }
+    if (createFor(profileId, it, { tz, now })) { it.status = 'set'; set.push(it); } else failed.push(it);
   }
   for (const it of failed) it.status = 'proposed';
   save(profileId, s);
@@ -132,6 +134,24 @@ function answer(profileId, text, { tz = null, now = Date.now() } = {}) {
   return parts.join(' ');
 }
 
+// The FAMILY's door (the dashboard): read a schedule they gave (typed, a PDF, a photo, a voice note) into items, shown with nothing set; then set ONLY the ones they tick.
+async function read(profileId, text, { now = Date.now() } = {}) {
+  const items = clean(await deps.extract(String(text || '')));
+  if (items.length) save(profileId, { at: now, items });
+  return items.map(({ id, task, time, repeat, weekday, kind }) => ({ id, task, time, repeat, weekday, kind, when: whenOf({ time, repeat, weekday }) }));
+}
+function setChosen(profileId, ids, { tz = null, now = Date.now() } = {}) {
+  const s = load(profileId); if (!s || !Array.isArray(s.items)) return { set: [], failed: [], skipped: [] };
+  const want = new Set((Array.isArray(ids) ? ids : []).map(String)), out = { set: [], failed: [], skipped: [] };
+  for (const it of s.items) {
+    if (it.status === 'set') continue;
+    if (!want.has(it.id)) { out.skipped.push(it.task); continue; }
+    if (createFor(profileId, it, { tz, now })) { it.status = 'set'; out.set.push(lineOf(it)); } else out.failed.push(it.task);
+  }
+  save(profileId, s);
+  return out;
+}
+
 // One step for a typed message: an answer to an open question, or a new schedule told to Maya. Returns { text } or null (the message is ordinary chat).
 async function handle(profileId, text, { tz = null, now = Date.now() } = {}) {
   if (pending(profileId, now)) { const a = answer(profileId, text, { tz, now }); if (a) return { text: a }; }
@@ -139,4 +159,4 @@ async function handle(profileId, text, { tz = null, now = Date.now() } = {}) {
   return null;
 }
 
-module.exports = { deps, handle, propose, answer, pending, looksLikeSchedule, readAnswer, clean, forget, file, load, MAX_ITEMS, TTL_MS };
+module.exports = { read, setChosen, deps, handle, propose, answer, pending, looksLikeSchedule, readAnswer, clean, forget, file, load, MAX_ITEMS, TTL_MS };

@@ -217,3 +217,14 @@ body.modal-open { overflow: hidden; }
 .who select { background: var(--surface); }
 @media (prefers-reduced-motion: reduce) { .skel i { animation: none; } .btn, .row, .metric.tap, .tap { transition: none; } .btn:active, .tap:active, .row:active { transform: none; } }
 #activityPanel > .sec-head { display: none; }   /* the sheet's own title already says Activity */
+
+.banner.esc { background: var(--accent-soft); color: var(--ink); cursor: default; flex-wrap: wrap; }
+.banner.esc .esc-actions { display: flex; align-items: center; gap: 8px; }
+.item.tap { cursor: pointer; transition: background-color 120ms, transform 80ms ease-out; } .item.tap:hover { background: var(--accent-soft); }
+.item .edit-hint { color: var(--accent); font-size: var(--t-cap); font-weight: 600; }
+.ring-actions { display: flex; justify-content: space-between; gap: 16px; margin-top: 32px; }
+.btn.ring { flex: 1; min-height: 64px; border-radius: 32px; font-size: var(--t-body); border: 0; color: #fff; }
+.btn.ring.decline { background: #c0392b; } .btn.ring.accept { background: #1e8a73; }   /* Decline red on the left, Accept green on the right */
+.check-row { display: flex; align-items: flex-start; gap: 16px; padding: 16px; border-radius: 12px; background: var(--surface-2); cursor: pointer; min-height: 56px; }
+.check-row input { width: 22px; height: 22px; margin-top: 2px; flex: none; }
+.check-row b { display: block; font-weight: 600; } .check-row span { color: var(--ink-2); font-size: var(--t-cap); }
