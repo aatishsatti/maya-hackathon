@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:record/record.dart';
 import 'package:maya_app/config.dart';
 import 'package:maya_app/services/call_log.dart';
 import 'package:maya_app/services/call_session.dart';
@@ -195,5 +196,19 @@ void main() {
     await until(() => v.primed == 1);
     await s.hangUp();
     s.dispose();
+  });
+
+  test('Android: the microphone keeps recording while Maya\'s voice plays (it is not paused by the audio focus her player takes); iOS settings are unchanged', () {
+    final android = RecordMic.config(16000, android: true);
+    expect(android.audioInterruption, AudioInterruptionMode.none, reason: 'the default (pause) left the microphone dead for the rest of the call after her greeting');
+    final ios = RecordMic.config(16000, android: false);
+    expect(ios.audioInterruption, AudioInterruptionMode.pause, reason: 'iOS is as it was');
+    for (final c in [android, ios]) {
+      expect(c.encoder, AudioEncoder.pcm16bits);
+      expect(c.sampleRate, 16000);
+      expect(c.numChannels, 1);
+      expect([c.echoCancel, c.noiseSuppress, c.autoGain], [true, true, true]);
+    }
+    expect(ios.iosConfig.categoryOptions, [IosAudioCategoryOption.defaultToSpeaker, IosAudioCategoryOption.allowBluetooth]);
   });
 }

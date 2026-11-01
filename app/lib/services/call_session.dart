@@ -23,16 +23,21 @@ class RecordMic implements MicSource {
   final AudioRecorder _rec = AudioRecorder();
   @override
   Future<bool> hasPermission() => _rec.hasPermission();
-  @override
-  Future<Stream<Uint8List>> start(int sampleRate) => _rec.startStream(RecordConfig(
+  /// The microphone settings for a call. On Android the recorder holds audio focus and, by default (AudioInterruptionMode.pause), PAUSES itself when anything else takes focus and never resumes:
+  /// Maya's own voice player takes focus every time she speaks, so after her greeting the microphone was dead and she heard nothing. A call is both at once, so on Android the recorder is told to keep
+  /// recording through interruptions (none). iOS is left exactly as it was.
+  static RecordConfig config(int sampleRate, {bool? android}) => RecordConfig(
         encoder: AudioEncoder.pcm16bits,
         sampleRate: sampleRate,
         numChannels: 1,
         echoCancel: true,
         noiseSuppress: true,
         autoGain: true,
+        audioInterruption: (android ?? Platform.isAndroid) ? AudioInterruptionMode.none : AudioInterruptionMode.pause,
         iosConfig: const IosRecordConfig(categoryOptions: [IosAudioCategoryOption.defaultToSpeaker, IosAudioCategoryOption.allowBluetooth]),
-      ));
+      );
+  @override
+  Future<Stream<Uint8List>> start(int sampleRate) => _rec.startStream(config(sampleRate));
   @override
   Future<void> stop() async {
     try {
