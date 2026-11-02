@@ -1033,7 +1033,7 @@ function addSeniorReminder(id, { task, dueAt, repeat, every = 1, deliver, channe
   const cap = { hourly: 72, daily: 60, weekly: 12 }[repeat];
   if (repeat !== 'none' && !(Number.isInteger(every) && every >= 1 && every <= cap)) throw Object.assign(new Error('That repeat is out of range.'), { status: 400 });
   if (!DELIVER.includes(deliver)) throw Object.assign(new Error('Delivery must be call, text or voice note.'), { status: 400 });
-  if (channel !== 'whatsapp' && channel !== 'app') throw Object.assign(new Error('Channel must be WhatsApp or the app.'), { status: 400 });
+  if (channel !== 'whatsapp' && channel !== 'app' && channel !== 'both') throw Object.assign(new Error('Channel must be WhatsApp, the app or both.'), { status: 400 });
   if (seniorSetCount(id) >= SENIOR_MAX_ITEMS) throw Object.assign(new Error('Too many reminders set by talking.'), { status: 409 });
   return addReminder(id, { task, dueAt, repeat, deliver, channel }, { by: 'senior', origin, every });
 }

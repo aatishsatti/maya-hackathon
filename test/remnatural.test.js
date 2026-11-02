@@ -36,7 +36,7 @@ test('in-call ask: "remind me in a minute" is NOT agreed as a timer and NOT refu
   assert.match(r.text, /I will remind you to take your pills right after you hang up the call/);
   assert.doesNotMatch(r.text, /in 1 minute|in one minute/);
   const yes = say(id, 'Yes', 'call'); assert.equal(yes.label, 'setrem-ask-delivery');
-  say(id, 'a text', 'call'); const sv = say(id, 'in the app', 'call');
+  const sv = say(id, 'a text', 'call');   // WhatsApp is not set up for them: no channel question, it comes to the app
   assert.equal(sv.label, 'setrem-saved');
   assert.match(sv.text, /right after you hang up the call/);
   const rem = care.get(id).reminders.find((x) => x.by === 'senior');
@@ -62,7 +62,7 @@ test('callback asked ON a call: "call me back in a minute" means right after thi
   const id = person();
   const r = say(id, 'Call me back in a minute', 'call');
   assert.match(r.text, /I will call you right after you hang up this call/);
-  say(id, 'yes', 'call'); const sv = say(id, 'in the app', 'call');
+  const sv = say(id, 'yes', 'call');   // WhatsApp is not set up for them: no channel question, it comes to the app
   assert.equal(sv.label, 'setrem-saved');
   assert.equal(setrem.afterHangup(id), 1);
   assert.equal(care.get(id).reminders.find((x) => x.by === 'senior').deliver, 'call');

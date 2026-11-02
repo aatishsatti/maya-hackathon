@@ -133,7 +133,8 @@ function readDelivery(rest) {
   if (/\bvoice (?:note|message|memo)s?\b|\bvoice\b|\baudio\b|\brecording\b|\bsay it\b|\bspeak\b/.test(s) && !/\bvoice call\b/.test(s)) deliver = 'voice';
   if (/\b(?:call|ring|phone) me\b|\bgive me a (?:call|ring)\b|\bby (?:a )?(?:phone )?call\b|\bwith a (?:phone )?call\b|\bvoice call\b|\ba (?:phone )?call\b|^ ?(?:a )?(?:phone )?call ?$|\bcall\b|\bring\b|\bphone\b/.test(s)) deliver = 'call';
   else if (!deliver && /\btext(?:ing)?\b|\bwritten\b|\bwriting\b|\bwrite\b|\bmessage me\b|\bsms\b|\ba message\b|\bmessage\b/.test(s)) deliver = 'text';
-  if (/\bwhats ?app\b|\bwhat'?s app\b/.test(s)) channel = 'whatsapp';
+  if (/\bboth\b|\bwhats ?app and (?:the )?(?:maya )?app\b|\b(?:maya )?app and whats ?app\b/.test(s)) channel = 'both';
+  else if (/\bwhats ?app\b|\bwhat'?s app\b/.test(s)) channel = 'whatsapp';
   else if (/\b(?:the |your |maya )?(?:maya )?app\b|\bin app\b/.test(s)) channel = 'app';
   return { deliver, channel };
 }
@@ -259,7 +260,7 @@ function quietHold(spec, { tz, now = Date.now(), origin } = {}) {
 }
 const quietClause = (spec, q) => spec.repeat === 'none' ? `it is quiet hours until ${q.words}, so I will remind you at ${q.words} instead` : `it is quiet hours until ${q.words}, so when one falls at night I will wait and remind you at ${q.words}`;
 const VERB_PHRASE = { call: 'call you', text: 'send you a text', voice: 'send you a voice note' };
-const WHERE_WORDS = { whatsapp: 'on WhatsApp', app: 'in the Maya app' };
+const WHERE_WORDS = { whatsapp: 'on WhatsApp', app: 'in the Maya app', both: 'in the Maya app and on WhatsApp' };
 // The sentence Maya says back before anything is saved. When the way and the place are already known they are in it.
 function confirmText(spec, ctx) {
   const when = whenWords(spec, ctx), what = `${toOrAbout(spec.task)} ${second(spec.task)}`;
@@ -321,7 +322,7 @@ function deliveryQuestionNote() {
 function channelQuestionNote(noWa) {
   return note('setrem-ask-channel', noWa
     ? `WhatsApp is not set up for them, so it cannot go there (nothing is saved yet). Ask as ONE short question whether the Maya app is fine: "Is the Maya app okay for that?" ${COMMON}`
-    : `Nothing is saved yet. They asked for this in a call, so ask where it should come to them, as ONE short question: "Should that be in the Maya app, or on WhatsApp?" ${COMMON}`);
+    : `Nothing is saved yet. WhatsApp is set up for them, so ask where it should come to them, as ONE short question: "Would you like that on the Maya app, on WhatsApp, or both?" ${COMMON}`);
 }
 
 function begin(id, heard, ctx) {
@@ -353,8 +354,11 @@ function afterYes(id, st, ctx) {
 }
 function needChannel(id, st, ctx) {
   const spec = st.spec;
-  if (!spec.channel && st.origin !== 'call') spec.channel = st.origin;   // asked on WhatsApp -> WhatsApp; asked in the app -> the app
-  if (spec.channel === 'whatsapp' && !ctx.waLinked) { spec.channel = null; st.noWa = true; }
+  // WhatsApp is only ever mentioned when it is set up for them. Not set up: no question, it comes to the Maya app. Set up: asked on WhatsApp -> WhatsApp; asked in the app or on a call -> they are asked
+  // "the Maya app, WhatsApp, or both?" before anything is saved.
+  if (!spec.channel && !ctx.waLinked) spec.channel = 'app';
+  else if (!spec.channel && st.origin === 'whatsapp') spec.channel = 'whatsapp';
+  if ((spec.channel === 'whatsapp' || spec.channel === 'both') && !ctx.waLinked) { spec.channel = null; st.noWa = true; }   // they ASKED for WhatsApp but it is not set up: said plainly, then the app
   if (!spec.channel) { st.stage = 'channel'; st.unclear = 0; return channelQuestionNote(st.noWa); }
   return save(id, st, ctx);
 }
@@ -416,7 +420,7 @@ function answer(id, st, heard, ctx) {
     if (dl.channel) spec.channel = dl.channel;
     else if (st.noWa && sayYes(heard)) spec.channel = 'app';
     if (!spec.channel) { st.unclear += 1; if (st.unclear >= 2) { states.delete(id); return cancelNote('They did not say where.'); } return channelQuestionNote(st.noWa); }
-    if (spec.channel === 'whatsapp' && !ctx.waLinked) { spec.channel = null; st.noWa = true; st.unclear += 1; if (st.unclear >= 2) { states.delete(id); return cancelNote('WhatsApp is not set up for them.'); } return channelQuestionNote(true); }
+    if ((spec.channel === 'whatsapp' || spec.channel === 'both') && !ctx.waLinked) { spec.channel = null; st.noWa = true; st.unclear += 1; if (st.unclear >= 2) { states.delete(id); return cancelNote('WhatsApp is not set up for them.'); } return channelQuestionNote(true); }
     return save(id, st, ctx);
   }
   return null;
@@ -439,4 +443,11 @@ function step(id, heard, { origin, tz = null, now = Date.now(), waLinked = false
 const reset = (id) => { if (id) states.delete(id); else states.clear(); };
 const pending = (id) => { const s = states.get(id); return s ? { stage: s.stage, origin: s.origin, spec: s.spec } : null; };
 
-module.exports = { quietHold, hourWords, savedText, afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };
+// The question a person is being asked right now ("how?", "where?"), for the one case where Spark twice closes without asking it: it is then put at the end of her reply so the set-up never stalls on a missing question.
+function pendingQuestion(id) {
+  const st = states.get(id); if (!st) return null;
+  if (st.stage === 'delivery') return 'Would you like me to call you, send you a text, or send you a voice note?';
+  if (st.stage === 'channel') return st.noWa ? 'Is the Maya app okay for that?' : 'Would you like that on the Maya app, on WhatsApp, or both?';
+  return null;
+}
+module.exports = { pendingQuestion, quietHold, hourWords, savedText, afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };

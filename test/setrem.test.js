@@ -77,18 +77,19 @@ test('every hour: the senior\'s own plain words become an hourly reminder; on a 
   const a = await say('Set a reminder for every hour and remind me every hour that I need to do a certain thing.');
   has(a, 'setrem-confirm'); assert.match(a.text, /So, every hour, starting in one hour, I will remind you to do a certain thing\./); assert.equal(mine(id).length, 0);
   const b = await say('Yes.'); has(b, 'setrem-ask-delivery');
-  const c = await say('Call me.'); has(c, 'setrem-ask-channel'); assert.match(c.text, /Maya app, or on WhatsApp/); assert.equal(mine(id).length, 0, 'a call has no default: it is asked');
+  const c = await say('Call me.'); has(c, 'setrem-ask-channel'); assert.match(c.text, /Maya app, on WhatsApp, or both/); assert.equal(mine(id).length, 0, 'a call has no default: it is asked');
   const d = await say('On WhatsApp.'); has(d, 'setrem-saved'); const r = mine(id)[0];
   assert.deepEqual([r.task, r.repeat, r.deliver, r.channel], ['do a certain thing', 'hourly', 'call', 'whatsapp']);
   assert.match(d.text, /They do NOT need to stay on the call/); assert.match(d.text, /not a timer/);
   assert.equal(care.view(id).reminders.find((x) => x.id === r.id).repeat, 'hourly');
 });
 
-test('a daily routine: "every morning at 8 am" is daily at 8:00 in their time zone; asked in the app, the app is the default and text is the pick', async () => {
+test('a daily routine: "every morning at 8 am" is daily at 8:00 in their time zone; with WhatsApp set up they are asked where, and the app and text are the picks', async () => {
   quiet(); const { id } = linked(true); care.get(id).tz = 'America/New_York'; const say = talker(id, 'app');
   const a = await say('Every morning at 8 am, remind me to take my pills.');
   has(a, 'setrem-confirm'); assert.match(a.text, /every day at 8:00 AM, I will remind you to take your pills/); assert.equal(mine(id).length, 0);
-  await say('Yeah.'); const c = await say('Text me.'); has(c, 'setrem-saved');
+  await say('Yeah.'); const c0 = await say('Text me.'); has(c0, 'setrem-ask-channel'); assert.equal(mine(id).length, 0, 'WhatsApp is set up for them: asked where, nothing saved yet');
+  const c = await say('The Maya app.'); has(c, 'setrem-saved');
   const r = mine(id)[0]; assert.deepEqual([r.repeat, r.deliver, r.channel], ['daily', 'text', 'app']);
   const f = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).format(new Date(r.dueAt)); assert.equal(f, '08:00'); assert.ok(r.dueAt > Date.now() && r.dueAt - Date.now() <= 24 * 3600000 + 5000);
 });
@@ -126,11 +127,12 @@ test('"call" in the task is not a delivery: "remind me to call my sister" is ask
   const d = await say2('Yes.'); has(d, 'setrem-saved'); assert.deepEqual([mine(y.id)[0].deliver, mine(y.id)[0].channel], ['call', 'whatsapp'], 'no delivery question: they had said it');
 });
 
-test('channel: asked on WhatsApp -> WhatsApp; asked in the app -> the app; a different channel they NAME wins over that default; WhatsApp not set up is not offered', async () => {
+test('channel: asked on WhatsApp -> WhatsApp; asked in the app with WhatsApp set up -> asked where; a channel they NAME wins; WhatsApp not set up is never mentioned unless they ask for it', async () => {
   quiet(); const w = linked(true); const sw = talker(w.id, 'whatsapp');
   await sw('Remind me in 15 minutes to stretch.'); await sw('Yes.'); await sw('Text.'); assert.equal(mine(w.id)[0].channel, 'whatsapp', 'default');
   quiet(); const a = linked(true); const sa = talker(a.id, 'app');
-  await sa('Remind me in 15 minutes to stretch.'); await sa('Yes.'); await sa('Text.'); assert.equal(mine(a.id)[0].channel, 'app', 'default');
+  await sa('Remind me in 15 minutes to stretch.'); await sa('Yes.'); const ac = await sa('Text.'); has(ac, 'setrem-ask-channel'); assert.equal(mine(a.id).length, 0, 'asked in the app with WhatsApp set up: they are asked where');
+  await sa('The Maya app.'); assert.equal(mine(a.id)[0].channel, 'app');
   quiet(); const o1 = linked(true); const s1 = talker(o1.id, 'whatsapp');
   await s1('Remind me in 15 minutes to stretch.'); await s1('Yes.'); const r1 = await s1('Send me a voice note in the Maya app.'); has(r1, 'setrem-saved');
   assert.deepEqual([mine(o1.id)[0].deliver, mine(o1.id)[0].channel], ['voice', 'app'], 'asked on WhatsApp, picked the app: the app is used');
@@ -138,7 +140,7 @@ test('channel: asked on WhatsApp -> WhatsApp; asked in the app -> the app; a dif
   await s2('Remind me in 15 minutes to stretch on WhatsApp.'); await s2('Yes.'); await s2('A text.');
   assert.deepEqual([mine(o2.id)[0].deliver, mine(o2.id)[0].channel], ['text', 'whatsapp'], 'asked in the app, named WhatsApp in the first sentence');
   quiet(); const nw = person(); const s3 = talker(nw, 'call');   // no WhatsApp linked
-  await s3('Remind me in 2 hours to stretch.'); await s3('Yes.'); await s3('Text me.'); const r3 = await s3('WhatsApp.'); has(r3, 'setrem-ask-channel'); assert.match(r3.text, /WhatsApp is not set up for them/); assert.equal(mine(nw).length, 0);
+  await s3('Remind me in 2 hours to stretch.'); await s3('Yes.'); const r3 = await s3('Text me on WhatsApp.'); has(r3, 'setrem-ask-channel'); assert.match(r3.text, /WhatsApp is not set up for them/); assert.equal(mine(nw).length, 0);
   const r4 = await s3('Yes the app is fine.'); has(r4, 'setrem-saved'); assert.equal(mine(nw)[0].channel, 'app');
 });
 
@@ -301,8 +303,9 @@ test('"oky", "ok", "okk", "okie", "yess", "yes": each counts as the yes; then a 
   }
   quiet(); const { id } = linked(true); care.get(id).tz = 'Asia/Kolkata'; const say = talker(id, 'app'); const app = openApp(id);
   await say('Remind me in 2 minutes to drink water'); await say('oky');
-  const saved = await say('a text please'); assert.ok(saved.labels.includes('setrem-saved'), saved.labels.join(','));
-  assert.equal(mine(id).length, 1); assert.deepEqual([mine(id)[0].deliver, mine(id)[0].channel], ['text', 'app'], 'asked in the app: it comes to the app (no WhatsApp question)');
+  const ask = await say('a text please'); assert.ok(ask.labels.includes('setrem-ask-channel'), 'WhatsApp is set up for them: asked where'); assert.equal(mine(id).length, 0);
+  const saved = await say('the Maya app'); assert.ok(saved.labels.includes('setrem-saved'), saved.labels.join(','));
+  assert.equal(mine(id).length, 1); assert.deepEqual([mine(id)[0].deliver, mine(id)[0].channel], ['text', 'app']);
   const menu = care.seniorMenu(id).reminders; assert.equal(menu.length, 1, 'the menu shows it before it is due'); assert.match(menu[0].task, /drink water/);
   assert.ok(menu[0].dueAt > Date.now() && menu[0].dueAt < Date.now() + 3 * 60000, 'about two minutes from now');
   care.tick(menu[0].dueAt + 2000); await settle();
@@ -317,4 +320,25 @@ test('a reply that is not a yes (a new thought, or a no) is still not taken for 
     const r = setrem.step(id, t, { origin: 'app', tz: 'Asia/Kolkata', now: Date.now() });
     assert.ok(!r || r.label !== 'setrem-ask-delivery', `"${t}" must not count as yes (${r && r.label})`);
   }
+});
+
+
+// The corrected rule: after the yes Maya asks HOW; WhatsApp is mentioned ONLY when it is set up for them; nothing is saved until the answers are in.
+test('WhatsApp set up: how (call / text / voice note) is asked, then "the Maya app, WhatsApp, or both?"; nothing is saved until both are answered; "both" is kept', async () => {
+  quiet(); const { id } = linked(true); care.get(id).tz = 'Asia/Kolkata'; const say = talker(id, 'app');
+  await say('Remind me in 2 minutes to drink water');
+  const how = await say('Yes'); has(how, 'setrem-ask-delivery'); assert.match(how.text, /call you, send you a text, or send you a voice note/); assert.doesNotMatch(how.text, /WhatsApp/i, 'how comes first, with no WhatsApp in it'); assert.equal(mine(id).length, 0);
+  const where = await say('A text'); has(where, 'setrem-ask-channel'); assert.match(where.text, /Maya app, on WhatsApp, or both/); assert.equal(mine(id).length, 0, 'not saved until the channel is answered');
+  const done = await say('Both please'); has(done, 'setrem-saved');
+  const r = mine(id)[0]; assert.deepEqual([r.deliver, r.channel], ['text', 'both']); assert.match(done.text, /Maya app and on WhatsApp/);
+  assert.equal(care.seniorMenu(id).reminders[0].channel, 'both');
+});
+
+test('WhatsApp NOT set up: how is asked, then it is saved to the Maya app, and WhatsApp is never mentioned', async () => {
+  quiet(); const id = person(); care.get(id).tz = 'Asia/Kolkata'; const say = talker(id, 'app'); const seen = [];
+  seen.push((await say('Remind me in 2 minutes to drink water')).text);
+  const how = await say('Yes'); has(how, 'setrem-ask-delivery'); seen.push(how.text); assert.equal(mine(id).length, 0, 'not saved before it is known how');
+  const done = await say('A voice note'); has(done, 'setrem-saved'); seen.push(done.text);
+  const r = mine(id)[0]; assert.deepEqual([r.deliver, r.channel], ['voice', 'app']);
+  for (const t of seen) assert.doesNotMatch(t, /WhatsApp/i, `no WhatsApp in: ${t.slice(0, 80)}`);
 });

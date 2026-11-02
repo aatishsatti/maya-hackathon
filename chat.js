@@ -272,8 +272,16 @@ class ChatSession {
       return this.reply(`${this.replyNote()} ${this.safetyNote()}`, { safetyRetry: true });
     }
     if (!pieces.length) throw new ChatError('Maya could not answer right now: no reply came back.'); // never a faked reply
-    const all = pieces.map((p) => p.text).join(' ').replace(/\s+([,.;:!?])/g, '$1');
+    let all = pieces.map((p) => p.text).join(' ').replace(/\s+([,.;:!?])/g, '$1');
     if (this.firstEver && !again && this.plainHello(feelRaw) && !IDENTITY_LINE.test(all)) return this.reply(`${note} Your draft did not say who you are. Write it again: this is the very first message to a new person, so say in your own fresh words that you are Maya, their companion, with one small warm line, in at most two short sentences and no question.`, { again: true });
+    // A reminder is being set up and she was handed a question to ask (is that right? how? where?): if her draft closes without asking it ("Perfect", "Got it", "that's noted"), it is written again
+    // once. The reminder is saved only by their answer, so a skipped question must never look like an answer.
+    if (!again && (this.factLabels || []).some((l) => /^setrem-(ask|confirm)/.test(l)) && !/\?/.test(all)) return this.reply(`${note} Your draft did not ask the question you were told to ask, and nothing is saved yet. Write it again: ask that ONE question in your own words, and do not say it is done, noted or set.`, { again: true });
+    if (again && (this.factLabels || []).some((l) => /^setrem-ask/.test(l)) && !/\?/.test(all)) {   // asked again and she STILL did not ask: the plain question closes her reply
+      const q = require('./setrem').pendingQuestion(this.profile.id);
+      const names = /whatsapp/i.test(q) ? /\bwhatsapp\b/i.test(all) : (all.match(/\b(?:call|text|voice)/gi) || []).length >= 2;   // she did name the choices, only without a question mark: leave it
+      if (q && !names) { pieces.push({ text: q, kind: null }); all = `${all} ${q}`.trim(); }
+    }
     this.history.push({ role: 'assistant', content: all });
     memory.appendTurn(this.profile.id, this.callId, { who: 'Maya', text: all });
     // Bookkeeping the next reply depends on (same as the end of Call.speakReply).
