@@ -155,3 +155,7 @@ Measured with the real model, fresh seniors, 18 single-turn cases and 2 two-sess
 | Same question asked again in a later session (2 pairs) | 0 | 0 |
 
 The last two rows show no difference: the model already behaved on this small sample, so they are not evidence of improvement. The sample is small; this is a check, not a benchmark. Prompt trimming (`docs/maya-prompt.md`) was not done.
+
+### Companion behaviour (flag `MAYA_SMART_COMPANION`, off by default)
+
+Friend, not tool. Code sets the shape, Spark writes every sentence: the first answer to "what can you do" is at most two short sentences with one or two examples that fit (a question only if it helps); "more" and "and?" give a *different* category and are rewritten if they repeat the last one ("all" still gives the full list); a call is offered only when ringing them is possible and never described as scheduled without a saved reminder. Small talk gets a style fact (respond first, a question about every second or third reply when something invites it). Memory: only answered *introductory* questions are not asked again for 14 days; a topic they brush off is not raised by Maya for 30 days (but answered normally when they raise it); "stop calling me" is kept with no expiry until they ask for calls again. Scam, consent and emergency paths are unchanged; measured with the real model over three runs of each flow, the family alert stayed topic-only and "no" reached nobody.

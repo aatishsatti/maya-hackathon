@@ -153,15 +153,16 @@ test('CONTRACT + CAPS: every non-scam turn carries the reply shape; ability and 
   assert.match(n, /keep who said what/); setAll(false);
 });
 
-test('MEMORY: one THREAD line each turn; the question she asked is kept, not asked again (even reworded), across sessions on the same profile; an unanswered question is flagged', async () => {
+test('MEMORY: one THREAD line each turn; an ANSWERED introductory question is not asked again (also in a new session); a relevant follow-up is never blocked; an unanswered question is flagged; a required set-up question is never blocked', async () => {
   setAll(false); process.env.MAYA_SMART_MEMORY = 'on'; const care = require('../care');
-  const a = session(); const id = a.profile.id; a.careNotes('I like my garden'); smart.afterReply(a, 'That sounds lovely. What flowers are you growing this season?');
+  const a = session(); const id = a.profile.id; a.careNotes('hello there'); smart.afterReply(a, 'Lovely to meet you. Do you have any hobbies you enjoy?');
   let n = a.careNotes('hmm'); assert.match(n, /THREAD: topic=/); assert.match(n, /have not answered it yet/);
-  n = a.careNotes('I am growing roses and some tomatoes this year'); assert.doesNotMatch(n, /have not answered it yet/); assert.match(n, /never ask the same thing again/);
-  assert.equal(smart.breaks('Which flowers are you growing this season?', a), 'repeat'); a._why = null;
-  assert.equal(smart.breaks('How is your sister doing these days?', a), null);
-  const b = session(); b.profile = memory.load(id); b.profile.id = id; assert.equal(smart.breaks('So what flowers are you growing this season?', b), 'repeat', 'a new session, same person');
-  b.factLabels = ['setrem-confirm']; assert.equal(smart.breaks('What flowers are you growing this season?', b), null, 'a required set-up question is never blocked'); assert.ok(care.get(id).smart.qs.length >= 1); setAll(false);
+  n = a.careNotes('I like my garden and grow roses and tomatoes'); assert.doesNotMatch(n, /have not answered it yet/); assert.match(n, /never ask the same thing again/);
+  assert.equal(smart.breaks('So what hobbies do you have these days?', a), 'repeat'); a._why = null;
+  assert.equal(smart.breaks('Which roses are blooming right now?', a), null, 'a relevant follow-up is not an introductory question');
+  smart.afterReply(a, 'Which roses are blooming right now?'); a.careNotes('the red ones'); assert.equal(smart.breaks('Which roses are blooming right now?', a), null, 'not introductory: never blocked by the 14-day rule');
+  const b = session(); b.profile = memory.load(id); b.profile.id = id; assert.equal(smart.breaks('Do you have any hobbies you enjoy?', b), 'repeat', 'a new session, same person');
+  b.factLabels = ['setrem-confirm']; assert.equal(smart.breaks('Do you have any hobbies you enjoy?', b), null, 'a required set-up question is never blocked'); assert.ok(care.get(id).smart.qs.length >= 1); setAll(false);
 });
 
 test('GENERAL: "is it safe / true / ok" on any topic is Not sure unless a check really ran; a failed check says so; never safe or verified', () => {
@@ -169,4 +170,39 @@ test('GENERAL: "is it safe / true / ok" on any topic is Not sure unless a check 
   assert.equal(smart.decideGeneral('is it safe to eat this', { web: 'ran' }).label, 'Checked'); assert.equal(smart.decideGeneral('I had a lovely day', {}), null);
   setAll(false); process.env.MAYA_SMART_GENERAL = 'on'; const c = session(); const n = c.careNotes('is it safe to take two tablets together'); assert.match(n, /NOT SURE \(nothing was checked\)[^]*never say safe, verified, fine or guaranteed/); setAll(false);
   const off = session().careNotes('is it safe to take two tablets together'); assert.doesNotMatch(off, /NOT SURE/);
+});
+
+// ---------------------------------------------------------------- COMPANION
+test('COMPANION abilities: the first answer is 2 sentences, 1-2 examples, a question only if useful; calls are offered only when ringing is possible; "more" is a DIFFERENT category, never the same chunk; "all" is still the full list', () => {
+  setAll(false); process.env.MAYA_SMART_COMPANION = 'on'; const care = require('../care');
+  const c = session(); const id = c.profile.id; c.history.push({ role: 'user', content: 'what can you do' }); let f = c.limitsFacts('what can you do');
+  assert.match(f, /AT MOST TWO short sentences with ONE or TWO things/); assert.match(f, /a question only if it truly helps/); assert.match(f, /Do NOT offer to call or ring them/); assert.doesNotMatch(f, /arrange a call/);
+  const ev = []; const detach = care.attachSenior(id, { write: () => true }, null); f = c.limitsFacts('what can you do'); assert.match(f, /arrange a call/); assert.doesNotMatch(f, /Do NOT offer to call/);
+  assert.equal(c._abilityMode.first, true); assert.equal(c._abilityMode.max, 2);
+  c._smart = { topic: 'ability' }; smart.afterReply(c, 'I can chat with you any time and set reminders for you.');
+  c.history.push({ role: 'user', content: 'more' }); const m = c.limitsFacts('more'); assert.match(m, /ONE other thing/); assert.match(m, /Do NOT repeat anything you already told them \(talk, remind\)/); assert.doesNotMatch(m, /reminders yourself, from a minute away to days ahead; /);
+  assert.equal(c._abilityMode.first, false); c._q = 0; c._cats = null; assert.equal(smart.breaks('I can also set reminders for you.', c), 'dump', 'the same chunk again is rewritten'); c._q = 0; c._cats = null; c._why = null;
+  assert.equal(smart.breaks('I can also look at a photo of a letter and tell you if it seems like a scam.', c), null, 'a different category passes');
+  c.history.push({ role: 'user', content: 'what can you do, tell me everything' }); assert.match(c.limitsFacts('what can you do, tell me everything'), /THE TRUE LIST|nine/i);
+  detach(); setAll(false);
+});
+
+test('COMPANION: "scheduled / booked / arranged" is blocked without a record and passes with one', () => {
+  setAll(false); process.env.MAYA_SMART_GUARD = 'on'; const s = session(); s._exec = { reminder: false };
+  for (const d of ["I've scheduled a call for you at six.", 'Your call is scheduled for tomorrow.', "I've arranged it for you."]) assert.equal(smart.breaks(d, s), 'claim', d);
+  assert.equal(smart.breaks('I can help arrange a call if you like.', s), null); s._exec = { reminder: true }; assert.equal(smart.breaks('Your call is scheduled for tomorrow.', s), null); setAll(false);
+});
+
+test('COMPANION controls: a brushed-off topic is not raised by her for 30 days but is answered when THEY bring it up; "stop calling me" never expires and ends only when they ask for calls again', () => {
+  setAll(false); process.env.MAYA_SMART_COMPANION = 'on'; process.env.MAYA_SMART_MEMORY = 'on'; const care = require('../care');
+  const c = session(); const id = c.profile.id; c.careNotes('hi there'); smart.afterReply(c, 'How is your sister doing in Pune these days?');
+  let n = c.careNotes('I would rather not talk about that'); assert.match(n, /DROP IT/);
+  c.factLabels = []; c._q = 0; assert.equal(smart.breaks('Is your sister coming to Pune soon?', c), 'brushed'); c._why = null;
+  c.lastHeard = () => 'my sister called me from Pune today'; c._q = 0; assert.equal(smart.breaks('How was the call with your sister in Pune?', c), null, 'they raised it themselves');
+  c.lastHeard = () => 'ok'; c._q = 0; assert.equal(smart.breaks('What do you like to cook on Sundays?', c), null, 'other topics are free');
+  const real = Date.now; const ago = 29 * 86400000; care.get(id).smart.brush[0].at = real() - ago; c._q = 0; assert.equal(smart.breaks('Is your sister coming to Pune soon?', c), 'brushed', 'still inside 30 days'); care.get(id).smart.brush[0].at = real() - 31 * 86400000; c._why = null; c._q = 0; assert.equal(smart.breaks('Is your sister coming to Pune soon?', c), null, 'after 30 days it is free again');
+  const d = session(); const did = d.profile.id; assert.match(d.careNotes('please stop calling me'), /CALLS REVOKED/); assert.equal(smart.callsOk(d), false);
+  care.get(did).smart.noCalls.at = real() - 400 * 86400000; assert.equal(smart.callsOk(d), false, 'no expiry, even a year on');
+  assert.match(d.careNotes('can you tell me what you can do'), /do not offer or arrange a call/);
+  assert.match(d.careNotes('can you call me tomorrow'), /CALLS RESTORED/); assert.equal(Boolean(care.get(did).smart.noCalls), false); setAll(false);
 });

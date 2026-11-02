@@ -1541,7 +1541,7 @@ function setTimezone(id, tz, source = 'manual') {
   return changed || p.tz === tz;
 }
 // smart.js MEMORY: the questions Maya recently asked (content words and a short text), so she does not ask them again in a later session.
-function persistSmart(id, obj) { const p = get(id); if (!p) return false; p.smart = obj; save(id); return true; }
+function persistSmart(id, patch) { const p = get(id); if (!p) return false; p.smart = { ...(p.smart || {}), ...patch }; save(id); return true; }
 function setReminderSender(sender) { reminderSender = sender; }
 const whatsappLinked = (id) => Boolean(reminderSender && reminderSender.channelFor(id) === 'whatsapp');   // is WhatsApp set up for this person (setrem.js asks before it offers it)
 const WA_OPEN = new Set(['wa_sent', 'wa_delivered', 'wa_read']);

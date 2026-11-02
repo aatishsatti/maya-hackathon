@@ -1207,7 +1207,7 @@ class Call {
     // "What can you do?" needs room for the whole true list (and a fuller one the second time they ask); a question goes with it only if she offers to try one.
     const asked = abilitiesAsks(this.history, this.lastHeard());
     if (asked && !special) {
-      if (require('./smart').flag('SHORT') && asked < 2 && !require('./smart').wantsAll(this.lastHeard())) { d.maxSentences = Math.min(d.maxSentences, 2); d.noQuestion = false; }   // the first answer is short: two sentences, three things, one question
+      if ((require('./smart').flag('SHORT') || require('./smart').flag('COMPANION')) && !/\b(?:all|everything|full list|the whole|in full)\b/i.test(this.lastHeard()) && (asked < 2 || require('./smart').flag('COMPANION'))) { d.maxSentences = Math.min(d.maxSentences, 2); d.noQuestion = false; }   // the first answer is short: two sentences, three things, one question
       else { d.maxSentences = Math.max(d.maxSentences, asked >= 2 ? 7 : 5); d.noQuestion = asked < 2 && d.noQuestion; }
     }
   }
@@ -1234,9 +1234,9 @@ class Call {
     // Her own power, stated as a fact whenever reminders or timers come up (found live: "I can't set a timer, your son can add a reminder" - both false): she sets them herself, from one minute, and says it is set only when the app says it is saved.
     if (REMINDERISH.test(text)) bits.push('REMINDER POWER: you CAN set reminders yourself whenever they ask you, in the chat or on a call, for any time from one minute away (one minute is fine and there is no minimum) to days ahead. Their family can add reminders too, but that is only an extra way: never say you cannot set a reminder or a timer, never say you do not set short ones, never make up a limit, and never tell them to ask their son, daughter or family to add it. When they ask for one you take it from there (what and when; never ask how or where: the app picks the way they said, else a text where they asked); you say it is set only when the app\'s facts say it is saved.');
     const nAsk = abilitiesAsks(this.history, text);
-    const shortAb = require('./smart').flag('SHORT') && nAsk === 1 && !require('./smart').wantsAll(text);
-    this._abilityFirst = shortAb;
-    if (nAsk) bits.push(shortAb ? require('./smart').ABILITY_SHORT.trim() : abilitiesFact(nAsk >= 2, this.channel !== 'chat').trim());
+    this._abilityFirst = false; this._abilityMode = null;
+    const af = nAsk ? require('./smart').abilityFact(this, text, nAsk) : null;   // SHORT / COMPANION flags: a short first answer, a different category on "more"; null = the full list as before
+    if (nAsk) bits.push(af ? af.text.trim() : abilitiesFact(nAsk >= 2, this.channel !== 'chat').trim());
     if (this.channel !== 'chat') bits.push('ON A CALL she cannot look at a photo or screenshot and cannot search the web yet; the written chat in the app can do both. If they offer a photo or screenshot, or ask her to find something out online, say so in a few words WITHOUT a flat "I can\'t": tell them to send it in the chat (after this call is fine) and she will check it there. Never say "I can\'t see pictures" or "I can\'t look things up online".');
     const pf = require('./phone').fact(text); if (pf) bits.push(pf);   // a number with a country code: which country, and that the number shown can be faked (a static table, no lookup)
     if (/(?:\d[\s().-]*){7,}/.test(text) || /\b(?:phone |telephone )?number\b/i.test(text)) bits.push('A PHONE NUMBER: you never look numbers up and cannot tell if one is real (callers can fake the number shown). If they give or ask about a number, say that straight away, in a few plain words ("I can\'t look numbers up"), never "I\'m not sure what you want me to do with it".');
@@ -1796,7 +1796,7 @@ class Call {
     // smart.js (flags, all OFF by default): the topic router, abilities on demand, the decision from signals, the state / record cards. Code decides what Spark sees; a flag OFF adds nothing here.
     const sm = require('./smart');
     if (sm.any()) {
-      this._exec = { ...(this._exec || {}), family: this.factLabels.some((l) => /^(scam-yes-to-family|concern-yes-alert|family-ask)$/.test(l)) || Boolean(care.scamTold(id)), reminder: this.factLabels.includes('setrem-saved') };
+      this._exec = { ...(this._exec || {}), family: this.factLabels.some((l) => /^(scam-yes-to-family|concern-yes-alert|family-ask)$/.test(l)) || Boolean(care.scamTold(id)), reminder: this.factLabels.includes('setrem-saved') || care.seniorSetCount(id) > 0 };
       for (const [l, t] of sm.notes(this, heard)) note(l, t);
     }
     this._knownText = notes.join(' ');

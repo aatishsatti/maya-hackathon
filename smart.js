@@ -14,10 +14,13 @@
 //   CAPS      the RECORD card on ability / reminder / "did you ..." turns too: tools available / unavailable here, and what really ran, failed or did not run.
 //   MEMORY    one THREAD line each turn (topic, what she last asked and whether it was answered, questions already asked, kept across sessions); a repeated question is rewritten once.
 //   GENERAL   a verification question on any topic ("is it safe", "is it true") is Not sure unless a check really ran; never safe, verified or guaranteed.
+//   COMPANION friend, not tool: the first abilities answer is 2 sentences with 1-2 relevant examples (a question only if it helps); "more" gives a DIFFERENT category, never the same chunk or the full list ("all" still does); calls are offered only when ringing them is possible
+//             and never as "scheduled" without a record; a style fact for small talk (respond first, a question is optional); the 14-day question memory covers answered INTRODUCTORY questions only; a brushed-off topic is not raised by her for 30 days (never
+//             ignored when THEY raise it); "stop calling me" is kept until they ask for calls again (no expiry). Nothing here touches scam, consent or safety turns.
 //   KINDS     for a scam turn only: what the real thing does and the common traps, for the kind named (data below; PROPOSED anchors, human check pending; no numbers, links or routes).
 'use strict';
 
-const LAYERS_ALL = ['ROUTER', 'ABILITIES', 'DECISION', 'CARDS', 'GUARD', 'KINDS', 'SHORT', 'CONTRACT', 'CAPS', 'MEMORY', 'GENERAL'];
+const LAYERS_ALL = ['ROUTER', 'ABILITIES', 'DECISION', 'CARDS', 'GUARD', 'KINDS', 'SHORT', 'CONTRACT', 'CAPS', 'MEMORY', 'GENERAL', 'COMPANION'];
 const any = () => LAYERS_ALL.some((l) => flag(l));
 const flag = (layer) => { const v = process.env[`MAYA_SMART_${layer}`]; return v === 'on' || (process.env.MAYA_SMART === 'on' && v !== 'off'); };
 
@@ -116,27 +119,52 @@ const WANTS_ALL = /\b(?:all|everything|every ?thing|full list|the whole|in full|
 const wantsAll = (t) => WANTS_ALL.test(String(t || ''));
 const ABILITY_SHORT = ' ABILITIES (facts for you, never read out as written): they have just asked what you can do. Reply in AT MOST TWO short sentences: name at most THREE things, picked for what fits this chat and said in your own fresh words, then ask ONE short question about what they would like. Do not list more than three; if they want everything they will say "more" or "all". Only real things: talking by voice or writing, setting reminders yourself, checking a message, photo or PDF for a scam (the written chat), and telling their family when they ask. Never a stock sentence.';
 const CATS = [['talk', /\b(?:voice|talk|chat|speak|company|conversation)\b/i], ['remind', /\bremind/i], ['scam', /\b(?:scam|photo|screenshot|pdf)\b/i], ['web', /\b(?:news|search|look(?:ing)? up|the web)\b/i], ['family', /\bfamily\b/i], ['schedule', /\bschedule\b/i], ['call', /\b(?:call|ring|phone) you\b/i]];
+const ABILITY_COMPANION = ' ABILITIES (facts for you, never read out as written): they asked what you can do. You are a friend to them, not a menu. Answer in AT MOST TWO short sentences with ONE or TWO things that fit what they are doing or what you know of them, in your own fresh words. Do not list everything and do not count them off; a question only if it truly helps (often none). If they want more they will ask. Only real things (below).';
+const POOL = [['talk', 'chatting by voice or in writing, any time'], ['remind', 'setting reminders yourself, from a minute away to days ahead'], ['scam', 'looking at a message, photo or PDF that worries them and saying if it looks like a scam (the written chat)'], ['family', 'letting their family know when they ask'], ['schedule', 'turning a schedule they tell you into reminders they choose'], ['call', 'helping them arrange a call from you as a reminder'], ['web', 'checking a claim or news on the web (the written chat)']];
+// What is really available now: ringing needs the app open or a registered phone; it is gone while they have told her to stop calling.
+function callsOk(s) { const care = require('./care'), id = s.profile && s.profile.id; const p = id && care.get(id); if (p && p.smart && p.smart.noCalls) return false; return Boolean(id && (care.appOpen(id) || care.pushReady(id))); }
+function availPool(s) { const chat = s.channel === 'chat'; return POOL.filter(([k]) => (k === 'call' ? callsOk(s) : (k === 'scam' || k === 'web') ? chat : true)); }
+function abilityFact(s, text, nAsk) {
+  const sh = flag('SHORT'), co = flag('COMPANION'); if (!(sh || co) || !nAsk) return null;
+  const x = st(s), all = /\b(?:all|everything|every ?thing|full list|the whole|in full)\b/i.test(String(text || ''));
+  if (all) return null;   // an explicit "all": the full list, as before
+  if (co && nAsk >= 2) {
+    const said = new Set(x.abilitySaid || []), left = availPool(s).filter(([k]) => !said.has(k));
+    s._abilityMode = { first: false, max: 2, avoid: [...said] };
+    return { first: false, text: left.length ? ` ABILITIES (facts for you, never read out as written): they want to hear more. Tell them about ONE other thing, in at most two short sentences and your own words, from ONLY these: ${left.map(([, w]) => w).join('; ')}. Do NOT repeat anything you already told them (${[...said].join(', ') || 'nothing yet'}) and do not list them all.` : ' ABILITIES (facts for you): you have already told them the main things. Say so lightly in one short sentence and ask what they would like, without listing again.' };
+  }
+  if (nAsk === 1 && !wantsAll(text)) {
+    if (co) { s._abilityMode = { first: true, max: 2, avoid: [] }; return { first: true, text: ABILITY_COMPANION.trim() + ` Real things you can mention: ${availPool(s).map(([, w]) => w).join('; ')}. ${callsOk(s) ? '' : 'Do NOT offer to call or ring them.'}` }; }
+    s._abilityMode = { first: true, max: 3, avoid: [] }; return { first: true, text: ABILITY_SHORT.trim() };
+  }
+  return null;
+}
 const ABILITY_FALLBACK = 'I can chat with you, set reminders, and check a message for scams. What would you like help with?';
 const STOP = new Set('that this with would could should have your you what when where which about there their they them then than from were been will just like some into also very much more'.split(' '));
 const contentWords = (t) => [...new Set(String(t || '').toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w)))];
 const overlap = (a, b) => { if (a.length < 3 || b.length < 3) return 0; const sb = new Set(b); return a.filter((w) => sb.has(w)).length / Math.min(a.length, b.length); };
 
+const INTRO = /\b(?:hobbies|hobby|what do you (?:like|enjoy)(?: to do| doing)?|where do you live|how many (?:children|grandchildren|kids|grandkids)|tell me (?:a bit )?about yourself|what did you do (?:today|this morning|yesterday)|how (?:was|is) your day|what(?:'s| is) your (?:favou?rite|name)|do you have (?:any )?(?:children|grandchildren|pets|family|hobbies))\b/i;   // the INTRODUCTORY questions: asked and answered once, not asked again for 14 days (a relevant follow-up is never one of these)
+const INTRO_KEYS = [['hobbies', /\bhobb(?:y|ies)\b|what do you (?:like|enjoy)(?: to do| doing)?|do you have any hobbies/i], ['home', /where do you live/i], ['kids', /how many (?:children|grandchildren|kids|grandkids)|do you have (?:any )?(?:children|grandchildren|family)/i], ['self', /tell me (?:a bit )?about yourself/i], ['today', /what did you do (?:today|this morning|yesterday)|how (?:was|is) your day/i], ['favourite', /what(?:'s| is) your (?:favou?rite|name)/i], ['pets', /do you have (?:any )?pets/i]];
+const introKey = (q) => { const k = INTRO_KEYS.find(([, re]) => re.test(String(q || ''))); return k ? k[0] : ''; };
 // ---------------------------------------------------------------- context memory (MEMORY): questions she asked, kept in the session and (content words + a short text) on the profile for 14 days
 const DAY14 = 14 * 86400000;
 function savedQs(s) { const care = require('./care'), id = s.profile && s.profile.id, p = id && care.get(id); return ((p && p.smart && p.smart.qs) || []).filter((q) => Date.now() - q.at < DAY14); }
 function allQs(s) { const x = st(s); return [...savedQs(s), ...(x.qs || [])]; }
 function afterReply(s, text) {
+  const x = st(s);
+  if (flag('COMPANION') && x.topic === 'ability') { x.abilitySaid = [...new Set([...(x.abilitySaid || []), ...CATS.filter(([, re]) => re.test(text)).map(([k]) => k)])]; }
   if (!flag('MEMORY')) return;
-  const x = st(s); const qs = String(text || '').split(/(?<=[.!?])\s+/).filter((q) => /\?\s*$/.test(q));
+  const qs = String(text || '').split(/(?<=[.!?])\s+/).filter((q) => /\?\s*$/.test(q));
   if (!qs.length) { x.lastQ = null; return; }
   x.qs = x.qs || [];
-  for (const q of qs) { const w = contentWords(q); if (w.length >= 3) x.qs.push({ w, t: q.replace(/\s+/g, ' ').slice(0, 90), at: Date.now() }); }
-  x.lastQ = { t: qs[qs.length - 1].replace(/\s+/g, ' ').slice(0, 90), answered: false };
+  for (const q of qs) { const w = contentWords(q); if (w.length >= 3 || introKey(q)) x.qs.push({ w, t: q.replace(/\s+/g, ' ').slice(0, 90), at: Date.now(), intro: introKey(q), answered: false }); }
+  x.lastQ = { t: qs[qs.length - 1].replace(/\s+/g, ' ').slice(0, 90), answered: false, entry: x.qs[x.qs.length - 1] };
   x.qs = x.qs.slice(-10);
-  try { require('./care').persistSmart(s.profile.id, { qs: allQs(s).slice(-10).map(({ w, t, at }) => ({ w, t: t.slice(0, 60), at })) }); } catch { /* no profile: session memory only */ }
+  try { require('./care').persistSmart(s.profile.id, { qs: allQs(s).slice(-10).map(({ w, t, at, intro, answered }) => ({ w, t: t.slice(0, 60), at, intro: intro || '', answered: Boolean(answered) })) }); } catch { /* no profile: session memory only */ }
 }
 function threadLine(s, heard) {
-  const x = st(s); if (x.lastQ && !x.lastQ.answered && words(heard).length >= 3 && !ACK.test(String(heard).trim().replace(/[.!,]+$/g, ''))) x.lastQ.answered = true;
+  const x = st(s); if (x.lastQ && !x.lastQ.answered && words(heard).length >= 3 && !ACK.test(String(heard).trim().replace(/[.!,]+$/g, ''))) { x.lastQ.answered = true; if (x.lastQ.entry) x.lastQ.entry.answered = true; }
   const qs = allQs(s).slice(-6).map((q) => `"${q.t.replace(/"/g, '')}"`);
   if (!x.topic && !qs.length) return null;
   return `THREAD: topic=${x.topic || 'none'}; ${x.lastQ && !x.lastQ.answered ? `you last asked "${x.lastQ.t.replace(/"/g, '')}" and they have not answered it yet, so do not move on as if they had; ` : ''}questions you already asked (never ask the same thing again, in any wording): ${qs.join(' ') || 'none'}.`;
@@ -148,6 +176,20 @@ function decideGeneral(heard, exec = {}) {
   if (!VERIFY_Q.test(String(heard || ''))) return null;
   if (exec.web === 'ran') return { label: 'Checked', why: 'a web check ran' };
   return { label: 'Not sure', why: exec.web === 'failed' ? 'the check failed' : 'nothing was checked' };
+}
+
+// ---------------------------------------------------------------- the controls they can say out loud (COMPANION): a brushed-off topic (30 days, only her own raising of it), "stop calling me" (kept until THEY ask again, no expiry)
+const BRUSH = /\b(?:i (?:don'?t|do not) (?:want|wish) to (?:talk|discuss|speak) about|(?:let'?s|can we) (?:not talk about|drop|stop talking about)|drop it|not now|i'?d rather not|i would rather not|leave it)\b/i;
+const NOCALLS = /\b(?:stop calling me|don'?t (?:ever )?call me|do not call me|no more calls|never call me)\b/i;
+const CALLS_BACK = /\b(?:you can|please|it'?s (?:ok|okay|fine) (?:to|for you to)|go ahead and|start) call(?:ing)? me\b|\bcall me again\b|\b(?:can|could|would) you (?:please )?call me\b|\bplease call me\b|\bcall me (?:tomorrow|later|at|every|daily)\b/i;
+function ledger(s, heard) {
+  const care = require('./care'), id = s.profile && s.profile.id, p = id && care.get(id); if (!p) return null;
+  const sm = p.smart || {}; const x = st(s); const prev = x.prevHeard; x.prevHeard = heard;
+  if (NOCALLS.test(heard)) { care.persistSmart(id, { noCalls: { at: Date.now() } }); return 'CALLS REVOKED: they told you to stop calling them. Say kindly, in one short sentence, that you will not call them unless they ask you to again. Never offer, arrange or promise a call after this, until THEY ask for calls again. Do not change any reminder they set themselves.'; }
+  if (sm.noCalls && CALLS_BACK.test(heard)) { care.persistSmart(id, { noCalls: null }); return 'CALLS RESTORED: they have asked for calls again. You may offer to arrange one.'; }
+  if (BRUSH.test(heard) && (x.lastQ || prev)) { const w = contentWords(x.lastQ ? x.lastQ.t : prev); if (w.length >= 2) { care.persistSmart(id, { brush: [...(sm.brush || []).filter((b) => Date.now() - b.at < 30 * 86400000), { w, at: Date.now() }].slice(-6) }); return 'DROP IT: they do not want to talk about that. Say okay, lightly, and move on. Do not raise that topic yourself again; if THEY bring it up, talk about it normally.'; }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- the notes for one turn: [[label, text], ...]
@@ -162,8 +204,11 @@ function notes(s, heard) {
   if (flag('ROUTER') && switched) out.push(['smart-switch', `TOPIC CHANGE: they have moved on from ${old} to ${it === 'smalltalk' ? 'something else' : it}. Answer what they just said first, and stay on it. Do not go back to ${old} unless they do${old === 'scam' ? '; the only exception is a family question that is still open, which you may repeat once, in one short sentence at the end' : ''}. (Any other FACT in this message still applies.)`]);
   if (it !== 'followup') x.topic = it;
   if (it !== 'scam' && switched && old === 'scam') { x.kind = null; x.incident = null; x.asked = []; x.known = {}; x.disclosed = false; }
+  if (flag('COMPANION')) { const f = ledger(s, heard); if (f) out.push(['smart-ledger', f]); }
+  if (flag('COMPANION') && (it === 'smalltalk' || it === 'followup') && !s.safety && !s.health) out.push(['smart-style', 'YOU ARE their friend, not a tool, not a menu and never a romantic partner. Respond to what they just said first, warmly, in short fresh words (begin differently from your last replies). A question is optional, never more than ONE: when something they said invites it, ask the small question a friend would (gardening: what they grow), about every second or third reply, and otherwise answer with a warm short remark. No interview.']);
+  if (flag('COMPANION') && (it === 'ability' || /\b(?:call|ring|phone)\b/i.test(heard))) out.push(['smart-calls', callsOk(s) ? 'CALLS: you can help ARRANGE a call from you when they ask (it is saved as a reminder). Arranging is not scheduled: say a call is scheduled ONLY when the RECORD below says reminder saved: yes.' : 'CALLS: do not offer or arrange a call from you (ringing them is not possible right now, or they told you to stop). If they ask, say so plainly and kindly.']);
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
-  if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and ONE question; say what you see, what you are unsure of, and one next step or question; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
+  if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and at most ONE question, only when it helps (often none); say what you see, what you are unsure of, and one next step if there is one; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
   if (flag('GENERAL') && it !== 'scam' && !s.safety) {
     const g = decideGeneral(heard, s._exec || {});
     if (g) out.push(['smart-decision-general', g.label === 'Checked' ? 'DECISION (made by the app): a web check ran. You may share what it returned as "what I found", never as proof, never "verified", "safe" or "guaranteed"; no diagnosis or medicine advice; they decide.' : `DECISION (made by the app): NOT SURE (${g.why}). You have NOT verified this. Say honestly that you cannot be sure, say a trusted source (their doctor or pharmacist, or the official site) is the place to confirm, and never say safe, verified, fine or guaranteed. No diagnosis or medicine advice; they decide.`]);
@@ -227,18 +272,26 @@ const CLAIM = [
   [/\bI(?:'ve| have| just)?\s+(?:looked (?:it )?up|searched|googled)\b/i, (e) => e.web === 'ran'],
   [/\bI(?:'ve| have| just)?\s+(?:checked|verified|confirmed)\b/i, (e) => e.web === 'ran' || e.scam === 'ran'],
   [/\bI(?:'ve| have| just)?\s+(?:called|rang|phoned|contacted|emailed|messaged)\s+(?!you\b)/i, () => false],
+  [/\bI(?:'ve| have| just)?\s+(?:scheduled|booked|arranged)\b|\b(?:is|'s|has been|have been)\s+(?:all\s+)?(?:scheduled|booked)\b/i, (e) => Boolean(e.reminder)],
   [/\bI(?:'ve| have| just)?\s+(?:notified|alerted|told|informed|sent)\s+(?:your\s+)?(?:family|son|daughter|them|the bank|the police)\b/i, (e) => Boolean(e.family)],
 ];
 // Returns a reason string when the draft must be written again, else null. rec = s._exec (what really ran); known = the text the facts and the senior gave (a link or number must already be in it).
 function breaks(text, s) {
   const t = String(text || '').replace(/’/g, "'");
-  if (flag('SHORT')) {
+  if (flag('SHORT') || flag('COMPANION')) {
     s._q = (s._q || 0) + (t.match(/\?/g) || []).length;
     if (s._q > 1) { s._why = 'you asked more than one question: ask only ONE'; return 'twoq'; }
-    if (s._abilityFirst) { s._cats = s._cats || new Set(); for (const [k, re] of CATS) if (re.test(t)) s._cats.add(k); if (s._cats.size > 3) { s._why = 'you listed too many abilities: name at most three, in at most two short sentences, then one question'; return 'dump'; } }
+    const am = s._abilityMode || (s._abilityFirst ? { first: true, max: 3, avoid: [] } : null);
+    if (am) {
+      s._cats = s._cats || new Set(); const seen = new Set(); for (const [k, re] of CATS) if (re.test(t)) { s._cats.add(k); seen.add(k); }
+      if (s._cats.size > am.max) { s._why = 'you listed too many abilities: name at most ' + am.max + ', in at most two short sentences'; return 'dump'; }
+      if (am.avoid.some((k) => seen.has(k))) { s._why = 'you repeated something you already told them about your abilities: say a different one'; return 'dump'; }
+    }
   }
   if (flag('MEMORY') && /\?\s*$/.test(t) && !(s.factLabels || []).some((l) => /^(setrem|scam)/.test(l))) {
-    const w = contentWords(t); if (allQs(s).some((q) => overlap(w, q.w) >= 0.6)) { s._why = 'that question was already asked: do not ask it again, move on'; return 'repeat'; }
+    const w = contentWords(t); const ik = introKey(t); if (ik && allQs(s).some((q) => q.intro === ik && q.answered)) { s._why = 'they already answered that introductory question: do not ask it again, build on their answer'; return 'repeat'; }
+    const ls = (s.profile && require('./care').get(s.profile.id) || {}).smart;
+    if (flag('COMPANION') && ls && (ls.brush || []).some((b) => Date.now() - b.at < 30 * 86400000 && overlap(w, b.w) >= 0.5 && !(b.w.some((x) => String(s.lastHeard ? s.lastHeard() : '').toLowerCase().includes(x))))) { s._why = 'they asked you to drop that topic: do not raise it'; return 'brushed'; }
   }
   if (!flag('GUARD')) return null;
   if (SAFE_CLAIM.test(t) && !/\bnot\s+(?:100|a hundred|safe|verified)|\bn't\s+(?:safe|verified)|\bcan'?t\s+(?:say|be)\b[^.]{0,30}\b(?:safe|sure)/i.test(t)) return 'certainty';
@@ -259,4 +312,4 @@ function fallback(s) {
     : 'I want to get this right. Could you tell me a little more about what you mean?';
 }
 
-module.exports = { any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
+module.exports = { ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
