@@ -35,6 +35,66 @@ const CHANGE = /\b(?:change|move|switch|reschedule|make)\b[^.?!]{0,25}\b(?:call|
 // The senior asking for a daily call themselves (so a recent "no" does not apply): "call me every day", "can you ring me daily".
 const SELF_ASK = /\b(?:can|could|would|will) you (?:please )?(?:call|ring|phone) me\b[^.?!]{0,40}\b(?:every ?day|daily|each day|every (?:morning|afternoon|evening))\b|\b(?:call|ring|phone) me (?:every ?day|daily|each day|every (?:morning|afternoon|evening))\b|\bi(?:'d| would) (?:like|love) (?:you to |a )?(?:call|ring|chat)[^.?!]{0,30}\b(?:every ?day|daily)\b/i;
 
+// ---- DECISION (smart.js flag MAYA_SMART_DECISION): Spark may read the request; THIS code validates the operation, the target and what the scheduler really supports. Nothing here widens the scheduler:
+// the companion call is ONE daily call at ONE time of day. Several weekdays in one schedule and a second daily call do not exist, so they are explained as exactly that limit (never "family needed", never "I cannot schedule").
+const D = () => require('./smart').flag('DECISION');
+const CALL_ASK = /\b(?:call|ring|phone)\s+me\b|\b(?:daily|every ?day)\s+(?:call|chat)s?\b|\bdaily calls?\b|\bgive me a (?:call|ring)\b/i;
+const DAILYW = /\b(?:every ?day|daily|each day|every (?:morning|afternoon|evening))\b/i;
+const DOW = '(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?s?';
+const MULTI_DAYS = new RegExp(`\\b(?:weekdays?|week days?|weekends?|${DOW}(?:\\s*(?:,|and|&|/|-|to)\\s*${DOW})+|(?:twice|three times|two times|2 times|3 times) a week|every other day|every (?:second|2nd) day|alternate days?)\\b`, 'i');
+const SECOND = /\b(?:another|a second|second|an extra|extra|additional|one more|as well|on top|in addition|two (?:daily )?calls|twice a day|also)\b/i;
+const CHANGE_CUE = /\b(?:change|move|switch|reschedule|instead|rather|replace|swap)\b/i;
+function predecessor(id, p, now) {   // what the record says happened before this request: acknowledged, never denied
+  if (care.socialOf(id)) return '';
+  const z = zget(id), sm = p.smart || {}, parts = [];
+  const h = (sm.history || []).filter((e) => e.type === 'daily-call').slice(-1)[0];
+  if (h) parts.push(`Their earlier daily call${h.h != null ? ` at ${clockWords(h.h, h.mi)}` : ''} was CANCELLED on ${dateWords(care.localDate(h.at, p.tz || 'UTC'))} (by the ${h.actor}, ${h.source}). It was real: never say it was never agreed or set up, and it is NOT a refusal of future calls: they are asking again themselves, which is their own choice. Mention in a few words that the earlier one was cancelled, then carry on.`);
+  else if (z.cancelledAt) parts.push(`Their earlier daily call was CANCELLED on ${dateWords(care.localDate(z.cancelledAt, p.tz || 'UTC'))} (details not recorded). It was real, and it is NOT a refusal of future calls: they are asking again themselves. Mention in a few words that it was cancelled, then carry on.`);
+  const ls = z.lastSave;
+  if (ls && ls.ok !== true) parts.push(ls.ok === false ? `An earlier attempt to save a daily call did NOT save (${String(ls.error || 'it failed').slice(0, 80)}); the app checked and no daily call exists. Say so in a few words, then carry on.` : 'An earlier attempt to save a daily call did not finish; the app checked and no daily call exists. Say so in a few words, then carry on.');
+  return parts.join(' ');
+}
+function existingFact(arr, p, why = '') {
+  const v = care.socialView(p, p.reminders.find((r) => r.social));
+  return ['social-decide-existing', `ALREADY SAVED (read from the saved record): they already have a daily call at ${clockWords(arr.h, arr.mi)} (${arr.tz}), status: ${v.status}${v.next ? `, next call ${dateWords(care.localDate(v.next, arr.tz))} at ${clockWords(arr.h, arr.mi)}` : ''}. Nothing new was saved: a repeated request never makes a second call.${why} Tell them it is already set up, from the record, in one or two short sentences.`];
+}
+function decision(s, id, p, arr, offer, heard, now) {
+  const ask = CALL_ASK.test(heard) || SELF_ASK.test(heard), live = arr && !arr.revoked ? arr : null;
+  const at = live ? `${clockWords(live.h, live.mi)} (${live.tz})` : '';
+  if (ask && MULTI_DAYS.test(heard) && (CALL_ASK.test(heard) || p.reminders.some((r) => r.social)))
+    return ['social-decide-days', `WEEKDAY PATTERN NOT AVAILABLE (a limit of Maya's scheduler, NOT a permission, not a family rule, not a lack of phone): the daily call can only be EVERY day at ONE time. Days such as Mon/Wed/Fri, weekdays, weekends or every other day are not available for it. ${live ? `Their existing daily call at ${at} is UNCHANGED and still active.` : 'Nothing is saved.'} Say that specific limit plainly in one or two short sentences. Do NOT say you cannot schedule calls, that the family is needed, or that only the app works. ${live ? 'Ask ONE question: keep it as it is?' : 'Ask ONE question: would an every-day call suit them instead?'} (A call on one single weekday, like every Tuesday, is an ordinary reminder they can ask for.)`];
+  if (live && ask && DAILYW.test(heard) && SECOND.test(heard) && !CHANGE_CUE.test(heard))
+    return ['social-decide-second', `SECOND DAILY CALL NOT AVAILABLE (a limit of Maya's scheduler: ONE daily call at a time; not a permission, not a family rule). Their existing daily call at ${at} is UNCHANGED and stays. Nothing new is saved. Say that specific limit plainly in one or two short sentences, and offer ONE thing: changing the time of the existing call, or keeping it. Do NOT say you cannot schedule calls or that the family is needed.`];
+  if (live && (SELF_ASK.test(heard) || (CALL_ASK.test(heard) && DAILYW.test(heard)))) {
+    const sl = slots(heard, live.tz, now), ls = zget(id).lastSave, why = !ls || ls.ok === true ? '' : ' (An earlier save looked unfinished, but the app checked: the call IS saved.)';
+    if (!sl.time || (sl.time.h === live.h && sl.time.mi === live.mi)) return existingFact(live, p, why);
+    if (!CHANGE_CUE.test(heard) && !offer) {   // a different time for a call they already have: change or add? Add does not exist, so ONE question that binds to exactly the change
+      const o = { id: uid(), stage: 'confirm', mode: 'change', at: now, tz: p.tz || live.tz, time: sl.time, start: live.start, ack: true };
+      zput(id, { offer: o });
+      return ['social-decide-ambiguous', `CHANGE OR ADD? (nothing is changed yet) They already have a daily call at ${at} and asked for ${clockWords(sl.time.h, sl.time.mi)}. A second daily call is not available (scheduler limit: ONE daily call at a time), so say that in a few words and ask ONE yes/no question: should the existing daily call MOVE to ${clockWords(sl.time.h, sl.time.mi)}, their local time (${o.tz})? If not, it stays at ${clockWords(live.h, live.mi)}. Only a yes to that question changes it.`];
+    }
+  }
+  if (CHANGE.test(heard) && !/\b(?:call|chat|ring|phone)\b/i.test(heard) && !offer) {
+    const others = p.reminders.filter((r) => !r.social && r.by === 'senior' && (r.dueAt != null || r.active)).length;
+    if (others && live) return ['social-decide-which', `WHICH ONE? (nothing is changed) They want to change a time but have a daily call at ${at} AND ${others} other reminder${others > 1 ? 's' : ''} they set. Ask ONE short question: which one do they mean (the daily call, or which reminder)? Change nothing until they say.`];
+  }
+  return null;
+}
+// "Stop all calls" is a consent change: scheduling needs their fresh yes. A request for a daily call afterwards is ASKED about, and only a plain yes to that question lifts it.
+function reconsent(s, id, p, z, heard, now) {
+  const fresh = z.reconsent && now - z.reconsent.at < OFFER_TTL_MS;
+  if (fresh && isYes(heard)) {
+    care.persistSmart(id, { noCalls: null, callsRestored: { at: now, source: 'chat: yes to the fresh-consent question' } }); zput(id, { reconsent: null });
+    const q = onCallsBack(id, now); if (q) return ['social-ask', `CALLS ALLOWED AGAIN by their yes. ${q}`];
+    const offer = { id: uid(), stage: 'collect', mode: 'new', at: now, tz: p.tz, time: null, start: null };
+    if (!p.tz) return null;
+    zput(id, { offer }); return advance(s, id, care.get(id), offer, '', now, true);
+  }
+  if (fresh && DECLINE.test(heard)) { zput(id, { reconsent: null }); return ['social-declined', 'They do not want calls from you again. Accept that in one short sentence; nothing is scheduled.']; }
+  if (CALL_ASK.test(heard) || SELF_ASK.test(heard)) { zput(id, { reconsent: { at: now } }); return ['social-decide-revoked', 'CALLS ARE STOPPED: earlier they told you to stop calling them. Nothing is scheduled and nothing will be until they clearly say they want calls from you again (this is their consent, not a family rule and not a technical limit). Ask ONE short yes/no question: do they want you to start calling them again? Do not ask for a time yet and do not say anything is arranged.']; }
+  return null;
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const pad2 = (n) => String(n).padStart(2, '0');
 const clockWords = (h, mi) => `${h % 12 === 0 ? 12 : h % 12}:${pad2(mi)} ${h < 12 ? 'am' : 'pm'}`;
@@ -51,7 +111,9 @@ const quietWords = () => `${pad2(care.cfg.quietStart)}:00 to ${pad2(care.cfg.qui
 function claims(id, heard, now = Date.now()) {
   const z = zget(id), arr = care.socialOf(id);
   if (z.offer && now - z.offer.at < OFFER_TTL_MS) return true;
-  return Boolean(SELF_ASK.test(String(heard || '')) && !arr);
+  const h = String(heard || '');
+  if (D() && CALL_ASK.test(h) && (DAILYW.test(h) || MULTI_DAYS.test(h))) return true;   // a daily-call request (even with a call already saved, or in a pattern that does not exist) is this flow's, never an ordinary reminder that would add a second record
+  return Boolean(SELF_ASK.test(h) && !arr);
 }
 
 // "Stop calling me" reaches the scheduler: the saved chat and any queued ring stop at once (the senior's other reminders are untouched).
@@ -94,7 +156,8 @@ function step(s, heard, ctx = {}, now = Date.now()) {
   if ((ctx.intent === 'smalltalk' || ctx.intent === 'followup') && ctx.safe !== false) x.warm += 1;
   let offer = z.offer && now - z.offer.at < OFFER_TTL_MS ? { ...z.offer } : null;
   if (z.offer && !offer) zput(id, { offer: null });
-  if (noCalls) { if (offer) zput(id, { offer: null }); return null; }
+  if (noCalls) { if (offer) zput(id, { offer: null }); return D() ? reconsent(s, id, p, z, heard, now) : null; }
+  if (D() && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard)) && !CANCEL.test(heard) && !SKIP.test(heard) && !READBACK.test(heard)) { const f = decision(s, id, p, arr, offer, heard, now); if (f) return f; }
 
   // ---- what the record says (never from memory of the conversation): "What daily calls do I have?"
   if (READBACK.test(heard)) {
@@ -105,7 +168,7 @@ function step(s, heard, ctx = {}, now = Date.now()) {
 
   // ---- the controls on a saved daily call: skip today, change the time, cancel the daily calls
   if (arr && !arr.revoked && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard))) {
-    if (CANCEL.test(heard)) { care.socialCancel(id); zput(id, { offer: null }); return ['social-cancel', 'CANCELLED: the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.']; }
+    if (CANCEL.test(heard)) { care.socialCancel(id, { actor: 'senior', source: 'chat', reason: 'the senior asked to cancel the daily calls' }); zput(id, { offer: null }); return ['social-cancel', 'CANCELLED: the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.']; }
     if (SKIP.test(heard)) {
       const r = care.socialSkipToday(id, now);
       if (r && r.skipped) return ['social-skip', `SKIPPED: today's call is skipped. Tomorrow's daily call is still on at ${clockWords(arr.h, arr.mi)}. Say so in one short sentence.`];
@@ -179,7 +242,9 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
     const t = nowParts(tz, now), today = `${t.y}-${pad2(t.m)}-${pad2(t.d)}`;
     if (offer.start < today || (offer.start === today && (offer.time.h * 60 + offer.time.mi) <= t.h * 60 + t.mi + 1)) { offer.start = null; offer.stage = 'collect'; zput(id, { offer }); return ['social-past', `That start is already in the past. Say so kindly and ask ONE question: which day should the daily calls start (tomorrow, or a later day)?${correction ? ` ${correction}` : ''}`]; }
   }
-  const notes = [correction, sl.notDaily ? 'They mentioned a different rhythm: say plainly that this is a DAILY call only, and ask if daily suits them.' : '', sl.ambiguous ? 'The time they gave could be morning or evening: ask whether it is am or pm.' : '', sl.vague && !sl.time ? 'What they gave is not a clock time: ask what time exactly.' : ''].filter(Boolean).join(' ');
+  const pre = D() && !offer.ack && offer.mode === 'new' ? predecessor(id, p, now) : '';
+  if (pre) offer.ack = true;
+  const notes = [pre, correction, sl.notDaily ? 'They mentioned a different rhythm: say plainly that this is a DAILY call only, and ask if daily suits them.' : '', sl.ambiguous ? 'The time they gave could be morning or evening: ask whether it is am or pm.' : '', sl.vague && !sl.time ? 'What they gave is not a clock time: ask what time exactly.' : ''].filter(Boolean).join(' ');
   if (offer.mode === 'change') {
     if (!offer.time) { offer.stage = 'collect'; zput(id, { offer }); return ['social-ask', `SOCIAL CALL, CHANGE OF TIME (nothing is changed yet): ask ONE question: what time would they like the daily call instead? ${NEED.time}.${notes ? ` ${notes}` : ''}`]; }
     offer.stage = 'confirm'; zput(id, { offer }); return ['social-confirm', confirmChangeFact(offer, tz, notes)];
@@ -191,16 +256,17 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
 
 function save(s, id, offer, now = Date.now()) {
   s._exec = s._exec || {};
+  zput(id, { lastSave: { at: now, ok: null, op: offer.mode, offerId: offer.id } });   // started, not yet confirmed: if the write never reports back the card says UNKNOWN, not "never tried"
   try {
     const r = offer.mode === 'change' ? care.socialChangeTime(id, offer.time, now) : care.socialSave(id, { offerId: offer.id, h: offer.time.h, mi: offer.time.mi, start: offer.start, tz: offer.tz }, now);
-    zput(id, { offer: null }); s._exec.social = true;
+    zput(id, { offer: null, lastSave: { at: now, ok: true, op: offer.mode, offerId: offer.id, rid: (r && r.id) || null } }); s._exec.social = true;
     const rec = care.socialOf(id) || r;   // the words come from the PERSISTED record, not from what was proposed
     const when = `${clockWords(rec.h, rec.mi)} ${rec.tz}`;
     return ['social-saved', offer.mode === 'change'
       ? `CHANGED (read from the saved record): the daily call is now at ${when}. Tell them in your own words, in ONE short sentence, this content: "Your daily call is now at ${when}; you can tell me here anytime to skip one call, change the time, or cancel these daily calls." Promise nothing else.`
       : `SAVED (read from the saved record): a call from you every day at ${when}, starting ${dateWords(rec.start)}. Tell them in your own words, in ONE short sentence, this content: "Your daily call is saved for ${when}, starting ${dateWords(rec.start)}; you can tell me here anytime to skip one call, change the time, or cancel these daily calls." Promise nothing else.`];
   } catch (e) {
-    zput(id, { offer: null }); s._exec.socialFailed = true;
+    zput(id, { offer: null, lastSave: { at: now, ok: false, op: offer.mode, offerId: offer.id, error: String(e.message || 'it did not work').slice(0, 100) } }); s._exec.socialFailed = true;
     return ['social-failed', `NOT SAVED: ${String(e.message || 'it did not work').slice(0, 140)} Tell them plainly, in one short sentence, that it did not work and nothing is set up. Do NOT say scheduled, arranged or booked, and do not say you will try again by yourself.`];
   }
 }

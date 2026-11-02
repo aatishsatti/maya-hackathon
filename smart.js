@@ -186,8 +186,8 @@ const CALLS_BACK = /\b(?:you can|please|it'?s (?:ok|okay|fine) (?:to|for you to)
 function ledger(s, heard) {
   const care = require('./care'), id = s.profile && s.profile.id, p = id && care.get(id); if (!p) return null;
   const sm = p.smart || {}; const x = st(s); const prev = x.prevHeard; x.prevHeard = heard;
-  if (NOCALLS.test(heard)) { care.persistSmart(id, { noCalls: { at: Date.now() } }); require('./social').onNoCalls(id); return 'CALLS REVOKED: they told you to stop calling them. Say kindly, in one short sentence, that you will not call them unless they ask you to again. Never offer, arrange or promise a call after this, until THEY ask for calls again. Do not change any reminder they set themselves.'; }
-  if (sm.noCalls && CALLS_BACK.test(heard)) { care.persistSmart(id, { noCalls: null }); const q = require('./social').onCallsBack(id); return q ? `CALLS RESTORED: they have asked for calls again. ${q}` : 'CALLS RESTORED: they have asked for calls again. You may offer to arrange one.'; }
+  if (NOCALLS.test(heard)) { care.persistSmart(id, { noCalls: { at: Date.now(), source: 'chat', reason: 'the senior asked Maya to stop calling' } }); require('./social').onNoCalls(id); return 'CALLS REVOKED: they told you to stop calling them. Say kindly, in one short sentence, that you will not call them unless they ask you to again. Never offer, arrange or promise a call after this, until THEY ask for calls again. Do not change any reminder they set themselves.'; }
+  if (sm.noCalls && CALLS_BACK.test(heard)) { care.persistSmart(id, { noCalls: null, callsRestored: { at: Date.now(), source: 'chat: the senior asked for calls again' } }); const q = require('./social').onCallsBack(id); return q ? `CALLS RESTORED: they have asked for calls again. ${q}` : 'CALLS RESTORED: they have asked for calls again. You may offer to arrange one.'; }
   if (BRUSH.test(heard) && (x.lastQ || prev)) { const w = contentWords(x.lastQ ? x.lastQ.t : prev); if (w.length >= 2) { care.persistSmart(id, { brush: [...(sm.brush || []).filter((b) => Date.now() - b.at < 30 * 86400000), { w, at: Date.now() }].slice(-6) }); return 'DROP IT: they do not want to talk about that. Say okay, lightly, and move on. Do not raise that topic yourself again; if THEY bring it up, talk about it normally.'; }
   }
   return null;
@@ -209,6 +209,7 @@ function notes(s, heard) {
   if (flag('COMPANION') && (it === 'smalltalk' || it === 'followup') && !s.safety && !s.health) out.push(['smart-style', 'YOU ARE their friend, not a tool, not a menu and never a romantic partner. Respond to what they just said first, warmly, in short fresh words (begin differently from your last replies). A question is optional, never more than ONE: when something they said invites it, ask the small question a friend would (gardening: what they grow), about every second or third reply, and otherwise answer with a warm short remark. No interview.']);
   if (flag('COMPANION') && (it === 'ability' || /\b(?:call|ring|phone)\b/i.test(heard))) out.push(['smart-calls', callsOk(s) ? 'CALLS: you can help ARRANGE a call from you when they ask (it is saved as a reminder). Arranging is not scheduled: say a call is scheduled ONLY when the RECORD below says reminder saved: yes.' : 'CALLS: do not offer or arrange a call from you (ringing them is not possible right now, or they told you to stop). If they ask, say so plainly and kindly.']);
   if (flag('COMPANION') && s.profile) { const sf = require('./social').step(s, heard, { intent: it, callsOk: callsOk(s), safe: !s.safety && !s.health && it !== 'scam' }); if (sf) out.push(sf); }   // the daily-call offer and its consent (social.js)
+  if (flag('CARDS') && s.profile && s.profile.id) { const c = appState(s); if (c) out.push(['smart-app-state', c]); }   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
   if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and at most ONE question, only when it helps (often none); say what you see, what you are unsure of, and one next step if there is one; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
   if (flag('GENERAL') && it !== 'scam' && !s.safety) {
@@ -259,6 +260,13 @@ function notes(s, heard) {
   return out;
 }
 
+// The senior's own state card (state.js) as text. s.profile.id is the authenticated senior; nothing typed in the chat selects whose card this is. Kept on s._card for the draft guard.
+function appState(s) {
+  const st_ = require('./state');
+  try { const card = st_.build(s.profile.id, { channel: s.channel === 'chat' ? 'chat' : 'call' }); s._card = card; return st_.render(card); }
+  catch { s._card = null; return 'APP STATE: UNKNOWN (the app could not read it this turn). Say you cannot see their saved calls right now; never say they have none, and never say anything is saved or scheduled.'; }
+}
+
 // What the audit shows for a session: asked, learned, checked, still unknown (names only, never the senior's words).
 function trace(s) {
   const x = st(s), sc = s._scam || {}, e = s._exec || {};
@@ -279,7 +287,7 @@ const CLAIM = [
 ];
 // Returns a reason string when the draft must be written again, else null. rec = s._exec (what really ran); known = the text the facts and the senior gave (a link or number must already be in it).
 function breaks(text, s) {
-  const t = String(text || '').replace(/’/g, "'");
+  const t = String(text || '').replace(/’/g, "'"); s._guardWhy = null;
   if (flag('SHORT') || flag('COMPANION')) {
     s._q = (s._q || 0) + (t.match(/\?/g) || []).length;
     if (s._q > 1) { s._why = 'you asked more than one question: ask only ONE'; return 'twoq'; }
@@ -297,6 +305,12 @@ function breaks(text, s) {
   }
   if (flag('COMPANION') && require('./social').claimBlocked(t, s)) { s._why = 'nothing is saved: do not say the call is scheduled, arranged, noted or booked. Say what is still needed, or that it was not saved'; return 'claim'; }
   if (!flag('GUARD')) return null;
+  if (s.profile && s.profile.id) {   // factual claims about calls and records, judged against a card built NOW for the authenticated senior (never against a phrase list alone)
+    const st_ = require('./state'); let card = null;
+    try { card = st_.build(s.profile.id, { channel: s.channel === 'chat' ? 'chat' : 'call' }); } catch { card = null; }
+    const bad = st_.checkDraft(t, card, { labels: s.factLabels || [], heard: s.lastHeard ? s.lastHeard() : '', exec: s._exec || {} });
+    if (bad) { s._why = bad.note; s._guardWhy = bad.why; return `state-${bad.why}`; }
+  }
   if (SAFE_CLAIM.test(t) && !/\bnot\s+(?:100|a hundred|safe|verified)|\bn't\s+(?:safe|verified)|\bcan'?t\s+(?:say|be)\b[^.]{0,30}\b(?:safe|sure)/i.test(t)) return 'certainty';
   const known = `${s.lastHeard ? s.lastHeard() : ''} ${s._knownText || ''}`;
   const u = URL_.exec(t); if (u && !known.toLowerCase().includes(u[0].toLowerCase().replace(/[.,!?)]+$/, ''))) return 'link';
@@ -311,9 +325,18 @@ function breaks(text, s) {
 function fallback(s) {
   const x = st(s);
   if (/abilities/.test(s._why || '')) return ABILITY_FALLBACK;
+  if (s._exec && s._exec.socialFailed) return 'That did not save, so nothing is set up yet. Would you like to try once more?';   // from the app's own save result, whatever the blocked draft said
+  if (s._guardWhy) {   // a plain line that is true from the app's own records (checked again here, never from the bad draft)
+    const c = (() => { try { return require('./state').build(s.profile.id, { channel: 'chat' }); } catch { return null; } })();
+    const live = c && Array.isArray(c.records) && c.records.find((r) => r.type === 'daily-call' && /^(active|today)/.test(r.status));
+    if (!c || !Array.isArray(c.records)) return "I can't see your saved calls right now, so I don't want to say anything wrong. Could you ask me again in a moment?";
+    if (s._exec && s._exec.socialFailed) return 'That did not save, so nothing is set up yet. Would you like to try once more?';
+    if (live) return `Your daily call is saved for ${live.time}. You can ask me to skip one, change the time or cancel it.`;
+    return 'I do not have a daily call saved for you right now. I can set one up with you myself: what time would suit you?';
+  }
   return x.topic === 'scam' || (s._scam && s._scam.needed)
     ? "I can't be sure about this one, and I can make mistakes. Please don't pay or share anything until you've checked with your family or the real company, using a number or app you already trust. What did they ask you for?"
     : 'I want to get this right. Could you tell me a little more about what you mean?';
 }
 
-module.exports = { ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
+module.exports = { appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };

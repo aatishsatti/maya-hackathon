@@ -85,7 +85,7 @@ const WHATSAPP_GOODBYE_FULL = `[[feel: emotion=neutral intensity=1 intent=farewe
 const BYE_ASKED = 'Do you have any questions?', BYE_NOMORE = "Okay that's all. Bye-bye.", BYE_TIMEOUT = "Okay, I'll let you go then. Bye-bye.", BYE_SAID = 'Okay, goodbye. Take care.';
 const CLOSE_WAIT_MS = 8000;
 const PLAIN_FACTS = new Set(['family-written-reminder', 'reminder-acknowledged-placed-call']);   // facts that say nothing about safety, health, a scam or a promise: they never stop a goodbye
-const HANGUP_OK = /^(?:smart-(?:style|calls|thread|shape|ledger|switch)|social-.*)$/;   // fact labels that say nothing about safety, health, a scam or a promise that is owed
+const HANGUP_OK = /^(?:smart-(?:style|calls|thread|shape|ledger|switch|app-state)|social-.*)$/;   // fact labels that say nothing about safety, health, a scam or a promise that is owed
 const plainWords = (t) => String(t || '').toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
 const NO_MORE = /^(no|nope|nah|no thanks|no thank you|nothing|nothing else|nothing more|that'?s all|that is all|that'?s it|i'?m fine|i am fine|all good|i'?m good|not really|no questions|none|i don'?t have any|no i don'?t|no i'?m fine)( thanks| thank you| dear| maya)?$/;
 const BYE_WORDS = /\b(good ?bye|bye( bye)?|good ?night|see you|talk (to you )?later|take care|i have to go|i must go|got to go|gotta go|you can (hang up|go now|go)|hang up now|let you go|we are done|we'?re done|(please )?hang up( the call| maya)?$)\b/;
