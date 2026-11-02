@@ -68,15 +68,15 @@ const talker = (id, origin) => {
 // ---------------------------------------------------------------- 2. every N hours / days / weeks
 test('"every 2 hours" SETS a reminder (no question); every N hours, days and weeks work; the next one is N units later; a too-large number is asked about', async () => {
   quiet(); const { id } = linked(true); const say = talker(id, 'whatsapp');   // no clock time here, so no time zone (and no quiet hours at the machine's hour)
-  const a = await say('Remind me every 2 hours to drink water.'); assert.ok(a.labels.includes('setrem-confirm'), a.labels.join()); assert.match(a.text, /So, every 2 hours, starting in 2 hours, I will remind you to drink water\./);
-  await say('Yes.'); const s = await say('A text please.'); assert.ok(s.labels.includes('setrem-saved'));
+  const a = await say('Remind me every 2 hours to drink water.'); assert.ok(a.labels.includes('setrem-confirm'), a.labels.join()); assert.match(a.text, /So, every 2 hours, starting in 2 hours, I will send you a text on WhatsApp and remind you to drink water\./);
+  const s = await say('Yes.'); assert.ok(s.labels.includes('setrem-saved'));
   const r = rem(id); assert.deepEqual([r.repeat, r.every, r.deliver, r.channel], ['hourly', 2, 'text', 'whatsapp']); const due0 = r.dueAt;
   care.tick(due0 + 2000); await settle(); assert.equal(rem(id).dueAt, due0 + 2 * 3600000, 'the next one is two hours later'); assert.equal(care.view(id).reminders[0].every, 2);
   quiet(); const d = linked(true); care.get(d.id).tz = 'America/New_York'; const sd = talker(d.id, 'app');
-  const b = await sd('Remind me every 3 days at 9 am to water the plants.'); assert.match(b.text, /every 3 days at 9:00 AM/); await sd('Yes.'); await sd('Text.'); await sd('The Maya app.');   // WhatsApp is set up: asked where
+  const b = await sd('Remind me every 3 days at 9 am to water the plants.'); assert.match(b.text, /every 3 days at 9:00 AM/); await sd('Yes.');   // WhatsApp is set up: still nothing asked, the door is the app
   const rd = rem(d.id), due1 = rd.dueAt; assert.deepEqual([rd.repeat, rd.every], ['daily', 3]); care.tick(due1 + 2000); await settle(); assert.equal(rem(d.id).dueAt, due1 + 3 * 86400000);
   quiet(); const w = linked(true); care.get(w.id).tz = 'America/New_York'; const sw = talker(w.id, 'app');
-  const c = await sw('Remind me every other week on Monday at 10 am to call my son.'); assert.match(c.text, /every 2 weeks, starting on Monday at 10:00 AM/); await sw('Yes.'); await sw('A text.'); await sw('In the app.'); assert.deepEqual([rem(w.id).repeat, rem(w.id).every], ['weekly', 2]);
+  const c = await sw('Remind me every other week on Monday at 10 am to call my son.'); assert.match(c.text, /every 2 weeks, starting on Monday at 10:00 AM/); await sw('Yes.'); assert.deepEqual([rem(w.id).repeat, rem(w.id).every], ['weekly', 2]);
   quiet(); const x = linked(true); const sx = talker(x.id, 'app');
   const e = await sx('Remind me every 100 hours to rest.'); assert.ok(e.labels.includes('setrem-ask-detail')); assert.match(e.text, /up to 72/); assert.equal(care.get(x.id).reminders.length, 0);
   assert.throws(() => care.addSeniorReminder(x.id, { task: 'x', dueAt: Date.now() + 9000, repeat: 'hourly', every: 73, deliver: 'text', channel: 'app', origin: 'app' }), /out of range/);

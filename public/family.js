@@ -271,7 +271,7 @@
   }
 
   const REM_PILL = { done: ['pill-ok', 'Answered'], missed: ['pill-miss', 'Missed'], no_reply: ['pill-wait', "Hasn't replied yet"], unanswered: ['pill-miss', "Couldn't reach"], declined: ['pill-wait', 'Declined'], calling: ['pill-info', 'Calling'], answered: ['pill-info', 'Picked up'],
-    wa_sending: ['pill-info', 'Sending'], wa_sent: ['pill-info', 'Sent'], wa_delivered: ['pill-info', 'Delivered'], wa_read: ['pill-wait', 'Read'], wa_missed: ['pill-miss', 'Missed'], app_sending: ['pill-info', 'Sending'], app_sent: ['pill-info', 'Sent'], app_delivered: ['pill-info', 'Delivered'], app_read: ['pill-wait', 'Seen'], app_missed: ['pill-miss', 'Missed'], app_failed: ['pill-miss', 'Not sent'], wa_failed: ['pill-miss', 'Not sent'] };
+    wa_sending: ['pill-info', 'Sending'], wa_sent: ['pill-info', 'Sent'], wa_delivered: ['pill-info', 'Delivered'], wa_read: ['pill-wait', 'Read'], wa_missed: ['pill-miss', 'Missed'], app_sending: ['pill-info', 'Sending'], app_sent: ['pill-info', 'Sent'], app_delivered: ['pill-info', 'Delivered'], app_read: ['pill-wait', 'Seen'], app_missed: ['pill-miss', 'Missed'], app_failed: ['pill-miss', 'Not sent'], app_unseen: ['pill-miss', 'Not seen'], wa_unseen: ['pill-miss', 'Not seen'], wa_failed: ['pill-miss', 'Not sent'] };
   // Message status -> pill. The words are the server's own: Sent, Delivered, Seen, Played, Replied, Hasn't replied yet.
   const NOTE_PILL = (label) => (/^Replied/.test(label) ? 'pill-ok' : /^Hasn't/.test(label) ? 'pill-wait' : /^(Seen|Played)/.test(label) ? 'pill-info' : 'pill-plain');
 

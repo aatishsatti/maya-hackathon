@@ -296,7 +296,7 @@ class ChatSession {
     // A reminder is being set up and she was handed a question to ask (is that right? how? where?): if her draft closes without asking it ("Perfect", "Got it", "that's noted"), it is written again
     // once. The reminder is saved only by their answer, so a skipped question must never look like an answer.
     if (!again && (this.factLabels || []).some((l) => /^(setrem-(ask|confirm|lost)|scam-(family-owed|resume|lost))/.test(l)) && !/\?/.test(all)) return this.reply(`${note} Your draft did not ask the question you were told to ask, and nothing is saved yet. Write it again: ask that ONE question in your own words, and do not say it is done, noted or set.`, { again: true });
-    const askLabel = (this.factLabels || []).find((l) => /^(setrem-(ask|lost)|scam-(family-owed|resume|lost))/.test(l));
+    const askLabel = (this.factLabels || []).find((l) => /^(setrem-(ask|confirm|lost)|scam-(family-owed|resume|lost))/.test(l));
     if (again && askLabel && !/\?/.test(all)) {   // asked again and she STILL did not ask: the plain question closes her reply
       const SCAM_Q = { 'scam-family-owed': 'Would you like me to let your family know about this?', 'scam-resume': 'Would you like me to let your family know about that?', 'scam-lost': 'What happened, and would you like me to let your family know?' };
       const q = SCAM_Q[askLabel] || require('./setrem').pendingQuestion(this.profile.id, askLabel);

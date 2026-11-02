@@ -2,9 +2,9 @@
 // on a call, on WhatsApp or in the app chat, and Maya sets it up. CODE owns every step; Spark only puts the facts into words (the same rule as the rest of the care layer):
 //   1. understand  : what, when and how often. Anything unclear is ONE short question, never a guess; a second miss drops it (nothing saved).
 //   2. confirm     : the plain-words sentence is said back BEFORE anything is saved ("So, every hour, I will remind you to ... Is that right?"). Only a yes goes on.
-//   3. delivery    : call, text or voice note (asked unless they already said it).
-//   4. channel     : the door they asked on is the default (WhatsApp -> WhatsApp, app -> app). On a CALL there is no default: they pick the app or WhatsApp. A different channel they name wins.
-//   5. save        : care.addReminder with by:'senior' (the reminder is "strict": at due time it goes EXACTLY that way, on that channel, never changed on its own; see care.js / whatsapp.js).
+//   3. way + place : NEVER asked. The way is what they said ("by calling me", "by texting me", "by voice note"), else a text. The place is the door they asked on (WhatsApp -> WhatsApp, the app chat or a call -> the app);
+//                    a place they name wins. Both are in the say-back, and the yes saves. WhatsApp asked for but not set up: the one question "is the app okay?".
+//   4. save        : care.addReminder with by:'senior' (the reminder is "strict": at due time it goes EXACTLY that way, on that channel, never changed on its own; see care.js / whatsapp.js).
 // Never invented: the task is the senior's own words (pronouns turned to "you" only when spoken back), no medicine, dose, condition or time is ever added.
 // This is a FUTURE reminder, not the in-call timer (call.js parseTimer, up to 30 minutes, only while the call stays open). The senior hangs up after setting it.
 // Nothing here is written to a log with words: counts and labels only.
@@ -124,6 +124,9 @@ function takeDelivery(rest) {
   cut(/\b(?:by|via|with|as|using|in)\s+(?:a\s+)?(?:voice (?:note|message|memo)|voice)\b/gi, () => { deliver = 'voice'; });
   cut(/\b(?:by|via|with|as|using|in)\s+(?:a\s+)?(?:text(?: message)?|message|sms)\b/gi, () => { deliver = 'text'; });
   cut(/\b(?:by|via|with|as|using|in)\s+(?:a\s+)?(?:phone\s+|voice\s+)?call\b/gi, () => { deliver = 'call'; });
+  cut(/\b(?:by|via|through)\s+(?:sending me (?:a )?)?(?:a\s+)?voice\s*(?:note|message|memo)s?\b/gi, () => { deliver = 'voice'; });
+  cut(/\b(?:by|via|through)\s+(?:calling|ringing|phoning)(?:\s+me)?\b/gi, () => { deliver = 'call'; });
+  cut(/\b(?:by|via|through)\s+(?:texting|messaging|sms-?ing|writing to)(?:\s+me)?\b/gi, () => { deliver = 'text'; });
   cut(/\bsend me (?:a )?(?:voice (?:note|message|memo))\b/gi, () => { deliver = 'voice'; });
   cut(/\bsend me (?:a )?(?:text(?: message)?|message)\b/gi, () => { deliver = 'text'; });
   cut(/\b(?:give me a (?:phone )?call|(?:call|ring|phone) me)\b/gi, () => { deliver = 'call'; });
@@ -325,9 +328,6 @@ const COMMON = 'Use ONLY the details in this fact: add no medicine, no dose, no 
 const note = (label, text) => ({ label, text: `FACT: ${text}` });
 const cancelNote = (why) => { return note('setrem-dropped', `${why} NOTHING was saved and no reminder was set. Tell them so gently in one short sentence, and that they can ask again whenever they like. Do not ask anything more about it. ${COMMON}`); };
 
-function deliveryQuestionNote() {
-  return note('setrem-ask-delivery', `They said yes to the reminder (nothing is saved yet). Now ask how they want it: you can call them, send a text, or send a voice note. Ask exactly that, as ONE short question: "Would you like me to call you, send you a text, or send you a voice note?" ${COMMON}`);
-}
 function channelQuestionNote(noWa) {
   return note('setrem-ask-channel', noWa
     ? `WhatsApp is not set up for them, so it cannot go there (nothing is saved yet). Ask as ONE short question whether the Maya app is fine: "Is the Maya app okay for that?" ${COMMON}`
@@ -343,6 +343,13 @@ function begin(id, heard, ctx) {
 }
 
 // After the words are understood: ask the ONE question, or say it back for a yes.
+// HOW and WHERE are never asked. Where: the door they asked on (the app chat -> the app, WhatsApp -> WhatsApp). How: what they said ("by calling me", "by voice note", "by text"), else a text in that door.
+// Said once, in the say-back, and changed only if they say so there.
+function applyDefaults(st) {
+  const spec = st.spec;
+  if (!spec.deliver) spec.deliver = 'text';
+  if (!spec.channel) spec.channel = st.origin === 'whatsapp' ? 'whatsapp' : 'app';
+}
 function progress(id, st, ctx) {
   const spec = st.spec;
   if (spec.noTz) { states.delete(id); return note('setrem-no-time-zone', `They asked for a reminder at a clock time, but you do not know what time it is where they are, so you cannot set it right now (nothing was saved). Say that kindly in one short sentence and offer one that does not need the clock, like "in an hour". ${COMMON}`); }
@@ -352,22 +359,20 @@ function progress(id, st, ctx) {
     const q = questionFor(spec);
     return note('setrem-ask-detail', `They asked you to set a reminder but part of it is not clear, and you must not guess. Ask them ONE short question and nothing else: "${q}" ${COMMON}`);
   }
-  st.stage = 'confirm'; st.unclear = 0;
+  applyDefaults(st);   // (a call-back's way is the call itself: set when it was parsed)
+  st.stage = 'confirm'; st.unclear = 0; st.say = confirmText(spec, ctx);
   return note('setrem-confirm', `They asked you to set a reminder. Nothing is saved yet. Say it back to them in fresh warm words, keeping EVERY detail exactly (how often, when, and what): "${confirmText(spec, ctx)}" End by asking if that is right, then wait for their yes or no. Do not say it is set. ${COMMON}`);
 }
 
 function afterYes(id, st, ctx) {
-  const spec = st.spec;
-  if (!spec.deliver) { st.stage = 'delivery'; st.unclear = 0; return deliveryQuestionNote(); }
+  applyDefaults(st);   // nothing is asked: the way and the place were said back with the confirmation
   return needChannel(id, st, ctx);
 }
 function needChannel(id, st, ctx) {
   const spec = st.spec;
-  // WhatsApp is only ever mentioned when it is set up for them. Not set up: no question, it comes to the Maya app. Set up: asked on WhatsApp -> WhatsApp; asked in the app or on a call -> they are asked
-  // "the Maya app, WhatsApp, or both?" before anything is saved.
-  if (!spec.channel && !ctx.waLinked) spec.channel = 'app';
-  else if (!spec.channel && st.origin === 'whatsapp') spec.channel = 'whatsapp';
-  if ((spec.channel === 'whatsapp' || spec.channel === 'both') && !ctx.waLinked) { spec.channel = null; st.noWa = true; }   // they ASKED for WhatsApp but it is not set up: said plainly, then the app
+  // Where = the door they asked on, unless they named one. WhatsApp is only ever mentioned when they ask for it and it is not set up (said plainly, then the app).
+  if (!spec.channel) spec.channel = st.origin === 'whatsapp' ? 'whatsapp' : 'app';
+  if ((spec.channel === 'whatsapp' || spec.channel === 'both') && !ctx.waLinked) { spec.channel = null; st.noWa = true; }
   if (!spec.channel) { st.stage = 'channel'; st.unclear = 0; return channelQuestionNote(st.noWa); }
   return save(id, st, ctx);
 }
@@ -418,26 +423,30 @@ function answer(id, st, heard, ctx) {
       st.asks = 0;
       return progress(id, st, ctx);
     }
+    // They name the way or the place while confirming ("call me instead", "yes, by voice note", "on WhatsApp"): it is taken as said, never asked again. Two ways named at once are not guessed: they pick ONE.
+    const named = readDelivery(heard);
+    if (named.multi && !named.deliver) {
+      st.unclear += 1; if (st.unclear >= 3) { states.delete(id); return cancelNote('They did not pick one way.'); }
+      const ways = named.multi.map((k) => (k === 'voice' ? 'voice note' : k)).join(' or ');
+      return note('setrem-ask-delivery', `They named more than one way (${named.multi.map((k) => (k === 'voice' ? 'voice note' : k)).join(' and ')}). Do NOT pick for them and do not save anything. Ask as ONE short question which ONE they want: "${ways}, pick one?" ${COMMON}`);
+    }
+    const differs = (named.deliver && named.deliver !== spec.deliver) || (named.channel && named.channel !== spec.channel);
+    const restated = Boolean(named.deliver || named.channel) && !differs && !sayYes(heard) && !sayNo(heard);   // only the way, said again ("text"): said back once more, not taken for a yes
+    if (differs || restated) {
+      if (named.deliver) spec.deliver = named.deliver; if (named.channel) spec.channel = named.channel;
+      if (sayYes(heard) && !sayNo(heard)) return afterYes(id, st, ctx);
+      if (st.corrections >= 3) { states.delete(id); return cancelNote('The details kept changing.'); }
+      st.corrections += 1; return progress(id, st, ctx);   // said back once more with the new way
+    }
     if (sayNo(heard) || CANCEL.test(heard)) { states.delete(id); return cancelNote('They said no to it.'); }
     if (sayYes(heard)) return afterYes(id, st, ctx);
     st.unclear += 1;
     if (st.unclear >= 2) { states.delete(id); return cancelNote('They did not say yes.'); }
     return note('setrem-confirm-again', `You asked whether the reminder is right and they did not answer yes or no. Nothing is saved. Ask just once more, briefly: "${confirmText(spec, ctx)}" ${COMMON}`);
   }
-  if (st.stage === 'delivery' || st.stage === 'channel') {
-    if (CANCEL.test(heard) || (sayNo(heard) && st.stage === 'delivery')) { states.delete(id); return cancelNote('They said no to it.'); }
+  if (st.stage === 'channel') {
+    if (CANCEL.test(heard)) { states.delete(id); return cancelNote('They said no to it.'); }
     const dl = readDelivery(heard);
-    if (st.stage === 'delivery' && dl.multi && !dl.deliver) {   // two ways named: never guessed, they pick ONE
-      st.unclear += 1; if (st.unclear >= 3) { states.delete(id); return cancelNote('They did not pick one way.'); }
-      const ways = dl.multi.map((k) => (k === 'voice' ? 'voice note' : k)).join(' or ');
-      return note('setrem-ask-delivery', `They named more than one way (${dl.multi.map((k) => (k === 'voice' ? 'voice note' : k)).join(' and ')}). Do NOT pick for them and do not save anything. Ask as ONE short question which ONE they want: "${ways}, pick one?" ${COMMON}`);
-    }
-    if (st.stage === 'delivery') {
-      if (dl.deliver) spec.deliver = dl.deliver;
-      if (dl.channel) spec.channel = dl.channel;
-      if (!spec.deliver) { st.unclear += 1; if (st.unclear >= 2) { states.delete(id); return cancelNote('They did not say how they want it.'); } return deliveryQuestionNote(); }
-      return needChannel(id, st, ctx);
-    }
     // channel stage
     if (dl.channel) spec.channel = dl.channel;
     else if (st.noWa && sayYes(heard)) spec.channel = 'app';
@@ -477,7 +486,7 @@ const pending = (id) => { const s = states.get(id); return s ? { stage: s.stage,
 function pendingQuestion(id, label = '') {
   if (label === 'setrem-lost') return 'What would you like me to remind you about, and when?';
   const st = states.get(id); if (!st) return null;
-  if (st.stage === 'delivery') return 'Would you like me to call you, send you a text, or send you a voice note?';
+  if (st.stage === 'confirm' && st.say) return st.say;   // the say-back with its "Is that right?" (the only question left to ask)
   if (st.stage === 'channel') return st.noWa ? 'Is the Maya app okay for that?' : 'Would you like that on the Maya app, on WhatsApp, or both?';
   if (st.stage === 'clarify' && st.spec && st.spec.ask && st.spec.ask.length) return questionFor(st.spec);
   return null;

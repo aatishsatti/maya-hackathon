@@ -21,16 +21,16 @@ const reset = (...q) => { queue.length = 0; queue.push(...q); asked.length = 0; 
 const mine = (id) => care.get(id).reminders.filter((r) => r.by === 'senior');
 let n = 0; const person = () => { const id = memory.createProfile(`Rask${String.fromCharCode(97 + n++)}`, 'male').id; care.setTimezone(id, 'Asia/Kolkata', 'manual'); return id; };
 
-test('the "how" question skipped by Spark ("Perfect, that is noted") is asked again, and nothing is saved', async () => {
+test('the say-back question skipped by Spark ("Perfect, that is noted") is asked again, and nothing is saved; the yes then saves it with no how question', async () => {
   const id = person();
-  reset(`${FEEL} Got it, in two minutes I will remind you to drink water. Is that right?`); await chat.sendText(id, 'Remind me in 2 minutes to drink water', 'Asia/Kolkata');
-  reset(`${FEEL} Perfect, that is noted.`, `${FEEL} Lovely. Would you like me to call you, send you a text, or send you a voice note?`);
-  const r = await chat.sendText(id, 'oky', 'Asia/Kolkata');
+  reset(`${FEEL} Perfect, that is noted.`, `${FEEL} Lovely. In two minutes I will send you a text in the Maya app and remind you to drink water. Is that right?`);
+  const r = await chat.sendText(id, 'Remind me in 2 minutes to drink water', 'Asia/Kolkata');
   assert.equal(asked.length, 2, 'the first draft had no question: written again once'); assert.match(asked[1], /did not ask the question you were told to ask/);
-  const said = r.messages[r.messages.length - 1].text; assert.match(said, /\?/, 'the reply asks how'); assert.doesNotMatch(said, /noted/);
-  assert.equal(mine(id).length, 0, 'nothing is saved until they say how');
-  reset(`${FEEL} Done, it is set.`); await chat.sendText(id, 'a text please', 'Asia/Kolkata');
-  assert.equal(mine(id).length, 1, 'their answer saves it'); assert.deepEqual([mine(id)[0].deliver, mine(id)[0].channel], ['text', 'app']);
+  const said = r.messages[r.messages.length - 1].text; assert.match(said, /\?/, 'the reply asks if it is right'); assert.doesNotMatch(said, /noted/);
+  assert.equal(mine(id).length, 0, 'nothing is saved until they say yes');
+  reset(`${FEEL} Done, it is set.`); const y = await chat.sendText(id, 'oky', 'Asia/Kolkata');
+  assert.equal(mine(id).length, 1, 'their yes saves it'); assert.deepEqual([mine(id)[0].deliver, mine(id)[0].channel], ['text', 'app']);
+  assert.ok(!asked.some((a) => /call you, send you a text, or send you a voice note/.test(a)), 'the how question is never handed to her'); void y;
 });
 
 test('a reply that already asks is left alone (one request only)', async () => {
@@ -41,11 +41,10 @@ test('a reply that already asks is left alone (one request only)', async () => {
 
 test('if she skips the question even when asked again, the plain question closes her reply (the set-up never stalls) and still nothing is saved', async () => {
   const id = person();
-  reset(`${FEEL} Got it, in two minutes I will remind you to drink water. Is that right?`); await chat.sendText(id, 'Remind me in 2 minutes to drink water', 'Asia/Kolkata');
   reset(`${FEEL} Perfect, that is noted.`);   // the same skip, twice
-  const r = await chat.sendText(id, 'ok', 'Asia/Kolkata');
+  const r = await chat.sendText(id, 'Remind me in 2 minutes to drink water', 'Asia/Kolkata');
   assert.equal(asked.length, 2); const said = r.messages[r.messages.length - 1].text;
-  assert.match(said, /call you, send you a text, or send you a voice note\?$/); assert.equal(mine(id).length, 0);
+  assert.match(said, /In 2 minutes, I will send you a text in the Maya app and remind you to drink water\. Is that right\?$|in 2 minutes, I will send you a text in the Maya app and remind you to drink water\. Is that right\?$/i); assert.equal(mine(id).length, 0);
 });
 
 test('after "sorry, that time has gone" the question is "when instead?"; after "I lost that set-up" it is "what and when?" - closed with the plain question if Spark twice skips it', async () => {
@@ -53,16 +52,14 @@ test('after "sorry, that time has gone" the question is "when instead?"; after "
   const real = Date.now; let skew = 0; Date.now = () => real() + skew;
   try {
     reset(`${FEEL} Got it, in two minutes I will remind you to drink water. Is that right?`); await chat.sendText(id, 'Remind me in 2 minutes to drink water', 'Asia/Kolkata');
-    reset(`${FEEL} Lovely, how would you like it?`); await chat.sendText(id, 'ok', 'Asia/Kolkata');
     skew += 6 * MIN;   // away, then back: the asked time has gone
     reset(`${FEEL} Sorry, those two minutes slipped by.`);
-    const r = await chat.sendText(id, 'a text please', 'Asia/Kolkata');
+    const r = await chat.sendText(id, 'oky', 'Asia/Kolkata');
     assert.match(r.messages[r.messages.length - 1].text, /When should I remind you\?$/); assert.equal(mine(id).length, 0);
     const other = person(); reset(`${FEEL} Got it, in ten minutes I will remind you to rest. Is that right?`); await chat.sendText(other, 'Remind me in 10 minutes to rest', 'Asia/Kolkata');
-    reset(`${FEEL} Lovely, how would you like it?`); await chat.sendText(other, 'ok', 'Asia/Kolkata');
     skew += 30 * MIN;   // away past the life of the set-up
     reset(`${FEEL} Sorry, I lost that.`);
-    const l = await chat.sendText(other, 'a text', 'Asia/Kolkata');
+    const l = await chat.sendText(other, 'yes', 'Asia/Kolkata');
     assert.match(l.messages[l.messages.length - 1].text, /What would you like me to remind you about, and when\?$/); assert.equal(mine(other).length, 0);
     void setrem;
   } finally { Date.now = real; }

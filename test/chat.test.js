@@ -136,7 +136,7 @@ test('text: "remind me next time I call that I need to call my grandson" is kept
   assert.equal(r.length, 1); assert.equal(r[0].text, 'I need to call my grandson'); assert.equal(r[0].status, 'open');
   assert.match(asked[0].roster, /The app keeps it and will bring it to you at the start of their next call/); assert.match(asked[0].roster, /Do not say you cannot do it/);
   reset(PLAIN); await chat.sendText(id, 'Remind me in 5 minutes to call him', null);
-  assert.match(asked[0].roster, /So, in 5 minutes, I will remind you to call him/, 'a timed ask in chat is now a future reminder, said back before anything is saved (setrem.js)'); assert.match(asked[0].roster, /Nothing is saved yet/);
+  assert.match(asked[0].roster, /So, in 5 minutes, I will send you a text in the Maya app and remind you to call him/, 'a timed ask in chat is now a future reminder, said back before anything is saved (setrem.js)'); assert.match(asked[0].roster, /Nothing is saved yet/);
   assert.equal(memory.load(id).memory.threads.filter((t) => t.kind === 'reminder').length, 1);
 });
 
@@ -219,7 +219,7 @@ test('text: the chat has no timers; a timed ask is a FUTURE reminder, said back 
   const id = newSenior();
   reset(PLAIN);
   await chat.sendText(id, 'remind me in 5 minutes to take the washing out', null);
-  assert.match(asked[0].roster, /So, in 5 minutes, I will remind you to take the washing out/); assert.match(asked[0].roster, /Nothing is saved yet/);
+  assert.match(asked[0].roster, /So, in 5 minutes, I will send you a text in the Maya app and remind you to take the washing out/); assert.match(asked[0].roster, /Nothing is saved yet/);
   assert.ok(!/A timer is set for it right now/.test(asked[0].roster));
 });
 

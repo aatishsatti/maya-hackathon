@@ -23,7 +23,7 @@ test('a natural recurring ask in the senior\'s own words becomes ONE plain daily
     const id = person();
     const r = say(id, NIGHT, origin);
     assert.equal(r.label, 'setrem-confirm', origin);
-    assert.match(r.text, /every day at 9:00 PM/); assert.match(r.text, /call you and remind you to take your medicine/);
+    assert.match(r.text, /every day at 9:00 PM/); assert.match(r.text, /I will call you (?:in the Maya app|on WhatsApp) and remind you to take your medicine/);
     assert.doesNotMatch(r.text, /so i will/i, 'the task is the medicine, not the rest of the sentence');
     setrem.reset && setrem.reset();
   }
@@ -35,8 +35,7 @@ test('in-call ask: "remind me in a minute" is NOT agreed as a timer and NOT refu
   assert.equal(r.label, 'setrem-confirm');
   assert.match(r.text, /I will remind you to take your pills right after you hang up the call/);
   assert.doesNotMatch(r.text, /in 1 minute|in one minute/);
-  const yes = say(id, 'Yes', 'call'); assert.equal(yes.label, 'setrem-ask-delivery');
-  const sv = say(id, 'a text', 'call');   // WhatsApp is not set up for them: no channel question, it comes to the app
+  const sv = say(id, 'Yes', 'call');   // nothing is asked: a text in the app (WhatsApp is not set up for them)
   assert.equal(sv.label, 'setrem-saved');
   assert.match(sv.text, /right after you hang up the call/);
   const rem = care.get(id).reminders.find((x) => x.by === 'senior');
