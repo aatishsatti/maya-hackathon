@@ -192,4 +192,8 @@ function talkNote(scam, opts = {}) {
 }
 
 
-module.exports = { TALK_REASONING, talkNote, FEEL_NOTE, needsCheck, payNow, checkPlan, READS, ASK_TALK, assessText, SIGNALS, WARN_AT, CAUTION_AT, ASK, parse, levelOf, typeLabel, assess, said };
+// A verdict of ONE warning sign that still names a kind of scam ("prize scam": a stranger's call saying they won a car, with no payment asked yet) is treated as a warning: the person is told it looks like
+// the kind of thing that is often a scam and the family question is asked, because the first call of an advance-fee scam asks for nothing yet. The detector itself is unchanged (its held-out numbers stand);
+// this only changes what the live pipeline does with its "caution". Stubbed checks in tests are not promoted.
+const promote = (v) => (v && v.level === 'caution' && String(v.type || '').trim() && v.type !== 'none' ? { ...v, level: 'warn', softened: true } : v);
+module.exports = { promote, TALK_REASONING, talkNote, FEEL_NOTE, needsCheck, payNow, checkPlan, READS, ASK_TALK, assessText, SIGNALS, WARN_AT, CAUTION_AT, ASK, parse, levelOf, typeLabel, assess, said };

@@ -314,8 +314,20 @@ const asksLinkNumber = (t) => ASKS_LINK_NUMBER.test(t) && GIVE_VERB.test(t);
 
 // "What can you do?" (and kin): the one place the TRUE list of what Maya can and cannot do is given to the brain, as facts, for every door (call and written chat, app and web: they all share this file).
 // "What can you do about my knee?" is a different question (help with something specific), so it is not matched.
-const ABILITIES_ASK = /\bwhat\s+(?:else\s+)?(?:can|could)\s+(?:you|maya)\s+(?:do|help|offer)\b(?!\s+(?:about|with)\b)(?!\s+for\s+(?!me\b|us\b))|\bhow\s+(?:can|could)\s+you\s+help\b(?!\s+(?:me\s+)?with\b)|\bwhat\s+do\s+you\s+do\b|\bwhat\s+are\s+you\s+(?:able|good|for)\b|\bwhat\s+can\s+i\s+(?:ask|do\s+with)\s+you\b|\b(?:your|maya'?s)\s+(?:abilities|capabilities|features)\b|\btell\s+me\s+what\s+you\s+can\b/i;
+const ABILITIES_ASK = /\bwhat\s+(?:else\s+)?(?:can|could)\s+(?:you|u|ya|maya)\s+(?:do|help|offer)\b(?!\s+(?:about|with)\b)(?!\s+for\s+(?!me\b|us\b))|\bhow\s+(?:can|could)\s+(?:you|u)\s+help\b(?!\s+(?:me\s+)?with\b)|\bwhat\s+do\s+(?:you|u)\s+do\b|\bwhat\s+are\s+(?:you|u)\s+(?:able|good|for)\b|\bwhat\s+can\s+i\s+(?:ask|do\s+with)\s+(?:you|u)\b|\b(?:your|maya'?s)\s+(?:abilities|capabilities|features)\b|\btell\s+me\s+what\s+you\s+can\b/i;
 const asksAbilities = (t) => ABILITIES_ASK.test(String(t || ''));
+// "and?" / "what else" / "more" right after she listed what she can do is the same question asked again (fuller, not the same list repeated).
+const ABILITIES_MORE = /^\s*(?:and|and then|and\?+|what else|anything else|more|tell me more|go on|is that all|that'?s all|that'?s it)\s*[?!.]*\s*$/i;
+// 0 = not the question; 1 = asked now for the first time; 2+ = asked before in this conversation (the current message is already in the history).
+function abilitiesAsks(history, text) {
+  const users = (history || []).filter((m) => m.role === 'user').map((m) => String(m.content || ''));
+  const cur = String(text || '');
+  const before = users.slice(0, users.length && users[users.length - 1].endsWith(cur) ? -1 : undefined);
+  const asked = before.filter((m) => asksAbilities(m)).length;
+  if (asksAbilities(cur)) return asked + 1;
+  if (ABILITIES_MORE.test(cur) && before.slice(-6).some((m) => asksAbilities(m)) ) return Math.max(2, asked + 1);
+  return 0;
+}
 const ABILITY_ITEMS = 'THE TRUE LIST of what you can do: (1) talk with them, by voice and in writing, any time; (2) remind them of things like medicine or appointments, by a message or by ringing them, whether they or their family set it; (3) call them, including calling them back; (4) read a schedule they tell you or send and follow it: you set reminders from it only for the items they say yes to; (5) look at a photo or a PDF in the written chat and tell them what it is and what it says (a letter, a bill, a label, a form), which you do in the chat and not on a call; (6) help with scams: read a message, a photo or what they tell you about a call or a visitor and say if it looks like one, and ask them not to pay or share anything until they have checked; (7) remember what they tell you about themselves and bring it back later, only what they actually said; (8) pass on notes from their family, and tell their family the topic when something really matters; (9) check in on how they are, on your own or when their family asks. WHAT YOU CANNOT DO, say it plainly too: you are not an emergency service (in an emergency they should call their local emergency number); you give no diagnosis, no medicine doses and no medical advice; you do not know where they are (no location); you cannot detect a fall unless they tell you.';
 const abilitiesFact = (again, onCall) => ` ABILITIES (facts for you, never read out as written): they have just asked what you can do. Answer with the REAL list below, in your own fresh words (never a stock sentence), naming EVERY one of the nine things and then, briefly, what you cannot do. Do not say "lots of things" or "many things" or anything vague in place of the items. ${again ? 'They have asked this before: do not repeat your last answer. Give a fuller list this time, with one small concrete example for each thing, in different words, and end by offering to try one now.' : 'Keep each item to a few words.'}${onCall ? ' They are on a call: say that the photo or PDF part is for the chat, and that you can do it there.' : ''} ${ABILITY_ITEMS}`;
 const BROWSE_EXCUSE = /\b(?:don['\u2019]?t|do not|can(?:['\u2019]?t|not)|unable to|not able to) (?:have )?(?:any )?(?:browsing|browse|internet access|access to the internet|web access|look (?:it |that |this |things )?up|go online|search(?: for it| online)?)\b/i;
@@ -345,7 +357,7 @@ function callWords(said, heard) {
   for (let k = said.length - 1; k >= 0 && used < MAX_SAID_CHARS; k--) { out = `${said[k]}\n${out}`; used += said[k].length + 1; }
   return ` WHAT THEY TOLD YOU EARLIER IN THIS CONVERSATION (their own words, oldest first, today; it is not in your saved notes yet, so it counts as something you know; a name, relationship or story that appears here is known, do not say you cannot remember it):\n${out.trim()}\n`;
 }
-const callDeps = { awaitMs: SCAM_AWAIT_MS_DEFAULT, officialMs: 4000, official: (words, opts) => require('./official').check(words, opts), scamText: (text) => (process.env.META_API_KEY ? require('./scam').assessText(text) : null) };
+const callDeps = { awaitMs: SCAM_AWAIT_MS_DEFAULT, officialMs: 4000, official: (words, opts) => require('./official').check(words, opts), scamText: (text) => (process.env.META_API_KEY ? Promise.resolve(require('./scam').assessText(text)).then(require('./scam').promote) : null) };
 // A turn about a scam is never a health emergency by its urgency alone (a panicked "he is on the phone" is not a fall): unless their own words name an injury.
 const EMERGENCY_WORDS = /\b(i fell|i have fallen|fell down|chest pain|can'?t breathe|cannot breathe|bleeding|stroke|collapsed|heart attack|passed out|can'?t get up|cannot get up)\b/i;
 const SCAM_CONTEXT_MS = 10 * 60000; // after a scam-looking turn, this long counts as the same scam conversation
@@ -1073,7 +1085,7 @@ class Call {
     bits.push('Their family and any alert are INTERNAL: never bring them up unless they asked about their family or an alert, or this turn is truly about that alert. A greeting or light chat is just a greeting or light chat. If you got something wrong, say plainly and specifically what was wrong and go back to what they were saying; never "let\'s drop it" or "forget it"; if they say "what?" or look lost, clarify the actual point in plain words.');
     bits.push('Companion tone: short, natural, direct, warm; not therapy in every turn. Never say "I\'m right here with you", "we\'ll take this slow together", "I\'m standing with you" or the like, and never give "I care about you" as the reason for something you did. If they are upset with you, answer the actual thing plainly.');
     bits.push('Never use a stock comfort phrase or a stock way of introducing yourself, whether it reassures them that you are with them or says who you are; a friend makes up new words each time.');
-    const beatNote = beat.note(this.beatCount);
+    const beatNote = this.unresolvedTalk() ? '' : beat.note(this.beatCount);   // not while something is still open: no "close gently"
     if (beatNote) bits.push(beatNote);
     const lastU = [...this.history].reverse().find((m) => m.role === 'user');
     if (lastU && simpleAffirmation(lastU.content) && !this.safety && !this.health && !this.pendingConcern) bits.push('They only said a short yes or okay. A real conversation answers that with ONE short line: act on what they agreed to in a few words, or simply carry on. No explanation, no recap of what was just said, and do not repeat a question you already asked or a line you already used.');
@@ -1175,7 +1187,15 @@ class Call {
   }
 
   // Decides this reply's beat from Spark's tag (topic) and the care state, then enforces its limits on the delivery (see beat.js).
+  // Something is still open: a scam question not yet answered, or a heavy feeling (worry, loneliness, sadness) in her last reply. An "okay" or "hmm" then is a quiet cue and not an ending, so no beat
+  // closes the subject with a statement and no question (beats are for light chat that is really finished).
+  unresolvedTalk() {
+    const id = this.profile && this.profile.id;
+    return Boolean((id && care.scamPending(id)) || (this.prevDelivery && beat.HEAVY.has(String(this.prevDelivery.emotion || '').toLowerCase())));
+  }
+
   applyBeat(d, raw, special) {
+    if (!special && this.unresolvedTalk()) special = true;
     const low = (k) => String((raw && raw[k]) || '').toLowerCase();
     const p = beat.plan({ count: this.beatCount, topic: low('topic'), emotion: d.emotion, intent: low('intent'), concern: low('concern'), pain: /^(1|yes|true)$/.test(low('pain')), personal: /^(1|yes|true)$/.test(low('personal')), special });
     const lim = beat.limits(p.type);
@@ -1184,10 +1204,8 @@ class Call {
     if (lim.noQuestion) d.noQuestion = true;
     if (lim.maxSentences < d.maxSentences) d.maxSentences = lim.maxSentences;
     // "What can you do?" needs room for the whole true list (and a fuller one the second time they ask); a question goes with it only if she offers to try one.
-    if (asksAbilities(this.lastHeard()) && !special) {
-      const asked = (this.history || []).filter((m) => m.role === 'user' && asksAbilities(m.content)).length;
-      d.maxSentences = Math.max(d.maxSentences, asked >= 2 ? 7 : 5); d.noQuestion = asked < 2 && d.noQuestion;
-    }
+    const asked = abilitiesAsks(this.history, this.lastHeard());
+    if (asked && !special) { d.maxSentences = Math.max(d.maxSentences, asked >= 2 ? 7 : 5); d.noQuestion = asked < 2 && d.noQuestion; }
   }
 
   // On a connect or close beat the reply may not open with a question: it is written again once, like a repeated opening.
@@ -1209,11 +1227,10 @@ class Call {
     if (asksLinkNumber(text)) bits.push(`LINK OR NUMBER REQUEST: they want a website link or a phone number (for a bank, a helpline or anything else). You NEVER give one, not even for the real bank, because a wrong one is dangerous. The reason is SAFETY: it is NOT that you have no browsing or cannot look things up, so never say that. In a few plain words of your own, two sentences at most: you won't share a link or number, even an official one, because a wrong one could hurt them; they should type the bank's name into their browser themselves, or use the official app or the number printed on their card. Never invent or guess a link or number.${this.channel !== 'chat' ? ' On a call also say: for anything to check, send it in the chat and you will check it there.' : ''}`);
     // She CAN be called, and in the chat the first answer must say so (never "I can't pick up a phone call").
     if (this.channel === 'chat') bits.push('YOU CAN BE CALLED: they can talk to you live, by voice, any time. In the Maya app there is a small phone button at the top right of the chat: one tap and you talk live. Where WhatsApp is set up they can also call you there. If they ask whether they can call you, or ring you, or talk to you, the FIRST thing you say is yes: tap the phone button at the top right and we will talk live. Never say you cannot pick up a phone call, never say you only do notes or writing, and never wait for them to mention the button first.');
-    if (asksAbilities(text)) {
-      const earlier = (this.history || []).filter((m) => m.role === 'user' && asksAbilities(m.content)).length;   // the current question is already in the history: 2 or more means they asked before
-      bits.push(abilitiesFact(earlier >= 2, this.channel !== 'chat').trim());
-    }
+    const nAsk = abilitiesAsks(this.history, text);
+    if (nAsk) bits.push(abilitiesFact(nAsk >= 2, this.channel !== 'chat').trim());
     if (this.channel !== 'chat') bits.push('ON A CALL she cannot look at a photo or screenshot and cannot search the web yet; the written chat in the app can do both. If they offer a photo or screenshot, or ask her to find something out online, say so in a few words WITHOUT a flat "I can\'t": tell them to send it in the chat (after this call is fine) and she will check it there. Never say "I can\'t see pictures" or "I can\'t look things up online".');
+    const pf = require('./phone').fact(text); if (pf) bits.push(pf);   // a number with a country code: which country, and that the number shown can be faked (a static table, no lookup)
     if (/(?:\d[\s().-]*){7,}/.test(text) || /\b(?:phone |telephone )?number\b/i.test(text)) bits.push('A PHONE NUMBER: you never look numbers up and cannot tell if one is real (callers can fake the number shown). If they give or ask about a number, say that straight away, in a few plain words ("I can\'t look numbers up"), never "I\'m not sure what you want me to do with it".');
     return bits.length ? ` LIMITS (facts for you, never read out as written): ${bits.join(' ')}` : '';
   }
@@ -1692,13 +1709,13 @@ class Call {
     if (scamQ) {
       if (this.safety || this.health) care.scamClear(id);
       // Her family question was never actually put to them (her reply was about the link or a photo, or Spark left it out): a yes or no now answers something else. It is owed: ask it, in her own words.
-      else if (!scamQ.asked) { scamHandled = true; note('scam-family-owed', `FACT: you have not yet asked them whether they would like their family to know about the possible ${scamQ.type} they told you about. After answering what they just said, ask it now as ONE short question in your own words (topic only: never the words of the message, numbers or a link). Nothing has been sent to their family.`); }
+      else if (!scamQ.asked) { scamHandled = true; note('scam-family-owed', `FACT: you have not yet asked them whether they would like their family to know about the possible ${scamQ.type} they told you about. After answering what they just said, ask it now as ONE short question in your own words (topic only: never the words of the message, numbers or a link). Nothing has been sent to their family, and the worry is NOT settled: do not call it settled, good or sorted.`); }
       // The question was asked a while ago (they went away, or the talk moved on): whatever they say now - even a yes - is NOT acted on until she restates the worry and asks again.
       else if (!care.scamFresh(id) && !require('./scam').needsCheck(heard) && !care.scamTold(id)) { scamHandled = true; note('scam-resume', `FACT: earlier they told you about a possible ${scamQ.type} and you asked whether they would like their family to know; that question was left open while they were away and NOTHING has been sent to their family. They have just said something: if it was a yes, do NOT say anything is done. In your own words, after answering what they said, say in one short sentence what the worry was (the topic only, never the words of the message, numbers or a link), and ask again whether they would like you to let their family know.`); }
       else if (CONCERN_NO.test(heard) || refusedFamily(heard)) { const told = care.scamTold(id); care.scamAnswer(id, false); scamHandled = true; this.pendingConcern = null; note('scam-no-to-family', told ? `FACT: they do not want their family told about the possible ${scamQ.type}, but the app ALREADY told their family earlier (topic only: the kind of scam, no words, no photo) and that cannot be undone. Say so plainly and briefly in fresh words: never deny it, never say nothing was sent, and do not excuse it by saying you did it because you care about them. Acknowledge what they wanted, ask nothing about telling the family again.` : `FACT: they said no to letting their family know about the possible ${scamQ.type} they told you about. You are NOT sending their family any message about it. In one short kind sentence say only that you will not send their family a message about it, and gently remind them never to pay or share details with anyone who contacts them like that. Never say it stays between you, is private or secret, or that nobody will know. Do not ask about it again and do not push.`); }
       else if (saysYesToFamily(heard)) { const r = care.scamAnswer(id, true); scamHandled = true; this.pendingConcern = null; note('scam-yes-to-family', r && r.isNew === false ? `FACT: their family was ALREADY told about the possible ${scamQ.type} earlier, so nothing new was sent now. Say that, in one short sentence in fresh words, naming the topic and saying "your family" and never naming a particular relative. Do not say you have just sent anything. Promise nothing else.` : `FACT: they said yes, so the app has now sent their family an alert saying only what kind of message it was (no words from it and no photo). The kind: a possible ${scamQ.type}. Confirm that in one short sentence in fresh words, naming the topic as they would know it (not "the earlier message"), saying "your family" and never naming a particular relative. Promise nothing else, and do not say what their family will do.`); }
       else if (care.scamTold(id)) care.scamClear(id);   // their family is already told: the open question is dropped, never asked again
-      else { care.scamUnclear(id); note('scam-family-unanswered', 'FACT: you asked whether they would like their family to know about the message and they have not answered that yet. Answer what they just said; do not push, and do not ask the same question again word for word.'); }
+      else { care.scamUnclear(id); note('scam-family-unanswered', `FACT: you asked whether they would like their family to know about the possible ${scamQ.type} and they have NOT answered that: "okay", "hmm" and a change of subject are not an answer, and the worry is NOT settled. Do not close it or call it settled, good or sorted. In one short line show you understood where they are with it (their worry, in their own words), and bring the family question back gently in different words than before.`); }
     } else if (care.scamLost(id) && !care.scamTold(id) && !this.safety && !this.health && (asksFamily(heard) || saysYesToFamily(heard))) {
       // The question about an earlier scam worry ran out while they were away; they now say yes / ask for their family to be told. Not a vague contact request and never a fake "done": it is brought back, and asked again.
       const lost = care.scamLost(id); care.scamAsk(id, lost.type, { channel: lost.channel, pause: lost.pause, asked: false }); scamHandled = true;
@@ -2102,4 +2119,4 @@ async function prefetchWelfareLine(profileId, tz, signal) {
   return { kind: 'welfare', line, ms: Date.now() - t0 };
 }
 
-module.exports = { asksAbilities, ABILITIES_ASK, sameName, prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, explicitFamilyRequest, ownPlan, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { abilitiesAsks, asksAbilities, ABILITIES_ASK, sameName, prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, explicitFamilyRequest, ownPlan, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

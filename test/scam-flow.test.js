@@ -156,7 +156,7 @@ test('an unclear answer is not a yes: the question stays open, but after two ans
   await chat.sendImage(id, PNG, '', null);
   const NOQ = PLAIN.replace(' Would you like me to let your family know?', '');   // replies that do not ask it again
   reset(NOQ); await chat.sendText(id, 'What time is it now', null);
-  assert.match(lastRoster(), /not answered that yet/); assert.ok(care.scamPending(id));
+  assert.match(lastRoster(), /they have NOT answered that/); assert.ok(care.scamPending(id));
   reset(NOQ); await chat.sendText(id, 'The weather looks grey', null);
   assert.equal(care.scamFresh(id), false, 'two answers that were not an answer: no longer fresh'); assert.ok(care.scamPending(id), 'but the incident is not lost');
   reset(PLAIN); await chat.sendText(id, 'Yes', null);
@@ -167,7 +167,7 @@ test('an unclear answer is not a yes: the question stays open, but after two ans
 test('wiring: the scam check runs beside the description (not instead), only with a Meta key, and the family text carries no letter words', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'chat.js'), 'utf8');
   assert.match(src, /Promise\.all\(\[deps\.describe\(buf, mime\), check\]\)/);
-  assert.match(src, /process\.env\.META_API_KEY \? require\('\.\/scam'\)\.assess/);
+  assert.match(src, /process\.env\.META_API_KEY \? Promise\.resolve\(require\('\.\/scam'\)\.assess\(buf, mime\)\)\.then\(require\('\.\/scam'\)\.promote\)/);   // only with a key, and a one-sign verdict that names a scam kind is treated as a warning
   const care_ = fs.readFileSync(path.join(__dirname, '..', 'care.js'), 'utf8');
   const t = care_.slice(care_.indexOf('function scamAlert'), care_.indexOf('function scamFlag'));
   assert.ok(!/reading|transcript|photo|mediaUrl/.test(t.replace(/never the letter, a transcript or the photo/g, '')), 'the alert text is built from the name and the kind only');

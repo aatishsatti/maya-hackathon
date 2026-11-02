@@ -1,10 +1,10 @@
-# Handoff (written 2 Nov 2026, local commit after 0853394, NOT pushed)
+# Handoff (written 2 Nov 2026; live at 97f808b; the work below is LOCAL, NOT pushed)
 
 Maya: voice companion for older adults. Branch `render-test` is the working and deployed branch; `main` is fast-forwarded to it on every push. Live: https://maya-singapore.onrender.com (Render, Singapore).
 
 ## State
-- Live at the time of writing: `0853394`. This work is local only until the push word.
-- Tests: `node --test test/*.test.js` -> 938 checks, 934 pass, 4 skipped (need live keys), 0 fail.
+- Live at the time of writing: `97f808b`. The car-prize / conversation work is local only until the push word.
+- Tests: `node --test test/*.test.js` -> 947 checks, 943 pass, 4 skipped (need live keys), 0 fail.
 - `docs/maya-prompt.md` is 7,494 of 7,500 characters (a test enforces < 7,500): never add words without trimming.
 
 ## The scam family question (this change)
@@ -19,6 +19,13 @@ What it does now:
 - Chat retry: if Spark skips a required question twice, a plain question closes her reply (`chat.js`, labels setrem-* and scam-*).
 - `FAMILY_CLAIM` also blocks "I'm letting your family know now" when nothing was sent. Chat sessions now carry `scamAt`, so "okay" after a scam talk is not read as a health emergency.
 - Unchanged: the detector (`scam.js`), the held-out numbers (37/38 warned, S114 cautioned, 0/38 false), false-yes protection (`saysYesToFamily`), "a no covers the incident" (`care.scamDeclined`), topic-only family text, voice / push / WhatsApp / reminders.
+
+## Second round (car prize call, conversation, numbers) - local, not pushed
+Live bugs at 97f808b: (1) a stranger's car-prize call with no payment demand never asked the family question; (2) replies were generic, no relevant question, "settled / good" closure while a worry was open; abilities answers were short.
+Causes in code:
+- The detector returned `caution` (one sign) for the prize call; only warn / pause registered the family question (`chat.js afterTalkReply`, `scam.js talkNote` told her NOT to ask). Number-only follow-ups are not re-checked.
+- `call.js ABILITIES_ASK` matched only "you" (not "u") and had no follow-up ("and?"), so the nine-item list never fired. `beat.js` closed light chat after 3 replies with "no question", also on "okay" / "hmm" while something was open.
+Changes: `scam.promote` (live pipeline only; stubs untouched) treats a one-sign verdict that names a kind as a warning, so every warn path (owed question, notes, official reconfirm) applies; the detector and held-out numbers are unchanged (checked: S114 has no kind, so nothing in the held-out run is promoted, 0 normal items were cautioned). A warning turn must itself ask the family question (rewritten once, then the plain question closes the reply); both-drafts-blocked now ends in the plain question instead of an error. `call.js unresolvedTalk` (open scam question, or a heavy feeling in her last reply) turns the beat limits off and drops the "close gently" note. New chat note UNDERSTAND THEM (context, care in one line, one relevant question, no closure on okay / hmm). Abilities: "u"/"ya", "and?" / "what else" follow-ups (`abilitiesAsks`). `phone.js`: static country-code table; a number with + / 00 gets the country and "the number shown can be faked", never a lookup, never stored (chat, photo and PDF text, and calls via `limitsFacts`).
 
 ## Proof status (needs Render + phone)
 - Scam fixes: proven locally with real Spark (fresh seniors); NOT yet live.

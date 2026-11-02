@@ -102,7 +102,7 @@ test('a scam warning that was spoken is not repeated on the next reply', async (
   const { c } = mkCall(); calls = 0; callDeps.scamText = verdict('warn'); reset(`${PLAIN2} Would you like me to let your family know?`);   // the reply really asks the family question
   await say(c, TOLD); assert.ok(care.scamPending(c.profile.id));
   callDeps.scamText = async () => null; await say(c, 'Thank you, dear.');
-  assert.equal(c.scamLater, null); assert.doesNotMatch(lastRoster(), /SCAM CHECK|scam/i);
+  assert.equal(c.scamLater, null); assert.doesNotMatch(lastRoster(), /SCAM CHECK/, 'the warning itself is not repeated (the open family question has its own note)');
 });
 
 test('family Seen told by her own line: counted as told only when she got to say it', async () => {
