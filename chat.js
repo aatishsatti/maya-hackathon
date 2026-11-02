@@ -173,17 +173,39 @@ class ChatSession {
     this.said = [...this.said, `${this.who('A')}: ${message}`].slice(-60);
     memory.appendTurn(id, this.callId, { label: 'A', text: message, userSaid: true });
     const channelNote = `CHANNEL: this is a written chat message in their app, not a call. ${how === 'voice' ? 'They sent you a voice note and the words above are what they said in it; you will answer by voice note, so write the way you would speak.' : how === 'image' ? 'They sent you a photo; the bracketed words describe it. Answer what matters to them, never claim to see more than the description says.' : how === 'document' ? 'They sent you a PDF document. Tell them in simple words what it is and what it asks; never reply only that you received it.' : 'They cannot hear you; write plainly, warm and short as in a call.'}`;
+    // The first thing Maya ever says to a new person, and how she talks to them after: short, slow, warm, one small thing at a time (see companionNote).
+    const priorMaya = this.thread.some((m) => m.role === 'maya');   // the thread already holds this message; any earlier Maya line (a reply, a reminder) means they have met
+    this.firstEver = !priorMaya && care.callCount(id) === 0 && !this.safety && !this.health && !scam && isHello(heard);   // only a hello (or a few words): a real question on the very first line is simply answered
+    this.metBefore = priorMaya || care.callCount(id) > 0;
     this.setFocus(heard, `${extra} ${note}`.trim());
     this.shortReply = (short || Boolean(scam)) && !ASKS_MORE.test(heard);   // a web / scam / lookup answer is the gist in one or two sentences unless they asked for more
     this.scamReply = scam;   // 'warn' | 'caution' | null: the shape of THIS reply (see reply())
     try {
-      const said = await this.reply(`${this.replyNote()} ${channelNote} ${extra} ${note}`.trim());
+      const said = await this.reply(`${this.replyNote()} ${channelNote} ${this.companionNote(heard)} ${extra} ${note}`.trim());
       this.commitReminder();   // the reply is out: a next-call reminder it carried now counts as delivered
       return said;
     } catch (e) {
       if (this.history.length && this.history[this.history.length - 1].role === 'user') this.history.pop(); // a failed turn cannot poison the next one
       throw e instanceof ChatError ? e : new ChatError(e.message);
-    } finally { this.scamReply = null; this.shortReply = false; this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.armIdle(); }
+    } finally { this.scamReply = null; this.shortReply = false; this.firstEver = false; this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.armIdle(); }
+  }
+
+  // How Maya is in the written chat, as FACTS for her own words (never a script): the first ever message is a short, slow hello that says who she is; after it she is short and gentle, learns one small
+  // thing at a time and only from what they actually say, and never introduces herself again.
+  companionNote(heard) {
+    if (this.firstEver) {
+      return 'FIRST EVER MESSAGE: you have never talked with this person before. Say hello slowly and warmly in your own fresh words, and say plainly that you are Maya and that you are their companion, then add ONE small warm line (that it is nice to meet them, or that you are glad they wrote), and STOP. At most two short sentences. No question, nothing about what is on their mind, no list, no advice, no explaining what you can do. Do not assume anything about them: you know nothing yet except what this message says. If their message already says something real, answer that in the same breath, still very short.';
+    }
+    const bits = ['CHAT STYLE: one or two short, gentle sentences, plain and slow, unless they clearly ask for more. If they write little, stay short and do not push. If they are chatty, match them, still short. If they tell a story, listen, and ask at most one small follow-up question; never take over.'];
+    if (this.metBefore) bits.push('You have already met: never introduce yourself or say your name again.');
+    bits.push('Getting to know them happens slowly, one small thing at a time, never as an interview: at most ONE small question, and only when it fits (how their day is going, what they like to do, a little about themselves). You learn their name, likes, day, mood and stories ONLY from what they actually say; never assume, and never pretend you knew something before they told you.');
+    return bits.join(' ');
+  }
+
+  // A first message that is just a hello, or news: not pain, a worry or a safety word (those are answered first and plainly, with no introduction).
+  plainHello(raw) {
+    if (this.safety || this.health || this.pendingConcern || this.scamReply) return false;
+    return !(raw && (/^(1|yes|true)$/i.test(String(raw.pain || '')) || ['unsure', 'urgent'].includes(String(raw.concern || '').toLowerCase())));
   }
 
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.
@@ -191,13 +213,14 @@ class ChatSession {
     const signal = AbortSignal.timeout(REPLY_TIMEOUT_MS);
     const rs = startReply(this.history, this.roster(note), signal);
     const pieces = [];
-    let delivery = null, feel = null, repeated = null, retryWhy = 'repeat';
+    let delivery = null, feel = null, repeated = null, retryWhy = 'repeat', feelRaw = null;
     const splitter = new ChunkSplitter({
       stripInterjection: this.openedWithInterjection,
-      stripGreeting: true,
+      stripGreeting: !this.firstEver,   // a greeting belongs to the start only: the very first message to a new person is the one place it stays
       onName: (l, n) => this.recordName(l, n),
       // Mirrors the onFeel in Call.speakReply (call.js): Spark's read goes through the deterministic map, then the same care effects.
       onFeel: (raw) => {
+        feelRaw = raw;
         const d = mapEmotionToDelivery(raw && raw.emotion, raw && raw.intensity, this.prevDelivery);
         const intent = raw && String(raw.intent).toLowerCase();
         const lastUser = ([...this.history].reverse().find((m) => m.role === 'user') || { content: '' }).content;
@@ -217,7 +240,10 @@ class ChatSession {
         // warning) the ONE question about telling their family. Calm and plain: nothing bright, no exclamation.
         if (this.scamReply) { d.noBright = true; d.maxExclaim = 0; d.excitedOpening = false; d.openingTone = null; d.moments = 0; d.noQuestion = !['warn', 'pause'].includes(this.scamReply); d.maxSentences = ASKS_MORE.test(lastUser) ? 4 : ['warn', 'pause'].includes(this.scamReply) && !care.scamTold(this.profile.id) ? 3 : 2; }   // the gist: two short sentences, three when the one question about telling their family is still owed; more only if they asked
         if (this.shortReply && !this.scamReply && !this.safety && !this.health) d.maxSentences = Math.min(d.maxSentences, 2);
+        // The written chat is always short (one or two lines) unless they ask for more or it is a story / a recall they asked for; the first ever message is two short sentences and no question.
+        if (!this.scamReply && !this.safety && !this.health && !ASKS_MORE.test(lastUser) && !(d.maxSentences === Infinity)) d.maxSentences = Math.min(d.maxSentences, 2);
         this.applyBeat(d, raw, Boolean(this.safety || this.health || this.pendingConcern || this.scamReply));
+        if (this.firstEver && this.plainHello(raw)) { d.noQuestion = true; d.maxSentences = Math.min(d.maxSentences, 2); }   // not over pain, a worry or a safety word: those are answered first
         delivery = d;
         feel = { emotion: d.emotion, intensity: d.intensity, intent: raw && INTENTS.includes(String(raw.intent).toLowerCase()) ? String(raw.intent).toLowerCase() : 'unclear' };
         return d;
@@ -244,6 +270,7 @@ class ChatSession {
     }
     if (!pieces.length) throw new ChatError('Maya could not answer right now: no reply came back.'); // never a faked reply
     const all = pieces.map((p) => p.text).join(' ').replace(/\s+([,.;:!?])/g, '$1');
+    if (this.firstEver && !again && this.plainHello(feelRaw) && !IDENTITY_LINE.test(all)) return this.reply(`${note} Your draft did not say who you are. Write it again: this is the very first message to a new person, so say in your own fresh words that you are Maya, their companion, with one small warm line, in at most two short sentences and no question.`, { again: true });
     this.history.push({ role: 'assistant', content: all });
     memory.appendTurn(this.profile.id, this.callId, { who: 'Maya', text: all });
     // Bookkeeping the next reply depends on (same as the end of Call.speakReply).
@@ -307,6 +334,9 @@ function mirrorSpoken(profileId, role, text) {
 }
 
 // When the person last wrote to Maya or she wrote to them in the chat (not the lines mirrored from a call), or 0: a fact for the next greeting.
+// A first message that is a greeting or only a few words ("Hi Maya", "hello", "good morning", "hi, how are you?"): the one kind that gets the introduction.
+const HELLO_START = /^\s*(?:hi+|hello+|hey+|hiya|namaste|namaskar|hola|good (?:morning|afternoon|evening)|assalam|salaam)\b/i;
+const isHello = (t) => HELLO_START.test(String(t)) || (String(t).trim().split(/\s+/).length <= 4 && !/\?/.test(t));
 const ASKS_MORE = /\b(more|details?|explain|in full|everything|the whole|elaborate|go on|longer|in depth)\b/i;
 const lastWrittenAt = (profileId) => { const s = sessions.get(profileId); const m = s && [...s.thread].reverse().find((x) => !x.spoken); return m ? m.at : 0; };
 // Chat -> call continuity, decided in code: when they wrote to Maya minutes ago, these are the facts the next call's greeting picks up from (call.js greetingNote).
