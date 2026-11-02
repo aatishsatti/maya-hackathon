@@ -153,8 +153,8 @@ test('the page: reconnects within 1-2 s, keeps trying for the window, then gives
   assert.deepEqual(MayaLine.next({ now: lostAt + MayaLine.WINDOW_MS, lostAt, attempt: 9, hasToken: true }), { retry: false });
   assert.deepEqual(MayaLine.next({ now: lostAt, lostAt, attempt: 0, hasToken: false }), { retry: false });
   assert.ok(MayaLine.WINDOW_MS < RESUME_GRACE_MS, 'the server holds the call longer than the page keeps trying');
-  assert.equal(MayaLine.dead({ now: 20000, lastRx: 9000 }), false);
-  assert.equal(MayaLine.dead({ now: 22000, lastRx: 9000 }), true, 'nothing heard for over DEAD_MS counts as a dead line');
+  assert.equal(MayaLine.dead({ now: 9000 + MayaLine.DEAD_MS - 1000, lastRx: 9000 }), false);
+  assert.equal(MayaLine.dead({ now: 9000 + MayaLine.DEAD_MS + 1000, lastRx: 9000 }), true, 'nothing heard for over DEAD_MS counts as a dead line');
 });
 
 test('audio gap: when mic frames stop (frozen link) Transcribe gets real-time silence; while frames flow it gets none from the stand-in', (t) => {

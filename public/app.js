@@ -91,7 +91,7 @@ class MayaCallState {
 // and sends the call's token so the server hands the same call back. Gives up after WINDOW_MS (the server holds the call for a little longer).
 // Heartbeat: the page pings every PING_MS and expects to hear anything from the server within DEAD_MS, else the line counts as lost.
 const MayaLine = {
-  WINDOW_MS: 18000, RETRY_MS: [300, 1000], PING_MS: 5000, DEAD_MS: 12000, ATTEMPT_MS: 4000,
+  WINDOW_MS: 18000, RETRY_MS: [300, 1000], PING_MS: 2500, DEAD_MS: 6000, ATTEMPT_MS: 4000, SLOW_MS: 5000,   // a silent (half-open) line is noticed in 6 s (a pong every 2.5 s; a mic stall is about 1 s); after SLOW_MS of trying the page says so plainly
   // First loss at lostAt; `attempt` is how many reconnects were tried. -> { retry, delay } or { retry: false }.
   next({ now, lostAt, attempt, hasToken }) {
     if (!hasToken || now - lostAt >= this.WINDOW_MS) return { retry: false };
@@ -106,6 +106,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   'use strict';
   if (typeof document === 'undefined') return; // loaded by a test, not a page
 
+  const MIC_RATE = 16000;        // the microphone's own context rate: what the app sends and what the ears want
+  const MIC_BACKLOG_BYTES = 65536;   // about one second of 16 kHz audio waiting to go out
   const SILENCE_MS = 1400;       // seniors pause; wait before ending an utterance
   const MAX_UTTERANCE_MS = 30000;
   const TICK_MS = 50;
@@ -569,6 +571,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     try { await c.ctx.audioWorklet.addModule('/mic-worklet.js'); }
     catch { endCall('Maya could not start the microphone. Please reload the page and try again.'); return; }
     if (myGen !== gen) return;
+    if (c.micCtx) { try { await c.micCtx.audioWorklet.addModule('/mic-worklet.js'); } catch { try { c.micCtx.close(); } catch { /* ignore */ } c.micCtx = null; } }   // decided BEFORE the socket opens: the start message carries the mic's rate
+    if (myGen !== gen) return;
     c.attempt = 0; c.lostAt = 0; c.lastRx = Date.now();
     openSocket(c, myGen, false);
     c.master = c.ctx.createGain(); // Maya's voice goes through this so her volume can dip instantly
@@ -579,13 +583,25 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     c.playAnalyser.fftSize = 1024;
     c.playBuf = new Float32Array(c.playAnalyser.fftSize);
     c.master.connect(c.playAnalyser);
-    const tap = new AudioWorkletNode(c.ctx, 'mic-tap');
+    // The microphone gets its OWN 16 kHz context (the same rate the app sends), so the uplink is a third of what a 48 kHz page sent and the frames come about every 64 ms (live: stalls of 300 to 1080 ms,
+    // frames expected every 50 to 100 ms). Maya's voice and the orb stay on the page's own context. If this browser will not make a 16 kHz context, the page's own is used, as before.
+    const mic = c.micCtx || c.ctx;
+    if (mic.state === 'suspended') mic.resume().catch(() => {});
+    const tap = new AudioWorkletNode(mic, 'mic-tap');
     c.tap = tap;
-    const mute = c.ctx.createGain(); // worklet must be connected to run; silent so the mic is never played back
+    c.micStats = { rate: mic.sampleRate, sent: 0, dropped: 0, longTasks: 0, worstMs: 0 };
+    try { c.longObs = new PerformanceObserver((l) => { for (const e of l.getEntries()) { c.micStats.longTasks += 1; c.micStats.worstMs = Math.max(c.micStats.worstMs, Math.round(e.duration)); } }); c.longObs.observe({ entryTypes: ['longtask'] }); } catch { /* not every browser reports long tasks */ }
+    const mute = mic.createGain(); // worklet must be connected to run; silent so the mic is never played back
     mute.gain.value = 0;
-    c.ctx.createMediaStreamSource(c.stream).connect(tap);
-    tap.connect(mute).connect(c.ctx.destination);
-    tap.port.onmessage = (e) => { if (c.ready && c.ws && c.ws.readyState === WebSocket.OPEN) c.ws.send(e.data.buffer); };
+    mic.createMediaStreamSource(c.stream).connect(tap);
+    tap.connect(mute).connect(mic.destination);
+    // Backlog guard: if the line cannot keep up, the newest audio matters more than audio that would arrive seconds late, so frames are dropped while more than MIC_BACKLOG_BYTES wait to go out
+    // (the server fills a gap with silence, call.js SILENCE_FEED_MS). Counted, never silent: the call's end prints the counts in the console.
+    tap.port.onmessage = (e) => {
+      if (!(c.ready && c.ws && c.ws.readyState === WebSocket.OPEN)) return;
+      if (c.ws.bufferedAmount > MIC_BACKLOG_BYTES) { c.micStats.dropped += 1; return; }
+      c.micStats.sent += 1; c.ws.send(e.data.buffer);
+    };
     c.heartbeat = setInterval(() => {
       if (myGen !== gen || call !== c) return;
       if (c.ws && c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify({ type: 'ping' }));
@@ -602,7 +618,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     ws.onopen = () => {
       if (myGen !== gen || c.ws !== ws) return;
       if (resume) { ws.send(JSON.stringify({ type: 'resume', token: c.token })); return; }
-      ws.send(JSON.stringify({ type: 'start', sampleRate: c.ctx.sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId }));
+      ws.send(JSON.stringify({ type: 'start', sampleRate: (c.micCtx || c.ctx).sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId }));
       if (callState.muted) { ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; } // muted while the line was still connecting
     };
     ws.onmessage = (m) => {
@@ -629,6 +645,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (!step.retry) { endCall(LINE_LOST_MSG); return; }
     c.attempt += 1;
     setState('thinking', 'reconnecting');
+    clearTimeout(c.slowTimer);
+    c.slowTimer = setTimeout(() => { if (myGen === gen && call === c && !c.ready) statusEl.textContent = 'Still trying to reconnect. You can press End call and call again.'; }, MayaLine.SLOW_MS);
     c.reconnectTimer = setTimeout(() => { if (myGen === gen && call === c) openSocket(c, myGen, true); }, step.delay);
   }
 
@@ -660,12 +678,14 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (myGen !== gen) { stream.getTracks().forEach((t) => t.stop()); return; } // ended while asking
 
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let micCtx = null;
+    try { const m = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: MIC_RATE }); if (m.sampleRate === MIC_RATE) micCtx = m; else m.close().catch(() => {}); } catch { /* an older browser: the page's own context carries the mic */ }
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     ctx.createMediaStreamSource(stream).connect(analyser);
 
     call = {
-      gen: myGen, stream, ctx, analyser,
+      gen: myGen, stream, ctx, micCtx, analyser,
       buf: new Float32Array(analyser.fftSize),
       utterance: null, fetchAbort: null, timer: null,
       onsetTicks: 0, lastVoice: 0, turn: 0, ws: null, tap: null, ready: false,
@@ -698,7 +718,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       clearTimeout(c.stuck);
       clearTimeout(c.duckFailsafe);
       clearTimeout(c.thinkTimer);
-      clearInterval(c.heartbeat); clearTimeout(c.reconnectTimer); clearTimeout(c.attemptTimer);
+      clearInterval(c.heartbeat); clearTimeout(c.reconnectTimer); clearTimeout(c.attemptTimer); clearTimeout(c.slowTimer);
       if (c.fetchAbort) c.fetchAbort.abort();
       if (c.utterance) {
         c.utterance.discard = true;
@@ -708,6 +728,9 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       if (c.tap) { c.tap.port.onmessage = null; c.tap.disconnect(); }
       stopPlayback();
       c.stream.getTracks().forEach((t) => { t.onended = null; t.stop(); });
+      if (c.longObs) { try { c.longObs.disconnect(); } catch { /* ignore */ } }
+      if (c.micStats) console.log('mic uplink', c.micStats);   // counts only: frames sent, frames dropped while backed up, main-thread stalls over 50 ms and the worst one
+      if (c.micCtx) c.micCtx.close().catch(() => {});
       c.ctx.close().catch(() => {});
     }
     stopSpeaking();
