@@ -153,6 +153,7 @@ function savedQs(s) { const care = require('./care'), id = s.profile && s.profil
 function allQs(s) { const x = st(s); return [...savedQs(s), ...(x.qs || [])]; }
 function afterReply(s, text) {
   const x = st(s);
+  if (flag('COMPANION') && s.profile) require('./social').noteSpoken(s, text);   // a claim that slipped out: corrected on the next turn
   if (flag('COMPANION') && x.topic === 'ability') { x.abilitySaid = [...new Set([...(x.abilitySaid || []), ...CATS.filter(([, re]) => re.test(text)).map(([k]) => k)])]; }
   if (!flag('MEMORY')) return;
   const qs = String(text || '').split(/(?<=[.!?])\s+/).filter((q) => /\?\s*$/.test(q));
@@ -273,7 +274,7 @@ const CLAIM = [
   [/\bI(?:'ve| have| just)?\s+(?:looked (?:it )?up|searched|googled)\b/i, (e) => e.web === 'ran'],
   [/\bI(?:'ve| have| just)?\s+(?:checked|verified|confirmed)\b/i, (e) => e.web === 'ran' || e.scam === 'ran'],
   [/\bI(?:'ve| have| just)?\s+(?:called|rang|phoned|contacted|emailed|messaged)\s+(?!you\b)/i, () => false],
-  [/\bI(?:'ve| have| just)?\s+(?:scheduled|booked|arranged)\b|\b(?:is|'s|has been|have been)\s+(?:all\s+)?(?:scheduled|booked)\b/i, (e) => !e.socialFailed && Boolean(e.reminder || e.social)],
+  [/\bI(?:'ve| have| just)?\s+(?:scheduled|booked|arranged)\b|\b(?:is|'s|has been|have been)\s+(?:all\s+)?(?:scheduled|booked)\b/i, (e) => !e.socialFailed && Boolean(e.reminder || e.social), true],
   [/\bI(?:'ve| have| just)?\s+(?:notified|alerted|told|informed|sent)\s+(?:your\s+)?(?:family|son|daughter|them|the bank|the police)\b/i, (e) => Boolean(e.family)],
 ];
 // Returns a reason string when the draft must be written again, else null. rec = s._exec (what really ran); known = the text the facts and the senior gave (a link or number must already be in it).
@@ -294,14 +295,15 @@ function breaks(text, s) {
     const ls = (s.profile && require('./care').get(s.profile.id) || {}).smart;
     if (flag('COMPANION') && ls && (ls.brush || []).some((b) => Date.now() - b.at < 30 * 86400000 && overlap(w, b.w) >= 0.5 && !(b.w.some((x) => String(s.lastHeard ? s.lastHeard() : '').toLowerCase().includes(x))))) { s._why = 'they asked you to drop that topic: do not raise it'; return 'brushed'; }
   }
-  if (flag('COMPANION') && require('./social').claimsScheduled(t) && !(s._exec && s._exec.social) && (s.factLabels || []).some((l) => /^social-(offer|ask|confirm|failed|declined|quiet|past)/.test(l))) { s._why = 'nothing is saved yet: do not say the call is scheduled, arranged or booked'; return 'claim'; }
+  if (flag('COMPANION') && require('./social').claimBlocked(t, s)) { s._why = 'nothing is saved: do not say the call is scheduled, arranged, noted or booked. Say what is still needed, or that it was not saved'; return 'claim'; }
   if (!flag('GUARD')) return null;
   if (SAFE_CLAIM.test(t) && !/\bnot\s+(?:100|a hundred|safe|verified)|\bn't\s+(?:safe|verified)|\bcan'?t\s+(?:say|be)\b[^.]{0,30}\b(?:safe|sure)/i.test(t)) return 'certainty';
   const known = `${s.lastHeard ? s.lastHeard() : ''} ${s._knownText || ''}`;
   const u = URL_.exec(t); if (u && !known.toLowerCase().includes(u[0].toLowerCase().replace(/[.,!?)]+$/, ''))) return 'link';
   const p = PHONE_.exec(t); if (p && !digits(known).includes(digits(p[0]))) return 'number';
   const e = s._exec || {};
-  for (const [re, ok] of CLAIM) if (re.test(t) && !ok(e)) return 'claim';
+  const sentences = t.split(/(?<=[.!?])\s+/);
+  for (const [re, ok, denyOk] of CLAIM) if (!ok(e) && sentences.some((x) => re.test(x) && !(denyOk && /\b(?:no|not|nothing|never|nobody|haven'?t|hasn'?t|didn'?t|isn'?t|wasn'?t|yet)\b/i.test(x)))) return 'claim';   // "nothing is scheduled yet" is a denial, not a claim; the other claims stay strict
   return null;
 }
 

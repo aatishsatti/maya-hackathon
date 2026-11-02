@@ -28,6 +28,7 @@ function isYes(text) {
 const YES_ALONE = { test: isYes };   // kept for callers that used the old pattern
 const DECLINE = /^\s*(?:no|nope|nah)\b|\bnot (?:now|today|really|interested)\b|\bno,? thanks?\b|\bno,? thank you\b|\bmaybe later\b|\bi(?:'d| would) rather not\b|\bi don'?t (?:want|need)\b|\bleave it\b/i;
 const VAGUE = /\b(?:after (?:lunch|dinner|breakfast|tea|supper|my (?:nap|walk))|before (?:lunch|dinner|bed)|sometime|some time|later|whenever|any ?time|in the (?:morning|afternoon|evening)|afternoon|morning|evening|around then)\b/i;
+const READBACK = /\b(?:what|which|any)\b[^.?!]{0,30}\b(?:calls?|chats?)\b[^.?!]{0,25}\b(?:do i have|have i (?:got|set)|(?:are|is) (?:set|arranged|scheduled|saved)|set up)\b|\bwhat time (?:do|will|are) you (?:call|ring|phone)\b|\bis my (?:daily )?(?:call|chat) (?:still )?(?:on|set|arranged|saved)\b|\b(?:do i have|have i got) (?:a |any )?(?:daily )?(?:call|calls)\b/i;
 const SKIP = /\b(?:skip|miss|pass on)\b[^.?!]{0,25}\b(?:today|this one|the call)\b|\bdon'?t call me today\b|\bno call today\b|\bnot today\b/i;
 const CANCEL = /\b(?:cancel|end|delete|remove|turn off|stop)\b[^.?!]{0,20}\b(?:daily|every ?day|regular|these|the|my)\b[^.?!]{0,12}\bcalls?\b|\bno more daily calls\b/i;
 const CHANGE = /\b(?:change|move|switch|reschedule|make)\b[^.?!]{0,25}\b(?:call|time|chat)\b|\bcall me (?:at|around)\b[^.?!]{0,15}\binstead\b/i;
@@ -95,6 +96,13 @@ function step(s, heard, ctx = {}, now = Date.now()) {
   if (z.offer && !offer) zput(id, { offer: null });
   if (noCalls) { if (offer) zput(id, { offer: null }); return null; }
 
+  // ---- what the record says (never from memory of the conversation): "What daily calls do I have?"
+  if (READBACK.test(heard)) {
+    if (arr) { const v = care.socialView(p, p.reminders.find((r) => r.social)); return ['social-readback', `SAVED RECORD: a daily call at ${clockWords(arr.h, arr.mi)} (${arr.tz}), status: ${v.status}${v.next ? `, next call ${dateWords(care.localDate(v.next, arr.tz))} at ${clockWords(arr.h, arr.mi)}` : ', no next call'}. Tell them this from the record only. They can skip one call, change the time or cancel these daily calls by telling you here.`]; }
+    return ['social-readback', z.cancelledAt ? `SAVED RECORD: no daily call is arranged now. One was cancelled on ${dateWords(care.localDate(z.cancelledAt, p.tz || 'UTC'))}; it did not fail to save. Say that plainly, and that they can ask for a new one.` : 'SAVED RECORD: no daily call is saved. Say so plainly; never say one is arranged or scheduled.'];
+  }
+  if (z.misled && now - z.misled < 3600000 && !arr && !(offer && ['confirm'].includes(offer.stage))) { zput(id, { misled: null }); return ['social-correct', 'CORRECTION: earlier you may have given the impression that a daily call is arranged. NO daily call is saved. Say so plainly in one short sentence, and ask if they would like to set one up.']; }
+
   // ---- the controls on a saved daily call: skip today, change the time, cancel the daily calls
   if (arr && !arr.revoked && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard))) {
     if (CANCEL.test(heard)) { care.socialCancel(id); zput(id, { offer: null }); return ['social-cancel', 'CANCELLED: the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.']; }
@@ -150,6 +158,10 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
   if (sl.time) { if (was.time && (was.time.h !== sl.time.h || was.time.mi !== sl.time.mi)) correction = 'They corrected the time: acknowledge the new time in a few words (for example that you have noted it) and carry on; there is no limit on how many times they may change it.'; offer.time = sl.time; }
   if (sl.start && offer.mode !== 'change') { if (was.start && was.start !== sl.start) correction = correction || 'They corrected the start day: acknowledge it in a few words and carry on.'; offer.start = sl.start; }
   const changed = (sl.time && (!was.time || was.time.h !== sl.time.h || was.time.mi !== sl.time.mi)) || (sl.start && was.start !== sl.start);
+  if (!changed && !yes && !fresh && (offer.stage === 'confirm') && /^\s*(?:yes|yeah|yep|sure|ok(?:ay)?)\b[^.?!]*\b(?:but|except|only|unless|though|however)\b/i.test(heard)) {
+    offer.stage = 'collect'; offer.at = now; zput(id, { offer });   // the old question no longer stands: a later bare yes does not save it
+    return ['social-condition', 'They said yes BUT added a condition. NOTHING is saved. Ask ONE short question about what they would like to change, and do not say anything is arranged, noted or scheduled.'];
+  }
   const related = fresh || yes || changed || sl.daily || sl.notDaily || sl.ambiguous || sl.vague || DECLINE.test(heard);
   if (!related) return null;   // something else was said: the offer waits (it lapses by itself), nothing is asked twice
   if (!changed && !fresh && DECLINE.test(heard) && !yes) {
@@ -182,15 +194,40 @@ function save(s, id, offer, now = Date.now()) {
   try {
     const r = offer.mode === 'change' ? care.socialChangeTime(id, offer.time, now) : care.socialSave(id, { offerId: offer.id, h: offer.time.h, mi: offer.time.mi, start: offer.start, tz: offer.tz }, now);
     zput(id, { offer: null }); s._exec.social = true;
-    return ['social-saved', `${offer.mode === 'change' ? 'CHANGED' : 'SAVED'} (the record exists now): a call from you every day at ${clockWords(r.h, r.mi)}, their own local time${offer.mode === 'change' ? '' : `, starting ${dateWords(offer.start)}`}. Now say it is arranged in ONE short sentence that holds all three: the time, the day it starts, and that they can say skip today, change the time or cancel the daily calls whenever they like. Promise nothing else.`];
+    const rec = care.socialOf(id) || r;   // the words come from the PERSISTED record, not from what was proposed
+    const when = `${clockWords(rec.h, rec.mi)} ${rec.tz}`;
+    return ['social-saved', offer.mode === 'change'
+      ? `CHANGED (read from the saved record): the daily call is now at ${when}. Tell them in your own words, in ONE short sentence, this content: "Your daily call is now at ${when}; you can tell me here anytime to skip one call, change the time, or cancel these daily calls." Promise nothing else.`
+      : `SAVED (read from the saved record): a call from you every day at ${when}, starting ${dateWords(rec.start)}. Tell them in your own words, in ONE short sentence, this content: "Your daily call is saved for ${when}, starting ${dateWords(rec.start)}; you can tell me here anytime to skip one call, change the time, or cancel these daily calls." Promise nothing else.`];
   } catch (e) {
     zput(id, { offer: null }); s._exec.socialFailed = true;
     return ['social-failed', `NOT SAVED: ${String(e.message || 'it did not work').slice(0, 140)} Tell them plainly, in one short sentence, that it did not work and nothing is set up. Do NOT say scheduled, arranged or booked, and do not say you will try again by yourself.`];
   }
 }
 
-// A draft that says the call is arranged while nothing is saved must be written again (smart.js breaks()).
-const SCHEDULED_CLAIM = /\b(?:i(?:'ve| have| will)?\s+(?:scheduled|arranged|booked|set (?:it|that|this) up)|(?:is|'s|has been|have been|all)\s+(?:scheduled|arranged|booked)|i(?:'ll| will) call you (?:every|each|tomorrow|daily))\b/i;
-function claimsScheduled(text) { return SCHEDULED_CLAIM.test(String(text || '')); }
+// A sentence that says a call is arranged / noted / saved while nothing is saved must never be spoken or shown (smart.breaks checks every piece BEFORE it is spoken): "Got it, 3:40 noted",
+// "I've scheduled it", "I'll call you at 3". A denial ("nothing is scheduled yet") is not a claim.
+const ARRANGED = /\b(?:noted|locked in|lock(?:ed)? it in|scheduled|arranged|booked|all set|set up|saved|i(?:'ll| will) (?:call|ring|phone) you|i(?:'ve| have) (?:got|put) (?:it|that|you) (?:down|in)|see you (?:at|then|tomorrow))\b/i;
+const CALL_CONTEXT = /\b(?:call|ring|chat|daily)\b|\b\d{1,2}:\d{2}\b|\b\d{1,2}\s?(?:am|pm)\b/i;
+const DENIAL = /\b(?:not|no|nothing|isn'?t|hasn'?t|haven'?t|didn'?t|can'?t|cannot|yet|unless|if|would|could|once|until)\b/i;
+function claimsScheduled(text) { const t = String(text || ''); return ARRANGED.test(t) && CALL_CONTEXT.test(t) && !DENIAL.test(t); }
+// May a sentence claiming a call is arranged be said on this turn? Only when the record says so: saved this turn, read back from the record, or an ordinary reminder was saved.
+const OK_LABELS = /^(?:social-(?:saved|readback|active|restored|skip|tz)|setrem-saved)/;
+const PENDING_LABELS = /^social-(?:offer|ask|confirm|failed|declined|quiet|past|condition|cancel|correct)/;
+function claimBlocked(text, s) {
+  const labels = s.factLabels || [], id = s.profile && s.profile.id;
+  if (s._exec && s._exec.social) return false;
+  const t = String(text || '');
+  if (labels.some((l) => PENDING_LABELS.test(l)) && ARRANGED.test(t) && !DENIAL.test(t)) return true;   // in a turn about the daily call, "all set" / "scheduled" / "noted" can only mean that call
+  if (!claimsScheduled(text)) return false;
+  if (labels.some((l) => OK_LABELS.test(l))) return false;
+  if (s._exec && s._exec.reminder && !/\d|\bdaily\b|\bevery day\b/i.test(t)) return false;   // the senior has an ordinary reminder and this names no time: the older rule (smart.js CLAIM) judges it
+  return !(id && care.socialOf(id));
+}
+// A claim got through (or was said before it could be stopped): the next turn corrects the impression.
+function noteSpoken(s, text) {
+  const id = s.profile && s.profile.id; if (!id || !claimBlocked(text, s)) return;
+  zput(id, { misled: Date.now() });
+}
 
-module.exports = { step, claims, onNoCalls, onCallsBack, claimsScheduled, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };
+module.exports = { step, claims, onNoCalls, onCallsBack, claimsScheduled, claimBlocked, noteSpoken, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };

@@ -104,7 +104,7 @@ async function handleCare(req, res, url) {
     return openStream(req, res, (r) => care.attachSenior(a, r, /^[\w/+\-]{1,60}$/.test(tz || '') ? tz : null));
   }
   if (req.method === 'DELETE' && b === 'device' && c) return care.removeDevice(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
-  if (req.method === 'DELETE' && b === 'reminders' && c) return care.deleteReminder(a, c) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' });
+  if (req.method === 'DELETE' && b === 'reminders' && c) { try { return care.deleteReminder(a, c, 'family') ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: 'Not found' }); } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); } }   // the family can stop THEIR OWN reminders only
   // The family's schedule upload: a PDF, a photo or a voice note arrives as raw bytes (nothing is stored); Maya reads it into items and sets NOTHING until the family ticks the ones they want.
   if (req.method === 'POST' && b === 'schedule' && (c === 'pdf' || c === 'image' || c === 'voice')) {
     if (MODE !== 'real') return sendJson(res, 503, { error: 'Reading a schedule needs real mode.' });
@@ -120,7 +120,7 @@ async function handleCare(req, res, url) {
     if (b === 'quiethours') return sendJson(res, 200, { on: care.setQuietHours(a, body.on) });   // the family's per-senior Quiet hours switch (default ON)
     if (b === 'delivery') return sendJson(res, 200, { delivery: care.setDelivery(a, body) });   // how reminders reach them on WhatsApp: a voice note in Maya's voice or text
     if (b === 'reminders' && !c) return sendJson(res, 200, { reminder: care.addReminder(a, body) });
-    if (b === 'reminders' && c && !d) return sendJson(res, 200, { reminder: care.updateReminder(a, c, body) });   // the edit popup
+    if (b === 'reminders' && c && !d) return sendJson(res, 200, { reminder: care.updateReminder(a, c, body, 'family') });   // the edit popup (the family's own reminders only)
     if (b === 'activity') return sendJson(res, 200, { ok: care.touch(a, 'app', Date.now(), /^[\w/+\-]{1,60}$/.test(body.tz || '') ? body.tz : null) });
     if (b === 'device') return sendJson(res, 200, care.registerDevice(a, body));   // the phone's push token (so Maya can ring it when the app is closed); never returned, never logged
     if (b === 'schedule' && c === 'text') { if (MODE !== 'real') return sendJson(res, 503, { error: 'Reading a schedule needs real mode.' }); return sendJson(res, 200, { items: await require('./schedule').read(a, body.text) }); }

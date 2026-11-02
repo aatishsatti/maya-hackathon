@@ -51,10 +51,10 @@ http.Client fakeServer() => MockClient((req) async {
           'quiet': {'start': 22, 'end': 7, 'tz': 'Europe/London'},
           'whatsappRules': ['Text and voice notes: WhatsApp only lets Maya send these within 24 hours after the person last wrote to Maya on WhatsApp.', 'If WhatsApp cannot deliver, the same reminder goes to the Maya app instead, and the Activity list tells you what happened and why.'],
           'reminders': [
-            {'id': 'r1', 'task': 'Take your tablets', 'dueAt': DateTime.now().add(const Duration(hours: 2)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'call', 'channel': 'both', 'held': false, 'msg': false, 'active': null, 'last': null},
-            for (var i = 0; i < 8; i++) {'id': 'f$i', 'task': 'Old reminder $i', 'dueAt': null, 'repeat': 'none', 'held': false, 'msg': false, 'active': null, 'last': {'state': 'done', 'at': 1700000000000 + i * 1000, 'label': 'Done, senior replied'}},
-            {'id': 'r9', 'task': 'Stretch my legs', 'dueAt': DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch, 'repeat': 'hourly', 'deliver': 'voice', 'channel': 'whatsapp', 'by': 'senior', 'held': false, 'msg': false, 'active': null, 'last': null},
-            {'id': 'r2', 'task': 'Drink water', 'dueAt': DateTime.now().add(const Duration(minutes: 5)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'text', 'channel': 'app', 'held': false, 'msg': false, 'active': null, 'last': null},
+            {'id': 'r1', 'owner': 'family', 'task': 'Take your tablets', 'dueAt': DateTime.now().add(const Duration(hours: 2)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'call', 'channel': 'both', 'held': false, 'msg': false, 'active': null, 'last': null},
+            for (var i = 0; i < 8; i++) {'id': 'f$i', 'owner': 'family', 'task': 'Old reminder $i', 'dueAt': null, 'repeat': 'none', 'held': false, 'msg': false, 'active': null, 'last': {'state': 'done', 'at': 1700000000000 + i * 1000, 'label': 'Done, senior replied'}},
+            {'id': 'r9', 'owner': 'senior', 'task': 'Stretch my legs', 'dueAt': DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch, 'repeat': 'hourly', 'deliver': 'voice', 'channel': 'whatsapp', 'by': 'senior', 'held': false, 'msg': false, 'active': null, 'last': null},
+            {'id': 'r2', 'owner': 'family', 'task': 'Drink water', 'dueAt': DateTime.now().add(const Duration(minutes: 5)).millisecondsSinceEpoch, 'repeat': 'none', 'deliver': 'text', 'channel': 'app', 'held': false, 'msg': false, 'active': null, 'last': null},
           ],
           'alerts': [],
           'flags': [],
@@ -126,7 +126,7 @@ void main() {
       addTearDown(Store.forgetForTest);   // the next test starts from its own saved values
       Api.testClient = MockClient((req) async {
         if (req.url.path == '/api/senior/abcdef12/menu') {
-          return http.Response(jsonEncode({'name': 'Rosa', 'tz': 'Europe/London', 'mode': 'standard', 'reminders': [{'id': 'm1', 'task': 'Call my sister', 'dueAt': DateTime.now().add(const Duration(hours: 3)).millisecondsSinceEpoch, 'repeat': 'daily', 'every': 1, 'deliver': 'voice', 'channel': 'app', 'going': false}, {'id': 'm2', 'task': 'Take my headache medicine', 'dueAt': DateTime.now().millisecondsSinceEpoch - 60000, 'repeat': 'none', 'every': 1, 'deliver': 'call', 'channel': 'app', 'going': false, 'held': true, 'waitUntil': DateTime.now().add(const Duration(hours: 3)).millisecondsSinceEpoch}]}), 200, headers: {'content-type': 'application/json'});
+          return http.Response(jsonEncode({'name': 'Rosa', 'tz': 'Europe/London', 'mode': 'standard', 'reminders': [{'id': 'm1', 'owner': 'family', 'task': 'Call my sister', 'dueAt': DateTime.now().add(const Duration(hours: 3)).millisecondsSinceEpoch, 'repeat': 'daily', 'every': 1, 'deliver': 'voice', 'channel': 'app', 'going': false}, {'id': 'm2', 'task': 'Take my headache medicine', 'dueAt': DateTime.now().millisecondsSinceEpoch - 60000, 'repeat': 'none', 'every': 1, 'deliver': 'call', 'channel': 'app', 'going': false, 'held': true, 'waitUntil': DateTime.now().add(const Duration(hours: 3)).millisecondsSinceEpoch}]}), 200, headers: {'content-type': 'application/json'});
         }
         return http.Response(jsonEncode({'messages': []}), 200, headers: {'content-type': 'application/json'});
       });
@@ -451,7 +451,7 @@ void main() {
       await t.pump(const Duration(milliseconds: 400));
       expect(t.takeException(), isNull);
       expect(find.text('Stretch my legs'), findsOneWidget);
-      expect(find.text('Set by talking'), findsOneWidget, reason: 'only the one they set themselves');
+      expect(find.text('Set by senior'), findsOneWidget, reason: 'only the one they set themselves');
       expect(find.textContaining('repeats hourly'), findsOneWidget);
       expect(find.text('Voice note'), findsWidgets);
       await t.pumpWidget(const SizedBox());

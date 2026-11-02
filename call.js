@@ -90,12 +90,28 @@ const plainWords = (t) => String(t || '').toLowerCase().replace(/[^a-z' ]/g, ' '
 const NO_MORE = /^(no|nope|nah|no thanks|no thank you|nothing|nothing else|nothing more|that'?s all|that is all|that'?s it|i'?m fine|i am fine|all good|i'?m good|not really|no questions|none|i don'?t have any|no i don'?t|no i'?m fine)( thanks| thank you| dear| maya)?$/;
 const BYE_WORDS = /\b(good ?bye|bye( bye)?|good ?night|see you|talk (to you )?later|take care|i have to go|i must go|got to go|gotta go|you can (hang up|go now|go)|hang up now|let you go|we are done|we'?re done|(please )?hang up( the call| maya)?$)\b/;
 const NOT_BYE = /\b(don'?t|do not|never|please don'?t|not yet|wait)\b/;   // "don't hang up", "wait": they are not ending it
-const saysBye = (t) => { const w = plainWords(t); return w.split(' ').length <= 10 && BYE_WORDS.test(w) && !NOT_BYE.test(w); };
+// The WHOLE finished turn decides, not a phrase inside it. 'stop' = an explicit stop / hang up (ends at once); 'bye' = a clear, completed goodbye ("I gotta go", "talk later", "bye"); 'unclear' = they may be leaving
+// ("I should probably go"): ONE short question, once; null = anything else. A turn that also asks something ("I gotta go, but what time will you call?"), is quoted, negated, hypothetical, reported
+// ("he said bye") or joking is not an exit: it is answered. Nothing else gates it: a health or scam topic alone, or a question Maya left open, does not keep them on the line.
+const STOP_NOW = /^(?:(?:please|just|ok|okay|maya|now)\s+)*(?:stop|hang up|end (?:the )?call|disconnect)(?:\s+(?:now|please|maya|the call|it|thanks|thank you))*$/;
+const EXIT_UNSURE = /\b(?:should|might|maybe|perhaps|probably|ought|supposed to|better|think i (?:need|have|should|must)|i guess)\b.*\b(?:go|leave|hang up|run|head off|finish|stop)\b|\b(?:go|leave|hang up|run)\b.*\b(?:maybe|perhaps|probably|i guess)\b/;
+const NOT_EXIT = /\b(?:don'?t|do not|never|not yet|wait|if|when|whenever|unless|whether|would|could|suppose|imagine|kidding|joking|jk|haha|lol|said|says|saying|told|tell|asked)\b/;
+const QUESTION_WORDS = /\b(?:who|what|why|how|when|where|which|can you|could you|would you|will you|do you|did you|are you|is it|is there|but|actually|one thing|one more|also|however)\b/;
+function endIntent(text) {
+  const raw = String(text || ''); if (/["“”]/.test(raw)) return null;
+  const w = plainWords(raw), n = w ? w.split(' ').length : 0;
+  if (!n || n > 12) return null;
+  if (STOP_NOW.test(w)) return 'stop';
+  if (!/\?/.test(raw) && EXIT_UNSURE.test(w)) return 'unclear';
+  if (!BYE_WORDS.test(w) || /\?/.test(raw) || NOT_BYE.test(w) || NOT_EXIT.test(w) || QUESTION_WORDS.test(w)) return null;
+  return 'bye';
+}
+const saysBye = (t) => { const e = endIntent(t); return e === 'bye' || e === 'stop'; };
 // After her question, a natural "no" is more than the bare words ("No thanks, got it, all set then."): it BEGINS like a no, is short, and asks or adds nothing (no question word, no "but", "wait", "actually", "one thing").
 const NO_START = /^(no|nope|nah|nothing|none|not really|that'?s all|that is all|that'?s it|i'?m (fine|good|all set)|i am (fine|good|all set)|all (good|set))\b/;
 const MORE_COMING = /\b(who|what|why|how|when|where|which|can you|could you|would you|will you|do you|did you|are you|is it|is there|tell me|but|wait|actually|one thing|one more|also|however)\b/;
 const noMore = (heard) => { const w = plainWords(heard); return NO_MORE.test(w) || (w.split(' ').length <= 12 && NO_START.test(w) && !MORE_COMING.test(w) && !/\?/.test(String(heard))); };
-const outboundEnd = (heard, asked) => saysBye(heard) ? 'bye' : asked && noMore(heard) ? 'nomore' : null;
+const outboundEnd = (heard, asked) => endIntent(heard) === 'stop' ? 'stop' : saysBye(heard) ? 'bye' : asked && noMore(heard) ? 'nomore' : null;
 // A goodbye Spark wrote herself ("...You can hang up now.", "Goodbye", "Good night."): on a call she placed it is followed by the hang-up in code (the feel tag describes the PERSON's words, not hers, so it cannot say this).
 const FAREWELL_SAID = /\b(good ?bye|bye( bye|-bye)?|hang up|hanging up|let you go|talk (to you )?(soon|later)|speak (to you )?soon)\b|\b(good night|take care)\W*$/i;
 const sayingFarewell = (text) => { const t = String(text || '').trim(); return !/\?\W*$/.test(t) && FAREWELL_SAID.test(t); };   // a reply that ends in a question is never a goodbye   // what their words say about ending a call Maya placed
@@ -1647,7 +1663,7 @@ class Call {
     this.pending = [];
     if (!turns.length || this.closed) return;
     dbg('RESPOND to', JSON.stringify(turns.map((t) => t.text)));
-    const extra = this.careNotes(turns.map((t) => t.text).join(' '));
+    let extra = this.careNotes(turns.map((t) => t.text).join(' '));
     this.checkIds = care.checkDueIds(this.profile.id);   // lookups due for this reply (care.checkFacts puts them in the facts)
     let scamTurn = this.scamForTurn(turns.map((t) => t.text).join(' '));
     if (scamTurn && typeof scamTurn.then === 'function') scamTurn = await scamTurn;   // only the rare "happening right now" turn ever waits
@@ -1690,11 +1706,20 @@ class Call {
     // A call Maya placed: the person's own words decide whether it ends (their goodbye, or "no, that's all" after her question). Never when a safety, health or other fact is in play: then she answers as usual.
     // On an app call the person's goodbye ("goodbye", "hang up", "you can go") ends it too: one fixed close, then the hang-up, in code. Only the goodbye rule: the question-and-"no" rule belongs to a call Maya placed.
     const heardAll = turns.map((t) => t.text).join(' ');
-    const endNow = this.ws.outbound ? outboundEnd(heardAll, this.closing === 'asked') : (saysBye(heardAll) ? 'bye' : null); this.closing = null; clearTimeout(this.closeTimer);
-    // Only when no fact of any weight is in play. The reminder's own 'what the family wrote' fact rides along for the next four turns, so 'no extra at all' was never true right after a reminder (found live: 'No, thank you.' went to Spark).
-    const plain = (this.factLabels || []).every((l) => PLAIN_FACTS.has(l) || HANGUP_OK.test(l));   // style / calls / thread / daily-chat facts never keep a goodbye from ending the call (found live: "You can hang up now" was answered politely and the call stayed open)
-    if (endNow) console.log(this.ws.outbound ? 'outbound end' : 'app call end', JSON.stringify({ rule: endNow, plain, safety: Boolean(this.safety || this.health) }));   // booleans and a rule name only
-    if (plain && !this.safety && !this.health && endNow) return this.sayFixed(endNow === 'nomore' ? BYE_NOMORE : BYE_SAID, { bye: true });
+    this.endAfterReply = false;
+    let endNow = this.ws.outbound ? outboundEnd(heardAll, this.closing === 'asked') : (endIntent(heardAll) === 'stop' ? 'stop' : saysBye(heardAll) ? 'bye' : null); this.closing = null; clearTimeout(this.closeTimer);
+    // They were asked, once, whether they want to end the call: a plain yes ends it, anything else carries on.
+    if (this.askedEnd) { this.askedEnd = false; if (!endNow && require('./social').isYes(heardAll)) endNow = 'bye'; }
+    const plain = (this.factLabels || []).every((l) => PLAIN_FACTS.has(l) || HANGUP_OK.test(l));
+    if (endNow) console.log(this.ws.outbound ? 'outbound end' : 'app call end', JSON.stringify({ rule: endNow, plain, safety: Boolean(this.safety || this.health) }));   // booleans and a rule name only   // booleans and a rule name only
+    // An explicit stop / hang up ends it AT ONCE: whatever is being said is cut, and the call is really closed (the socket), not merely answered.
+    if (endNow === 'stop') { if (this.abort) this.abort.abort(); this.playUntil = 0; this.history.push({ role: 'user', content: heardAll }); return this.hangUp({ quiet: false }); }
+    // Concrete danger in play: at most ONE brief safety instruction (Spark writes it), then the call is closed after it. No new question, no interview.
+    if (endNow && (this.safety || this.health)) { this.endAfterReply = true; extra = `${extra} THEY ARE LEAVING while something worrying is open. In ONE or two short sentences give ONE brief safety instruction only (stay with someone or get help now if they are in danger), then say a gentle goodbye. Ask NO question.`; }
+    else if (endNow === 'nomore') { if (plain) return this.sayFixed(BYE_NOMORE, { bye: true }); }   // a "no, that's all" can still carry a request ("tell my family..."): a fact of weight keeps that with Spark
+    else if (endNow) return this.sayFixed(BYE_SAID, { bye: true });
+    // They may be about to go but it is not clear: ONE short question, once in the call.
+    else if (!this.askedEndOnce && endIntent(heardAll) === 'unclear') { this.askedEndOnce = true; this.askedEnd = true; extra = `${extra} THEY MAY BE LEAVING but it is not clear: in ONE short sentence ask only whether they would like to end the call now. Nothing else, no goodbye.`; }
     if (this.abort) this.abort.abort(); // never two replies at once
     this.lastAnswered = { key: this.textKey(turns), at: Date.now() };
     const myGen = ++this.gen;
@@ -1718,7 +1743,7 @@ class Call {
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}${this.ws.outbound ? OUTBOUND_NOTE : ''}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
     this.scamOwed = scamTurn && scamTurn.scam && scamTurn.scam.level !== 'none' ? scamTurn.scam : null;
-    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent, onDone: this.askQuestion ? () => { this.askQuestion = false; this.askAnyQuestions(); } : null }); }
+    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent, bye: Boolean(this.endAfterReply), onDone: this.askQuestion ? () => { this.askQuestion = false; this.askAnyQuestions(); } : null }); }
     finally {
       this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null; this.officialNow = null;
       if (this.scamOwed) { this.scamLater = { scam: this.scamOwed, at: Date.now() }; this.scamOwed = null; }   // cut off before it was heard: the next reply carries the warning again
@@ -2117,6 +2142,7 @@ class Call {
       if (this.safety && isQuestion(all)) this.noteSafetyAsked(all);
     }
     const farewell = Boolean(this.ws.outbound && !this.safety && !this.health && said.length && sayingFarewell(said.join(' ')));   // a goodbye she says is followed by the hang-up, in code
+    try { if (record && require('./smart').flag('COMPANION')) require('./social').noteSpoken(this, said.join(' ')); } catch { /* the correction is a convenience */ }
     if (this.ws.outbound && record) console.log('outbound reply', JSON.stringify({ farewell, pieces: said.length }));   // a boolean and a count, never a word
     if (hangup) this.hangUp(); else if (bye || farewell) this.hangUp({ quiet: false }); else if (onDone) setImmediate(onDone); else this.armSilence();
     if (timing) {
@@ -2160,4 +2186,4 @@ async function prefetchWelfareLine(profileId, tz, signal) {
   return { kind: 'welfare', line, ms: Date.now() - t0 };
 }
 
-module.exports = { REMINDERISH, abilitiesAsks, asksAbilities, ABILITIES_ASK, sameName, prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, explicitFamilyRequest, ownPlan, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };
+module.exports = { endIntent, REMINDERISH, abilitiesAsks, asksAbilities, ABILITIES_ASK, sameName, prefetchReminderLine, prefetchWelfareLine, outboundEnd, sayingFarewell, BYE_ASKED, BYE_NOMORE, BYE_TIMEOUT, BYE_SAID, reminderFacts, isAck, isFamilyMessage, stripAddressee, explicitFamilyRequest, ownPlan, CALL_PROMISE, WHATSAPP_GOODBYE_LINE, latencyForLog, saysYesToFamily, asksFamily, simpleAffirmation, callWords, affirmed, refusedFamily, CONCERN_YES, FAMILY_ASK, callDeps, liveCalls, RESUME_GRACE_MS, Call, warmLeads, leadClips, fakeSpeech, TONES, scale, STORY_ASK, RECALL_ASK, IDENTITY_LINE, isAck, isFamilyMessage, firstSilenceWait, SILENCE_WAIT_MS, SILENCE_FIRST_MIN_MS, SILENCE_FIRST_MAX_MS };

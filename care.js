@@ -94,6 +94,7 @@ function get(id) {
   try { s = JSON.parse(fs.readFileSync(file(id), 'utf8')); } catch { /* new */ }
   s = Object.assign(blank(id), s || {});
   s.lastActivity = Object.assign({ maya: null, app: null, whatsapp: null }, s.lastActivity);
+  for (const r of s.reminders || []) if (!r.owner) r.owner = r.by === 'senior' || r.social ? 'senior' : 'family';   // who set it, stamped once (before this, only the family page and the senior's own talking could make one)
   if (!Array.isArray(s.days)) s.days = [];           // an older care file has no daily numbers yet
   if (!s.trend || typeof s.trend !== 'object') s.trend = null;
   if (!MODES[s.mode]) s.mode = 'standard';
@@ -1051,16 +1052,17 @@ function addReminder(id, { task, dueAt, repeat, every, deliver, channel }, inter
   else every = internal.every;
   if (deliver != null && deliver !== '' && !DELIVER.includes(deliver)) throw Object.assign(new Error('Delivery must be call, text or voice note.'), { status: 400 });
   if (channel != null && channel !== '' && !CHANNELS.includes(channel)) throw Object.assign(new Error('Channel must be WhatsApp, the app or both.'), { status: 400 });
-  const r = { id: uid(), task, dueAt, repeat, active: null, last: null, created: Date.now(), ...(deliver ? { deliver } : {}), ...(channel ? { channel } : {}), ...(internal.by === 'senior' ? { by: 'senior', strict: true, origin: internal.origin || null, ...(internal.every > 1 ? { every: internal.every } : {}) } : (repeat !== 'none' && every === 2 ? { every: 2 } : {})) };
+  const r = { id: uid(), task, dueAt, repeat, active: null, last: null, created: Date.now(), owner: internal.by === 'senior' ? 'senior' : 'family', ...(deliver ? { deliver } : {}), ...(channel ? { channel } : {}), ...(internal.by === 'senior' ? { by: 'senior', strict: true, origin: internal.origin || null, ...(internal.every > 1 ? { every: internal.every } : {}) } : (repeat !== 'none' && every === 2 ? { every: 2 } : {})) };
   p.reminders.push(r);
   save(id);
   pushFamily('refresh', { id });
   return r;
 }
 // The family edits a reminder (the popup behind a tap on it): the same checks as adding one. One that is going out right now cannot be changed (409). Stopping it is deleteReminder.
-function updateReminder(id, rid, { task, dueAt, repeat, every, deliver, channel }) {
+function updateReminder(id, rid, { task, dueAt, repeat, every, deliver, channel }, actor = null) {
   const p = get(id), r = p && p.reminders.find((x) => x.id === rid);
   if (!r) throw Object.assign(new Error('That reminder is not there any more.'), { status: 404 });
+  if (actor === 'family' && ownerOf(r) !== 'family') throw forbidFamily();
   if (r.active) throw Object.assign(new Error('That reminder is going out right now. Please try again in a moment.'), { status: 409 });
   task = clip(task, 80);
   if (!task) throw Object.assign(new Error('Please enter what Maya should remind them about.'), { status: 400 });
@@ -1100,9 +1102,14 @@ function rescheduleReminder(id, rid, dueAt) {
   r.dueAt = Math.max(Date.now() + 5000, Number(dueAt)); save(id); pushFamily('refresh', { id });
   return true;
 }
-function deleteReminder(id, rid) {
+// WHO set a reminder (r.owner, stamped when it is made). Only 'family' is the family's to stop or change from the dashboard; 'senior' and anything unknown are view-only there.
+const ownerOf = (r) => (r && r.owner === 'family' ? 'family' : 'senior');
+const forbidFamily = () => Object.assign(new Error('The senior set this one up, so it is theirs to change: they can do it by talking to Maya. You can see it here.'), { status: 403 });
+function deleteReminder(id, rid, actor = null) {
   const p = get(id);
   if (!p) return false;
+  const target = p.reminders.find((r) => r.id === rid);
+  if (actor === 'family' && target && ownerOf(target) !== 'family') throw forbidFamily();   // authorised against THIS record only
   const n = p.reminders.length;
   p.reminders = p.reminders.filter((r) => r.id !== rid);
   save(id);
@@ -1119,6 +1126,7 @@ function seniorMenu(id) {
 function stopSeniorReminder(id, rid) {
   const p = get(id), r = p && p.reminders.find((x) => x.id === rid);
   if (!r || r.by !== 'senior') return false;
+  if (r.social) return socialCancel(id);
   return deleteReminder(id, rid);
 }
 function findReminder(id, rid) { const p = get(id); return p && p.reminders.find((r) => r.id === rid); }
@@ -1319,6 +1327,13 @@ function fireSocial(p, r, now) {
   o.social = true; o.single = true; r.active.outreachId = o.id; r.active.notifId = o.notif.id;
   save(p.id); console.log('social chat', JSON.stringify({ event: 'ringing' }));
 }
+// What the family page shows for a daily chat the senior set: view-only, who set it, the time with its zone, the next one, and the real state.
+function socialView(p, r) {
+  if (!r.social) return null;
+  const sc = r.social, today = sc.tz ? localDate(Date.now(), sc.tz) : null;
+  const status = sc.revoked ? 'Stopped (the senior asked Maya not to call)' : sc.paused ? 'Paused: their time zone changed, waiting for the senior to confirm' : sc.skipDate && sc.skipDate === today ? 'Today\'s call is skipped' : 'Active';
+  return { time: `${pad2(sc.h)}:${pad2(sc.mi)}`, tz: sc.tz, next: sc.revoked || sc.paused ? null : r.dueAt, status, setBy: 'senior' };
+}
 function socialOf(id) { const p = get(id), r = socialRec(p); return r ? { id: r.id, h: r.social.h, mi: r.social.mi, tz: r.social.tz, start: r.social.start, nextAt: r.dueAt, revoked: Boolean(r.social.revoked), paused: r.social.paused || null, skipDate: r.social.skipDate || null, offerId: r.social.offerId } : null; }
 function socialSave(id, { offerId, h, mi, start, tz }, now = Date.now()) {
   const p = get(id); if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
@@ -1343,7 +1358,8 @@ function socialRestore(id, now = Date.now()) {
   if (p.smart && p.smart.noCalls) throw Object.assign(new Error('They have not asked for calls again.'), { status: 409 });
   r.social.revoked = null; r.social.paused = null; r.dueAt = socialNext(r.social, now + 60000, localDate(now, r.social.tz)); save(id); pushFamily('refresh', { id }); return socialOf(id);
 }
-function socialCancel(id) { const p = get(id), r = socialRec(p); if (!r) return false; socialDropOutreach(p, r); p.reminders = p.reminders.filter((x) => x !== r); save(id); pushFamily('refresh', { id }); return true; }
+function socialCancel(id) { const p = get(id), r = socialRec(p); if (!r) return false; socialDropOutreach(p, r); p.reminders = p.reminders.filter((x) => x !== r); p.smart = { ...(p.smart || {}), social: { ...((p.smart || {}).social || {}), offer: null, cancelledAt: Date.now() } };   // the record is gone, but WHY is remembered: cancelled, not "never saved"
+  save(id); pushFamily('refresh', { id }); return true; }
 // Skip only the call that is due TODAY (their local date); with the next one tomorrow there is nothing to skip.
 function socialSkipToday(id, now = Date.now()) {
   const p = get(id), r = socialRec(p); if (!r || r.social.revoked || r.dueAt == null) return null;
@@ -2082,7 +2098,7 @@ function view(id) {
   if (!p) return null;
   const seen = lastSeen(p);
   const fl = (f) => ({ ...f, name: nameOf(id), timeline: timeline(p, f) });
-  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, channel: r.channel || null, msg: Boolean(r.msg), held: Boolean(r.held), waitUntil: waitingUntil(p, r), every: r.every || 1, by: r.by || null, origin: r.origin || null,
+  const rem = (r) => ({ id: r.id, task: r.task, dueAt: r.dueAt, repeat: r.repeat, deliver: r.deliver || null, channel: r.channel || null, msg: Boolean(r.msg), held: Boolean(r.held), waitUntil: waitingUntil(p, r), every: r.every || 1, by: r.by || null, origin: r.origin || null, owner: ownerOf(r), seniorSet: ownerOf(r) !== 'family', social: socialView(p, r),
     active: r.active && { ...r.active, label: occLabel(r.active) },
     last: r.last && { ...r.last, label: occLabel(r.last) } });
   return {
@@ -2118,6 +2134,6 @@ module.exports = {
   familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamAskedOut, scamAsked, scamFresh, scamLost, asksFamilyQ, SCAM_GAP_MS, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  persistSmart, addReminder, addSeniorReminder, quietEndsAt, quietOn, setQuietHours, callStarting, socialOf, socialSave, socialRevoke, socialRestore, socialCancel, socialSkipToday, socialChangeTime, hourQuiet, localDate, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  persistSmart, addReminder, addSeniorReminder, quietEndsAt, quietOn, setQuietHours, callStarting, socialView, socialOf, socialSave, socialRevoke, socialRestore, socialCancel, socialSkipToday, socialChangeTime, hourQuiet, localDate, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

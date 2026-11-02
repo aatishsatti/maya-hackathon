@@ -72,7 +72,7 @@ test('2 + 1 consent: "tomorrow afternoon" alone saves nothing; every missing pie
   assert.equal(say(s, '"yes" is what he said'), null, 'a quoted yes is not permission');
   assert.equal(recs(id).length, 0);
   r = say(s, 'yes');
-  assert.equal(r[0], 'social-saved'); assert.match(r[1], /the record exists now/); assert.match(r[1], /skip today, change the time or cancel the daily calls/);
+  assert.equal(r[0], 'social-saved'); assert.match(r[1], /read from the saved record/); assert.match(r[1], /Your daily call is saved for 3:00 pm America\/New_York, starting Fri 6 Nov; you can tell me here anytime to skip one call, change the time, or cancel these daily calls\./);
   const [rec] = recs(id); assert.ok(rec); assert.equal(rec.repeat, 'daily'); assert.equal(rec.deliver, 'call'); assert.equal(rec.channel, 'app'); assert.equal(rec.by, 'senior');
   assert.deepEqual([rec.social.h, rec.social.mi, rec.social.tz, rec.social.start], [15, 0, TZ, '2026-11-06']);
   assert.equal(rec.dueAt, setrem.zonedEpoch(2026, 11, 6, 15, 0, TZ));
@@ -260,15 +260,15 @@ test('D1 "You can hang up now" ENDS the call on a web or app voice call even wit
   const id = senior(); const said = [];
   const run = async (labels, text) => {
     const { ws } = fakeWs(); const call = new Call(ws, 'k'); clearInterval(call.endTimer); calls.push(call); call.profile = memory.load(id);
-    call.sayFixed = async (t, o) => { said.push([t, o.bye]); }; call.careNotes = function () { this.factLabels = labels.slice(); return ''; };   // the facts this turn gave Spark (names only)
+    call.sayFixed = async (t, o) => { said.push([t, o.bye]); }; call.hangUp = () => { said.push(['HANGUP', true]); }; call.careNotes = function () { this.factLabels = labels.slice(); return ''; };   // the facts this turn gave Spark (names only)
     call.pending = [{ text, partial: '', completedAt: Date.now(), endedAt: Date.now() }];
     call.attribute = (t) => [{ label: 'A', text: t.text }]; call.respond = Call.prototype.respond;
     try { await Promise.race([call.respond(0), sleep(300)]); } catch { /* the rest of respond needs a live Spark: only the decision to end matters here */ }
   };
   for (const t of ['You can hang up now.', 'You can hang up.', 'Please hang up', 'Okay, goodbye then']) await run(['smart-style', 'smart-calls', 'smart-thread', 'smart-shape', 'social-active', 'smart-ledger'], t);
-  assert.deepEqual(said, Array(4).fill(["Okay, goodbye. Take care.", true]), 'each one: the close and the hang-up');
+  assert.deepEqual(said, [["Okay, goodbye. Take care.", true], ["Okay, goodbye. Take care.", true], ['HANGUP', true], ["Okay, goodbye. Take care.", true]], 'a goodbye: the close and the hang-up; "please hang up": the hang-up at once');
   said.length = 0; await run(['smart-style'], "You're still here."); await run(['smart-style'], "Please don't hang up"); assert.deepEqual(said, [], 'not a goodbye: carries on');
-  said.length = 0; await run(['setrem-confirm'], 'You can hang up now.'); await run(['scam-warn'], 'You can hang up now.'); assert.deepEqual(said, [], 'a question still open or a scam in play: answered as before, not cut');
+  said.length = 0; await run(['setrem-confirm'], 'You can hang up now.'); await run(['scam-warn'], 'You can hang up now.'); assert.equal(said.length, 2, 'an open question or a scam topic alone is no reason to keep them on the line');
 });
 
 test('D2 a call that begins while the chat is due, queued or ringing: the chat is skipped, closed cleanly, never rung twice, never caught up; a start message alone already counts as busy', async () => {
@@ -320,7 +320,7 @@ test('D5 natural yes answers to THAT confirm question save ("yes", "yes please",
   for (const yes of ['yes', 'Yes please', 'yes perfect', 'Yes, that sounds good', 'sure', 'perfect', 'okay that works', 'yes thank you Maya']) {
     const id = senior(), s = sess(id); warm(s, id); say(s, 'tomorrow at 3 pm');
     const r = say(s, yes); assert.equal(r[0], 'social-saved', yes); assert.equal(recs(id).length, 1, yes);
-    assert.match(r[1], /ONE short sentence that holds all three: the time, the day it starts, and that they can say skip today, change the time or cancel the daily calls/);
+    assert.match(r[1], /ONE short sentence/); assert.match(r[1], /skip one call, change the time, or cancel these daily calls/);
   }
   for (const no of ['"yes"', 'my daughter said yes', 'yes but not on fridays', 'yes?', 'no', 'yes I like the garden too']) {
     const id = senior(), s = sess(id); warm(s, id); say(s, 'tomorrow at 3 pm'); say(s, no); assert.equal(recs(id).length, 0, no);

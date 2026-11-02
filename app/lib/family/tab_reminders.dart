@@ -65,7 +65,7 @@ class _RemindersTabState extends State<RemindersTab> {
                   }
                   final r = rows[i];
                   return InkWell(
-                    onTap: () => showModalBottomSheet<void>(context: context, isScrollControlled: true, backgroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))), builder: (_) => Padding(padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom), child: _AddSheet(data: data, edit: r))),
+                    onTap: r.seniorSet ? null : () => showModalBottomSheet<void>(context: context, isScrollControlled: true, backgroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))), builder: (_) => Padding(padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom), child: _AddSheet(data: data, edit: r))),
                     child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -76,15 +76,16 @@ class _RemindersTabState extends State<RemindersTab> {
                           Wrap(spacing: 6, runSpacing: 4, children: [
                             if (r.channel != null) Pill(_whereLabel[r.channel] ?? r.channel!),
                             if (r.deliver != null) Pill(_howLabel[r.deliver] ?? r.deliver!),
-                            if (r.by == 'senior') const Pill('Set by talking'),
+                            if (r.seniorSet) const Pill('Set by senior') else if (r.by == 'senior') const Pill('Set by talking'),
                             if (r.held || r.waitUntil != null) const Pill('Waiting until morning', tone: kToneWait),
                             if (r.stateLabel != null) Pill(r.stateLabel!, tone: kToneInfo),
                           ]),
-                          if (r.waitUntil != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Waiting until morning (quiet hours): goes at ${dayTime(r.waitUntil!)}', style: const TextStyle(fontSize: 13, color: kSoft)))
+                          if (r.socialLine != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text(r.socialLine!, style: const TextStyle(fontSize: 13, color: kSoft)))
+                          else if (r.waitUntil != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Waiting until morning (quiet hours): goes at ${dayTime(r.waitUntil!)}', style: const TextStyle(fontSize: 13, color: kSoft)))
                           else if (r.dueAt != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text('Next: ${dayTime(r.dueAt!)}${r.repeat != 'none' ? ' · repeats ${r.every == 2 ? 'every 2 ${r.repeat == 'weekly' ? 'weeks' : 'days'}' : r.repeat}' : ''}', style: const TextStyle(fontSize: 13, color: kSoft))),
                         ]),
                       ),
-                      const Padding(padding: EdgeInsets.only(left: 8, top: 4), child: Icon(Icons.chevron_right, color: kSoft)),
+                      if (!r.seniorSet) const Padding(padding: EdgeInsets.only(left: 8, top: 4), child: Icon(Icons.chevron_right, color: kSoft)),
                     ]),
                   ));
                 },

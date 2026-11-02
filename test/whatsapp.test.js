@@ -1291,8 +1291,8 @@ test('C2 a goodbye turn on a call Maya placed is answered by the fixed goodbye a
   assert.deepEqual(said, [[callMod.BYE_NOMORE, true], [callMod.BYE_SAID, true]]);
   said.length = 0; await run(false, 'No thanks', true); await run(true, 'Who wrote me that message?', true); assert.deepEqual(said, [], 'a "no" is not a goodbye on an app call, and a question carries on');
   // an APP call (Android or iPhone, the person called Maya): their goodbye gets ONE fixed close and the hang-up, in code; nothing else about an app call changes
-  said.length = 0; for (const t of ['Okay, goodbye then', 'Bye', 'Good night Maya', 'Please hang up', 'Sounds good. Maya, you can hang up.', 'You can hang up now, thank you']) await run(false, t, false);
-  assert.deepEqual(said, Array(6).fill([callMod.BYE_SAID, true]), 'every goodbye on an app call: the one fixed close, then the hang-up');
+  said.length = 0; for (const t of ['Okay, goodbye then', 'Bye', 'Good night Maya', 'Sounds good. Maya, you can hang up.', 'You can hang up now, thank you']) await run(false, t, false);
+  assert.deepEqual(said, Array(5).fill([callMod.BYE_SAID, true]), 'every goodbye on an app call: the one fixed close, then the hang-up');   // "Please hang up" / "stop" now end at once, with no close first (test/natural.test.js)
   said.length = 0; for (const t of ['Hang up the washing, will you?', "Please don't hang up", 'Wait, do not hang up yet', 'What is the weather today?', 'Okay, okay', 'Thank you Maya']) await run(false, t, false);
   assert.deepEqual(said, [], 'a thank-you, an okay, a question, "don\'t hang up": the call carries on');
 });

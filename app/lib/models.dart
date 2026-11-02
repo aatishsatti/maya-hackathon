@@ -61,7 +61,9 @@ class Reminder {
   final int? lastAt;
   final int every;
   final int? waitUntil;   // quiet hours: when a held (or night-time) reminder will go, null for an ordinary one
-  const Reminder({required this.id, required this.task, required this.repeat, this.every = 1, this.dueAt, this.deliver, this.channel, this.by, this.held = false, this.msg = false, this.stateLabel, this.finished = false, this.lastAt, this.waitUntil});
+  final bool seniorSet;   // the senior set it (or ownership is unknown): view-only here, never editable or stoppable by the family
+  final String? socialLine;   // a daily chat the senior set: its time, zone, next call and state, as one line
+  const Reminder({required this.id, required this.task, required this.repeat, this.every = 1, this.dueAt, this.deliver, this.channel, this.by, this.held = false, this.msg = false, this.stateLabel, this.finished = false, this.lastAt, this.waitUntil, this.seniorSet = false, this.socialLine});
 
   static Reminder? from(dynamic j) {
     if (j is! Map || j['id'] is! String) return null;
@@ -79,6 +81,8 @@ class Reminder {
       lastAt: j['last'] is Map && (j['last'] as Map)['at'] is num ? ((j['last'] as Map)['at'] as num).toInt() : null,
       held: j['held'] == true,
       waitUntil: j['waitUntil'] is num ? (j['waitUntil'] as num).toInt() : null,
+      seniorSet: j['owner'] != 'family',
+      socialLine: j['social'] is Map ? 'Daily chat at ${(j['social'] as Map)['time']} (${(j['social'] as Map)['tz']}) · ${(j['social'] as Map)['next'] is num ? 'next: ${dayTime(((j['social'] as Map)['next'] as num).toInt())}' : 'no next call'} · ${(j['social'] as Map)['status']}. Only the senior can change it, by talking to Maya.' : null,
       msg: j['msg'] == true,
       stateLabel: cur is Map && cur['label'] is String ? cur['label'] as String : null,
     );
