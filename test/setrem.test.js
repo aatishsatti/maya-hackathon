@@ -243,7 +243,7 @@ test('nothing invented: the said-back sentence and the saved reminder hold only 
 test('an open set-up is forgotten after ten minutes, and a set-up begun on one door is not finished from another', async () => {
   quiet(); const { id } = linked(true); const say = talker(id, 'whatsapp'); await say('Remind me in 1 hour to take my medicine.'); assert.ok(setrem.pending(id));
   const other = talker(id, 'call'); const x = await other('Yes.'); assert.ok(!x.labels.some((l) => l.startsWith('setrem')), 'a yes on another door does not save it'); assert.equal(mine(id).length, 0);
-  const now = Date.now(); setrem.step(id, 'Remind me in 1 hour to take my medicine.', { origin: 'app', now }); const late = setrem.step(id, 'Yes', { origin: 'app', now: now + setrem.TTL_MS + 1000 }); assert.equal(late, null, 'too late: a bare yes is nothing'); assert.equal(setrem.pending(id), null);
+  const now = Date.now(); setrem.step(id, 'Remind me in 1 hour to take my medicine.', { origin: 'app', now }); const late = setrem.step(id, 'Yes', { origin: 'app', now: now + setrem.TTL_MS + 1000 }); assert.equal(late.label, 'setrem-lost', 'too late: nothing is saved, and the answer is told plainly that the set-up was lost'); assert.equal(setrem.pending(id), null); assert.equal(mine(id).length, 0);
 });
 
 test('a WhatsApp reply to a senior-set reminder is told to Maya as THEIR reminder, never "from their family"', () => {
@@ -341,4 +341,38 @@ test('WhatsApp NOT set up: how is asked, then it is saved to the Maya app, and W
   const done = await say('A voice note'); has(done, 'setrem-saved'); seen.push(done.text);
   const r = mine(id)[0]; assert.deepEqual([r.deliver, r.channel], ['voice', 'app']);
   for (const t of seen) assert.doesNotMatch(t, /WhatsApp/i, `no WhatsApp in: ${t.slice(0, 80)}`);
+});
+
+// Away between the question and the answer: the set-up must never end in "I couldn't set that, your family can add reminders". Either it is resumed (the asked time has gone: sorry, when instead?) or,
+// if it timed out, a short answer to it gets a plain "I lost that set-up, tell me again".
+test('away, then back: the asked time has passed -> sorry, when instead? (what / how / where are kept), and the next answer saves it; never "your family can add"', () => {
+  const t0 = Date.now(); const MIN = 60000; quiet(); const id = person(); care.get(id).tz = 'Asia/Kolkata'; const o = { origin: 'app', tz: 'Asia/Kolkata' };
+  const notes = [];
+  notes.push(setrem.step(id, 'Remind me in 2 minutes to drink water', { ...o, now: t0 }));
+  notes.push(setrem.step(id, 'oky', { ...o, now: t0 + 1000 }));
+  notes.push(setrem.step(id, 'a text please', { ...o, now: t0 + 6 * MIN }));   // back after six minutes: "in 2 minutes" has gone
+  const back = notes[2]; assert.equal(back.label, 'setrem-ask-detail'); assert.match(back.text, /has already passed while they were away/); assert.match(back.text, /When should I remind you\?/);
+  assert.equal(mine(id).length, 0);
+  notes.push(setrem.step(id, 'in 3 minutes', { ...o, now: t0 + 6 * MIN + 2000 }));
+  assert.equal(notes[3].label, 'setrem-confirm'); assert.match(notes[3].text, /in 3 minutes/);
+  const done = setrem.step(id, 'yes', { ...o, now: t0 + 6 * MIN + 4000 }); assert.equal(done.label, 'setrem-saved');
+  assert.equal(mine(id).length, 1); const r = mine(id)[0]; assert.deepEqual([r.task, r.deliver, r.channel], ['drink water', 'text', 'app']);
+  assert.ok(r.dueAt > t0 + 6 * MIN, 'the new time is from now, not the old one');
+  for (const n of notes.concat(done)) assert.doesNotMatch(n.text, /family (?:can|could|should) add|their family can/i, `never "family can add": ${n.label}`);
+});
+
+test('away, timed out: a short answer to the forgotten question gets "I lost that set-up, start again" - never "your family can add reminders"', () => {
+  const t0 = Date.now(); const MIN = 60000; quiet(); const id = person(); const o = { origin: 'app', tz: 'Asia/Kolkata' };
+  setrem.step(id, 'Remind me in 2 minutes to drink water', { ...o, now: t0 }); setrem.step(id, 'yes', { ...o, now: t0 + 1000 });   // now waiting on "how" / "where"
+  const late = setrem.step(id, 'Maya app', { ...o, now: t0 + 25 * MIN });
+  assert.equal(late.label, 'setrem-lost'); assert.match(late.text, /lost that set-up while they were away/); assert.match(late.text, /tell you again what to remind them about and when/);
+  assert.doesNotMatch(late.text, /their family can|family can add/i); assert.match(late.text, /Never mention their family/); assert.equal(mine(id).length, 0);
+  assert.equal(setrem.step(id, 'Maya app', { ...o, now: t0 + 26 * MIN }), null, 'said once, then ordinary talk again');
+  assert.equal(setrem.step(id, 'Good morning', { ...o, now: t0 + 27 * MIN }), null, 'not an answer: nothing');
+});
+
+test('a real save failure says plainly it could not be set just now, or that they can stop one in My Reminders - never "your family can add"', () => {
+  quiet(); const id = person(); care.get(id).tz = 'Asia/Kolkata'; const o = { origin: 'app', tz: 'Asia/Kolkata' };
+  for (let i = 0; i < setrem.MAX_OPEN; i++) care.addSeniorReminder(id, { task: `t${i}`, dueAt: Date.now() + 3600000 + i * 1000, repeat: 'none', deliver: 'text', channel: 'app', origin: 'app' });
+  const full = setrem.step(id, 'Remind me in 20 minutes to rest', o); assert.equal(full.label, 'setrem-full'); assert.match(full.text, /My Reminders/); assert.doesNotMatch(full.text, /their family can|family can add/i);
 });

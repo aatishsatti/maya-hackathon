@@ -285,7 +285,9 @@ const savedText = (spec, ctx) => {
 const deliveryWords = (task) => { const w = `Your reminder: ${second(String(task || '').replace(/[\s.!?,;:]+$/, ''))}.`; return w; };
 
 // ---------------------------------------------------------------- the conversation (per person, in memory only)
-const states = new Map();   // profileId -> { stage, spec, origin, asks, unclear, at }
+const states = new Map();
+const lost = new Map();   // profile id -> { at }: a set-up that timed out; a short answer to it gets a plain 'I lost that' (never silence, never a made-up result)
+  // profileId -> { stage, spec, origin, asks, unclear, at }
 const YES = /\b(?:yes|yeah|yep|yup|yea|ya|correct|right|exactly|sure|ok(?:ay)?|please do|go ahead|do it|sounds good|that'?s right|that is right|that'?s correct|that is correct|perfect|good)\b/i;
 const NO = /\b(?:no|nope|nah|wrong|not right|cancel|never ?mind|forget it|don'?t|do not|stop|not that)\b/i;
 const CANCEL = /\b(?:cancel|never ?mind|forget it|forget about it|don'?t (?:set|bother)|do not (?:set|bother)|stop)\b/i;
@@ -364,6 +366,14 @@ function needChannel(id, st, ctx) {
 }
 function save(id, st, ctx) {
   const spec = st.spec, care = require('./care');
+  // They went away between the question and the answer and the time they asked for ("in 2 minutes") has passed: saving it would fail. Not a failure and not "ask your family": say it plainly and ask the time again,
+  // keeping what they already told us (what, how, where), so one short answer finishes it.
+  if (!afterCall(spec, { origin: st.origin }) && Number.isFinite(spec.dueAt) && spec.dueAt < (ctx.now || Date.now()) - 60000) {
+    const was = whenWords(spec, { tz: ctx.tz, now: ctx.now || Date.now(), origin: st.origin });
+    st.spec = { ...spec, dueAt: null, relMs: null, clock: null, day: null, weekday: null, daypart: null, startsInHour: false, ask: ['time'] };
+    st.stage = 'clarify'; st.asks = 1; st.unclear = 0; st.at = ctx.now || Date.now(); states.set(id, st);
+    return note('setrem-ask-detail', `The time they asked for (${was}) has already passed while they were away, so nothing is set yet. Say sorry plainly in one short sentence that that time has gone, and then ask ONE short question and nothing else: "${QUESTION.time}" ${COMMON}`);
+  }
   states.delete(id);
   try {
     // On a call, something this soon waits for the call to end (then it happens right after the hang-up). It is parked until then, with a safety time if the hang-up is never seen.
@@ -371,7 +381,7 @@ function save(id, st, ctx) {
     const r = care.addSeniorReminder(id, { task: spec.task, dueAt: park ? Date.now() + PARK_MS : spec.dueAt, repeat: spec.repeat, every: spec.every, deliver: spec.deliver, channel: spec.channel, origin: st.origin });
     if (park && r && r.id) { const w = waiting.get(id) || []; w.push({ rid: r.id, delay: Math.max(20000, spec.relMs) }); waiting.set(id, w); }
   } catch (e) {
-    return note('setrem-not-saved', `The reminder could NOT be saved (${e.status === 409 ? 'they already have as many reminders set by talking as can be kept' : 'a problem on your side'}). Tell them kindly in one short sentence that you could not set it, and that their family can add reminders. Do not say it is set. ${COMMON}`);
+    return note('setrem-not-saved', `The reminder could NOT be saved (${e.status === 409 ? 'they already have as many reminders set by talking as can be kept' : 'a problem on your side'}). ${e.status === 409 ? 'Tell them kindly in one short sentence that you could not set it because they already have so many, and that they can stop one in My Reminders (the menu button at the top left) to make room, then ask again.' : 'Tell them kindly in one short sentence that you could not set it just now, and that they can ask you again in a moment.'} Never say or suggest their family should add it: they can set their own reminders with you. Do not say it is set. ${COMMON}`);
   }
   console.log('setrem', JSON.stringify({ event: 'saved', repeat: spec.repeat, every: spec.every || 1, deliver: spec.deliver, channel: spec.channel, origin: st.origin }));   // kinds only: never the task
   const q = quietHold(spec, { ...ctx, origin: st.origin });
@@ -432,11 +442,19 @@ function step(id, heard, { origin, tz = null, now = Date.now(), waLinked = false
   if (!heard) return null;
   const ctx = { origin, tz: validTz(tz) ? tz : null, now, waLinked, skipEmpty };
   let st = states.get(id);
+  if (st && now - st.at > TTL_MS) lost.set(id, { at: now });   // timed out while they were away: if the next thing they say is an answer to it, they are told plainly
   if (st && (now - st.at > TTL_MS || st.origin !== origin)) { states.delete(id); st = null; }
   if (st && isRequest(heard) && st.stage !== 'clarify') { const fresh = parseRequest(heard, ctx); if (fresh.task && (fresh.dueAt || fresh.ask.length)) { states.delete(id); st = null; } }
   if (st) { st.at = now; return answer(id, st, heard, ctx); }
-  if (!isRequest(heard)) return null;
-  if (require('./care').seniorSetCount(id) >= MAX_OPEN) return note('setrem-full', `They asked for a reminder, but they already have as many reminders set by talking as can be kept (${MAX_OPEN}). Say so kindly in one short sentence and that their family can add or change reminders. Nothing was saved. ${COMMON}`);
+  if (!isRequest(heard)) {
+    const gone = lost.get(id);
+    if (gone && now - gone.at < 60 * MIN && heard.split(/\s+/).length <= 6 && (readDelivery(heard).channel || readDelivery(heard).deliver || YES.test(heard) || SHORT_YES.test(heard.replace(/[^\p{L}]+$/u, '')) || NO.test(heard))) {
+      lost.delete(id);
+      return note('setrem-lost', `A reminder they were setting up earlier was forgotten while they were away (nothing was saved), and what they just said looks like an answer to it. Say sorry plainly in one short sentence that you lost that set-up while they were away, and ask them to tell you again what to remind them about and when. Do not say anything is set. Never mention their family. ${COMMON}`);
+    }
+    return null;
+  }
+  if (require('./care').seniorSetCount(id) >= MAX_OPEN) return note('setrem-full', `They asked for a reminder, but they already have as many reminders set by talking as can be kept (${MAX_OPEN}). Say so kindly in one short sentence and that they can stop one in My Reminders (the menu button at the top left) to make room. Nothing was saved. Never suggest their family should add it. ${COMMON}`);
   return begin(id, heard, ctx);
 }
 
@@ -444,10 +462,12 @@ const reset = (id) => { if (id) states.delete(id); else states.clear(); };
 const pending = (id) => { const s = states.get(id); return s ? { stage: s.stage, origin: s.origin, spec: s.spec } : null; };
 
 // The question a person is being asked right now ("how?", "where?"), for the one case where Spark twice closes without asking it: it is then put at the end of her reply so the set-up never stalls on a missing question.
-function pendingQuestion(id) {
+function pendingQuestion(id, label = '') {
+  if (label === 'setrem-lost') return 'What would you like me to remind you about, and when?';
   const st = states.get(id); if (!st) return null;
   if (st.stage === 'delivery') return 'Would you like me to call you, send you a text, or send you a voice note?';
   if (st.stage === 'channel') return st.noWa ? 'Is the Maya app okay for that?' : 'Would you like that on the Maya app, on WhatsApp, or both?';
+  if (st.stage === 'clarify' && st.spec && st.spec.ask && st.spec.ask.length) return questionFor(st.spec);
   return null;
 }
 module.exports = { pendingQuestion, quietHold, hourWords, savedText, afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };

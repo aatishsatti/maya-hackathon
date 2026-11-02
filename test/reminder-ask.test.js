@@ -47,3 +47,23 @@ test('if she skips the question even when asked again, the plain question closes
   assert.equal(asked.length, 2); const said = r.messages[r.messages.length - 1].text;
   assert.match(said, /call you, send you a text, or send you a voice note\?$/); assert.equal(mine(id).length, 0);
 });
+
+test('after "sorry, that time has gone" the question is "when instead?"; after "I lost that set-up" it is "what and when?" - closed with the plain question if Spark twice skips it', async () => {
+  const setrem = require('../setrem'); const MIN = 60000; const id = person();
+  const real = Date.now; let skew = 0; Date.now = () => real() + skew;
+  try {
+    reset(`${FEEL} Got it, in two minutes I will remind you to drink water. Is that right?`); await chat.sendText(id, 'Remind me in 2 minutes to drink water', 'Asia/Kolkata');
+    reset(`${FEEL} Lovely, how would you like it?`); await chat.sendText(id, 'ok', 'Asia/Kolkata');
+    skew += 6 * MIN;   // away, then back: the asked time has gone
+    reset(`${FEEL} Sorry, those two minutes slipped by.`);
+    const r = await chat.sendText(id, 'a text please', 'Asia/Kolkata');
+    assert.match(r.messages[r.messages.length - 1].text, /When should I remind you\?$/); assert.equal(mine(id).length, 0);
+    const other = person(); reset(`${FEEL} Got it, in ten minutes I will remind you to rest. Is that right?`); await chat.sendText(other, 'Remind me in 10 minutes to rest', 'Asia/Kolkata');
+    reset(`${FEEL} Lovely, how would you like it?`); await chat.sendText(other, 'ok', 'Asia/Kolkata');
+    skew += 30 * MIN;   // away past the life of the set-up
+    reset(`${FEEL} Sorry, I lost that.`);
+    const l = await chat.sendText(other, 'a text', 'Asia/Kolkata');
+    assert.match(l.messages[l.messages.length - 1].text, /What would you like me to remind you about, and when\?$/); assert.equal(mine(other).length, 0);
+    void setrem;
+  } finally { Date.now = real; }
+});
