@@ -493,6 +493,7 @@ function ringByPush(o) {
   o.pushed = true;
   const payload = { type: 'incoming', outreachId: o.id, kind: o.kind, ringMs: cfg.ringMs, profile: o.profileId };   // profile: so a phone that was signed out of this person can ignore the ring and ask the server to forget it
   Promise.all(devs.map((d) => push.send(d, payload).then((r) => ({ d, r })))).then((rs) => {
+    console.log('push', JSON.stringify({ event: 'ring pushed', kind: o.kind, results: rs.map(({ d, r }) => ({ platform: d.platform, ok: Boolean(r.ok), ...(r.ok ? {} : { reason: r.reason || 'failed' }) })) }));   // platforms and the answer only: never a token
     for (const { d, r } of rs) if (r.gone) removeDevice(o.profileId, d.token);   // the phone no longer has the app: forget it
     if (!rs.some((x) => x.r.ok)) pushFailed(o, attempt, (rs[0] && rs[0].r.reason) || 'failed');
   });
