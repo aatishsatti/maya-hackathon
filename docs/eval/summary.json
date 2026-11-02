@@ -356,11 +356,11 @@
    "live": {
     "scams": 38,
     "normal": 38,
-    "warned": 35,
-    "cautioned": 36,
+    "warned": 37,
+    "cautioned": 38,
     "falseWarned": 0,
     "falseCautioned": 0,
-    "pauseOnScam": 4,
+    "pauseOnScam": 5,
     "pauseOnNormal": 0
    }
   },
@@ -380,23 +380,67 @@
   ],
   "minimalMissed": [
    {
-    "id": "S010",
-    "kind": "government",
-    "level": "none",
-    "filtered": true
-   },
-   {
     "id": "S114",
     "kind": "invoice_fraud",
     "level": "caution",
     "filtered": false
-   },
-   {
-    "id": "S130",
-    "kind": "in_progress",
-    "level": "none",
-    "filtered": true
    }
   ]
- }
+ },
+ "heldMinimalWhen": "2026-11-02",
+ "liveVoice": {
+  "when": "2026-11-02",
+  "commit": "84dc6cb",
+  "turns": 4,
+  "sparkFirstMs": [
+   2312,
+   2982,
+   2480,
+   1737
+  ],
+  "speechEndToFirstAudioMs": [
+   2604,
+   3271,
+   2742,
+   2018
+  ],
+  "ttsFirstChunkMs": [
+   111,
+   114
+  ],
+  "micStallsMs": [
+   374,
+   389,
+   1080,
+   309,
+   314,
+   333,
+   507,
+   486,
+   529
+  ],
+  "note": "One live voice call on the hosted server, measured in the browser (the latency lines) and in the server log. The mic fix of 06530d2 came after this call and has not been measured live yet."
+ },
+ "jobs": [
+  [
+   "Live reply",
+   "Spark writes what Maya says, with a private read of how the person seems to feel, the subject and any pain, in one streamed reply."
+  ],
+  [
+   "Memory",
+   "After a call Spark files what the person said into short private notes (people, events, open follow-ups). The temporary file of words is deleted once filed; the call's lines also stay in that person's chat history (see the privacy page)."
+  ],
+  [
+   "Scam check",
+   "Spark reads typed and spoken talk for six signs of a scam, and for \"about to pay\", so Maya can pause someone before they act."
+  ],
+  [
+   "Photos",
+   "Spark vision describes a photo of a letter or screen, and checks it for a scam."
+  ],
+  [
+   "Schedules",
+   "Spark reads a schedule (a photo, a PDF, typed or spoken) into reminder items; nothing is set until the family ticks them."
+  ]
+ ]
 }

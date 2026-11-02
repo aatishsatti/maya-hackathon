@@ -12,17 +12,27 @@ Maya is a voice companion for older adults. Her **ears and brain are Meta models
 | **Spark vision** | Describes a photo for Maya; checks a photo for a scam | wired and used; **not measured** (the evaluation is text only) |
 | **Transcribe** `muse-voice-transcribe-1.0` (ears) | Hears live calls (streamed) and recorded voice notes | voice notes: 48 hearings, 2.1 s average; live calls: used, not part of the evaluation |
 
+## Five jobs for Spark, and the live voice call
+
+- **Live reply.** Spark writes what Maya says, with a private read of how the person seems to feel, the subject and any pain, in one streamed reply.
+- **Memory.** After a call Spark files what the person said into short private notes (people, events, open follow-ups). The temporary file of words is deleted once filed; the call's lines also stay in that person's chat history (see the privacy page).
+- **Scam check.** Spark reads typed and spoken talk for six signs of a scam, and for "about to pay", so Maya can pause someone before they act.
+- **Photos.** Spark vision describes a photo of a letter or screen, and checks it for a scam.
+- **Schedules.** Spark reads a schedule (a photo, a PDF, typed or spoken) into reminder items; nothing is set until the family ticks them.
+
+**Live voice, measured 2026-11-02** (4 turns, hosted server, commit 84dc6cb): Spark's first words 1737 to 2982 ms; Maya's first audio 2018 to 3271 ms after the person stopped talking; the voice itself was fast (111 to 114 ms to first audio). The mic stalled 309 to 1080 ms on that call. One live voice call on the hosted server, measured in the browser (the latency lines) and in the server log. The mic fix of 06530d2 came after this call and has not been measured live yet.
+
 ## Results (details on the page)
 
 - **Conversation:** 0% of replies repeat a polite phrase; subject tag right 93%; the "nobody knows" worry answered with what the app does 98%.
 - **Memory:** a due follow-up asked at the first reply 92%; never asked twice; trimmed memory still answers; nothing invented.
 - **Trends (simulation):** ordinary life wrongly flagged 2.0%; slow drifts noticed within two weeks 78% on average.
-- **Scam shield:** dev scams warned 99%, no normal item warned. Held-out: 37 of 38 scams warned by the detector, 35 of 38 behind the live word filter, 0 of 38 normal items wrongly warned.
+- **Scam shield:** dev scams warned 99%, no normal item warned. Held-out: 37 of 38 scams warned by the detector, 37 of 38 behind the live word filter, 0 of 38 normal items wrongly warned.
 - **Hearing:** word error rate 3.0% on synthetic clean speech (the average of 8 runs); 98.5% of key words, 99.4% of scam words survived.
 
 ## What changing the scam check's reasoning cost
 
-The scam check on talk moved from reasoning `low` to `minimal`, decided on the dev half (4 runs per setting): warned 100% vs 99%, false warnings 0% vs 0%, about 1.7x faster, 57% fewer output tokens. The held-out half was run once for each: `low` warned 38 of 38, `minimal` 37 of 38 (one polite invoice scam moved from a warning to a caution: still flagged, not missed). Not a significant drop, not nothing. Both runs are published in `docs/scam-results.md`.
+The scam check on talk moved from reasoning `low` to `minimal`, decided on the dev half (4 runs per setting): warned 100% vs 99%, false warnings 0% vs 0%, about 1.7x faster, 57% fewer output tokens. The held-out half was run once for each: `low` warned 38 of 38, `minimal` 37 of 38. Not a significant drop, not nothing. Both runs are published in `docs/scam-results.md`.
 
 ## Limits
 

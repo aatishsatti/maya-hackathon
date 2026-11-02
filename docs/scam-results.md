@@ -1,6 +1,44 @@
-# Scam shield: final held-out results (both settings)
+# Scam shield: current held-out results (re-run 2026-11-02)
 
-> **STALE as of 2026-10-29 (commit after 93740be):** the cheap word filter in front of the live check was widened (scam.js: an outside party asking for something to be handed over or done, and doing it as they speak). Every number below was measured with the OLD filter (36 of 38 held-out scams reached a check; the pipeline rows below are behind that filter). The two scams it missed (S010, S130) are now regression cases, not fresh evidence. One held-out re-run after code freeze will replace these pipeline numbers; until then do not quote them as current.
+> **Current.** The held-out half of `docs/scam-testset.json` was run once more on 2026-11-02, code at commit `06530d2`, live setting (Spark, reasoning `minimal`), after the cheap word filter was widened. Raw results: `docs/scam-results-held-rerun-2026-11-02.json`. These replace the pipeline numbers further down, which are **stale** (measured with the old filter on 2026-10-28). Honest short version: **37 of 38 held-out scams warned, the 38th cautioned, 0 of 38 normal items wrongly warned**, both for the detector alone and behind the live filter. The set is written by the team and small (38 + 38), so the intervals are wide.
+
+Meta Spark, text only, run once more on the held-out half of docs/scam-testset.json (never used for tuning). Intervals are 95% Wilson intervals; with this few items they are wide.
+
+| detector | scams warned | scams at least cautioned | normal wrongly warned | normal wrongly cautioned |
+|---|---|---|---|---|
+| New detector alone (six signs, pause level) | 37/38 = 97% (95% CI 87%-100%) | 38/38 = 100% (95% CI 91%-100%) | 0/38 = 0% (95% CI 0%-9%) | 0/38 = 0% (95% CI 0%-9%) |
+| New detector behind the cheap word filter (what runs live) | 37/38 = 97% (95% CI 87%-100%) | 38/38 = 100% (95% CI 91%-100%) | 0/38 = 0% (95% CI 0%-9%) | 0/38 = 0% (95% CI 0%-9%) |
+
+### The pause moment
+
+- Scams in progress paused: detector alone 5/5 = 100% (95% CI 57%-100%); behind the filter 5/5 = 100% (95% CI 57%-100%).
+- Genuine payments in progress wrongly paused: 0/5 = 0% (95% CI 0%-43%).
+- Other normal items wrongly paused: 0/33 = 0% (95% CI 0%-10%).
+
+### Every held-out scam that was not warned (behind the filter)
+
+- S114 [invoice_fraud/text/hard] caution: Hi, please find attached the invoice for the boiler service last month. Our bank details have changed, so kindly send the payment of $320 to the new account below.
+
+### Every held-out normal item that was wrongly flagged (warned or cautioned, behind the filter)
+
+- None.
+
+### Caveats (please read before quoting any number)
+
+- The test set was written by the same team that built the detector, so both halves are ours. Real scams in the wild may be harder, or phrased differently.
+- There are only 38 scams and 38 normal items in this half. "0 wrongly warned" can hide a true rate of up to about 9%. The intervals above are the honest range.
+- The same family of model reads both the examples and the checks, and the same detector run twice can differ by about two items (identical dev runs gave 36 and 38 of 38).
+- Text only. Photos (the vision path) were not measured here.
+- Warn accuracy is not meaningfully different from the original five-signal prompt (overlapping intervals). What the new detector adds is the pause moment, coverage of typed and spoken talk, and the remote-access and identity-details reads.
+- The cheap word filter was widened on 2026-10-29. In this run the behind-the-filter numbers equal the detector-alone numbers, so every held-out scam the detector warned on also reached the check. The old 36-of-38 pass rate no longer applies.
+- The held-out half has now been used three times (the original prompt, the first final run, and this re-run after the filter change). No change was made to the detector, the filter or the prompts because of any of them.
+
+
+---
+
+# Superseded results (2026-10-28, old filter) — STALE, kept for the record
+
+> **Superseded.** Measured with the OLD word filter (36 of 38 held-out scams reached a check). The section above is the current result; do not quote the numbers below as current.
 
 **Change, stated openly:** On 2026-10-28 the live setting of the scam check on typed and spoken talk was changed from reasoning "low" to "minimal". The decision was made on the DEV half only (76 items, 4 runs per setting: both settings warned 99-100% of scams with 0% false warnings and paused 95% of scams in progress; "minimal" was about 1.7 to 2 times faster and used 57% fewer output tokens). The held-out half was then run once more for the new setting. Both held-out results are shown below; neither was hidden or used for tuning.
 

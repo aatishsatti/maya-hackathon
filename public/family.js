@@ -406,7 +406,7 @@
   }
   async function runCall(path, body, button) {
     if (waTesting) return;
-    waTesting = true; for (const b of ['waTestCall', 'waRemCall', 'waWelfareCall']) $(b).disabled = true; $('waTestLine').textContent = 'Placing the call...';
+    waTesting = true; for (const b of ['waWelfareCall']) $(b).disabled = true; $('waTestLine').textContent = 'Placing the call...';
     try {
       const r = await waCall(`/api/whatsapp/${id}/${path}`, 'POST', body);
       if (!r.ok) { $('waTestLine').textContent = `${r.j.error || 'Could not place the call.'} Nothing rang.`; load(); return; }
@@ -427,18 +427,9 @@
       }
       load();
     } catch (e) { $('waTestLine').textContent = `Could not reach the server: ${e.message}. Nothing rang.`; }
-    finally { waTesting = false; for (const b of ['waTestCall', 'waRemCall', 'waWelfareCall']) $(b).disabled = false; }
+    finally { waTesting = false; for (const b of ['waWelfareCall']) $(b).disabled = false; }
   }
-  $('waTestCall').addEventListener('click', () => runCall('test-call'));
   $('waWelfareCall').addEventListener('click', () => runCall('welfare-call', { via: welfareSeg.get() || 'call', channel: welfareWhere.get() || 'whatsapp' }));   // Step 1: a welfare check call, no reminder
-  // C2: the family's reminder, delivered by the call. A reminder you already set wins over typed text.
-  $('waRemPick').addEventListener('change', remSource); $('waRemText').addEventListener('input', remSource);
-  $('waRemClear').addEventListener('click', () => { $('waRemPick').value = ''; $('waRemText').value = ''; remSource(); });
-  $('waRemCall').addEventListener('click', () => {
-    const rid = $('waRemPick').value, task = $('waRemText').value.trim();
-    if (!rid && !task) { $('waTestLine').textContent = 'Pick a reminder or type one first. Nothing rang.'; return; }
-    runCall('reminder-call', rid ? { reminderId: rid } : { task });
-  });
 
   async function load() {
     if (!id) return;

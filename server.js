@@ -195,20 +195,14 @@ async function handleWhatsapp(req, res, url) {
   try {
     if (req.method === 'GET' && !b) return sendJson(res, 200, whatsapp.view(a));
     if (req.method === 'DELETE' && !b) return sendJson(res, 200, { ok: whatsapp.unlink(a) });
-    if (req.method === 'POST' && b === 'test-call') return MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeTestCall(a)); // TEMPORARY (render-test): one outbound test call, see wacall.callOut
     if (req.method === 'POST' && b === 'welfare-call') { // the welfare picker: call | text | voice (a call needs real mode)
       const body = (await readJson(req)) || {}, via = body.via === 'text' || body.via === 'voice' ? body.via : 'call';
       if (typeof body.channel === 'string' && body.channel) return via === 'call' && MODE !== 'real' && body.channel !== 'app' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await require('./welfarechan').run(a, { via, channel: body.channel }));   // Where it goes: app | whatsapp | both
       return via === 'call' && MODE !== 'real' ? sendJson(res, 503, { error: 'Calls need real mode.' }) : sendJson(res, 200, await whatsapp.placeWelfare(a, via));
-    } // TEMPORARY (render-test): Step 1, a one-off welfare check call
+    }
     if (b === 'welfare-schedule') {   // Step 2: scheduled welfare checks, started and stopped by the family
       if (req.method === 'POST') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, { schedule: care.welfareScheduleStart(a, { everyMin: body.everyMin, every: body.every, unit: body.unit, via: body.via, channel: body.channel }) }); }
       if (req.method === 'DELETE') return sendJson(res, 200, { stopped: care.welfareScheduleStop(a) });
-    }
-    if (req.method === 'POST' && b === 'reminder-call') { // TEMPORARY (render-test): C2, a reminder delivered by an outbound call
-      if (MODE !== 'real') return sendJson(res, 503, { error: 'Calls need real mode.' });
-      const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' });
-      return sendJson(res, 200, await whatsapp.placeReminderCall(a, typeof body.reminderId === 'string' && body.reminderId ? { rid: body.reminderId } : { task: body.task }));
     }
     if (req.method === 'POST' && b === 'link') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, whatsapp.link(a, body.phone, body.optIn)); }
   } catch (e) { return sendJson(res, e.status || 500, { error: e.message, ...(e.needsTemplate ? { needsTemplate: true, windowClosed: true } : e.windowClosed ? { windowClosed: true } : {}) }); }
@@ -278,8 +272,6 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
     return sendJson(res, 200, { mode: MODE, commit: COMMIT });
   }
-  // TEMPORARY (render-test branch): hosting diagnostic, no secrets, cached 60 s. Removed before the final version. See diag.js.
-  if (url.pathname === '/api/diag' && req.method === 'GET') return MODE === 'real' ? sendJson(res, 200, url.searchParams.get('asr') === '1' ? await require('./diag').getAsr() : await require('./diag').get()) : sendJson(res, 404, { error: 'Not found' });
   // Profiles (family setup). Names and gender only; each profile has its own memory file.
   // The senior door asks who this phone is by the id in its link (the id is the key: it is never listed anywhere). Name only.
   const who = /^\/api\/senior\/([a-f0-9]{8})$/.exec(url.pathname);

@@ -88,7 +88,7 @@ function render(s) {
 <g class="arrow"><path d="M120 73 H150"/><path d="M350 73 H400"/><path d="M600 73 H690"/><path d="M500 116 V190"/><path d="M890 73 H905 V20 H65 V30"/><path d="M570 116 L602 190"/></g></svg>`;
 
   const heldTable = `<table><thead>${row(['Held-out half (38 scams, 38 normal)', 'Scams warned', 'Normal wrongly warned', 'Scams paused'], true)}</thead><tbody>
-${heldRow('"low", detector alone', lowH.alone)}${heldRow('"low", behind the word filter', lowH.live)}${heldRow('"minimal" (live now), detector alone', miH.alone)}${heldRow('"minimal" (live now), behind the word filter', miH.live)}</tbody></table>`;
+${heldRow(`"low" (${s.when}, old word filter), detector alone`, lowH.alone)}${heldRow(`"low" (${s.when}, old word filter), behind the word filter`, lowH.live)}${heldRow(`"minimal" (live now, re-run ${s.heldMinimalWhen || s.when}), detector alone`, miH.alone)}${heldRow(`"minimal" (live now, re-run ${s.heldMinimalWhen || s.when}), behind the word filter`, miH.live)}</tbody></table>`;
 
   const dropped = (s.held.minimalMissed.length - s.held.lowMissed.length);
   return `<!doctype html>
@@ -117,13 +117,17 @@ ${flow}
 <div class="wrap"><table><tbody>${usageTable}</tbody></table></div>
 <p class="sub">The calls, speeds and tokens in this table come from one representative full run; the rates elsewhere are averages over all the baseline runs. Spark is called through Meta's chat-completions endpoint; Transcribe through Meta's realtime stream (live calls) and its file endpoint (voice notes). ElevenLabs only turns Maya's words into speech; nothing is understood or decided there. No ElevenLabs request is made by the evaluation.</p>
 
+<h2>Five jobs for Spark, and the live voice call</h2>
+<ul>${(s.jobs || []).map((j) => `<li><b>${esc(j[0])}.</b> ${esc(j[1])}</li>`).join('')}</ul>
+${s.liveVoice ? `<p><b>Live voice, measured ${esc(s.liveVoice.when)} (${esc(s.liveVoice.turns)} turns, hosted server, commit ${esc(s.liveVoice.commit)}):</b> Spark's first words arrived after ${esc(Math.min(...s.liveVoice.sparkFirstMs))} to ${esc(Math.max(...s.liveVoice.sparkFirstMs))} ms, and Maya's first audio came ${esc(Math.min(...s.liveVoice.speechEndToFirstAudioMs))} to ${esc(Math.max(...s.liveVoice.speechEndToFirstAudioMs))} ms after the person stopped talking. The voice itself was fast (first audio ${esc(s.liveVoice.ttsFirstChunkMs[0])} to ${esc(s.liveVoice.ttsFirstChunkMs[1])} ms). So the wait is mostly Spark thinking, plus the pause Maya leaves so she does not cut a slow speaker off. The mic stalled for ${esc(Math.min(...s.liveVoice.micStallsMs))} to ${esc(Math.max(...s.liveVoice.micStallsMs))} ms on that call. ${esc(s.liveVoice.note)}</p>` : ''}
+
 <h2>The scam check: the reasoning setting, and what changing it cost</h2>
 <p>The check on typed and spoken talk was changed from reasoning <code>low</code> to <code>minimal</code>. The decision was made on the dev half only: 76 items, ${esc(R.runs)} runs per setting.</p>
 <div class="wrap"><table><thead>${row(['Dev half', 'Scams warned', 'Normal wrongly warned', 'Scams in progress paused', 'Average speed', 'Slowest 10%', 'Output tokens per call'], true)}</thead><tbody>
 ${row(['<code>low</code> (before)', pc(lo.warned), pc(lo.falseWarn), pc(lo.pauseInProgress), secs(lo.avgMs), secs(lo.p90Ms), num(Math.round(lo.tokensOut))])}${row(['<code>minimal</code> (live now)', pc(mi.warned), pc(mi.falseWarn), pc(mi.pauseInProgress), secs(mi.avgMs), secs(mi.p90Ms), num(Math.round(mi.tokensOut))])}</tbody></table></div>
 <div class="note warn"><b>The cost of the change, stated plainly.</b> On the held-out half, which was run once for each setting, <code>minimal</code> warned ${frac(miH.alone.warned, miH.alone.scams)} scams against ${frac(lowH.alone.warned, lowH.alone.scams)} for <code>low</code> (${frac(miH.live.warned, miH.live.scams)} against ${frac(lowH.live.warned, lowH.live.scams)} behind the cheap word filter that runs live). ${dropped > 0 ? 'The one difference is a polite invoice scam ("our bank details have changed") that moved from a warning to a caution: still flagged, not missed.' : 'No scam was lost.'} In exchange the check is about ${(lo.avgMs / mi.avgMs).toFixed(1)} times faster and uses ${pc(1 - mi.tokensOut / lo.tokensOut)} fewer output tokens. The intervals overlap, so this is not a significant drop, but it is not nothing either. Both held-out runs are published in full: <code>docs/scam-results.md</code>.</div>
 <div class="wrap">${heldTable}</div>
-<p class="sub">The word filter lets about 1 scam description in 20 through unchecked, so those get no pause moment (Maya still answers naturally). The photo check is unchanged and was not measured.</p>
+<p class="sub">${miH.live.warned === miH.alone.warned ? `In the ${esc(s.heldMinimalWhen || s.when)} re-run, after the word filter was widened, every held-out scam reached the check.` : 'The word filter lets about 1 scam description in 20 through unchecked, so those get no pause moment (Maya still answers naturally).'} The "low" rows are from ${esc(s.when)}, with the old filter. The photo check is unchanged and was not measured.</p>
 
 <h2>Hearing: Meta Transcribe</h2>
 <p>Twenty-four fixed sentences were each spoken by two of four built-in Mac voices (US, UK, Australian, Irish) and transcribed by Meta Transcribe: ${num(H.sentences)} hearings, ${num(H.failed)} failed. Word error rate <b>${pc1(H.wer)}</b>${H.runs ? ` (the average of ${esc(H.runs)} runs, ${num(H.hearings)} hearings, because Transcribe varies a little from run to run)` : ''}; <b>${pc1(H.termSurvival)}</b> of the key words survived, and <b>${pc1(H.scamTermSurvival)}</b> of the words a scam turns on (gift cards, Medicare number, date of birth, code, arrested, install). Average ${secs(H.avgMs)} per voice note.</p>
@@ -167,6 +171,10 @@ Maya is a voice companion for older adults. Her **ears and brain are Meta models
 | **Spark vision** | Describes a photo for Maya; checks a photo for a scam | wired and used; **not measured** (the evaluation is text only) |
 | **Transcribe** \`muse-voice-transcribe-1.0\` (ears) | Hears live calls (streamed) and recorded voice notes | ${note ? `voice notes: ${num(note.calls)} hearings, ${secs(note.avgMs)} average` : 'n/a'}; live calls: used, not part of the evaluation |
 
+## Five jobs for Spark, and the live voice call
+
+${(s.jobs || []).map((j) => `- **${j[0]}.** ${j[1]}`).join('\n')}
+${s.liveVoice ? `\n**Live voice, measured ${s.liveVoice.when}** (${s.liveVoice.turns} turns, hosted server, commit ${s.liveVoice.commit}): Spark's first words ${Math.min(...s.liveVoice.sparkFirstMs)} to ${Math.max(...s.liveVoice.sparkFirstMs)} ms; Maya's first audio ${Math.min(...s.liveVoice.speechEndToFirstAudioMs)} to ${Math.max(...s.liveVoice.speechEndToFirstAudioMs)} ms after the person stopped talking; the voice itself was fast (${s.liveVoice.ttsFirstChunkMs[0]} to ${s.liveVoice.ttsFirstChunkMs[1]} ms to first audio). The mic stalled ${Math.min(...s.liveVoice.micStallsMs)} to ${Math.max(...s.liveVoice.micStallsMs)} ms on that call. ${s.liveVoice.note}\n` : ''}
 ## Results (details on the page)
 
 - **Conversation:** ${pc(m['conversation.repeatRate'])} of replies repeat a polite phrase; subject tag right ${pc(m['conversation.topicAccuracy'])}; the "nobody knows" worry answered with what the app does ${pc(m['conversation.worryAction'])}.
