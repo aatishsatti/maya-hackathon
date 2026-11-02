@@ -288,7 +288,9 @@ const states = new Map();   // profileId -> { stage, spec, origin, asks, unclear
 const YES = /\b(?:yes|yeah|yep|yup|yea|ya|correct|right|exactly|sure|ok(?:ay)?|please do|go ahead|do it|sounds good|that'?s right|that is right|that'?s correct|that is correct|perfect|good)\b/i;
 const NO = /\b(?:no|nope|nah|wrong|not right|cancel|never ?mind|forget it|don'?t|do not|stop|not that)\b/i;
 const CANCEL = /\b(?:cancel|never ?mind|forget it|forget about it|don'?t (?:set|bother)|do not (?:set|bother)|stop)\b/i;
-const sayYes = (t) => YES.test(t) && !NO.test(t);
+// A one-word yes that is mistyped or stretched ("oky", "okk", "okie", "okey", "kk", "yess", "yeaa", "haan") counts as yes too, like the listed words: they are answering the question in front of them.
+const SHORT_YES = /^(?:o+k+(?:a+y+|a+|e+y*|i+e*|y+)?|k+|y+e+s+|y+e+a+h*|y+u+p+|y+e+p+|y+s+|ye+|haan+|han+|achh?a+|theek|sahi)$/i;
+const sayYes = (t) => (YES.test(t) && !NO.test(t)) || SHORT_YES.test(String(t).trim().replace(/[^\p{L}]+$/u, ''));
 const sayNo = (t) => NO.test(t) && !/\b(?:yes|yeah|yep|yup)\b/i.test(t);
 
 const QUESTION = {

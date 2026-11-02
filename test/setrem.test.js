@@ -289,3 +289,32 @@ test('quiet hours: an ordinary daytime reminder is not shown as waiting, and May
     assert.equal(care.seniorMenu(id).reminders[0].waitUntil, null);
   } finally { Date.now = real; }
 });
+
+// "oky" live: a mistyped yes was not a yes, so nothing was saved, the menu stayed empty and no pop-up ever came. A yes, however it is typed, goes on to the delivery question; once it is
+// saved the reminder is in the senior's menu BEFORE it is due, and at its time the open app gets the notice (the pop-up).
+test('"oky", "ok", "okk", "okie", "yess", "yes": each counts as the yes; then a saved reminder shows in the senior menu before it is due and fires the pop-up at its time', async () => {
+  for (const yes of ['oky', 'ok', 'okk', 'okie', 'yess', 'Yes.', 'okay thanks']) {
+    quiet(); const { id } = linked(true); care.get(id).tz = 'Asia/Kolkata'; const say = talker(id, 'app');
+    await say('Remind me in 2 minutes to drink water');
+    const a = await say(yes); assert.ok(a.labels.includes('setrem-ask-delivery'), `"${yes}" is a yes, got ${a.labels.join(',')}`);
+    assert.equal(mine(id).length, 0, 'still not saved until it is known how');
+  }
+  quiet(); const { id } = linked(true); care.get(id).tz = 'Asia/Kolkata'; const say = talker(id, 'app'); const app = openApp(id);
+  await say('Remind me in 2 minutes to drink water'); await say('oky');
+  const saved = await say('a text please'); assert.ok(saved.labels.includes('setrem-saved'), saved.labels.join(','));
+  assert.equal(mine(id).length, 1); assert.deepEqual([mine(id)[0].deliver, mine(id)[0].channel], ['text', 'app'], 'asked in the app: it comes to the app (no WhatsApp question)');
+  const menu = care.seniorMenu(id).reminders; assert.equal(menu.length, 1, 'the menu shows it before it is due'); assert.match(menu[0].task, /drink water/);
+  assert.ok(menu[0].dueAt > Date.now() && menu[0].dueAt < Date.now() + 3 * 60000, 'about two minutes from now');
+  care.tick(menu[0].dueAt + 2000); await settle();
+  const notice = app.ev.find(([k]) => k === 'notice'); assert.ok(notice, 'at its time the open app gets the notice, which is the pop-up');
+  assert.equal(notice[1].by, 'senior'); assert.match(notice[1].text, /drink water/i); app.detach();
+});
+
+test('a reply that is not a yes (a new thought, or a no) is still not taken for one', () => {
+  for (const t of ['no', 'not now', 'tell me a story', 'what is the time', 'hmm', 'maybe', 'okay but at 5 instead']) {
+    quiet(); const { id } = linked(true); care.get(id).tz = 'Asia/Kolkata';
+    setrem.step(id, 'Remind me in 2 minutes to drink water', { origin: 'app', tz: 'Asia/Kolkata', now: Date.now() });
+    const r = setrem.step(id, t, { origin: 'app', tz: 'Asia/Kolkata', now: Date.now() });
+    assert.ok(!r || r.label !== 'setrem-ask-delivery', `"${t}" must not count as yes (${r && r.label})`);
+  }
+});

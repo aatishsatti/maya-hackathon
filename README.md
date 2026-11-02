@@ -60,7 +60,7 @@ Set `META_MODE` in `.env`:
 
 Two commands, for two different jobs. Neither ever calls ElevenLabs.
 
-- `npm test`: the offline tests (921 checks: 917 pass and 4 are skipped because they need live keys, no network, no keys, about 80 seconds). They guard the logic: what Maya may say, the memory rules, the scam decisions, the trend rules, the family flow, the privacy rules and the generated page.
+- `npm test`: the offline tests (923 checks: 919 pass and 4 are skipped because they need live keys, no network, no keys, about 80 seconds). They guard the logic: what Maya may say, the memory rules, the scam decisions, the trend rules, the family flow, the privacy rules and the generated page.
 - `npm run eval`: the Meta evaluation. It runs Maya's real brain (Meta Spark) and ears (Meta Transcribe) on fixed inputs, text only, plus a few sentences spoken by the Mac's own `say` voice for the hearing test. About 700 Meta calls and about 5 minutes. It prints the guard rails, compares the numbers with the saved baseline, and prints a table of the Meta models doing the work. It exits with an error if a guard rail fails or a number has dropped by more than normal run-to-run noise. Each suite runs on throwaway data folders, never on your real data.
   - `npm run eval:offline` runs only the part that needs no Meta key (the trends simulation).
   - `node eval/run.js --suites scam,hearing --runs 4` runs chosen suites with more repeats.

@@ -22,7 +22,7 @@
     const n = (one, many) => (r.every <= 1 ? `Every ${one}` : `Every ${r.every} ${many}`);
     return r.repeat === 'hourly' ? n('hour', 'hours') : r.repeat === 'daily' ? n('day', 'days') : r.repeat === 'weekly' ? n('week', 'weeks') : 'Just once';
   }
-  const whenLine = (r) => (r.waitUntil != null ? `Waiting until morning · ${when(r.waitUntil)}` : when(r.dueAt));
+  const whenLine = (r) => (r.waitUntil != null ? `Waiting until morning · ${when(r.waitUntil)}` : r.dueAt == null && r.going ? 'Just sent to you' : when(r.dueAt));   // sent, and waiting for the person: not "No time set"
   const channelText = (r) => (r.channel === 'whatsapp' ? 'On WhatsApp' : r.channel === 'app' ? 'In the Maya app' : 'In the Maya app or WhatsApp');
   const howText = (r) => (r.deliver === 'call' ? 'A phone call' : r.deliver === 'text' ? 'A message' : r.deliver === 'voice' ? 'A voice note' : 'Maya decides');
   const MODE = { cautious: 'Cautious: Maya keeps a closer eye and tells your family gently if something seems wrong.', ultra: 'Extra careful: Maya tells your family every time she cannot reach you.', standard: 'Standard: Maya tells your family only when something really needs them.' };
@@ -71,7 +71,7 @@
     } else if (page === 'reminder' && open) {
       parts.push(title('Reminder', true), errLine(),
         fact('What', open.task),
-        fact('When', open.going ? 'Going out now' : open.waitUntil != null ? `Waiting until morning. It is quiet hours, so Maya will remind you at ${when(open.waitUntil)}.` : when(open.dueAt)),
+        fact('When', open.going ? (open.dueAt == null ? 'Just sent to you' : 'Going out now') : open.waitUntil != null ? `Waiting until morning. It is quiet hours, so Maya will remind you at ${when(open.waitUntil)}.` : when(open.dueAt)),
         fact('How often', repeatText(open)),
         fact('How it reaches you', `${howText(open)}. ${channelText(open)}.`));
       const stop = el('button', 'menu-stop', open.going ? 'Going out now' : 'Stop this reminder'); stop.type = 'button'; stop.disabled = stopping || open.going;
