@@ -79,3 +79,29 @@ test('items are checked: no time, a weekly without a day, or an over-long task i
   const c = sched.clean([{ task: 'x', time: '09:00' }, { task: 'water plants', time: '9:5' }, { task: 'weekly thing', time: '09:00', repeat: 'weekly' }, { task: 'ok task', time: '7:05', repeat: 'daily' }, ...Array.from({ length: 20 }, (_, i) => ({ task: `task ${i}`, time: '10:00' }))]);
   assert.equal(c[0].task, 'ok task'); assert.equal(c[0].time, '07:05'); assert.equal(c.length, 12);
 });
+
+test('a QUESTION is never consent: "what about number 1?" and its kin set nothing and are not taken as an answer; a yes then sets only the ticked items', async () => {
+  const id = person();
+  await talk(id, TEXT);
+  const items = sched.load(id).items;
+  for (const q of ['what about number 1?', 'What about the walk?', 'is number 2 at five?', 'can you tell me about 3', 'which one is the doctor?', 'number 1?', 'yes, what about 2?']) {
+    assert.equal(sched.readAnswer(q, items), null, `a question is not an answer: ${q}`);
+  }
+  assert.equal(sched.readAnswer('number 1', items), null, 'a bare mention is not a yes either');
+  await talk(id, 'what about number 1?');
+  assert.equal(mine(id).length, 0, 'the question set nothing');
+  assert.ok(sched.pending(id), 'and the list is still waiting for a real answer');
+  assert.ok(sched.load(id).items.every((x) => x.status === 'proposed'), 'no item was marked yes or no by a question');
+  const r = await talk(id, 'yes to 1 and 3');
+  assert.match(last(r), /Done\. I will call you for: take your blood pressure tablet[^;]*; see Dr Rao/);
+  assert.equal(mine(id).length, 2, 'only the ticked items');
+  assert.ok(!mine(id).some((x) => /walk/.test(x.task)));
+});
+
+test('explicit answers still work: yes, all, yes to some, none', () => {
+  const items = [{ id: '1', task: 'take your tablet', kind: 'medicine' }, { id: '2', task: 'go for a walk', kind: 'walk' }, { id: '3', task: 'see Dr Rao', kind: 'doctor' }];
+  const v = (t) => Object.fromEntries(sched.readAnswer(t, items));
+  assert.deepEqual(v('yes'), { 1: 'yes', 2: 'yes', 3: 'yes' }); assert.deepEqual(v('all'), { 1: 'yes', 2: 'yes', 3: 'yes' });
+  assert.deepEqual(v('yes to 1 and 3'), { 1: 'yes', 2: 'unsaid', 3: 'yes' }); assert.deepEqual(v('yes, set 1'), { 1: 'yes', 2: 'unsaid', 3: 'unsaid' });
+  assert.deepEqual(v('yes to 1 and 3, not the walk'), { 1: 'yes', 2: 'no', 3: 'yes' }); assert.deepEqual(v('none'), { 1: 'no', 2: 'no', 3: 'no' });
+});

@@ -100,7 +100,14 @@ const MayaLine = {
   dead({ now, lastRx }) { return now - lastRx > this.DEAD_MS; },
 };
 
-if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallState, MayaLine };
+// The "Maya did not answer" timer. It starts when the turn ends (the server says thinking / speechEnd) and stops when anything real arrives from her. The heartbeat's pong is NOT something from her:
+// it comes every few seconds, and when it used to clear the timer a turn that never got an answer was never ended.
+const MayaThink = {
+  TIMEOUT_MS: 30000,
+  action(type) { return type === 'thinking' || type === 'speechEnd' ? 'start' : type === 'pong' ? 'keep' : 'clear'; },
+};
+
+if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallState, MayaLine, MayaThink };
 
 (() => {
   'use strict';
@@ -485,7 +492,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   // No loudness-based barge-in here: a system ding or a click must not stop Maya. The server stops her
   // only when Transcribe hears real words (see call.js considerBargeIn) and sends 'stopped'.
 
-  const THINK_TIMEOUT_MS = 30000; // fail fast: a turn that never gets an answer ends the call
+  const THINK_TIMEOUT_MS = MayaThink.TIMEOUT_MS; // fail fast: a turn that never gets an answer ends the call
 
   // Two soft rising notes (about 0.4 s), played the moment the line is live, so there is no dead silence while Maya's
   // first words are written. A sound only: it does not pretend she has heard anything.
@@ -505,8 +512,9 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   }
 
   function onServerEvent(c, ev) {
-    clearTimeout(c.thinkTimer);
-    if (ev.type === 'thinking' || ev.type === 'speechEnd') {
+    const think = MayaThink.action(ev.type);
+    if (think !== 'keep') clearTimeout(c.thinkTimer);   // a pong (the heartbeat's answer) leaves a running timer alone
+    if (think === 'start') {
       c.thinkTimer = setTimeout(() => { if (call === c) endCall('Maya did not answer in time. Please call again.'); }, THINK_TIMEOUT_MS);
     }
     switch (ev.type) {

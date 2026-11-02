@@ -77,11 +77,17 @@ function readAnswer(text, items) {
   const t = String(text || '').toLowerCase().replace(/[’]/g, "'").trim();
   if (!t) return null;
   const yes = /\b(?:yes|yeah|yep|yup|sure|please|ok(?:ay)?|go ahead|do it|set (?:them|it|all))\b/.test(t), neg = NEG.test(t);
+  // A QUESTION IS NEVER CONSENT. "What about number 1?" asks about an item; it sets nothing and is not an answer (null: the words go on to Maya as a normal question).
+  // Only an explicit yes (yes / yeah / yep / sure / ok / go ahead / do it / set it) or "all" says yes; a number or a task name on its own does not.
+  const strong = /\b(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|set (?:them|it|all|\d+))\b/.test(t);
+  const asks = /\?/.test(t) || /^(?:what|which|when|how|why|who|is|are|can|could|does|should|tell me|explain)\b/.test(t);
+  if (asks && (mentions(t, items).length || !(strong || /\b(?:all|everything)\b/.test(t)))) return null;
   const all = /\b(?:all|everything|each|every one|all of them|them all)\b/.test(t);
   const none = /^(?:no|nope|none|nothing|no thanks|no thank you|not now|don'?t)\b/.test(t) || /\bnone\b|\bnone of\b|\bnot any\b/.test(t) || (/\bno\b/.test(t) && !/\b(?:yes|and|but)\b/.test(t) && !all && !mentions(t, items).length);
   if (none && !(yes && !/^no\b/.test(t))) return items.map((i) => [i.id, 'no']);
   if (all && !neg) return items.map((i) => [i.id, 'yes']);
   const m = mentions(t, items);
+  if (m.length && !strong && !m.some((x) => x.no)) return null;   // "number 1" alone, or "the walk": a mention is not a yes
   if (m.length) {
     // each mentioned item: "not the walk" / "no to 2" / "skip" before it -> no; otherwise yes. Items not mentioned are not set.
     return items.map((i) => { const hit = m.find((x) => x.id === i.id); return [i.id, hit ? (hit.no ? 'no' : 'yes') : 'unsaid']; });
