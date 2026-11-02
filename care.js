@@ -407,7 +407,7 @@ const activeByProfile = new Map();   // profileId -> outreach
 
 const safetyFlag = (p) => p.flags.find((x) => x.status === 'active' && x.safety);
 
-const ringText = (p, reminderId) => { const r = reminderId && p.reminders.find((x) => x.id === reminderId); return r && r.by === 'senior' ? 'Maya is calling with your reminder.' : 'Maya is calling with a reminder from your family.'; };   // a reminder they set by talking is theirs, not the family's
+const ringText = (p, reminderId) => { const r = reminderId && p.reminders.find((x) => x.id === reminderId); if (r && r.social) return r.by === 'senior' ? 'Maya is calling for the chat you asked for.' : 'Maya is calling: a chat arranged by your family.'; return r && r.by === 'senior' ? 'Maya is calling with your reminder.' : 'Maya is calling with a reminder from your family.'; };   // a reminder they set by talking is theirs, not the family's
 function startOutreach(id, { kind, reminderId = null, talked = false, delayMs = null, safety = false }) {
   const p = get(id);
   if (!p || liveCalls.has(id)) return null;
@@ -430,8 +430,9 @@ function startOutreach(id, { kind, reminderId = null, talked = false, delayMs = 
 function ring(o) {
   if (outreaches.get(o.id) !== o) return;
   const p = get(o.profileId);
+  if (o.social) { const r = p.reminders.find((x) => x.id === o.reminderId), why = r ? socialBlock(p, r, Date.now(), { ringing: true }) : 'gone'; if (why) { socialEnd(p, o, r, 'social_skipped', why); return; } }   // stop / quiet hours / time zone are re-checked at the moment of ringing
   o.attempts += 1; o.state = 'ringing';
-  const reached = pushSenior(o.profileId, 'incoming', { outreachId: o.id, notifId: o.notif.id, kind: o.kind, text: o.notif.text, attempt: o.attempts, of: cfg.maxAttempts });
+  const reached = pushSenior(o.profileId, 'incoming', { outreachId: o.id, notifId: o.notif.id, kind: o.kind, text: o.notif.text, attempt: o.attempts, of: cfg.maxAttempts, ringMs: cfg.ringMs });
   if (o.reminderId) { const r = p.reminders.find((x) => x.id === o.reminderId); if (r && r.active) r.active.attempts = o.attempts; }
   if (o.safety) { const f = safetyFlag(p); if (f) { f.callbackState = 'ringing'; f.callbackAttempts = o.attempts; if (reached > 0) f.callbackReached = true; } }
   console.log('care ring', JSON.stringify({ profile: o.profileId, kind: o.kind, attempt: o.attempts, appOpen: reached > 0 }));
@@ -443,10 +444,12 @@ function ring(o) {
 function ringTimeout(o) {
   if (outreaches.get(o.id) !== o) return;
   pushSenior(o.profileId, 'incomingEnd', { outreachId: o.id });
+  if (o.social) { const p = get(o.profileId); socialEnd(p, o, p.reminders.find((x) => x.id === o.reminderId), 'social_unanswered'); return; }   // one ring, one bounded attempt: no retry, no flag, no family, no WhatsApp
   if (o.kind === 'welfare') { welfareRingEnded(o); return; }   // a welfare ring is one ring: nobody answered, the entry says so (no flag, as for a WhatsApp welfare call), and the other platform may be tried once
   if (o.alt && o.kind === 'reminder') { bothSecond(o); return; }   // 'Both' + Call: the app rang first and nobody answered: WhatsApp gets its one try, after this ring has ended (never two rings at once)
   if (o.single) { exhausted(o); return; }   // the app was the SECOND platform: one ring, then it is over
   if (o.attempts < cfg.maxAttempts) {
+    if (o.pushed) pushEnd(o);   // between two tries the phone's call screen goes down WITH the server's ring (it was left to its own timer, which starts later and could outlive the ring: an Accept on a ring that had already ended). Every other way a ring ends goes through closeOutreach, which does this.
     o.state = 'waiting';
     o.timer = setTimeout(() => ring(o), rand(cfg.retryMinMs, cfg.retryMaxMs));
     return;
@@ -523,6 +526,7 @@ function pushFailed(o, attempt, reason) {
   console.log('reminder', JSON.stringify({ event: 'push failed', reason, then: 'fallback' }));
   o.pushed = false; closeOutreach(o, 'failed');
   if (!r || !a) { save(p.id); return; }
+  if (r.social) { finishOccurrence(p, r.id, 'social_skipped', { social: true, reason: 'push_failed' }); pushFamily('refresh', { id: p.id }); return; }   // an app-only chat: never WhatsApp
   const dueAt = a.dueAt, id = p.id, chan = effectiveChannel(p, r);
   const waLinked = Boolean(reminderSender && reminderSender.channelFor(id) === 'whatsapp');
   const route = waLinked && reminderSender.callRoute ? reminderSender.callRoute(id) : { permission: false, windowOpen: false };
@@ -543,7 +547,7 @@ function claim(id, oid) {
   if (o.safety) { const f = safetyFlag(p); if (f) { f.callbackState = 'answered'; f.answers = (f.answers || 0) + 1; } } // answering does NOT close the ticket
   advance(p, o.notif, o.kind === 'reminder' || o.kind === 'welfare' ? 'seen' : 'replied');
   if (o.kind === 'welfare') { o.notif.calling = false; o.notif.pickedUp = true; }   // picked up: whether they spoke is settled when the call ends
-  if (o.reminderId) { const r = p.reminders.find((x) => x.id === o.reminderId); if (r && r.active) r.active.state = 'answered'; } // picked up; waiting for the acknowledgement
+  if (o.reminderId) { const r = p.reminders.find((x) => x.id === o.reminderId); if (r && r.social) { finishOccurrence(p, r.id, 'social_answered', { social: true }); info.social = true; } else if (r && r.active) r.active.state = 'answered'; } // picked up; waiting for the acknowledgement (a social chat needs none)
   closeOutreach(o, 'answered');
   pushFamily('refresh', { id });
   return info;
@@ -1124,7 +1128,8 @@ function finishOccurrence(p, rid, state, extra = {}) {
   const wa = act.channel === 'whatsapp' || act.channel === 'app' ? { channel: act.channel, ...(act.app ? { app: act.app } : {}), notifId: act.notifId || null, via: act.via || null, wamid: act.wamid || null, voiceUnavailable: Boolean(act.voiceUnavailable), sentAt: act.sentAt || null, deliveredAt: act.deliveredAt || null, readAt: act.readAt || null, nudged: Boolean(act.nudged), ...(act.template ? { template: true } : {}), ...(act.pausedBy ? { pausedBy: act.pausedBy } : {}) } : {};
   r.last = { dueAt: act.dueAt, state, at: Date.now(), attempts: act.attempts || 0, ...wa, ...(act.instead ? { instead: act.instead } : {}), ...(act.escalated ? { escalated: act.escalated } : {}), ...(act.fellBack ? { fellBack: act.fellBack } : {}), ...(act.alsoTried ? { alsoTried: act.alsoTried } : {}), ...extra };
   r.active = null;
-  if (state === 'done') trendEvent(p.id, { kind: 'reminder', acked: true });                          // answered
+  if (r.social) { /* a chat is not a task: it never counts as a missed reminder */ }
+  else if (state === 'done') trendEvent(p.id, { kind: 'reminder', acked: true });                          // answered
   else if (state === 'no_reply' || state === 'unanswered' || state === 'wa_missed' || state === 'wa_failed') trendEvent(p.id, { kind: 'reminder', acked: false });   // missed (a decline is a choice, not counted)
   else if (state === 'app_missed' || state === 'app_failed') trendEvent(p.id, { kind: 'reminder', acked: false });   // the same, for the app
   save(p.id);
@@ -1262,6 +1267,94 @@ function reminderViaMessage(id, spec) {
 
 // How a due reminder is delivered. The channel (r.channel, else the person's default, else WhatsApp) says WHERE: WhatsApp (its own rules: the 24 hour window, calls and their limits, quiet hours),
 // the Maya app (none of those rules: a text notice, a voice note in the chat, or a ring), or both. The pick (Call / Text / Voice note) says HOW. Already in a call: it is said in the call.
+// ---------------------------------------------------------------- the companion chat (social.js): ONE daily call the senior agreed to, out loud, with the four things bound to that offer
+// (daily, start date, local time, time zone). It is a reminder record (task CALL_TASK, by the senior, app only, daily) with r.social on it, but it does NOT inherit the reminder machinery:
+// one ring, one bounded attempt (ringMs), no retry, no 4-minute unseen call, no WhatsApp, no flag, no family escalation, not counted as a missed reminder. Anything that stops it
+// (stop calling me, cancel, quiet hours, a busy phone, a changed time zone, a skipped day) means THAT day does not happen: nothing is held, caught up or moved.
+const SOCIAL_LATE_MS = 10 * MIN;   // a server that was down: a chat more than this late is skipped, never rung as a surprise
+const pad2 = (n) => String(n).padStart(2, '0');
+const localDate = (ts, tz) => { const q = require('./setrem').partsIn(ts, tz); return `${q.y}-${pad2(q.m)}-${pad2(q.d)}`; };
+const socialRec = (p) => (p && p.reminders.find((r) => r.social)) || null;
+// The first real moment after `after` that is h:mi on the local date dateStr or a later day (zonedEpoch handles daylight saving: a day is a date, never "+24 hours").
+function socialNext(sc, after, dateStr) {
+  const st = require('./setrem'), [y, m, d] = dateStr.split('-').map(Number);
+  for (let i = 0; i < 4; i++) { const dt = new Date(Date.UTC(y, m - 1, d + i)); const at = st.zonedEpoch(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate(), sc.h, sc.mi, sc.tz); if (at > after) return at; }
+  return null;
+}
+const hourQuiet = (p, h) => Boolean(p && p.tz && quietOn(p) && (cfg.quietStart > cfg.quietEnd ? (h >= cfg.quietStart || h < cfg.quietEnd) : (h >= cfg.quietStart && h < cfg.quietEnd)));
+// Why this chat must not ring now (null = it may). Read when it is due AND again at the moment of ringing.
+function socialBlock(p, r, now, { ringing = false } = {}) {
+  const sc = r.social;
+  if (sc.revoked || (p.smart && p.smart.noCalls)) return 'stopped';
+  if (sc.paused) return 'paused';
+  if (!p.tz || p.tz !== sc.tz) { sc.paused = 'timezone'; return 'timezone changed'; }
+  if (sc.skipDate && sc.skipDate === localDate(now, sc.tz)) return 'skipped today';
+  if (inQuiet(p.id, now)) return 'quiet hours';
+  if (liveCalls.has(p.id)) return 'busy';
+  const cur = activeByProfile.get(p.id); if (cur && !(ringing && cur.social && cur.reminderId === r.id)) return 'busy';
+  if (!appOpen(p.id) && !pushReady(p.id)) return 'app closed';
+  return null;
+}
+function socialEnd(p, o, r, state, why) {
+  o.notif.noReply = false; closeOutreach(o, state === 'social_unanswered' ? 'failed' : 'skipped');
+  if (r) finishOccurrence(p, r.id, state, { social: true, ...(why ? { reason: why } : {}) });
+  save(p.id); pushFamily('refresh', { id: p.id });
+}
+function fireSocial(p, r, now) {
+  const sc = r.social, dueAt = r.dueAt;
+  const late = now - dueAt > SOCIAL_LATE_MS;
+  const why = late ? 'late' : socialBlock(p, r, now);
+  // Tomorrow happens only while the daily schedule stays authorised: stopped or paused = dormant (no next time), anything else = the next local day.
+  const dormant = why === 'stopped' || why === 'paused' || why === 'timezone changed';
+  sc.lastDate = localDate(dueAt, sc.tz);
+  r.dueAt = dormant ? null : socialNext(sc, Math.max(now, dueAt), (() => { const [y, m, d] = sc.lastDate.split('-').map(Number); const dt = new Date(Date.UTC(y, m - 1, d + 1)); return `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())}`; })());
+  if (why) { r.last = { dueAt, state: 'social_skipped', at: now, attempts: 0, social: true, reason: why }; save(p.id); pushFamily('refresh', { id: p.id }); console.log('social chat', JSON.stringify({ event: 'skipped', why })); return; }
+  r.active = { dueAt, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app', social: true };
+  const o = startOutreach(p.id, { kind: 'reminder', reminderId: r.id });
+  if (!o) { r.active = null; r.last = { dueAt, state: 'social_skipped', at: now, attempts: 0, social: true, reason: 'busy' }; save(p.id); return; }
+  o.social = true; o.single = true; r.active.outreachId = o.id; r.active.notifId = o.notif.id;
+  save(p.id); console.log('social chat', JSON.stringify({ event: 'ringing' }));
+}
+function socialOf(id) { const p = get(id), r = socialRec(p); return r ? { id: r.id, h: r.social.h, mi: r.social.mi, tz: r.social.tz, start: r.social.start, nextAt: r.dueAt, revoked: Boolean(r.social.revoked), paused: r.social.paused || null, skipDate: r.social.skipDate || null, offerId: r.social.offerId } : null; }
+function socialSave(id, { offerId, h, mi, start, tz }, now = Date.now()) {
+  const p = get(id); if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  const have = socialRec(p);
+  if (have) { if (have.social.offerId === offerId) return socialOf(id); throw Object.assign(new Error('A daily chat is already arranged.'), { status: 409 }); }
+  if (p.smart && p.smart.noCalls) throw Object.assign(new Error('They asked Maya not to call.'), { status: 409 });
+  if (!p.tz || p.tz !== tz) throw Object.assign(new Error('The time zone is not known or changed.'), { status: 409 });
+  if (!(Number.isInteger(h) && h >= 0 && h <= 23 && Number.isInteger(mi) && mi >= 0 && mi <= 59) || !/^\d{4}-\d{2}-\d{2}$/.test(start || '')) throw Object.assign(new Error('The time or start date is not clear.'), { status: 400 });
+  if (hourQuiet(p, h)) throw Object.assign(new Error(`That time is in quiet hours (${pad2(cfg.quietStart)}:00 to ${pad2(cfg.quietEnd)}:00).`), { status: 409 });
+  const sc = { h, mi, tz, start, offerId, consentAt: Date.now(), revoked: null, paused: null, skipDate: null, lastDate: null };
+  const dueAt = socialNext(sc, now + 60000, start);
+  if (!dueAt) throw Object.assign(new Error('That start time could not be worked out.'), { status: 400 });
+  const r = addSeniorReminder(id, { task: require('./setrem').CALL_TASK, dueAt, repeat: 'daily', every: 1, deliver: 'call', channel: 'app', origin: 'app' });
+  r.social = sc; save(id); pushFamily('refresh', { id });
+  return socialOf(id);
+}
+function socialDropOutreach(p, r) { for (const o of [...outreaches.values()]) if (o.profileId === p.id && o.social && o.reminderId === r.id) { closeOutreach(o, 'revoked'); r.active = null; } }
+// "Stop calling me": the saved chat stops existing AND queued ones (a ring already going comes down). It stays on record, revoked, so it can be restored on purpose and never by a stray yes.
+function socialRevoke(id) { const p = get(id), r = socialRec(p); if (!r || r.social.revoked) return false; r.social.revoked = { at: Date.now() }; r.dueAt = null; socialDropOutreach(p, r); save(id); pushFamily('refresh', { id }); return true; }
+function socialRestore(id, now = Date.now()) {
+  const p = get(id), r = socialRec(p); if (!r || !r.social.revoked) return null;
+  if (p.smart && p.smart.noCalls) throw Object.assign(new Error('They have not asked for calls again.'), { status: 409 });
+  r.social.revoked = null; r.social.paused = null; r.dueAt = socialNext(r.social, now + 60000, localDate(now, r.social.tz)); save(id); pushFamily('refresh', { id }); return socialOf(id);
+}
+function socialCancel(id) { const p = get(id), r = socialRec(p); if (!r) return false; socialDropOutreach(p, r); p.reminders = p.reminders.filter((x) => x !== r); save(id); pushFamily('refresh', { id }); return true; }
+// Skip only the call that is due TODAY (their local date); with the next one tomorrow there is nothing to skip.
+function socialSkipToday(id, now = Date.now()) {
+  const p = get(id), r = socialRec(p); if (!r || r.social.revoked || r.dueAt == null) return null;
+  const today = localDate(now, r.social.tz), nextDay = localDate(r.dueAt, r.social.tz);
+  if (nextDay !== today) return { skipped: false, nextAt: r.dueAt };
+  r.social.skipDate = today; save(id); pushFamily('refresh', { id }); return { skipped: true, nextAt: socialNext(r.social, r.dueAt, (() => { const [y, m, d] = today.split('-').map(Number); const dt = new Date(Date.UTC(y, m - 1, d + 1)); return `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())}`; })()) };
+}
+function socialChangeTime(id, { h, mi }, now = Date.now()) {
+  const p = get(id), r = socialRec(p); if (!r) throw Object.assign(new Error('No daily chat is arranged.'), { status: 404 });
+  if (r.social.revoked) throw Object.assign(new Error('The daily chat is stopped.'), { status: 409 });
+  if (!p.tz) throw Object.assign(new Error('The time zone is not known.'), { status: 409 });
+  if (hourQuiet(p, h)) throw Object.assign(new Error(`That time is in quiet hours (${pad2(cfg.quietStart)}:00 to ${pad2(cfg.quietEnd)}:00).`), { status: 409 });
+  Object.assign(r.social, { h, mi, tz: p.tz, paused: null, skipDate: null }); r.dueAt = socialNext(r.social, now + 60000, localDate(now, p.tz)); save(id); pushFamily('refresh', { id }); return socialOf(id);
+}
+
 function fireReminder(p, r, now) {
   const live = liveCalls.get(p.id);
   const occ = { dueAt: r.dueAt, state: 'calling', attempts: 0, outreachId: null, notifId: null, where: 'app' };
@@ -1865,6 +1958,7 @@ function tick(now = Date.now()) {
     for (const r of p.reminders) {
       waTick(p, r, now);
       if (r.dueAt == null || r.dueAt > now || r.active) continue;
+      if (r.social) { fireSocial(p, r, now); continue; }   // a companion chat is skipped, never held and never caught up
       // Quiet hours (22:00 to 07:00 where they are): nothing is sent, texted or rung at night. A due reminder is HELD and goes when the quiet hours end; being held is not being late. Only Tier A safety alerts
       // ignore quiet hours (they never pass through here). With no known time zone nothing is held (as before).
       if (inQuiet(p.id, now)) { if (!r.held) { r.held = true; save(p.id); pushFamily('refresh', { id: p.id }); console.log('reminder', JSON.stringify({ event: 'held for quiet hours' })); } continue; }
@@ -1937,7 +2031,7 @@ function waLabel(o) {
   }
 }
 const occLabel = (o) => (o.escalated && !waLabel(o) && OCC_LABEL[o.state] ? `Not seen in ${Math.round(cfg.unseenCallMs / MIN)} minutes, so Maya called: ${OCC_LABEL[o.state]}` : waLabel(o) || OCC_LABEL[o.state]);
-const OCC_LABEL = { calling: 'Calling now', answered: 'Picked up, waiting for a reply', done: 'Done, senior replied', no_reply: "Hasn't replied yet", unanswered: "Couldn't reach senior", declined: 'Senior declined the call', missed: 'Missed: Maya could not call at that time' };
+const OCC_LABEL = { calling: 'Calling now', answered: 'Picked up, waiting for a reply', done: 'Done, senior replied', no_reply: "Hasn't replied yet", unanswered: "Couldn't reach senior", declined: 'Senior declined the call', social_answered: 'Daily chat: picked up', social_unanswered: 'Daily chat: not picked up (no follow-up)', social_skipped: 'Daily chat: skipped today', missed: 'Missed: Maya could not call at that time' };
 function setMode(id, mode) {
   const p = get(id);
   if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
@@ -2020,6 +2114,6 @@ module.exports = {
   familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamAskedOut, scamAsked, scamFresh, scamLost, asksFamilyQ, SCAM_GAP_MS, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  persistSmart, addReminder, addSeniorReminder, quietEndsAt, quietOn, setQuietHours, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  persistSmart, addReminder, addSeniorReminder, quietEndsAt, quietOn, setQuietHours, socialOf, socialSave, socialRevoke, socialRestore, socialCancel, socialSkipToday, socialChangeTime, hourQuiet, localDate, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

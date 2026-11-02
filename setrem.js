@@ -491,4 +491,4 @@ function pendingQuestion(id, label = '') {
   if (st.stage === 'clarify' && st.spec && st.spec.ask && st.spec.ask.length) return questionFor(st.spec);
   return null;
 }
-module.exports = { pendingQuestion, quietHold, hourWords, savedText, afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };
+module.exports = { resolveClock, norm, pendingQuestion, quietHold, hourWords, savedText, afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };

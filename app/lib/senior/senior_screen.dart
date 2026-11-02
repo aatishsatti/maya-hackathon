@@ -48,6 +48,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   Map<String, dynamic>? _incoming; // a ring from Maya while the app is open
   Map<String, dynamic>? _notice; // a note from the family
   Timer? _ringTimer;
+  Timer? _ringEnd; // a ring is ONE bounded attempt: the screen clears by itself when the ring time is over, even if the server's end message never arrives
   bool _inCall = false;
   StreamSubscription<String>? _nativeAccept, _nativeEnd, _nativeRing;
   StreamSubscription<({String via, String messageId})>? _nativeOpened;
@@ -75,6 +76,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     _playClear?.cancel();
     _events?.stop();
     _ringTimer?.cancel();
+    _ringEnd?.cancel();
     _recTimer?.cancel();
     _ampSub?.cancel();
     _rec?.dispose();
@@ -200,6 +202,8 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
           HapticFeedback.heavyImpact();
           SystemSound.play(SystemSoundType.alert);
         });
+        _ringEnd?.cancel();
+        _ringEnd = Timer(Duration(milliseconds: ((e.data['ringMs'] as num?)?.toInt() ?? 30000) + 3000), _dropIncoming);
         HapticFeedback.heavyImpact();
         break;
       case 'incomingEnd':
@@ -222,6 +226,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
 
   void _dropIncoming() {
     _ringTimer?.cancel();
+    _ringEnd?.cancel();
     if (mounted) setState(() => _incoming = null);
   }
 

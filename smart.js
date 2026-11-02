@@ -185,8 +185,8 @@ const CALLS_BACK = /\b(?:you can|please|it'?s (?:ok|okay|fine) (?:to|for you to)
 function ledger(s, heard) {
   const care = require('./care'), id = s.profile && s.profile.id, p = id && care.get(id); if (!p) return null;
   const sm = p.smart || {}; const x = st(s); const prev = x.prevHeard; x.prevHeard = heard;
-  if (NOCALLS.test(heard)) { care.persistSmart(id, { noCalls: { at: Date.now() } }); return 'CALLS REVOKED: they told you to stop calling them. Say kindly, in one short sentence, that you will not call them unless they ask you to again. Never offer, arrange or promise a call after this, until THEY ask for calls again. Do not change any reminder they set themselves.'; }
-  if (sm.noCalls && CALLS_BACK.test(heard)) { care.persistSmart(id, { noCalls: null }); return 'CALLS RESTORED: they have asked for calls again. You may offer to arrange one.'; }
+  if (NOCALLS.test(heard)) { care.persistSmart(id, { noCalls: { at: Date.now() } }); require('./social').onNoCalls(id); return 'CALLS REVOKED: they told you to stop calling them. Say kindly, in one short sentence, that you will not call them unless they ask you to again. Never offer, arrange or promise a call after this, until THEY ask for calls again. Do not change any reminder they set themselves.'; }
+  if (sm.noCalls && CALLS_BACK.test(heard)) { care.persistSmart(id, { noCalls: null }); const q = require('./social').onCallsBack(id); return q ? `CALLS RESTORED: they have asked for calls again. ${q}` : 'CALLS RESTORED: they have asked for calls again. You may offer to arrange one.'; }
   if (BRUSH.test(heard) && (x.lastQ || prev)) { const w = contentWords(x.lastQ ? x.lastQ.t : prev); if (w.length >= 2) { care.persistSmart(id, { brush: [...(sm.brush || []).filter((b) => Date.now() - b.at < 30 * 86400000), { w, at: Date.now() }].slice(-6) }); return 'DROP IT: they do not want to talk about that. Say okay, lightly, and move on. Do not raise that topic yourself again; if THEY bring it up, talk about it normally.'; }
   }
   return null;
@@ -207,6 +207,7 @@ function notes(s, heard) {
   if (flag('COMPANION')) { const f = ledger(s, heard); if (f) out.push(['smart-ledger', f]); }
   if (flag('COMPANION') && (it === 'smalltalk' || it === 'followup') && !s.safety && !s.health) out.push(['smart-style', 'YOU ARE their friend, not a tool, not a menu and never a romantic partner. Respond to what they just said first, warmly, in short fresh words (begin differently from your last replies). A question is optional, never more than ONE: when something they said invites it, ask the small question a friend would (gardening: what they grow), about every second or third reply, and otherwise answer with a warm short remark. No interview.']);
   if (flag('COMPANION') && (it === 'ability' || /\b(?:call|ring|phone)\b/i.test(heard))) out.push(['smart-calls', callsOk(s) ? 'CALLS: you can help ARRANGE a call from you when they ask (it is saved as a reminder). Arranging is not scheduled: say a call is scheduled ONLY when the RECORD below says reminder saved: yes.' : 'CALLS: do not offer or arrange a call from you (ringing them is not possible right now, or they told you to stop). If they ask, say so plainly and kindly.']);
+  if (flag('COMPANION') && s.profile) { const sf = require('./social').step(s, heard, { intent: it, callsOk: callsOk(s), safe: !s.safety && !s.health && it !== 'scam' }); if (sf) out.push(sf); }   // the daily-call offer and its consent (social.js)
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
   if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and at most ONE question, only when it helps (often none); say what you see, what you are unsure of, and one next step if there is one; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
   if (flag('GENERAL') && it !== 'scam' && !s.safety) {
@@ -272,7 +273,7 @@ const CLAIM = [
   [/\bI(?:'ve| have| just)?\s+(?:looked (?:it )?up|searched|googled)\b/i, (e) => e.web === 'ran'],
   [/\bI(?:'ve| have| just)?\s+(?:checked|verified|confirmed)\b/i, (e) => e.web === 'ran' || e.scam === 'ran'],
   [/\bI(?:'ve| have| just)?\s+(?:called|rang|phoned|contacted|emailed|messaged)\s+(?!you\b)/i, () => false],
-  [/\bI(?:'ve| have| just)?\s+(?:scheduled|booked|arranged)\b|\b(?:is|'s|has been|have been)\s+(?:all\s+)?(?:scheduled|booked)\b/i, (e) => Boolean(e.reminder)],
+  [/\bI(?:'ve| have| just)?\s+(?:scheduled|booked|arranged)\b|\b(?:is|'s|has been|have been)\s+(?:all\s+)?(?:scheduled|booked)\b/i, (e) => !e.socialFailed && Boolean(e.reminder || e.social)],
   [/\bI(?:'ve| have| just)?\s+(?:notified|alerted|told|informed|sent)\s+(?:your\s+)?(?:family|son|daughter|them|the bank|the police)\b/i, (e) => Boolean(e.family)],
 ];
 // Returns a reason string when the draft must be written again, else null. rec = s._exec (what really ran); known = the text the facts and the senior gave (a link or number must already be in it).
@@ -293,6 +294,7 @@ function breaks(text, s) {
     const ls = (s.profile && require('./care').get(s.profile.id) || {}).smart;
     if (flag('COMPANION') && ls && (ls.brush || []).some((b) => Date.now() - b.at < 30 * 86400000 && overlap(w, b.w) >= 0.5 && !(b.w.some((x) => String(s.lastHeard ? s.lastHeard() : '').toLowerCase().includes(x))))) { s._why = 'they asked you to drop that topic: do not raise it'; return 'brushed'; }
   }
+  if (flag('COMPANION') && require('./social').claimsScheduled(t) && !(s._exec && s._exec.social) && (s.factLabels || []).some((l) => /^social-(offer|ask|confirm|failed|declined|quiet|past)/.test(l))) { s._why = 'nothing is saved yet: do not say the call is scheduled, arranged or booked'; return 'claim'; }
   if (!flag('GUARD')) return null;
   if (SAFE_CLAIM.test(t) && !/\bnot\s+(?:100|a hundred|safe|verified)|\bn't\s+(?:safe|verified)|\bcan'?t\s+(?:say|be)\b[^.]{0,30}\b(?:safe|sure)/i.test(t)) return 'certainty';
   const known = `${s.lastHeard ? s.lastHeard() : ''} ${s._knownText || ''}`;

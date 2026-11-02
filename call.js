@@ -1525,18 +1525,36 @@ class Call {
     }
     if (myGen !== this.gen || this.closed) return;
     this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: Date.now() - greetAt, tries: line.tries || 1, lineAt: Date.now(), ...(pre ? { prefetched: true, prefetchMs: pre.ms } : {}) };   // milliseconds and a count, never a word (wabridge logs it)
-    care.addLine(this.profile.id, rem ? 'reminder' : 'greeting', line.said);
+    care.addLine(this.profile.id, rem ? (rem.social ? 'social' : 'reminder') : 'greeting', line.said);
     this.history.push({ role: 'assistant', content: line.said });
     this.mirror('maya', line.said);
-    if (this.outreach && this.outreach.kind === 'reminder') { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
+    if (this.outreach && this.outreach.kind === 'reminder' && !(rem && rem.social)) { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
     if (!rem) this.startPrethink();   // Spark thinks about the likeliest routine answer while the greeting is spoken
-    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem ? 1 : 2, bright: !rem && this.greetingPlain === true });
+    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem && !rem.social ? 1 : 2, bright: !rem && this.greetingPlain === true });
     if (!this.noVoice) warmLeads();   // the short lead-in clips are rendered once, after the first voiced greeting (not at server start); a no-voice call never does
+  }
+
+  // ---- the daily chat they agreed to (social.js): the pickup opening. Spark writes it; code only keeps it varied, short, free of invented facts and free of the reminder wording. ----
+  async socialLine(rem, signal) {
+    const name = this.profile.name, id = this.profile.id, useName = Math.random() < this.nameChance;
+    const recent = care.recentLines(id, 'social').slice(-6);
+    const check = (said) => {
+      if (/time to talk to maya|you just set it|set it for yourself|your reminder|reminder/i.test(said)) return 'Do not mention a reminder or that they set this up: you are simply calling for a friendly chat.';
+      if (/\b(?:lonely|alone|bored|miss(?:ed)? you|all by yourself)\b/i.test(said)) return 'Do not assume how they feel or that they are lonely.';
+      if (!useName && new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(said)) return 'Leave their name out this time.';
+      if (recent.length && sameOpening(said, recent[recent.length - 1])) return 'That opens the same way as your last call. Open differently.';
+      return null;
+    };
+    const what = `You have just rung ${name} for the friendly daily chat they asked you for. They picked up. Say a short, natural, warm opening in ONE or two short sentences, the way a friend who rings every day would (for example a hello and how the day is going, or a light comment on the time of day). VARY how you open: never the same opening as before, never a canned line. Mention a personal detail ONLY if it is something they actually told you that is in what you know about them and is clearly still relevant; otherwise mention none. Never invent an interest, an event or the weather, never assume they are lonely or unwell, and do not say you are calling for a reminder. ${useName ? `You may use their name, ${name}, once.` : 'Do not use their name.'}`;
+    const line = await this.dynamicLine({ pool: 'social', signal, what, check, sentences: 2 });
+    if (check(line.said)) { const opts = ['Hello! I thought I would ring and see how your day is going.', 'Hi there, it is Maya. How has today been so far?', 'Good to hear your voice. How are you getting on today?', 'Hello, it is Maya again. What have you been up to?']; const said = opts.find((o) => !care.isRepeatLine(id, 'social', o) && !(recent.length && sameOpening(o, recent[recent.length - 1]))) || opts[Date.now() % opts.length]; return { full: said, said }; }
+    return line;
   }
 
   // ---- Reminders and timers: information only, as the family (or the person) wrote it ----
   // The task is named FIRST. Maya never advises, diagnoses or recommends anything about it.
   async reminderLine(rem, signal, { inCall = false } = {}) {
+    if (rem.social) return this.socialLine(rem, signal);
     const task = rem.task;
     const name = this.profile.name;
     const bySenior = rem.by === 'senior';   // a reminder they set by talking: their own words, never "from the family"
@@ -1777,7 +1795,7 @@ class Call {
     // after a yes, then asked how and where. There is no in-call timer: the person hangs up and the reminder still comes.
     const origin = this.channel === 'chat' ? (care.turnChannel(id) === 'whatsapp' ? 'whatsapp' : 'app') : 'call';
     let sr = null;
-    if (!(recall.parseNextCallReminder(heard) && !setrem.pending(id))) {
+    if (!(recall.parseNextCallReminder(heard) && !setrem.pending(id)) && !(require('./smart').flag('COMPANION') && require('./social').claims(id, heard))) {   // a daily-call offer being answered is social.js's, not a reminder request
       const p0 = care.get(id);
       sr = setrem.step(id, heard, { origin, tz: (p0 && p0.tz) || this.tz, waLinked: care.whatsappLinked(id) });
       if (sr) note(sr.label, sr.text);
