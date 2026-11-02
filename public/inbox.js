@@ -92,6 +92,7 @@
   // ---- A reminder or a message: a card with a bell and two buttons, a gentle chime, and (when this page is hidden or in the background) a browser notification, if the person has allowed them.
   // The browser asks for that permission only when the person presses Allow, never by itself; refused or unsupported, the card says so plainly and everything else still works.
   const away = () => Boolean(document.hidden) || (typeof document.hasFocus === 'function' && !document.hasFocus());
+  const answered = new Set();   // notice ids this page has already answered (or heard were seen elsewhere): a replay of one never raises the card again
   const osNotes = new Map();   // card key -> the browser notification, closed when the card is
   let titleFlash = null, baseTitle = document.title;
   function osNotify(key, title, body) {
@@ -126,6 +127,12 @@
     } else return null;
     return p;
   }
+  // A short confirmation after a card button: a small line at the bottom of the page for a moment. Not part of the card list.
+  function done(text) {
+    if (!text || !document.body || typeof document.body.append !== 'function') return;
+    const t = document.createElement('div'); t.className = 'inbox-done'; t.setAttribute('role', 'status'); t.textContent = text;
+    document.body.append(t); setTimeout(() => { if (t.parentNode) t.remove(); }, 2200);
+  }
   function noticeCard(key, label, text, buttons) {
     drop(key);
     const el = document.createElement('div');
@@ -140,7 +147,7 @@
     const row = document.createElement('div'); row.className = 'inbox-row';
     for (const b of buttons) {
       const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = b.label; btn.className = `inbox-btn ${b.cls || ''}`.trim();
-      btn.addEventListener('click', () => { drop(key); b.run(); });
+      btn.addEventListener('click', () => { if (el.parentNode) el.remove(); drop(key); done(b.done); b.run(); });   // gone at once (the element itself, not only the map), with a short "done" line so the click is seen to work
       row.append(btn);
     }
     el.append(row); inbox.append(el); cards.set(key, el);
@@ -219,12 +226,16 @@
     es.addEventListener('incomingEnd', (e) => drop(`o${JSON.parse(e.data).outreachId}`));
     es.addEventListener('notice', (e) => {
       const d = JSON.parse(e.data);
+      if (answered.has(d.notifId)) return;
       post(`/api/care/${id}/notifications/${d.notifId}/delivered`);
       noticeCard(`n${d.notifId}`, noteLabel(d), d.text, [
-        { label: 'Open', run: () => { seen(d.notifId); window.focus(); const box = document.getElementById('msgIn'); if (box && !(window.mayaInCall && window.mayaInCall())) box.focus({ preventScroll: false }); } },
-        { label: 'Got it', cls: 'primary', run: () => seen(d.notifId) },
+        // Open: reported as Seen, and the reminder is shown in the chat (the chat page comes forward and scrolls to it).
+        { label: 'Open', done: 'Marked as seen', run: () => { answered.add(d.notifId); seen(d.notifId); window.focus(); try { window.dispatchEvent(new CustomEvent('maya-show-reminder', { detail: { id: d.notifId, label: noteLabel(d), text: d.text } })); } catch { /* no chat page to show it in */ } } },
+        { label: 'Got it', cls: 'primary', done: 'Done. Marked as seen', run: () => { answered.add(d.notifId); seen(d.notifId); } },
       ]);
     });
+    // Seen on another page of theirs (a second tab, their phone): this card goes too.
+    es.addEventListener('noticeSeen', (e) => { try { const nid = JSON.parse(e.data).notifId; answered.add(nid); drop(`n${nid}`); } catch { /* ignore a bad event */ } });
   }
   function disconnect() { stopRing(); if (es) es.close(); es = null; for (const k of [...cards.keys()]) drop(k); }
   window.addEventListener('maya-profile', connect);

@@ -159,3 +159,16 @@ test('notification permission is asked only when the person presses Allow; refus
   const none = browser(); none.fire('pointerdown'); await tick(); none.es().emit('notice', { notifId: 'p3', kind: 'family_message', text: 'Hello' });
   assert.equal(none.cards()[0].all('small').filter((x) => /Notifications/.test(x.textContent)).length, 0, 'a browser with no notifications: no line at all');
 });
+
+test('a click removes the card at once, reports Seen exactly once, and a Seen on another page takes the card down too; a replayed notice that was already answered is not a second Seen', async () => {
+  const b = browser(); b.fire('pointerdown'); await tick();
+  b.es().emit('notice', { notifId: 'z1', kind: 'reminder', by: 'senior', text: 'Take your meds' });
+  assert.equal(b.cards().length, 1);
+  button(b, 'Got it').handlers.click(); assert.equal(b.cards().length, 0, 'gone at once');
+  assert.equal(b.log.posts.filter((u) => /notifications\/z1\/seen/.test(u)).length, 1, 'Seen once');
+  b.es().emit('notice', { notifId: 'z2', kind: 'reminder', by: 'senior', text: 'Drink water' }); assert.equal(b.cards().length, 1);
+  b.es().emit('noticeSeen', { notifId: 'z2' }); assert.equal(b.cards().length, 0, 'seen on another page: this card goes too');
+  assert.equal(b.log.posts.filter((u) => /notifications\/z2\/seen/.test(u)).length, 0, 'and this page does not report it again');
+  b.es().emit('notice', { notifId: 'z1', kind: 'reminder', by: 'senior', text: 'Take your meds' }); b.es().emit('notice', { notifId: 'z2', kind: 'reminder', by: 'senior', text: 'Drink water' });
+  assert.equal(b.cards().length, 0, 'a replay of a notice already answered raises nothing');
+});

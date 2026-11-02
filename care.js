@@ -343,6 +343,7 @@ function markNotif(id, nid, status) {
   if (!n || !['delivered', 'seen'].includes(status)) return false;
   advance(p, n, status);
   if (n.to === 'senior' && n.app) appNotifStatus(p, n.id, status);
+  if (status === 'seen' && n.to === 'senior') pushSenior(id, 'noticeSeen', { notifId: nid });   // every OTHER page of theirs that still shows this card (a second tab, their phone) takes it down too
   if (status === 'seen' && n.to === 'family') {
     for (const f of p.flags) if (f.safety && f.status === 'active' && f.notifId === n.id) resolveSafety(p, f, 'family');
     for (const sc of p.scams || []) if (sc.status === 'active' && sc.notifId === n.id) { sc.status = 'resolved'; sc.resolvedAt = Date.now(); sc.resolvedBy = 'family'; } // a scam warning clears when the family sees it, like any alert

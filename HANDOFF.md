@@ -4,7 +4,7 @@ Maya: voice companion for older adults. Branch `render-test` is the working and 
 
 ## State
 - Live at the time of writing: `97f808b`. The car-prize / conversation work is local only until the push word.
-- Tests: `node --test test/*.test.js` -> 947 checks, 943 pass, 4 skipped (need live keys), 0 fail.
+- Tests: `node --test test/*.test.js` -> 949 checks, 945 pass, 4 skipped (need live keys), 0 fail.
 - `docs/maya-prompt.md` is 7,494 of 7,500 characters (a test enforces < 7,500): never add words without trimming.
 
 ## The scam family question (this change)
@@ -26,6 +26,9 @@ Causes in code:
 - The detector returned `caution` (one sign) for the prize call; only warn / pause registered the family question (`chat.js afterTalkReply`, `scam.js talkNote` told her NOT to ask). Number-only follow-ups are not re-checked.
 - `call.js ABILITIES_ASK` matched only "you" (not "u") and had no follow-up ("and?"), so the nine-item list never fired. `beat.js` closed light chat after 3 replies with "no question", also on "okay" / "hmm" while something was open.
 Changes: `scam.promote` (live pipeline only; stubs untouched) treats a one-sign verdict that names a kind as a warning, so every warn path (owed question, notes, official reconfirm) applies; the detector and held-out numbers are unchanged (checked: S114 has no kind, so nothing in the held-out run is promoted, 0 normal items were cautioned). A warning turn must itself ask the family question (rewritten once, then the plain question closes the reply); both-drafts-blocked now ends in the plain question instead of an error. `call.js unresolvedTalk` (open scam question, or a heavy feeling in her last reply) turns the beat limits off and drops the "close gently" note. New chat note UNDERSTAND THEM (context, care in one line, one relevant question, no closure on okay / hmm). Abilities: "u"/"ya", "and?" / "what else" follow-ups (`abilitiesAsks`). `phone.js`: static country-code table; a number with + / 00 gets the country and "the number shown can be faked", never a lookup, never stored (chat, photo and PDF text, and calls via `limitsFacts`).
+
+## Third round (reminder card stays on screen) - local, not pushed
+Live report: Open / Got it did nothing visible, the card stayed, the family dashboard showed Seen. Could NOT be reproduced with one tab (real mouse events, desktop and phone width, real mode, the exact chat flow): the card closed. Reproduced with the senior page open in TWO tabs: Got it in one reported Seen and left the other tab's card up (the server never told the other page). Fix: `care.markNotif` pushes `noticeSeen` to every open page of that senior; `public/inbox.js` drops the card on it, removes the clicked card by element at once, shows a short "Done. Marked as seen" line, ignores a replay of an answered notice (no second Seen); Open shows the reminder in the chat (`maya-show-reminder` in `chat-ui.js`). Family dashboard logic unchanged.
 
 ## Proof status (needs Render + phone)
 - Scam fixes: proven locally with real Spark (fresh seniors); NOT yet live.

@@ -387,6 +387,14 @@
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!sheet.hidden) closeSheet(); else if (picked) closePreview(); } });
 
   // Maya's own unprompted line (the family has seen the worry): it joins the thread as her message.
+  // Open on a reminder card: the reminder is shown in the chat, once, in the words the server gave (it is not saved here; the chat's own thread is unchanged).
+  window.addEventListener('maya-show-reminder', (e) => {
+    const d = e.detail || {}; if (!d.text) return;
+    if (thread.querySelector(`[data-reminder="${String(d.id).replace(/[^\w-]/g, '')}"]`)) { scrollDown(); return; }
+    const r = append({ id: '', role: 'maya', kind: 'text', text: d.text }); r.dataset.reminder = String(d.id).replace(/[^\w-]/g, ''); r.classList.add('reminder-shown');
+    if (typeof r.scrollIntoView === 'function') r.scrollIntoView({ block: 'end' });
+    const box = document.getElementById('msgIn'); if (box && !(window.mayaInCall && window.mayaInCall())) box.focus({ preventScroll: true });
+  });
   window.addEventListener('maya-chat-message', (e) => {
     const m = e.detail; if (!m) return;
     const row = append(m);
