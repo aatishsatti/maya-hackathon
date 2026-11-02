@@ -59,6 +59,11 @@ OPEN (not fixed): prompt trimming not done; the scam warning is repeated on an u
 - Tests: `test/quiethours.test.js` (6). Full suite 987 run, 977 pass, 6 fail, 4 skipped; the same 6 fail on clean 622f14b (notice-seen x1, reminder-ask x1, setrem x3, and the whatsapp-set-up "both please" one): not caused by this change. Flutter: analyze clean, 49 pass 4 skipped.
 - NOT live-proven: the switch on a real phone/Render, real night rings. Needs Aatish live test: flip OFF on a test senior with a night timezone, schedule a check/reminder, confirm it rings, flip ON, confirm it is held and the text shows.
 
+## Check-In popup fix (web family page only, local commit on top of 5bce941, NOT pushed)
+- The popup no longer locks when WhatsApp is unlinked (the "Check-ins start once their WhatsApp is linked" wall is gone). One "Where it goes" segment (Maya app / WhatsApp / Both) and one Start; unlinked: WhatsApp and Both are grayed out with "Link WhatsApp in Settings to use this" and the choice falls back to Maya app; linked: all three live.
+- Chosen: removed the dead one-time pickers (a second Check-in-by / Where-it-goes pair that had no button of its own), so the only action left is the schedule form with its own Start. Schedule logic, server routes, quiet hours, other popups untouched; the server already let app/both through without WhatsApp (whatsapp.js welfare blocked()).
+- Tests: welfarechan 25/25 (1 new), whatsapp + dashboard-actions 149/149; two old assertions on the removed markup were updated (waWelfareWhere, waWelfareVia). Not live-proven: a real app-only check-in on an unlinked senior in a browser; the Flutter dashboard has its own check-in sheet, not changed.
+
 ## Proof status (needs Render + phone)
 - Scam fixes: proven locally with real Spark (fresh seniors); NOT yet live.
 - Voice latency (06530d2), closed Android push, WhatsApp template + Got it: NOT PROVEN until the user's live tests (steps were given in the chat).

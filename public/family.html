@@ -53,21 +53,9 @@
 
     </div></div></div>
     <div class="modal" id="mCheck" hidden role="dialog" aria-modal="true" aria-labelledby="mCheckT"><div class="modal-card"><div class="grab" aria-hidden="true"></div><header class="modal-head"><h2 id="mCheckT">Check In With Them</h2><button class="btn close" type="button" data-close>Close</button></header><div class="modal-body">
-      <p id="checkLocked" class="hint" hidden>Check-ins start once their WhatsApp is linked. Open Settings, then link their number.</p>
           <div id="waTest" class="wa-call" hidden>
             <h3 class="wa-sub" id="welfareHead" hidden>Check In With Them</h3>
             <p class="hint">Maya says it is a welfare check and asks how they are. As a call she then talks with them (needs their call permission); as a text or a voice note she sends the same short words, only while they have written in the last 24 hours. No reminder is used.</p>
-            <div id="waWelfareVia" class="seg" role="radiogroup" aria-label="Check in by">
-              <button type="button" role="radio" aria-checked="true" data-v="call">Call</button>
-              <button type="button" role="radio" aria-checked="false" data-v="text">Text</button>
-              <button type="button" role="radio" aria-checked="false" data-v="voice">Voice note</button>
-            </div>
-            <label class="wa-label" id="welfareWhereLabel">Where it goes</label>
-            <div id="waWelfareWhere" class="seg" role="radiogroup" aria-labelledby="welfareWhereLabel">
-              <button type="button" role="radio" aria-checked="false" data-v="app">Maya app</button>
-              <button type="button" role="radio" aria-checked="true" data-v="whatsapp">WhatsApp</button>
-              <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
-            </div>
             <h3 class="wa-sub" id="schedHead" hidden>Scheduled check-ins</h3>
             <div id="schedBlock" hidden><p class="sched-status" id="schedStatus" aria-live="polite"><strong id="schedState">Stopped</strong> <span id="schedNext"></span></p>
             <p class="hint" id="schedLine">No schedule is running.</p></div>
@@ -98,6 +86,7 @@
               <button type="button" role="radio" aria-checked="true" data-v="whatsapp">WhatsApp</button>
               <button type="button" role="radio" aria-checked="false" data-v="both">Both</button>
             </div>
+            <p class="hint" id="schedWhereHint" hidden>Link WhatsApp in Settings to use this</p>
             <p class="hint" id="schedPlan"></p>
             <div><button id="checkInfoBtn" class="info-btn" type="button" data-info="checkin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>How check-ins work</button></div>
             <div class="wa-actions">

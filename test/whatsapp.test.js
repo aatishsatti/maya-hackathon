@@ -1533,7 +1533,7 @@ test('dashboard: no senior words in the list or the logs; the page file has the 
   const r = await runWelfare('spoke'); let json;
   try { json = JSON.stringify(wa.activityOf(r.id)); assert.doesNotMatch(json + r.out, /Okay thanks|tablets|v=0|wacid/); assert.equal(wa.activityOf(r.id).entries.find((e) => e.type === 'welfare').words, null); assert.equal(wa.activityOf(r.id).entries.find((e) => e.type === 'welfare').label, 'Answered'); } finally { await r.dev.peer.close(); }
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8');
-  for (const id of ['actSummary', 'actFilters', 'actList', 'actPager', 'deliverPick', 'waWelfareVia']) assert.match(html, new RegExp(`id="${id}"`), id);
+  for (const id of ['actSummary', 'actFilters', 'actList', 'actPager', 'deliverPick', 'schedVia']) assert.match(html, new RegExp(`id="${id}"`), id);
   assert.match(html, /<h2>Activity<\/h2>/); assert.doesNotMatch(html, /data-kind="call">Call and say it</); assert.match(html, /<h3 class="wa-sub">Notifications<\/h3>\s*<div id="notifs"/); for (const v of ['call', 'text', 'voice']) assert.match(html, new RegExp(`id="deliverPick"[\\s\\S]*?data-v="${v}"`));
 });
 

@@ -205,7 +205,10 @@
   const inQuietAt = (ms) => { if (!quiet || !quiet.tz || quiet.on === false || !Number.isFinite(ms)) return false; try { const h = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: quiet.tz }).format(new Date(ms))); return quiet.start > quiet.end ? (h >= quiet.start || h < quiet.end) : (h >= quiet.start && h < quiet.end); } catch { return false; } };
   function remQuietWarn() { const on = inQuietAt(new Date($('at').value).getTime()); $('remQuietWarn').hidden = !on; $('remQuietWarn').textContent = on ? `That time is in their quiet hours (${hh(quiet.start)}:00 to ${hh(quiet.end)}:00). The reminder is kept and will be held until ${hh(quiet.end)}:00: nothing is sent, texted or rung at night.` : ''; }
   let pendingAdds = [], showAllRem = false;
+  let waOk = false;   // is their WhatsApp linked, opted in and set up on the server?
   const channelSeg = seg($('channelPick')), deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia')), welfareWhere = seg($('waWelfareWhere')), schedWhere = seg($('schedWhere'));
+  // Without a linked WhatsApp, WhatsApp and Both are grayed out (with the hint) and the choice falls back to the Maya app; linked: all three are live.
+  function applyWhere() { for (const b of Array.from($('schedWhere').querySelectorAll ? $('schedWhere').querySelectorAll('button') || [] : [])) { const off = !waOk && b.dataset.v !== 'app'; b.disabled = off; b.setAttribute('aria-disabled', String(off)); } $('schedWhereHint').hidden = waOk; if (!waOk && schedWhere.get() !== 'app') schedWhere.set('app'); }
   let whereFor = null;
   const WHERE_TEXT = { app: 'in the Maya app', whatsapp: 'on WhatsApp', both: 'on WhatsApp and in the app' };
   const whereText = (s) => (s && WHERE_TEXT[s.channel] ? ` ${WHERE_TEXT[s.channel]}` : '');
@@ -328,7 +331,7 @@
       const qon = tzq.on !== false; if (document.activeElement !== $('quietSw')) $('quietSw').checked = qon; $('quietState').textContent = qon ? 'ON' : 'OFF'; $('quietNote').textContent = qon ? `A check, call or reminder that falls between ${hh(tzq.start == null ? 22 : tzq.start)}:00 and ${hh(tzq.end == null ? 7 : tzq.end)}:00 their time is held until ${hh(tzq.end == null ? 7 : tzq.end)}:00. Safety alerts are never held.` : 'OFF may wake the senior at night.'; }
     if (v.delivery && document.activeElement !== $('deliv')) $('deliv').value = v.delivery.reminders;
     if (v.delivery && document.activeElement !== $('delivChan')) $('delivChan').value = v.delivery.channel || 'whatsapp';
-    if (v.delivery && whereFor !== id) { whereFor = id; const ch = v.delivery.channel || 'whatsapp'; welfareWhere.set(ch); schedWhere.set(ch); }   // the welfare pickers start at the person's own default, like a reminder's
+    if (v.delivery && whereFor !== id) { whereFor = id; const ch = v.delivery.channel || 'whatsapp'; welfareWhere.set(ch); schedWhere.set(ch); applyWhere(); }   // the welfare pickers start at the person's own default, like a reminder's
     const nots = v.notifications.map((n) => {
       const c = el('div', 'item');
       const head = el('div', 'item-head');
@@ -359,7 +362,7 @@
     $('waLink').hidden = Boolean(v.linked && v.optIn);
     waWindowClosed = Boolean(v.linked && v.optIn && !v.windowOpen); later(renderSummary);
     $('waNote').hidden = !v.linked;
-    $('waTest').hidden = !(v.linked && v.optIn && v.configured);
+    waOk = Boolean(v.linked && v.optIn && v.configured); $('waTest').hidden = false; applyWhere();   // the Maya app needs no WhatsApp: the sheet is always there, only WhatsApp and Both wait for the link
     $('waCap').textContent = capText(v.calls);
     if (v.testCall && !waTesting) $('waTestLine').textContent = `Last test call: ${TEST_STATE[v.testCall.state] || v.testCall.state} (${t(v.testCall.at)}).`;
     $('waState').textContent = !v.linked ? 'Not linked' : !v.optIn ? 'Opted out' : v.windowOpen ? 'Can message' : 'Waiting for them to write';
@@ -488,7 +491,6 @@
   function renderSummaryNow() {
     const v = lastView; if (!v) return;
     $('skel').hidden = true; renderEsc(v);
-    $('checkLocked').hidden = !$('waTest').hidden;   // check-ins need their WhatsApp linked first: say so instead of showing an empty sheet
     const active = (a) => (a || []).filter((f) => f.status === 'active');
     const sc = v.scams || [], alerts = [...active(v.alerts), ...active(sc.filter((x) => x.level === 'alert'))], flags = [...active(v.flags), ...active(sc.filter((x) => x.level !== 'alert'))];
     const need = alerts.length + flags.length > 0;

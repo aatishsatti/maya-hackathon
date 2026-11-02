@@ -222,7 +222,7 @@ test('Scheduled check-ins carry the channel: an app-only schedule needs no Whats
 
 test('The dashboards: a "Where it goes" picker (App / WhatsApp / Both) for welfare on the web page and in the app; Send-a-message is gone', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.html'), 'utf8'), js = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8');
-  assert.match(html, /id="waWelfareWhere"[\s\S]*?data-v="app"[\s\S]*?data-v="whatsapp"[\s\S]*?data-v="both"/); assert.match(html, /id="schedWhere"[\s\S]*?data-v="app"[\s\S]*?data-v="whatsapp"[\s\S]*?data-v="both"/);
+  assert.match(html, /id="schedWhere"[\s\S]*?data-v="app"[\s\S]*?data-v="whatsapp"[\s\S]*?data-v="both"/);
   assert.match(js, /channel: welfareWhere\.get\(\)/); assert.match(js, /channel: schedWhere\.get\(\)/);
   assert.doesNotMatch(html, /Send a message|id="msgPanel"|id="waSend"|Send message/); assert.doesNotMatch(js, /\/messages`|\/send`/);
   const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'family', 'tab_welfare.dart'), 'utf8'); assert.match(dart, /WherePicker/); assert.match(dart, /'channel': _where/); assert.match(dart, /'channel': _schedWhere/);
@@ -239,4 +239,20 @@ test('Notification buttons: "I\'m okay" answers a waiting welfare check and "Got
   assert.equal(care.notificationAck(r, 'reminder'), true, 'Got it marks the app reminder answered'); assert.equal(care.notificationAck(r, 'reminder'), false);
   assert.throws(() => care.notificationAck(id, 'call'), /Unknown answer/);
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'); assert.match(server, /b === 'ack'.*notificationAck/); quiet();
+});
+
+// Check-In popup: one Where-it-goes segment and one Start; the Maya app needs no WhatsApp, so only WhatsApp and Both wait for the link.
+test('check-in popup: unlinked = Maya app live, WhatsApp and Both disabled with the hint, no lock message; linked = all three live; one Where segment, one Start', () => {
+  const fs2 = require('node:fs'), path2 = require('node:path'), vm2 = require('node:vm');
+  const html = fs2.readFileSync(path2.join(__dirname, '..', 'public', 'family.html'), 'utf8'), js = fs2.readFileSync(path2.join(__dirname, '..', 'public', 'family.js'), 'utf8');
+  const popup = html.slice(html.indexOf('id="mCheck"'), html.indexOf('id="mRem"'));
+  assert.equal((popup.match(/Where it goes/g) || []).length, 1); assert.equal((popup.match(/id="schedStart"/g) || []).length, 1); assert.doesNotMatch(html, /checkLocked|Check-ins start once their WhatsApp is linked/); assert.match(popup, /Link WhatsApp in Settings to use this/);
+  assert.match(js, /\$\('waTest'\)\.hidden = false/, 'the sheet is never locked');
+  const src = js.match(/function applyWhere\(\) \{[^\n]*\}(?=\n)/)[0];
+  const mk = () => { const btns = ['app', 'whatsapp', 'both'].map((v) => ({ dataset: { v }, disabled: false, attrs: {}, setAttribute(k, x) { this.attrs[k] = x; } })); return btns; };
+  const run = (waOk, start) => { const btns = mk(); let cur = start; const hint = { hidden: null };
+    const $ = (id) => id === 'schedWhere' ? { querySelectorAll: () => btns } : hint; const schedWhere = { get: () => cur, set: (v) => { cur = v; } };
+    vm2.runInNewContext(`${src}; applyWhere();`, { $, waOk, schedWhere, Array }); return { btns, cur, hint }; };
+  const off = run(false, 'whatsapp'); assert.deepEqual(off.btns.map((b) => b.disabled), [false, true, true]); assert.equal(off.cur, 'app'); assert.equal(off.hint.hidden, false);
+  const on = run(true, 'both'); assert.deepEqual(on.btns.map((b) => b.disabled), [false, false, false]); assert.equal(on.cur, 'both'); assert.equal(on.hint.hidden, true);
 });
