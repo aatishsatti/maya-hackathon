@@ -202,7 +202,7 @@
   // ---- quiet hours (where THEY are): nothing is sent, texted or rung at night, so a time that falls in them is warned about (and still accepted: it is held, never dropped) ----
   let quiet = null;   // { start, end, tz } from the server; unknown time zone: nothing is held, so nothing is warned about
   const hh = (n) => String(n).padStart(2, '0');
-  const inQuietAt = (ms) => { if (!quiet || !quiet.tz || !Number.isFinite(ms)) return false; try { const h = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: quiet.tz }).format(new Date(ms))); return quiet.start > quiet.end ? (h >= quiet.start || h < quiet.end) : (h >= quiet.start && h < quiet.end); } catch { return false; } };
+  const inQuietAt = (ms) => { if (!quiet || !quiet.tz || quiet.on === false || !Number.isFinite(ms)) return false; try { const h = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: quiet.tz }).format(new Date(ms))); return quiet.start > quiet.end ? (h >= quiet.start || h < quiet.end) : (h >= quiet.start && h < quiet.end); } catch { return false; } };
   function remQuietWarn() { const on = inQuietAt(new Date($('at').value).getTime()); $('remQuietWarn').hidden = !on; $('remQuietWarn').textContent = on ? `That time is in their quiet hours (${hh(quiet.start)}:00 to ${hh(quiet.end)}:00). The reminder is kept and will be held until ${hh(quiet.end)}:00: nothing is sent, texted or rung at night.` : ''; }
   let pendingAdds = [], showAllRem = false;
   const channelSeg = seg($('channelPick')), deliverSeg = seg($('deliverPick')), welfareSeg = seg($('waWelfareVia')), schedSeg = seg($('schedVia')), welfareWhere = seg($('waWelfareWhere')), schedWhere = seg($('schedWhere'));
@@ -219,7 +219,7 @@
     $('schedCustomWarn').className = n < 1440 ? 'hint warn' : 'hint';
     if (!Number.isInteger(n) || n < 5 || n > 120960) { $('schedPlan').textContent = 'Choose a number of hours, days or weeks (up to 12 weeks).'; return; }
     const long = n >= 1440, count = Math.max(1, Math.floor((long ? 90 * 1440 : 24 * 60) / n)), what = via === 'call' ? 'calls' : via === 'voice' ? 'voice notes' : 'texts';
-    $('schedPlan').textContent = `Up to ${count} ${what} in the next ${long ? '90 days' : '24 hours'}, one every ${EVERY_TEXT(n)}.${long ? ' It keeps going until you stop it.' : ''} ${quiet && quiet.tz ? `A check that falls between ${hh(quiet.start)}:00 and ${hh(quiet.end)}:00 (their night) is held until ${hh(quiet.end)}:00. ` : ''}${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}${via === 'call' ? '' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round, and tries the text or voice note again first the next time. '}It pauses by itself after 2 unanswered calls in a row or when WhatsApp refuses a call, and says why. Every check shows in Activity. You can stop it any time.`;
+    $('schedPlan').textContent = `Up to ${count} ${what} in the next ${long ? '90 days' : '24 hours'}, one every ${EVERY_TEXT(n)}.${long ? ' It keeps going until you stop it.' : ''} ${quiet && quiet.tz && quiet.on !== false ? `A check that falls between ${hh(quiet.start)}:00 and ${hh(quiet.end)}:00 (their night) is held until ${hh(quiet.end)}:00. ` : ''}${via === 'call' ? "WhatsApp decides how many calls a business may start in a day and refuses the rest: Maya then pauses the schedule. " : ''}${via === 'call' ? '' : 'WhatsApp only allows a text or a voice note inside 24 hours after they last wrote: when that window is closed at a check, Maya calls instead for that round, and tries the text or voice note again first the next time. '}It pauses by itself after 2 unanswered calls in a row or when WhatsApp refuses a call, and says why. Every check shows in Activity. You can stop it any time.`;
   }
   function renderSchedule(s) {
     lastSched = s || null; later(renderSummary);
@@ -324,7 +324,8 @@
     fillRemPick(v.reminders);
     lastRules = v.whatsappRules || lastRules;   // Meta's rules in plain words, from the server: the family reads them before picking WhatsApp
     { const tzq = v.quiet || {}, SRC = { device: "from their phone", ip: "from their internet connection", phone: "from their phone number's country", manual: 'set by you' };
-      $('tzRow').hidden = Boolean(tzq.tz); $('tzKnown').hidden = !tzq.tz; if (tzq.tz) $('tzKnown').textContent = `Time zone: ${tzq.tz} (found ${SRC[tzq.tzSource] || 'automatically'}).`; }
+      $('tzRow').hidden = Boolean(tzq.tz); $('tzKnown').hidden = !tzq.tz; if (tzq.tz) $('tzKnown').textContent = `Time zone: ${tzq.tz} (found ${SRC[tzq.tzSource] || 'automatically'}).`;
+      const qon = tzq.on !== false; if (document.activeElement !== $('quietSw')) $('quietSw').checked = qon; $('quietState').textContent = qon ? 'ON' : 'OFF'; $('quietNote').textContent = qon ? `A check, call or reminder that falls between ${hh(tzq.start == null ? 22 : tzq.start)}:00 and ${hh(tzq.end == null ? 7 : tzq.end)}:00 their time is held until ${hh(tzq.end == null ? 7 : tzq.end)}:00. Safety alerts are never held.` : 'OFF may wake the senior at night.'; }
     if (v.delivery && document.activeElement !== $('deliv')) $('deliv').value = v.delivery.reminders;
     if (v.delivery && document.activeElement !== $('delivChan')) $('delivChan').value = v.delivery.channel || 'whatsapp';
     if (v.delivery && whereFor !== id) { whereFor = id; const ch = v.delivery.channel || 'whatsapp'; welfareWhere.set(ch); schedWhere.set(ch); }   // the welfare pickers start at the person's own default, like a reminder's
@@ -458,6 +459,7 @@
 
   $('who').addEventListener('change', () => pick($('who').value));
   try { if (typeof Intl.supportedValuesOf === 'function') $('tzList').replaceChildren(...Intl.supportedValuesOf('timeZone').map((z) => { const o = el('option', '', ''); o.value = z; return o; })); } catch (e) { /* the box still takes a typed name */ }
+  $('quietSw').addEventListener('change', () => api(`/api/care/${id}/quiethours`, 'POST', { on: $('quietSw').checked }).then(() => { showErr(''); load(); }).catch((x) => { $('quietSw').checked = !$('quietSw').checked; showErr(x.message); }));
   $('tzSave').addEventListener('click', () => api(`/api/care/${id}/timezone`, 'POST', { tz: $('tzIn').value.trim() }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('delivChan').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { channel: $('delivChan').value }).then(() => { later(renderSummary); showErr(''); load(); }).catch((x) => showErr(x.message)));
   $('deliv').addEventListener('change', () => api(`/api/care/${id}/delivery`, 'POST', { reminders: $('deliv').value }).then(() => { showErr(''); load(); }).catch((x) => showErr(x.message)));

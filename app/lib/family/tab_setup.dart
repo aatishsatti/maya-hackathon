@@ -57,6 +57,7 @@ class _SetupTabState extends State<SetupTab> {
 
   @override
   Widget build(BuildContext context) {
+    final quietOn = !(d.care['quiet'] is Map && (d.care['quiet'] as Map)['on'] == false);
     final delivery = (d.care['delivery'] is Map ? (d.care['delivery'] as Map)['reminders'] : null) as String? ?? 'voice';
     return ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 24), children: [
       sectionLabel('WhatsApp'),
@@ -113,6 +114,17 @@ class _SetupTabState extends State<SetupTab> {
         },
       ),
       ..._timeZone(context),
+      sectionLabel('Quiet hours'),
+      SwitchListTile(
+        key: const ValueKey('quiet-hours-switch'),
+        contentPadding: EdgeInsets.zero,
+        title: Text(quietOn ? 'Quiet hours: ON' : 'Quiet hours: OFF', style: const TextStyle(fontSize: 16)),
+        subtitle: Text(quietOn ? 'A check, call or reminder that falls between ${hh(((d.care['quiet'] as Map?)?['start'] ?? 22) as num)}:00 and ${hh(((d.care['quiet'] as Map?)?['end'] ?? 7) as num)}:00 their time is held until ${hh(((d.care['quiet'] as Map?)?['end'] ?? 7) as num)}:00. Safety alerts are never held.' : 'OFF may wake the senior at night.', style: TextStyle(fontSize: 14, color: quietOn ? kSoft : kToneWait.ink)),
+        value: quietOn,
+        onChanged: (v) async {
+          if (await act(context, () => Api.postJson('/api/care/${d.profileId}/quiethours', {'on': v}))) d.refresh(quiet: true);
+        },
+      ),
       sectionLabel('Mode'),
       RadioGroup<String>(
         groupValue: d.mode,

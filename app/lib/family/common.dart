@@ -10,7 +10,7 @@ bool _tzReady = false;
 /// Is `ms` inside their quiet hours (where THEY are)? The server holds anything due in them until the morning; this only warns.
 /// An unknown time zone: false (the server holds nothing then).
 bool inQuietAt(Map<String, dynamic>? quiet, int ms) {
-  if (quiet == null || quiet['tz'] is! String) return false;
+  if (quiet == null || quiet['tz'] is! String || quiet['on'] == false) return false;   // switch OFF for this senior: nothing is held
   try {
     if (!_tzReady) {
       tzdata.initializeTimeZones();

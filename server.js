@@ -117,6 +117,7 @@ async function handleCare(req, res, url) {
   try {
     if (b === 'mode') return sendJson(res, 200, { mode: care.setMode(a, body.mode) });
     if (b === 'timezone') return sendJson(res, 200, { ok: care.setTimezone(a, body.tz, 'manual') });   // the dashboard asks for this ONLY when it could not be found automatically
+    if (b === 'quiethours') return sendJson(res, 200, { on: care.setQuietHours(a, body.on) });   // the family's per-senior Quiet hours switch (default ON)
     if (b === 'delivery') return sendJson(res, 200, { delivery: care.setDelivery(a, body) });   // how reminders reach them on WhatsApp: a voice note in Maya's voice or text
     if (b === 'reminders' && !c) return sendJson(res, 200, { reminder: care.addReminder(a, body) });
     if (b === 'reminders' && c && !d) return sendJson(res, 200, { reminder: care.updateReminder(a, c, body) });   // the edit popup

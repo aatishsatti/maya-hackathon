@@ -125,7 +125,18 @@ function localHour(ts, tz) {
   catch { return new Date(ts).getHours(); }
 }
 // Is it quiet hours where this person is (22:00 to 07:00 in their time zone)? Unknown time zone: no (nothing is held).
-const inQuiet = (id, now = Date.now()) => { const p = get(id); return Boolean(p && p.tz && inQuietHours(now, p.tz)); };
+// Per-senior switch (family dashboard "Quiet hours"): p.quietHours === false means OFF (no hold for that senior). Anything else, including every existing senior, is ON.
+const quietOn = (p) => Boolean(p) && p.quietHours !== false;
+// Held now for this senior: switch ON, time zone known, and it is night there. Tier A safety alerts never ask this.
+const quietNow = (p, ts = Date.now()) => Boolean(p && p.tz && quietOn(p) && inQuietHours(ts, p.tz));
+const inQuiet = (id, now = Date.now()) => quietNow(get(id), now);
+function setQuietHours(id, on) {
+  const p = get(id);
+  if (!p) throw Object.assign(new Error('Unknown person'), { status: 404 });
+  if (typeof on !== 'boolean') throw Object.assign(new Error('Quiet hours must be on or off.'), { status: 400 });
+  p.quietHours = on; save(id); pushFamily('refresh', { id });
+  return on;
+}
 function inQuietHours(ts, tz) {
   const h = localHour(ts, tz);
   return cfg.quietStart > cfg.quietEnd ? (h >= cfg.quietStart || h < cfg.quietEnd) : (h >= cfg.quietStart && h < cfg.quietEnd);
@@ -146,6 +157,7 @@ function quietEndsAt(ts, tz) {
 // A reminder that is held for the night, or whose time falls in the quiet hours: when it will be released. null = it is an ordinary reminder.
 function waitingUntil(p, r, now = Date.now()) {
   if (!p || !p.tz || r.active || r.dueAt == null) return null;
+  if (!quietOn(p)) return null;
   return quietEndsAt(r.held ? now : Math.max(r.dueAt, 0), p.tz);
 }
 
@@ -581,7 +593,7 @@ function assess(p, { sudden = false, worry = false, now = Date.now() }) {
   if (busy && now - busy <= cfg.greenMs) return { level: 'green', notify: null, sudden, long: false, quiet: false };
   const seen = lastSeen(p);
   const long = !seen.at || now - seen.at >= cfg.longInactiveMs;
-  const quiet = inQuietHours(now, p.tz);
+  const quiet = quietOn(p) && inQuietHours(now, p.tz);
   let level = 'flag';
   if (p.mode === 'ultra') level = 'alert';
   else if (sudden && (!quiet || worry)) level = 'alert';
@@ -1511,7 +1523,7 @@ function unseenCall(p, r, now) {
   const id = p.id, dueAt = a.dueAt;
   const no = (why) => { a.unseen = why; save(id); waLog({ event: 'unseen', via: ch, call: false, why }); pushFamily('refresh', { id }); return false; };
   if (liveCalls.has(id) || activeByProfile.get(id)) return no('busy');
-  if (p.tz && inQuietHours(now, p.tz)) return no('quiet hours');
+  if (quietNow(p, now)) return no('quiet hours');
   if (ch === 'app' && !(appOpen(id) || pushReady(id))) return no('app closed');
   waLog({ event: 'unseen', via: ch, call: true });
   finishOccurrence(p, r.id, ch === 'app' ? 'app_unseen' : 'wa_unseen', { reason: 'not_seen' });
@@ -1694,7 +1706,7 @@ function reminderAckWhatsApp(id, ack = true, now = Date.now()) {
 function escalate(p, r, why, now = Date.now()) {
   if (!r.last || p.mode === 'standard' || r.by === 'senior') return;   // a reminder the senior set for themselves never sends their own words to the family (the entry still says Missed / Not sent)
   if (assess(p, { now }).level === 'green') { r.last.escalate = { skipped: 'green' }; save(p.id); return; }
-  if (p.tz && inQuietHours(now, p.tz)) { r.last.escalate = { pending: true, why }; save(p.id); return; }
+  if (quietNow(p, now)) { r.last.escalate = { pending: true, why }; save(p.id); return; }
   sendEscalation(p, r, why);
 }
 function sendEscalation(p, r, why) {
@@ -1711,7 +1723,7 @@ function waTick(p, r, now) {
   appTick(p, r, now);
   const a = r.active;
   if (a && a.channel === 'whatsapp') {
-    const quiet = Boolean(p.tz) && inQuietHours(now, p.tz);
+    const quiet = quietNow(p, now);
     if (a.state === 'wa_sending') {
       if (now - a.startedAt > cfg.waSendStuckMs) failWA(p, r, 'no_answer', { title: 'WhatsApp did not answer' });
     } else if (WA_OPEN.has(a.state)) {
@@ -1725,7 +1737,7 @@ function waTick(p, r, now) {
     }
   }
   const e = r.last && r.last.escalate;
-  if (e && e.pending && !(p.tz && inQuietHours(now, p.tz))) sendEscalation(p, r, e.why);
+  if (e && e.pending && !quietNow(p, now)) sendEscalation(p, r, e.why);
 }
 
 let ticker = null;
@@ -1976,7 +1988,7 @@ function view(id) {
     active: r.active && { ...r.active, label: occLabel(r.active) },
     last: r.last && { ...r.last, label: occLabel(r.last) } });
   return {
-    id, name: nameOf(id), mode: p.mode, modes: MODES, delivery: p.delivery, quiet: { start: cfg.quietStart, end: cfg.quietEnd, tz: p.tz || null, ...(p.tzSource ? { tzSource: p.tzSource } : {}) }, whatsappRules: WA_RULES, appOpen: appOpen(id), inCall: liveCalls.has(id),
+    id, name: nameOf(id), mode: p.mode, modes: MODES, delivery: p.delivery, quiet: { start: cfg.quietStart, end: cfg.quietEnd, tz: p.tz || null, ...(quietOn(p) ? {} : { on: false }), ...(p.tzSource ? { tzSource: p.tzSource } : {}) }, whatsappRules: WA_RULES, appOpen: appOpen(id), inCall: liveCalls.has(id),
     lastActivity: p.lastActivity, lastSeen: seen, lastCallAt: p.lastActivity.maya, callCount: p.callCount || 0,
     activeOutreach: activeByProfile.has(id) ? { kind: activeByProfile.get(id).kind, attempts: activeByProfile.get(id).attempts, of: cfg.maxAttempts, state: activeByProfile.get(id).state } : null,
     flags: p.flags.filter((f) => f.level === 'flag').map(fl),
@@ -2008,6 +2020,6 @@ module.exports = {
   familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamAskedOut, scamAsked, scamFresh, scamLost, asksFamilyQ, SCAM_GAP_MS, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  persistSmart, addReminder, addSeniorReminder, quietEndsAt, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  persistSmart, addReminder, addSeniorReminder, quietEndsAt, quietOn, setQuietHours, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

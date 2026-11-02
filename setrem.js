@@ -260,8 +260,8 @@ function whenWords(spec, { tz, now = Date.now(), origin } = {}) {
 // Quiet hours: nothing is rung, texted or sent at night (care.js tick), so a reminder whose first time falls in them is HELD until they end. Maya must say so, plainly, when she says it back and when it is saved.
 // Returns { at: when it will really go (the end of the quiet hours), words: "7 in the morning" } or null (an ordinary reminder, or no time zone known).
 const hourWords = (h) => `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? ' in the morning' : h < 17 ? ' in the afternoon' : ' in the evening'}`;
-function quietHold(spec, { tz, now = Date.now(), origin } = {}) {
-  if (!tz || !validTz(tz) || spec.task == null) return null;
+function quietHold(spec, { tz, now = Date.now(), origin, quietOn = true } = {}) {
+  if (!tz || !validTz(tz) || spec.task == null || quietOn === false) return null;   // switch OFF for this senior: nothing is held, so nothing is promised
   const care = require('./care');
   const first = afterCall(spec, { origin }) ? now + Math.max(20000, spec.relMs) : spec.dueAt;   // after a call it goes 20 seconds or the asked delay after the hang-up
   if (!Number.isFinite(first)) return null;
@@ -461,7 +461,7 @@ function answer(id, st, heard, ctx) {
 function step(id, heard, { origin, tz = null, now = Date.now(), waLinked = false, skipEmpty = false } = {}) {
   heard = norm(heard);
   if (!heard) return null;
-  const ctx = { origin, tz: validTz(tz) ? tz : null, now, waLinked, skipEmpty };
+  const ctx = { origin, tz: validTz(tz) ? tz : null, now, waLinked, skipEmpty, quietOn: (() => { const c = require('./care'); const p = c.get(id); return !p || c.quietOn(p); })() };
   let st = states.get(id);
   if (st && now - st.at > TTL_MS) lost.set(id, { at: now });   // timed out while they were away: if the next thing they say is an answer to it, they are told plainly
   if (st && (now - st.at > TTL_MS || st.origin !== origin)) { states.delete(id); st = null; }
