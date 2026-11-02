@@ -10,7 +10,7 @@ process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles'); process.env.MAYA_CARE_DI
 const queue = []; const brainPath = require.resolve('../brain');
 require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, exports: { requireRealEnv() {}, streamSpeech: async () => {}, sparkComplete: async () => '{}', describeImage: async () => 'u', sparkStream: async (h, r, _s, onDelta) => { const t = queue.length > 1 ? queue.shift() : queue[0] || 'Okay.'; if (onDelta) onDelta(t); return t; } } };
 const memory = require('../memory'); const smart = require('../smart'); const { Call } = require('../call');
-const LAYERS = ['ROUTER', 'ABILITIES', 'DECISION', 'CARDS', 'GUARD', 'KINDS'];
+const LAYERS = ['ROUTER', 'ABILITIES', 'DECISION', 'CARDS', 'GUARD', 'KINDS', 'SHORT', 'CONTRACT', 'CAPS', 'MEMORY', 'GENERAL'];
 const setAll = (v) => { delete process.env.MAYA_SMART; for (const l of LAYERS) delete process.env[`MAYA_SMART_${l}`]; if (v) process.env.MAYA_SMART = 'on'; };
 let n = 0; const person = () => { const id = memory.createProfile(`Smart${String.fromCharCode(97 + (n % 26))}${String.fromCharCode(97 + Math.floor(n++ / 26))}`, 'female').id; return id; };
 const session = () => { const id = person(); const c = new Call({ send() {}, close() {}, onmessage: null, onclose: null }, 'k'); clearInterval(c.endTimer); c.profile = memory.load(id); c.channel = 'chat'; return c; };
@@ -108,7 +108,7 @@ test('GUARD: 12 bad drafts (certainty, an invented link or number, a claim with 
   let blocked = 0; for (const [d, why] of BAD_DRAFTS) { const r = smart.breaks(d, s); assert.equal(r, why, d); blocked += 1; } assert.equal(blocked, 12);
   for (const d of FINE_DRAFTS) assert.equal(smart.breaks(d, s), null, d);
   s._exec = { family: true, web: 'ran', scam: 'ran' }; assert.equal(smart.breaks("I've told your family about it.", s), null, 'with a record the claim is true'); assert.equal(smart.breaks('I searched the web and found nothing.', s), null);
-  s.lastHeard = () => 'my number is 98765 43210 and the site is www.mybank.com'; assert.equal(smart.breaks('Is www.mybank.com the one they gave you?', s), null, 'a link they gave is not invented'); assert.equal(smart.breaks('So 98765 43210 called you?', s), null);
+  s.lastHeard = () => 'my number is 98765 43210 and the site is www.mybank.com'; assert.equal(smart.breaks('Is www.mybank.com the one they gave you?', s), null, 'a link they gave is not invented'); s._q = 0; assert.equal(smart.breaks('So 98765 43210 called you?', s), null);
   assert.equal(c_breaks(), true); setAll(false);
 });
 function c_breaks() { const c = session(); return c.breaksFacts('It is verified safe.'); }
@@ -126,4 +126,47 @@ test('GUARD through the chat: a bad draft is rewritten once; if the rewrite is b
   queue.length = 0; queue.push(`${FEEL} It is verified safe.`, `${FEEL} I can't be sure, so please do not share the code. What did he ask you for?`);
   const r2 = await chat.sendText(id, 'He wants the code now', 'Asia/Kolkata'); assert.match(r2.messages[r2.messages.length - 1].text, /do not share the code/);
   setAll(false);
+});
+
+// ---------------------------------------------------------------- SHORT / CONTRACT / CAPS / MEMORY / GENERAL
+test('SHORT: the first "what can you do" is told to be two sentences, three things, one question; "more" and "all" get the full list; flag off = the old nine-item fact', () => {
+  const run = (on, turns) => { setAll(false); if (on) process.env.MAYA_SMART_SHORT = 'on'; const c = session(); c.channel = 'chat'; let n = ''; for (const t of turns) { c.history.push({ role: 'user', content: t }); n = c.limitsFacts(t); } const d = { maxSentences: 9, noQuestion: false, emotion: 'neutral', intensity: 1 }; c.applyBeat(d, {}, false); setAll(false); return { n, d }; };
+  const first = run(true, ['what can you do for me']); assert.match(first.n, /AT MOST TWO short sentences[^]*at most THREE things[^]*ONE short question/); assert.ok(first.d.maxSentences <= 2, `cap ${first.d.maxSentences}`);
+  const more = run(true, ['what can you do for me', 'more']); assert.match(more.n, /THE TRUE LIST|nine/i); assert.ok(more.d.maxSentences >= 5);
+  const all = run(true, ['tell me everything you can do']); assert.doesNotMatch(all.n, /AT MOST TWO short sentences/);
+  const off = run(false, ['what can you do for me']); assert.doesNotMatch(off.n, /AT MOST TWO short sentences/); assert.ok(off.d.maxSentences >= 5, 'flag off = unchanged');
+});
+
+test('SHORT guard: a dump of four abilities and a second question are rewritten (reason given), then a plain true line; three things and one question pass', () => {
+  setAll(false); process.env.MAYA_SMART_SHORT = 'on'; const c = session(); c._abilityFirst = true;
+  const feed = (...ps) => { c._q = 0; c._cats = null; c._why = null; return ps.map((p) => smart.breaks(p, c)); };
+  assert.deepEqual(feed('I can chat with you, set reminders, and check messages for scams.', 'What would you like help with?'), [null, null]);
+  assert.deepEqual(feed('I can talk, set reminders, check photos for scams, search the news and tell your family.').map(String), ['dump']); assert.match(c._why, /too many abilities/); assert.match(smart.fallback(c), /What would you like help with\?$/);
+  assert.deepEqual(feed('How are you today?', 'And what did you eat?'), [null, 'twoq']); assert.match(c._why, /only ONE/); setAll(false);
+});
+
+test('CONTRACT + CAPS: every non-scam turn carries the reply shape; ability and reminder turns carry the RECORD with tools available and unavailable here', () => {
+  setAll(false); process.env.MAYA_SMART_CONTRACT = 'on'; process.env.MAYA_SMART_CAPS = 'on';
+  const c = session(); c.careNotes('can you check a photo for me'); assert.ok(c.factLabels.includes('smart-shape') && c.factLabels.includes('smart-record'), c.factLabels.join());
+  const n = c.careNotes('can you check a photo for me'); assert.match(n, /available: chat, reminders, photo/); assert.match(n, /unavailable: phoning anyone/);
+  const v = session(); v.channel = 'call'; assert.match(v.careNotes('can you check a photo for me'), /unavailable: photo, PDF, web search/);
+  assert.match(n, /keep who said what/); setAll(false);
+});
+
+test('MEMORY: one THREAD line each turn; the question she asked is kept, not asked again (even reworded), across sessions on the same profile; an unanswered question is flagged', async () => {
+  setAll(false); process.env.MAYA_SMART_MEMORY = 'on'; const care = require('../care');
+  const a = session(); const id = a.profile.id; a.careNotes('I like my garden'); smart.afterReply(a, 'That sounds lovely. What flowers are you growing this season?');
+  let n = a.careNotes('hmm'); assert.match(n, /THREAD: topic=/); assert.match(n, /have not answered it yet/);
+  n = a.careNotes('I am growing roses and some tomatoes this year'); assert.doesNotMatch(n, /have not answered it yet/); assert.match(n, /never ask the same thing again/);
+  assert.equal(smart.breaks('Which flowers are you growing this season?', a), 'repeat'); a._why = null;
+  assert.equal(smart.breaks('How is your sister doing these days?', a), null);
+  const b = session(); b.profile = memory.load(id); b.profile.id = id; assert.equal(smart.breaks('So what flowers are you growing this season?', b), 'repeat', 'a new session, same person');
+  b.factLabels = ['setrem-confirm']; assert.equal(smart.breaks('What flowers are you growing this season?', b), null, 'a required set-up question is never blocked'); assert.ok(care.get(id).smart.qs.length >= 1); setAll(false);
+});
+
+test('GENERAL: "is it safe / true / ok" on any topic is Not sure unless a check really ran; a failed check says so; never safe or verified', () => {
+  assert.equal(smart.decideGeneral('is it safe to take two of my tablets', {}).label, 'Not sure'); assert.equal(smart.decideGeneral('is it true that the bank closes', { web: 'failed' }).why, 'the check failed');
+  assert.equal(smart.decideGeneral('is it safe to eat this', { web: 'ran' }).label, 'Checked'); assert.equal(smart.decideGeneral('I had a lovely day', {}), null);
+  setAll(false); process.env.MAYA_SMART_GENERAL = 'on'; const c = session(); const n = c.careNotes('is it safe to take two tablets together'); assert.match(n, /NOT SURE \(nothing was checked\)[^]*never say safe, verified, fine or guaranteed/); setAll(false);
+  const off = session().careNotes('is it safe to take two tablets together'); assert.doesNotMatch(off, /NOT SURE/);
 });

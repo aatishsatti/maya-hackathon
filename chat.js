@@ -217,6 +217,7 @@ class ChatSession {
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.
   async reply(note, { again = false, safetyRetry = false } = {}) {
     if (!again) this.guardBlocked = false;
+    this._q = 0; this._cats = null; if (!again) this._why = null;
     const signal = AbortSignal.timeout(REPLY_TIMEOUT_MS);
     const rs = startReply(this.history, this.roster(note), signal);
     const pieces = [];
@@ -270,7 +271,7 @@ class ChatSession {
     } catch (e) {
       if (!(e && e.empty && !pieces.length)) throw new ChatError(`Maya could not answer: ${e.message}`);
     }
-    if (splitter.halted && repeated) return this.reply(`${note} ${retryWhy === 'facts' ? `Your draft said "${repeated}", which the app's facts do not support (a family alert that was never made, a reason nobody gave, or a stock comfort line). Write the whole reply again in plain, short, direct words: say only what the FAMILY ALERTS fact says, no excuse, no soothing line.` : retryWhy === 'beat' ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.` : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`}`, { again: true });
+    if (splitter.halted && repeated) return this.reply(`${note} ${retryWhy === 'facts' ? `Your draft said "${repeated}", which the app's facts do not support${this._why ? ` (${this._why})` : ''} (a family alert that was never made, a reason nobody gave, or a stock comfort line). Write the whole reply again in plain, short, direct words: say only what the FAMILY ALERTS fact says, no excuse, no soothing line.` : retryWhy === 'beat' ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.` : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`}`, { again: true });
     if (splitter.halted && !safetyRetry) { // Spark read the person as in crisis before saying anything: Tier A, then the reply is written again with the safety note
       this.enterSafety();
       return this.reply(`${this.replyNote()} ${this.safetyNote()}`, { safetyRetry: true });
@@ -446,17 +447,18 @@ async function sendText(profileId, text, tz, opts = {}) {
   if (!off) { scam = await talkCheck(profileId, t, chk); if (scam && (scam.level === 'warn' || scam.level === 'pause')) off = await officialStep(s, profileId, t, scam); }
   // Anything else that needs checking (news, a claim, a medicine): the general web check; a failed search tells her she cannot verify it.
   const tt = talkTurn(scam, profileId, off);
-  let sources = [];
+  let sources = [], webFailed = false;
   if (!off && (!scam || scam.level === 'none') && !care.hasActiveSafety(profileId) && !s.health && !s.safety && !selfHarmText(t)) {
     let g = null;
-    try { g = await deps.web(t, {}); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; }
+    try { g = await deps.web(t, {}); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; webFailed = true; }
     const wn = require('./web').note(g); if (wn) { tt.note = [tt.note, wn].filter(Boolean).join(' '); tt.short = true; sources = require('./web').sources(g); }
   }
   const due = care.checkDueIds(profileId);
   // smart.js: what really ran this turn (the record card and the draft guard use it) and what the scam check said (the decision uses it). Read only there; a flag OFF ignores both.
   s._scam = { scam, failed: Boolean(chk.failed), needed: require('./scam').needsCheck(t) };
-  s._exec = { scam: scam ? 'ran' : chk.failed ? 'failed' : null, web: sources.length ? 'ran' : null };
+  s._exec = { scam: scam ? 'ran' : chk.failed ? 'failed' : null, web: sources.length ? 'ran' : webFailed ? 'failed' : null };
   const r = await s.turn({ heard: t, ...tt });
+  require('./smart').afterReply(s, r.text);   // MEMORY flag: the questions she just asked (content words only, kept on the profile 14 days)
   care.checkDelivered(profileId, due);   // a finished lookup was handed to her with this reply: told once
   afterTalkReply(profileId, scam, 'text', off, r.text);
   return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text, ...(sources.length ? { sources } : {}) })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };

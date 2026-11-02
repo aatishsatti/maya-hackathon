@@ -139,3 +139,19 @@ Trace shown for a session (names only, never the senior's words): `asked`, `lear
 Failure handling is shown, not only success: a stubbed draft saying "verified safe, call 1800 ..." is rewritten, and when the rewrite is also bad the senior sees "I can't be sure about this one, and I can make mistakes..." (`test/smart.test.js`). A failed scam check gives Not sure. A caller's "do not tell anyone" is not taken as the senior saying no to their family.
 
 **Limits, plainly.** If the first gate (V1) misses a scam, nothing here can rescue it. Checks are simple patterns, so a reply that drifts in meaning can still get through. No design here guarantees zero hallucination or zero forgetting. A consent or state bug is a release blocker of its own and is tested separately. Sensitive holds are unchanged. The model never decides what is sent to the family.
+
+### Second round of code-side layers (flags, all off by default)
+
+`SHORT` (first ability answer: two sentences, three things, one question; the full list only on "more" or "all"; a dump or a second question is rewritten once, then a plain line), `CONTRACT` (a reply-shape line on every non-scam turn), `CAPS` (tools available and unavailable here, plus what ran or failed), `MEMORY` (one THREAD line per turn; questions she already asked are not asked again, also in a later session; kept as content words on the profile for 14 days), `GENERAL` ("is it safe / true / ok" on any topic is Not sure unless a check ran).
+
+Measured with the real model, fresh seniors, 18 single-turn cases and 2 two-session pairs, flags off vs `MAYA_SMART=on`:
+
+| | off | on |
+|---|---|---|
+| Replies over two sentences (18) | 4 | 0 |
+| Ability answers naming 4+ abilities (6) | 5 | 0 |
+| Replies with two questions (18) | 0 | 0 |
+| "Is it safe" answers that claim safe or verified (4) | 0 | 0 |
+| Same question asked again in a later session (2 pairs) | 0 | 0 |
+
+The last two rows show no difference: the model already behaved on this small sample, so they are not evidence of improvement. The sample is small; this is a check, not a benchmark. Prompt trimming (`docs/maya-prompt.md`) was not done.

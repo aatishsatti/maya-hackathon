@@ -9,16 +9,23 @@
 //   DECISION  signals -> Warning / Caution / Not sure / Nothing-unusual-so-far, made here; unknown, unanswered or a failed check can never be Nothing-unusual.
 //   CARDS     a one-line STATE card (kind, asked, contact, questions, next missing fact, consent read-only) and a RECORD card (what really ran this turn).
 //   GUARD     a draft is rewritten once (then a plain safe line) if it says "verified safe" / "100% scam", invents a link or a number, or claims "I checked / called / told" with no record.
+//   SHORT     first ability answer: at most 2 sentences, 3 things, one question (the full list only on "more / all"); every turn one question; a long dump or two questions is rewritten once, then a plain line.
+//   CONTRACT  a short reply-shape line on every non-scam turn (what you see, what you are unsure of, ONE next step; keep who said what and every "not").
+//   CAPS      the RECORD card on ability / reminder / "did you ..." turns too: tools available / unavailable here, and what really ran, failed or did not run.
+//   MEMORY    one THREAD line each turn (topic, what she last asked and whether it was answered, questions already asked, kept across sessions); a repeated question is rewritten once.
+//   GENERAL   a verification question on any topic ("is it safe", "is it true") is Not sure unless a check really ran; never safe, verified or guaranteed.
 //   KINDS     for a scam turn only: what the real thing does and the common traps, for the kind named (data below; PROPOSED anchors, human check pending; no numbers, links or routes).
 'use strict';
 
+const LAYERS_ALL = ['ROUTER', 'ABILITIES', 'DECISION', 'CARDS', 'GUARD', 'KINDS', 'SHORT', 'CONTRACT', 'CAPS', 'MEMORY', 'GENERAL'];
+const any = () => LAYERS_ALL.some((l) => flag(l));
 const flag = (layer) => { const v = process.env[`MAYA_SMART_${layer}`]; return v === 'on' || (process.env.MAYA_SMART === 'on' && v !== 'off'); };
 
 // ---------------------------------------------------------------- 1. intent router
 const HEALTH = /\b(pain|hurts?|aching|dizzy|chest|breath(?:ing|less)?|fell|fall(?:en)?|fever|bleed(?:ing)?|unwell|nauseous|hospital|ambulance|can'?t sleep)\b/i;
 const REMIND = /\bremind(?:er|ers|ing)?\b|\btimer\b|\balarm\b|\btell me in \d+|\bin \d+ (?:minutes?|hours?)\b/i;
 const ABILITY_Q = /\b(?:can|could|do|are|will)\s+(?:you|u|maya)\b[^?.!]{0,40}\b(?:photo|picture|screenshot|pdf|letter|call|ring|phone|remind|search|look up|check|read|book|order|buy|pay|send|text|message|voice|speak|language|help|tell|let|talk)\b|\bwhat\s+(?:can|could)\s+(?:you|u)\s+do\b|\bare you able\b/i;
-const ACK = /^(?:ok(?:ay)?|oky|yes|yeah|yep|no|nope|hmm+|and\??|so\??|what about (?:it|that)\??|really\??|why\??|how\??|go on|thanks?|thank you)$/i;
+const ACK = /^(?:ok(?:ay)?|oky|yes|yeah|yep|no|nope|hmm+|and\??|so\??|more|all|everything|tell me more|what else|anything else|what about (?:it|that)\??|really\??|why\??|how\??|go on|thanks?|thank you)$/i;
 const words = (t) => String(t || '').trim().split(/\s+/).filter(Boolean);
 
 function intent(heard, s) {
@@ -104,10 +111,49 @@ function consent(s) {
   return care.scamTold(id) ? 'family already told (topic only)' : p && care.scamDeclined(id, p.type) ? 'they said no (yellow flag only, never ask again)' : p ? 'question to the family is open' : 'no family question open';
 }
 
+// ---------------------------------------------------------------- short ceiling (SHORT)
+const WANTS_ALL = /\b(?:all|everything|every ?thing|full list|the whole|in full|more|and\?|what else|anything else|go on)\b/i;
+const wantsAll = (t) => WANTS_ALL.test(String(t || ''));
+const ABILITY_SHORT = ' ABILITIES (facts for you, never read out as written): they have just asked what you can do. Reply in AT MOST TWO short sentences: name at most THREE things, picked for what fits this chat and said in your own fresh words, then ask ONE short question about what they would like. Do not list more than three; if they want everything they will say "more" or "all". Only real things: talking by voice or writing, setting reminders yourself, checking a message, photo or PDF for a scam (the written chat), and telling their family when they ask. Never a stock sentence.';
+const CATS = [['talk', /\b(?:voice|talk|chat|speak|company|conversation)\b/i], ['remind', /\bremind/i], ['scam', /\b(?:scam|photo|screenshot|pdf)\b/i], ['web', /\b(?:news|search|look(?:ing)? up|the web)\b/i], ['family', /\bfamily\b/i], ['schedule', /\bschedule\b/i], ['call', /\b(?:call|ring|phone) you\b/i]];
+const ABILITY_FALLBACK = 'I can chat with you, set reminders, and check a message for scams. What would you like help with?';
+const STOP = new Set('that this with would could should have your you what when where which about there their they them then than from were been will just like some into also very much more'.split(' '));
+const contentWords = (t) => [...new Set(String(t || '').toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w)))];
+const overlap = (a, b) => { if (a.length < 3 || b.length < 3) return 0; const sb = new Set(b); return a.filter((w) => sb.has(w)).length / Math.min(a.length, b.length); };
+
+// ---------------------------------------------------------------- context memory (MEMORY): questions she asked, kept in the session and (content words + a short text) on the profile for 14 days
+const DAY14 = 14 * 86400000;
+function savedQs(s) { const care = require('./care'), id = s.profile && s.profile.id, p = id && care.get(id); return ((p && p.smart && p.smart.qs) || []).filter((q) => Date.now() - q.at < DAY14); }
+function allQs(s) { const x = st(s); return [...savedQs(s), ...(x.qs || [])]; }
+function afterReply(s, text) {
+  if (!flag('MEMORY')) return;
+  const x = st(s); const qs = String(text || '').split(/(?<=[.!?])\s+/).filter((q) => /\?\s*$/.test(q));
+  if (!qs.length) { x.lastQ = null; return; }
+  x.qs = x.qs || [];
+  for (const q of qs) { const w = contentWords(q); if (w.length >= 3) x.qs.push({ w, t: q.replace(/\s+/g, ' ').slice(0, 90), at: Date.now() }); }
+  x.lastQ = { t: qs[qs.length - 1].replace(/\s+/g, ' ').slice(0, 90), answered: false };
+  x.qs = x.qs.slice(-10);
+  try { require('./care').persistSmart(s.profile.id, { qs: allQs(s).slice(-10).map(({ w, t, at }) => ({ w, t: t.slice(0, 60), at })) }); } catch { /* no profile: session memory only */ }
+}
+function threadLine(s, heard) {
+  const x = st(s); if (x.lastQ && !x.lastQ.answered && words(heard).length >= 3 && !ACK.test(String(heard).trim().replace(/[.!,]+$/g, ''))) x.lastQ.answered = true;
+  const qs = allQs(s).slice(-6).map((q) => `"${q.t.replace(/"/g, '')}"`);
+  if (!x.topic && !qs.length) return null;
+  return `THREAD: topic=${x.topic || 'none'}; ${x.lastQ && !x.lastQ.answered ? `you last asked "${x.lastQ.t.replace(/"/g, '')}" and they have not answered it yet, so do not move on as if they had; ` : ''}questions you already asked (never ask the same thing again, in any wording): ${qs.join(' ') || 'none'}.`;
+}
+
+// ---------------------------------------------------------------- general decision (GENERAL): any "is it safe / true / ok" question
+const VERIFY_Q = /\b(?:is (?:it|this|that) (?:true|safe|ok(?:ay)?|real|normal|fine|good for)|are (?:they|these) (?:safe|ok(?:ay)?)|should i (?:take|stop|eat|drink|stop taking)|can i (?:take|stop|eat|drink|mix)|is it (?:ok|okay|safe) to)\b/i;
+function decideGeneral(heard, exec = {}) {
+  if (!VERIFY_Q.test(String(heard || ''))) return null;
+  if (exec.web === 'ran') return { label: 'Checked', why: 'a web check ran' };
+  return { label: 'Not sure', why: exec.web === 'failed' ? 'the check failed' : 'nothing was checked' };
+}
+
 // ---------------------------------------------------------------- the notes for one turn: [[label, text], ...]
 function notes(s, heard) {
   const out = [];
-  if (!(flag('ROUTER') || flag('ABILITIES') || flag('DECISION') || flag('CARDS') || flag('KINDS'))) return out;
+  if (!any()) return out;
   const sc = s._scam;   // set by chat.js for this turn: { scam, failed, needed }
   const x = st(s); let it = intent(heard, s); const old = x.topic;
   // "Can you check a photo of a letter?" is a question about her, not a scam story: it stays an ability question unless the V1 detector itself flagged it.
@@ -116,6 +162,12 @@ function notes(s, heard) {
   if (flag('ROUTER') && switched) out.push(['smart-switch', `TOPIC CHANGE: they have moved on from ${old} to ${it === 'smalltalk' ? 'something else' : it}. Answer what they just said first, and stay on it. Do not go back to ${old} unless they do${old === 'scam' ? '; the only exception is a family question that is still open, which you may repeat once, in one short sentence at the end' : ''}. (Any other FACT in this message still applies.)`]);
   if (it !== 'followup') x.topic = it;
   if (it !== 'scam' && switched && old === 'scam') { x.kind = null; x.incident = null; x.asked = []; x.known = {}; x.disclosed = false; }
+  if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
+  if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and ONE question; say what you see, what you are unsure of, and one next step or question; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
+  if (flag('GENERAL') && it !== 'scam' && !s.safety) {
+    const g = decideGeneral(heard, s._exec || {});
+    if (g) out.push(['smart-decision-general', g.label === 'Checked' ? 'DECISION (made by the app): a web check ran. You may share what it returned as "what I found", never as proof, never "verified", "safe" or "guaranteed"; no diagnosis or medicine advice; they decide.' : `DECISION (made by the app): NOT SURE (${g.why}). You have NOT verified this. Say honestly that you cannot be sure, say a trusted source (their doctor or pharmacist, or the official site) is the place to confirm, and never say safe, verified, fine or guaranteed. No diagnosis or medicine advice; they decide.`]);
+  }
   if (flag('ABILITIES') && it === 'ability') {
     const hit = CAN.filter(([re]) => re.test(heard)).slice(0, 2);
     const chat = s.channel === 'chat';
@@ -152,9 +204,10 @@ function notes(s, heard) {
     }
   }
   const claimy = /\b(?:did|have|had)\s+you\b[^?.!]{0,30}\b(?:check|call|ring|tell|told|send|sent|look|search|verif)/i.test(heard) || it === 'scam';
-  if (flag('CARDS') && s._exec && claimy) {
-    const e = s._exec;
-    out.push(['smart-record', `RECORD (what really happened this turn; claim nothing that is "no"): family alert/note sent by the app: ${e.family ? 'yes' : 'no'}; web check: ${e.web || 'not run'}; message/photo scam check: ${e.scam || 'not run'}; reminder saved: ${e.reminder ? 'yes' : 'no'}. You never phoned anyone for them.`]);
+  if ((flag('CARDS') || flag('CAPS')) && (s._exec || flag('CAPS')) && (claimy || (flag('CAPS') && (it === 'ability' || it === 'reminder')))) {
+    const e = s._exec || {}, chat = s.channel === 'chat';
+    const tools = flag('CAPS') ? ` TOOLS here: available: ${chat ? 'chat, reminders, photo / PDF / message scam check, web check, family note' : 'voice talk, reminders, family note'}; unavailable: ${chat ? 'phoning anyone, location, payments' : 'photo, PDF, web search, phoning anyone, location, payments'}.` : '';
+    out.push(['smart-record', `RECORD (what really happened this turn; claim nothing that is "no"): family alert/note sent by the app: ${e.family ? 'yes' : 'no'}; web check: ${e.web || 'not run'}; message/photo scam check: ${e.scam || 'not run'}; reminder saved: ${e.reminder ? 'yes' : 'no'}. You never phoned anyone for them.${tools}`]);
   }
   return out;
 }
@@ -178,8 +231,16 @@ const CLAIM = [
 ];
 // Returns a reason string when the draft must be written again, else null. rec = s._exec (what really ran); known = the text the facts and the senior gave (a link or number must already be in it).
 function breaks(text, s) {
-  if (!flag('GUARD')) return null;
   const t = String(text || '').replace(/’/g, "'");
+  if (flag('SHORT')) {
+    s._q = (s._q || 0) + (t.match(/\?/g) || []).length;
+    if (s._q > 1) { s._why = 'you asked more than one question: ask only ONE'; return 'twoq'; }
+    if (s._abilityFirst) { s._cats = s._cats || new Set(); for (const [k, re] of CATS) if (re.test(t)) s._cats.add(k); if (s._cats.size > 3) { s._why = 'you listed too many abilities: name at most three, in at most two short sentences, then one question'; return 'dump'; } }
+  }
+  if (flag('MEMORY') && /\?\s*$/.test(t) && !(s.factLabels || []).some((l) => /^(setrem|scam)/.test(l))) {
+    const w = contentWords(t); if (allQs(s).some((q) => overlap(w, q.w) >= 0.6)) { s._why = 'that question was already asked: do not ask it again, move on'; return 'repeat'; }
+  }
+  if (!flag('GUARD')) return null;
   if (SAFE_CLAIM.test(t) && !/\bnot\s+(?:100|a hundred|safe|verified)|\bn't\s+(?:safe|verified)|\bcan'?t\s+(?:say|be)\b[^.]{0,30}\b(?:safe|sure)/i.test(t)) return 'certainty';
   const known = `${s.lastHeard ? s.lastHeard() : ''} ${s._knownText || ''}`;
   const u = URL_.exec(t); if (u && !known.toLowerCase().includes(u[0].toLowerCase().replace(/[.,!?)]+$/, ''))) return 'link';
@@ -192,9 +253,10 @@ function breaks(text, s) {
 // The line a person sees when both drafts were blocked: plain, true, asks one thing. Never a faked answer, never the bad draft.
 function fallback(s) {
   const x = st(s);
+  if (/abilities/.test(s._why || '')) return ABILITY_FALLBACK;
   return x.topic === 'scam' || (s._scam && s._scam.needed)
     ? "I can't be sure about this one, and I can make mistakes. Please don't pay or share anything until you've checked with your family or the real company, using a number or app you already trust. What did they ask you for?"
     : 'I want to get this right. Could you tell me a little more about what you mean?';
 }
 
-module.exports = { attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
+module.exports = { any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };

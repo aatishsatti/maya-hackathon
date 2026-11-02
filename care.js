@@ -1540,6 +1540,8 @@ function setTimezone(id, tz, source = 'manual') {
   if (changed) pushFamily('refresh', { id });
   return changed || p.tz === tz;
 }
+// smart.js MEMORY: the questions Maya recently asked (content words and a short text), so she does not ask them again in a later session.
+function persistSmart(id, obj) { const p = get(id); if (!p) return false; p.smart = obj; save(id); return true; }
 function setReminderSender(sender) { reminderSender = sender; }
 const whatsappLinked = (id) => Boolean(reminderSender && reminderSender.channelFor(id) === 'whatsapp');   // is WhatsApp set up for this person (setrem.js asks before it offers it)
 const WA_OPEN = new Set(['wa_sent', 'wa_delivered', 'wa_read']);
@@ -2006,6 +2008,6 @@ module.exports = {
   familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamAskedOut, scamAsked, scamFresh, scamLost, asksFamilyQ, SCAM_GAP_MS, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  addReminder, addSeniorReminder, quietEndsAt, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  persistSmart, addReminder, addSeniorReminder, quietEndsAt, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };
