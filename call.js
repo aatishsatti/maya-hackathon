@@ -1264,6 +1264,7 @@ class Call {
     if (!told.length && (SEEN_TALK.test(t) || (PAST_SEND_THEM.test(t) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|yet)\b/i.test(t) && this.familyRelevant()))) return true;   // no record: no past-tense send to "them", and nothing about what they have seen
     if (!told.length && t.split(/(?<=[.!?])\s+/).some((x) => SENT_CLAIM.test(x) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|wasn't|yet)\b/i.test(x))) return true;   // a denial ("no note was sent") is not a claim return true;   // "I can" is an ability; a note that "went over" or an invented "you'd asked" needs a record on the dashboard
     if (SELF_HARM_REASON.test(t) && !told.some((x) => /safety|health/.test(x))) return true;
+    if (require('./smart').breaks(t, this)) return true;   // smart.js GUARD (flag, OFF by default): "verified safe" / "100% scam", an invented link or number, "I checked / told" with no record
     return false;
   }
 
@@ -1787,6 +1788,13 @@ class Call {
     // A reply on WhatsApp while a reminder from the family is in flight (or was just answered): she is told, so her reply is about it. Not on a call (a call speaks its reminders itself),
     // and not for the same person typing in the app (care.turnChannel is 'whatsapp' only inside whatsapp.js's chat call).
     if (this.channel === 'chat' && care.turnChannel(id) === 'whatsapp') { const rf = reminderFacts(care.reminderContext(id)); if (rf) note(rf.label, rf.text); }
+    // smart.js (flags, all OFF by default): the topic router, abilities on demand, the decision from signals, the state / record cards. Code decides what Spark sees; a flag OFF adds nothing here.
+    const sm = require('./smart');
+    if (sm.flag('CARDS') || sm.flag('DECISION') || sm.flag('ROUTER') || sm.flag('ABILITIES') || sm.flag('KINDS')) {
+      this._exec = { ...(this._exec || {}), family: this.factLabels.some((l) => /^(scam-yes-to-family|concern-yes-alert|family-ask)$/.test(l)) || Boolean(care.scamTold(id)), reminder: this.factLabels.includes('setrem-saved') };
+      for (const [l, t] of sm.notes(this, heard)) note(l, t);
+    }
+    this._knownText = notes.join(' ');
     return notes.join(' ');
   }
 

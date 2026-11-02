@@ -216,6 +216,7 @@ class ChatSession {
 
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.
   async reply(note, { again = false, safetyRetry = false } = {}) {
+    if (!again) this.guardBlocked = false;
     const signal = AbortSignal.timeout(REPLY_TIMEOUT_MS);
     const rs = startReply(this.history, this.roster(note), signal);
     const pieces = [];
@@ -255,7 +256,7 @@ class ChatSession {
         return d;
       },
       onPiece: (text, kind) => {
-        if (this.breaksFacts(text)) { if (again) return; repeated = text; retryWhy = 'facts'; splitter.halted = true; return; }   // nothing is shown until the whole reply is done: any piece that claims what the app never did, or a stock counselling line, means write it again
+        if (this.breaksFacts(text)) { if (again) { this.guardBlocked = true; return; } repeated = text; retryWhy = 'facts'; splitter.halted = true; return; }   // nothing is shown until the whole reply is done: any piece that claims what the app never did, or a stock counselling line, means write it again
         if (!pieces.length && !again && !this.safety) {
           const why = this.repeatsOpening(text) ? 'repeat' : this.beatBlocks(text, delivery) ? 'beat' : null;
           if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
@@ -280,6 +281,7 @@ class ChatSession {
       const Q = { 'scam-family-owed': 'Would you like me to let your family know about this?', 'scam-resume': 'Would you like me to let your family know about that?', 'scam-lost': 'I lost that set-up while you were away, so nothing was sent. What happened, and would you like me to let your family know?' };
       if (lab) pieces.push({ text: Q[lab], kind: null });
     }
+    if (!pieces.length && again && require('./smart').flag('GUARD') && this.guardBlocked) { pieces.push({ text: require('./smart').fallback(this), kind: null }); this.guardBlocked = false; }   // both drafts broke the guard: a plain true line, never the bad draft
     if (!pieces.length) throw new ChatError('Maya could not answer right now: no reply came back.'); // never a faked reply
     let all = pieces.map((p) => p.text).join(' ').replace(/\s+([,.;:!?])/g, '$1');
     // Her own power: she does set reminders (and short ones) herself. A draft that refuses, invents a limit or sends them to their family is written again once; and while a set-up is still open (nothing saved yet) a draft that says it is
@@ -408,10 +410,10 @@ const thread = (profileId) => { session(profileId); return sessions.get(profileI
 // latency-critical, so the check is simply awaited before Maya answers. A failed check never blocks the reply and never invents a verdict.
 // Safety first: nothing is checked while a safety alert is active or when the words themselves are about self-harm, and a pending
 // "shall I tell your family?" question is answered, not re-asked.
-async function talkCheck(profileId, words) {
+async function talkCheck(profileId, words, out = null) {
   const scam = require('./scam');
   if (!scam.needsCheck(words) || care.hasActiveSafety(profileId) || care.scamFresh(profileId) || selfHarmText(words)) return null;
-  try { return await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); return null; }
+  try { return await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); if (out) out.failed = true; return null; }
 }
 // Official source (official.js), typed chat only: on a warn / pause the company they named is looked up on its official site; if none is clear, ONE
 // reconfirm question is asked first (type the link, or send a photo) and the family question waits for their answer. Returns facts for Spark.
@@ -440,7 +442,8 @@ async function sendText(profileId, text, tz, opts = {}) {
   // A reconfirm question is open: this message may settle it (a plain yes / no to the family question does not). Otherwise the usual scam check.
   let scam = null, off = null;
   if (require('./official').asking(s.rc) && !care.hasActiveSafety(profileId) && !selfHarmText(t)) { off = await officialStep(s, profileId, t, null); if (off) scam = off.scam; }
-  if (!off) { scam = await talkCheck(profileId, t); if (scam && (scam.level === 'warn' || scam.level === 'pause')) off = await officialStep(s, profileId, t, scam); }
+  const chk = {};
+  if (!off) { scam = await talkCheck(profileId, t, chk); if (scam && (scam.level === 'warn' || scam.level === 'pause')) off = await officialStep(s, profileId, t, scam); }
   // Anything else that needs checking (news, a claim, a medicine): the general web check; a failed search tells her she cannot verify it.
   const tt = talkTurn(scam, profileId, off);
   let sources = [];
@@ -450,6 +453,9 @@ async function sendText(profileId, text, tz, opts = {}) {
     const wn = require('./web').note(g); if (wn) { tt.note = [tt.note, wn].filter(Boolean).join(' '); tt.short = true; sources = require('./web').sources(g); }
   }
   const due = care.checkDueIds(profileId);
+  // smart.js: what really ran this turn (the record card and the draft guard use it) and what the scam check said (the decision uses it). Read only there; a flag OFF ignores both.
+  s._scam = { scam, failed: Boolean(chk.failed), needed: require('./scam').needsCheck(t) };
+  s._exec = { scam: scam ? 'ran' : chk.failed ? 'failed' : null, web: sources.length ? 'ran' : null };
   const r = await s.turn({ heard: t, ...tt });
   care.checkDelivered(profileId, due);   // a finished lookup was handed to her with this reply: told once
   afterTalkReply(profileId, scam, 'text', off, r.text);

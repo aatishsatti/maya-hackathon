@@ -82,3 +82,43 @@ Not built, or built but not proven, and not claimed:
 - **Real-household security.** The family signs in with a username and password. The person never logs in: their link (an 8-character key) opens their chat, so anyone who has the link can open it. This is a prototype, not ready for real households.
 - **Measured on real people.** The evaluation uses test sets the team wrote and synthetic speech, and one live voice call. See the limits on [`docs/meta-models.html`](docs/meta-models.html).
 - **Voice speed.** Maya's first audio comes about 2 to 3 seconds after a person stops talking (live, 2 November): mostly Spark thinking time. See the live numbers on the same page.
+
+## How Maya stays on topic (smart.js, flags, off by default)
+
+Maya's voice model (Muse Spark 1.3) is fast, and a fast model drifts as the prompt grows. So **code decides what it sees each turn and checks what comes back**. Spark is the wording layer; code owns the decisions. No model call is made by this layer, no bigger model is used, and the first scam gate (`scam.js`) is unchanged. A miss by that first gate cannot be rescued here.
+
+```
+ senior says something
+   |
+   v
+ [scam.js first gate, unchanged] ---> signals (urgency, money, impersonation, secrecy, payment)
+   |
+   v
+ ROUTER (code)      scam / reminder / ability question / health / small talk / follow-up; a topic-switch fact
+ ABILITIES (code)   one short fact per ability that really exists, and a "cannot" fact for what does not
+ DECISION (code)    signals -> Warning / Caution / Not sure / "Nothing unusual so far"; unknown or failed is never safe
+ KINDS (data)       what the real bank / tax office / lottery / airline / police / tech support / relative / investment does, and common traps
+ CARDS (code)       STATE (kind, signs, contact, questions asked 0-3, next missing fact, consent read-only) + RECORD (what really ran)
+   |
+   v
+ Spark words the reply  (wording only)
+   |
+   v
+ GUARD (code)       blocks "verified safe", "100% scam", an invented link or number, "I checked / told / called" with no record;
+                    rewritten once, then a plain true line. Never the bad draft.
+```
+
+Flags: `MAYA_SMART=on` turns all layers on; `MAYA_SMART_<ROUTER|ABILITIES|DECISION|CARDS|GUARD|KINDS>=off|on` overrides one. All off = the same output as before.
+
+| Check (code level, no model) | Layer off | Layer on |
+|---|---|---|
+| Ability questions get the right fact (12 cases) + topic switches get the switch fact (6) | 0 / 18 | 18 / 18 |
+| Bad drafts blocked: certainty, invented link or number, claim with no record (12); honest drafts passed (4) | 0 / 12 | 12 / 12, 4 / 4 pass |
+| Decision from signals (8 cases); short, unread, unknown or failed never "nothing unusual" | n/a | 8 / 8 |
+| First scam gate, held-out set (`docs/scam-results.md`): warned / false alarms | 37 / 38, 0 / 38 | unchanged (scam tests 133 / 133) |
+
+These count what the code hands Spark or blocks, not how Spark words it. Live checks used the real model with fresh seniors.
+
+**What Maya will not claim.** She never says something is "verified safe" or "100% a scam". She says what she sees, says she can make mistakes, and the choice is the senior's. If a check failed or there is too little to go on, she says she is not sure and asks. She does not say she checked, called or told anyone unless the app's record shows it. She does not give phone numbers or links. Family consent is unchanged: yes sends a topic-only alert, no leaves only a quiet flag and is never asked again, one incident counts once.
+
+The scam kinds and their "what the real thing does" rules are kinds and behaviours, checked by a human, versioned in `smart.js`. They are proposed anchors and still need a human source check before the flag goes on.
