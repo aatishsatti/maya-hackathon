@@ -71,7 +71,10 @@ const QUESTIONS = [
 const KNOWS = { contact: /\b(?:called|rang|phoned|messaged|texted|emailed|contacted|came to)\s+(?:me|us)\b|\bi (?:called|rang|phoned|clicked|searched|found)\b/i, source: /\b(?:google|ad|advert|app|card|website|link|search)\b/i, ask: /\b(?:asked|wants?|wanted|told me to|send|pay|give|share|install|download)\b/i, check: /\b(?:checked|double.?checked|called the bank|asked my (?:son|daughter|family))\b/i };
 
 // ---------------------------------------------------------------- state per session
-function st(s) { return s._smart || (s._smart = { topic: null, kind: null, incident: null, asked: [], known: {}, disclosed: false, prev: null }); }
+// "They said do not tell anyone": the CALLER's instruction, not the senior refusing to tell their family. Speaker attribution for the consent reader (call.js careNotes, ROUTER flag).
+const attributedToOther = (t) => /\b(?:they|he|she|the (?:man|woman|lady|caller|person|officer)|someone|that (?:man|person))\s+(?:said|says|told|asked|wants?|keeps?|insists?)\b|\b(?:told|asked|warned) me\b/i.test(String(t || ''));
+
+function st(s) { return s._smart || (s._smart = { topic: null, kind: null, incident: null, asked: [], known: {}, contact: null, disclosed: false, prev: null }); }
 
 // ---------------------------------------------------------------- 4. decision from signals (made here, not by Spark's mood)
 // scam: the V1 / Spark-reading result { level, type, signals, reading } or null; ctx: { failed, needed, heard }.
@@ -88,6 +91,8 @@ function decide(scam, { failed = false, needed = false, heard = '' } = {}) {
 function nextQuestion(s, heard) {
   const x = st(s);
   for (const [k] of QUESTIONS) if (!x.known[k] && KNOWS[k].test(heard || '')) x.known[k] = true;
+  if (/\b(?:called|rang|phoned|messaged|texted|emailed|contacted|came to|knocked)\s+(?:me|us)\b|\b(?:someone|a man|a woman|a lady|they|he|she)\s+(?:called|rang|phoned|messaged|texted|emailed)\b/i.test(heard || '')) x.contact = 'they contacted the senior';
+  else if (/\bi (?:called|rang|phoned|clicked|searched|found|googled)\b/i.test(heard || '')) x.contact = 'the senior contacted them';
   if (x.asked.length >= 3) return null;
   const q = QUESTIONS.find(([k]) => !x.known[k] && !x.asked.includes(k));
   return q || null;
@@ -127,7 +132,8 @@ function notes(s, heard) {
     if (flag('DECISION')) {
       d = decide(sc && sc.scam, { failed: sc && sc.failed, needed: Boolean(sc && sc.needed) || it === 'scam', heard });
       if (d) {
-        const nq = d.label === 'Warning' ? null : nextQuestion(s, heard);
+        const nq0 = nextQuestion(s, heard);   // also learns from what they said, on every scam turn
+        const nq = d.label === 'Warning' ? null : nq0;
         const body = { 'Warning': 'WARNING. Your FIRST sentence must say plainly that this looks like a possible scam and why, from the signs (then do not pay or share anything). Never "definitely" or "100%".', 'Caution': 'CAUTION. Name ONE thing to double-check; do not call it a scam.', 'Not sure': `NOT SURE (${d.why}). Say honestly you cannot tell yet. Do not say it is safe or that it is a scam.`, 'Nothing unusual so far': 'NOTHING UNUSUAL FOUND SO FAR. You may say nothing unusual stands out in what they have told you so far. Never say safe, verified, legit or genuine.' }[d.label];
         let t = `DECISION (made by the app from the signals, not by you): ${body}`;
         if (nq) { x.asked.push(nq[0]); t += ` Ask ONE short question in your own words, only this: ${nq[1]}`; }
@@ -140,7 +146,9 @@ function notes(s, heard) {
       const sig = (sc && sc.scam && sc.scam.signals) || {};
       const asked = ['payment', 'secrecy', 'urgency', 'impersonation', 'money'].filter((k) => sig[k]);
       const unk = QUESTIONS.filter(([k]) => !x.known[k]).map(([k]) => k);
-      out.push(['smart-state', `STATE: topic=scam; kind=${x.kind || 'not clear'}; signs so far=${asked.join(',') || 'none'}; first contact: ${x.known.contact ? 'told' : 'unknown'}; what they were told by the senior is REPORTED, not verified; questions asked ${x.asked.length}/3; still unknown: ${unk.join(',') || 'nothing'}; family consent (read-only, do not change or announce it): ${consent(s)}.`]);
+      const ACT = { payment: 'pay or send details', secrecy: 'keep it secret', urgency: 'act now', impersonation: 'trust a claimed authority', money: 'money out of the blue' };
+      out.push(['smart-state', `STATE: topic=scam; incident=${x.kind || 'unclear'}#1; kind=${x.kind || 'not clear'}; requested action=${asked.map((k) => ACT[k]).join(', ') || 'none seen yet'}; who contacted whom=${x.contact || 'unknown'}; everything the senior says about the other side is REPORTED by the senior, not verified (say "you say they...", never state it as fact); answered=${Object.keys(x.known).filter((k) => x.known[k]).join(',') || 'none'}; questions asked ${x.asked.length}/3; next missing fact=${(QUESTIONS.find(([k]) => !x.known[k] && !x.asked.includes(k)) || [])[0] || 'none'}; family consent (read-only, never change, announce or guess it): ${consent(s)}.`]);
+      out.push(['smart-contract', 'OUTPUT CONTRACT: short; say what you see, what you are unsure of, and ONE next question or check; one worry, one step. Keep who said what, keep "not/never/didn\'t" exactly as said, and keep past apart from now. Answering the caller\'s questions is NOT a yes to you or to telling their family; only their answer to YOUR family question counts, and the app decides what is sent.']);
     }
   }
   const claimy = /\b(?:did|have|had)\s+you\b[^?.!]{0,30}\b(?:check|call|ring|tell|told|send|sent|look|search|verif)/i.test(heard) || it === 'scam';
@@ -149,6 +157,12 @@ function notes(s, heard) {
     out.push(['smart-record', `RECORD (what really happened this turn; claim nothing that is "no"): family alert/note sent by the app: ${e.family ? 'yes' : 'no'}; web check: ${e.web || 'not run'}; message/photo scam check: ${e.scam || 'not run'}; reminder saved: ${e.reminder ? 'yes' : 'no'}. You never phoned anyone for them.`]);
   }
   return out;
+}
+
+// What the audit shows for a session: asked, learned, checked, still unknown (names only, never the senior's words).
+function trace(s) {
+  const x = st(s), sc = s._scam || {}, e = s._exec || {};
+  return { asked: [...x.asked], learned: Object.keys(x.known).filter((k) => x.known[k]).concat(x.contact ? ['contact'] : []), checked: [sc.scam ? 'scam check ran' : sc.failed ? 'scam check FAILED' : 'scam check not run', e.web === 'ran' ? 'web check ran' : 'web check not run'], unknown: QUESTIONS.map(([k]) => k).filter((k) => !x.known[k]) };
 }
 
 // ---------------------------------------------------------------- 5/6. draft guard
@@ -183,4 +197,4 @@ function fallback(s) {
     : 'I want to get this right. Could you tell me a little more about what you mean?';
 }
 
-module.exports = { flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
+module.exports = { attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };

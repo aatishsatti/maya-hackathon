@@ -80,6 +80,22 @@ test('DECISION: signals -> Warning / Caution / Not sure / Nothing unusual so far
   assert.ok(asked + 1 <= 4, `at most three questions in one incident, got ${asked + 1}`); setAll(false);
 });
 
+test('STATE + CONTRACT + TRACE: who contacted whom and what was asked are kept, the other side is "reported", consent is read-only, and the trace names what was asked, learned, checked and still unknown', () => {
+  setAll(true); const c = session(); c._scam = { scam: { level: 'caution', type: 'bank scam', signals: { urgency: true, payment: true } }, failed: false, needed: true };
+  const n = c.careNotes('A man phoned me from my bank and says I must pay today'); assert.match(n, /who contacted whom=they contacted the senior/); assert.match(n, /requested action=pay or send details, act now/); assert.match(n, /REPORTED by the senior, not verified/);
+  assert.match(n, /family consent \(read-only, never change, announce or guess it\)/); assert.match(n, /OUTPUT CONTRACT[^]*NOT a yes to you/);
+  const tr = smart.trace(c); assert.deepEqual([tr.checked[0], tr.learned.includes('contact'), tr.unknown.includes('check')], ['scam check ran', true, true]); assert.ok(tr.asked.length <= 1);
+  c._scam = { scam: null, failed: true, needed: true }; c.careNotes('hmm'); assert.equal(smart.trace(c).checked[0], 'scam check FAILED'); setAll(false);
+});
+
+test('speaker attribution: the CALLER saying "do not tell anyone" is not the senior saying no to their family (flag on); the senior\'s own no still is', () => {
+  const care = require('../care'); const run = (on, said) => { setAll(on); const c = session(); const id = c.profile.id; care.scamAsk(id, 'bank scam', { channel: 'chat', asked: true }); c.careNotes(said); const l = [...c.factLabels]; setAll(false); return l; };
+  assert.ok(run(false, 'they said do not tell anyone').includes('scam-no-to-family'), 'flag off = the old reading, unchanged');
+  assert.ok(!run(true, 'they said do not tell anyone').includes('scam-no-to-family'));
+  assert.ok(!run(true, 'he told me not to tell anyone').includes('scam-no-to-family'));
+  assert.ok(run(true, 'no, do not tell them').includes('scam-no-to-family') && run(true, 'no').includes('scam-no-to-family'), 'their own no still counts');
+});
+
 test('KINDS: the kind named gets its real-behaviour rules and traps; no number, no link, no route in any of them', () => {
   setAll(true); const c = session(); c._scam = { scam: { level: 'warn', type: 'tax refund scam', signals: { payment: true } }, failed: false, needed: true };
   const t = c.careNotes('Someone from the tax office says I owe money and must pay in gift cards'); assert.match(t, /KIND \(tax\)/); assert.match(t, /every refund is fake|do not say every refund is fake/);

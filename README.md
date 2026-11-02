@@ -122,3 +122,20 @@ These count what the code hands Spark or blocks, not how Spark words it. Live ch
 **What Maya will not claim.** She never says something is "verified safe" or "100% a scam". She says what she sees, says she can make mistakes, and the choice is the senior's. If a check failed or there is too little to go on, she says she is not sure and asks. She does not say she checked, called or told anyone unless the app's record shows it. She does not give phone numbers or links. Family consent is unchanged: yes sends a topic-only alert, no leaves only a quiet flag and is never asked again, one incident counts once.
 
 The scam kinds and their "what the real thing does" rules are kinds and behaviours, checked by a human, versioned in `smart.js`. They are proposed anchors and still need a human source check before the flag goes on.
+
+### The six layers, and how honest each label is
+
+| # | Layer | Where | Status |
+|---|---|---|---|
+| 1 | V1 screening: signals from the message | `scam.js` (unchanged), held-out set in `docs/scam-results.md` | implemented |
+| 2 | State and attribution: who contacted whom, what the senior reported vs what is verified, answered questions, the speaker of "do not tell anyone" | `smart.js` STATE card, `attributedToOther` | implemented (simple patterns; semantic drift beyond them remains) |
+| 3 | Kind reasoning: what the real bank, tax office, lottery, airline, police, tech support, relative or investment firm does, and the traps | `smart.js` KINDS | implemented as data; **proposed anchors, country and agency exceptions not yet human-checked** |
+| 4 | Evidence and tool validation: a claim like "I checked / called / told" needs a matching record | `smart.js` RECORD card and GUARD | implemented for the checks that exist (scam check, web check, family alert, saved reminder); no other tools exist |
+| 5 | Code decisions and consent: Warning / Caution / Not sure / "Nothing unusual so far"; the family question, yes / no / never again, are code | `smart.js` DECISION, `care.js` | implemented; consent state is read-only to the model |
+| 6 | Output and audit controls: output contract, draft guard, bounded rewrite, plain fallback, trace | `smart.js` GUARD, `trace()` | implemented; the audit trace is names and counts only |
+
+Trace shown for a session (names only, never the senior's words): `asked`, `learned`, `checked`, `still unknown`. Example from a live-local scam run: `{"asked":[],"checked":["scam check ran","web check not run"],"unknown":["contact","source","ask","check"]}`, and when the check fails: `checked: ["scam check FAILED"]` and the decision is Not sure, never "nothing unusual".
+
+Failure handling is shown, not only success: a stubbed draft saying "verified safe, call 1800 ..." is rewritten, and when the rewrite is also bad the senior sees "I can't be sure about this one, and I can make mistakes..." (`test/smart.test.js`). A failed scam check gives Not sure. A caller's "do not tell anyone" is not taken as the senior saying no to their family.
+
+**Limits, plainly.** If the first gate (V1) misses a scam, nothing here can rescue it. Checks are simple patterns, so a reply that drifts in meaning can still get through. No design here guarantees zero hallucination or zero forgetting. A consent or state bug is a release blocker of its own and is tested separately. Sensitive holds are unchanged. The model never decides what is sent to the family.
