@@ -21,7 +21,14 @@
 'use strict';
 
 const LAYERS_ALL = ['ROUTER', 'ABILITIES', 'DECISION', 'CARDS', 'GUARD', 'KINDS', 'SHORT', 'CONTRACT', 'CAPS', 'MEMORY', 'GENERAL', 'COMPANION'];
-const any = () => LAYERS_ALL.some((l) => flag(l));
+const any = () => LAYERS_ALL.some((l) => flag(l)) || STATE_LAYERS.some((l) => stateFlag(l));
+// STATE flags (the senior's own state card, its draft check and the daily-call decisions: state.js / social.js). INDEPENDENT of the scam layers above: their own env names, default OFF, and they
+// ignore MAYA_SMART (the scam master switch). A scam flag never turns a state layer on, and a state flag never turns a scam layer on.
+//   MAYA_SMART_STATE_CARDS=on      the APP STATE card on every turn          (scam CARDS stays MAYA_SMART_CARDS)
+//   MAYA_SMART_STATE_GUARD=on      factual check of drafts against the state card (scam GUARD stays MAYA_SMART_GUARD)
+//   MAYA_SMART_STATE_DECISION=on   add / replace / second call / weekday / re-set / fresh-consent decisions (scam DECISION stays MAYA_SMART_DECISION)
+const STATE_LAYERS = ['CARDS', 'GUARD', 'DECISION'];
+const stateFlag = (layer) => process.env[`MAYA_SMART_STATE_${layer}`] === 'on';
 const flag = (layer) => { const v = process.env[`MAYA_SMART_${layer}`]; return v === 'on' || (process.env.MAYA_SMART === 'on' && v !== 'off'); };
 
 // ---------------------------------------------------------------- 1. intent router
@@ -209,7 +216,7 @@ function notes(s, heard) {
   if (flag('COMPANION') && (it === 'smalltalk' || it === 'followup') && !s.safety && !s.health) out.push(['smart-style', 'YOU ARE their friend, not a tool, not a menu and never a romantic partner. Respond to what they just said first, warmly, in short fresh words (begin differently from your last replies). A question is optional, never more than ONE: when something they said invites it, ask the small question a friend would (gardening: what they grow), about every second or third reply, and otherwise answer with a warm short remark. No interview.']);
   if (flag('COMPANION') && (it === 'ability' || /\b(?:call|ring|phone)\b/i.test(heard))) out.push(['smart-calls', callsOk(s) ? 'CALLS: you can help ARRANGE a call from you when they ask (it is saved as a reminder). Arranging is not scheduled: say a call is scheduled ONLY when the RECORD below says reminder saved: yes.' : 'CALLS: do not offer or arrange a call from you (ringing them is not possible right now, or they told you to stop). If they ask, say so plainly and kindly.']);
   if (flag('COMPANION') && s.profile) { const sf = require('./social').step(s, heard, { intent: it, callsOk: callsOk(s), safe: !s.safety && !s.health && it !== 'scam' }); if (sf) out.push(sf); }   // the daily-call offer and its consent (social.js)
-  if (flag('CARDS') && s.profile && s.profile.id) { const c = appState(s); if (c) out.push(['smart-app-state', c]); }   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
+  if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s); if (c) out.push(['smart-app-state', c]); }   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
   if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and at most ONE question, only when it helps (often none); say what you see, what you are unsure of, and one next step if there is one; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
   if (flag('GENERAL') && it !== 'scam' && !s.safety) {
@@ -304,13 +311,13 @@ function breaks(text, s) {
     if (flag('COMPANION') && ls && (ls.brush || []).some((b) => Date.now() - b.at < 30 * 86400000 && overlap(w, b.w) >= 0.5 && !(b.w.some((x) => String(s.lastHeard ? s.lastHeard() : '').toLowerCase().includes(x))))) { s._why = 'they asked you to drop that topic: do not raise it'; return 'brushed'; }
   }
   if (flag('COMPANION') && require('./social').claimBlocked(t, s)) { s._why = 'nothing is saved: do not say the call is scheduled, arranged, noted or booked. Say what is still needed, or that it was not saved'; return 'claim'; }
-  if (!flag('GUARD')) return null;
-  if (s.profile && s.profile.id) {   // factual claims about calls and records, judged against a card built NOW for the authenticated senior (never against a phrase list alone)
+  if (stateFlag('GUARD') && s.profile && s.profile.id) {   // factual claims about calls and records, judged against a card built NOW for the authenticated senior (never against a phrase list alone)
     const st_ = require('./state'); let card = null;
     try { card = st_.build(s.profile.id, { channel: s.channel === 'chat' ? 'chat' : 'call' }); } catch { card = null; }
     const bad = st_.checkDraft(t, card, { labels: s.factLabels || [], heard: s.lastHeard ? s.lastHeard() : '', exec: s._exec || {} });
     if (bad) { s._why = bad.note; s._guardWhy = bad.why; return `state-${bad.why}`; }
   }
+  if (!flag('GUARD')) return null;
   if (SAFE_CLAIM.test(t) && !/\bnot\s+(?:100|a hundred|safe|verified)|\bn't\s+(?:safe|verified)|\bcan'?t\s+(?:say|be)\b[^.]{0,30}\b(?:safe|sure)/i.test(t)) return 'certainty';
   const known = `${s.lastHeard ? s.lastHeard() : ''} ${s._knownText || ''}`;
   const u = URL_.exec(t); if (u && !known.toLowerCase().includes(u[0].toLowerCase().replace(/[.,!?)]+$/, ''))) return 'link';
@@ -339,4 +346,4 @@ function fallback(s) {
     : 'I want to get this right. Could you tell me a little more about what you mean?';
 }
 
-module.exports = { appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
+module.exports = { stateFlag, STATE_LAYERS, appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };

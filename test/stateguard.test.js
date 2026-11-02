@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-sguard-'));
 process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles'); process.env.MAYA_CARE_DIR = path.join(tmp, 'care');
-process.env.MAYA_SMART_COMPANION = 'on'; process.env.MAYA_SMART_GUARD = 'on';
+process.env.MAYA_SMART_COMPANION = 'on'; process.env.MAYA_SMART_STATE_GUARD = 'on';
 const brainPath = require.resolve('../brain');
 require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, exports: { requireRealEnv() {}, streamSpeech: async () => {}, sparkComplete: async () => '{}', sparkStream: async (_h, _r, _s, d) => { if (d) d('Okay.'); return 'Okay.'; } } };
 const memory = require('../memory'); const care = require('../care'); const smart = require('../smart'); const social = require('../social'); const setrem = require('../setrem'); const state = require('../state');
@@ -64,6 +64,6 @@ test('4 an unreadable record: no denial, no success claim; the plain line says i
 });
 
 test('5 GUARD off: no state check (the older rules only)', () => {
-  const id = senior(), s = sess(id); delete process.env.MAYA_SMART_GUARD;
-  try { assert.equal(blocked(s, 'You would need to ask your son to set that up for you.'), null); } finally { process.env.MAYA_SMART_GUARD = 'on'; }
+  const id = senior(), s = sess(id); delete process.env.MAYA_SMART_STATE_GUARD;
+  try { assert.equal(blocked(s, 'You would need to ask your son to set that up for you.'), null); } finally { process.env.MAYA_SMART_STATE_GUARD = 'on'; }
 });

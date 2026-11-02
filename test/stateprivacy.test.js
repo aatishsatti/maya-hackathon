@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-sprivacy-'));
 process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles'); process.env.MAYA_CARE_DIR = path.join(tmp, 'care'); process.env.MAYA_MEDIA_DIR = path.join(tmp, 'media'); process.env.MAYA_WA_DIR = path.join(tmp, 'wa'); process.env.MAYA_ACCOUNTS_DIR = path.join(tmp, 'acc');
-process.env.MAYA_SMART_COMPANION = 'on'; process.env.MAYA_SMART_CARDS = 'on'; process.env.MAYA_SMART_GUARD = 'on'; process.env.MAYA_SMART_DECISION = 'on';
+process.env.MAYA_SMART_COMPANION = 'on'; process.env.MAYA_SMART_STATE_CARDS = 'on'; process.env.MAYA_SMART_STATE_GUARD = 'on'; process.env.MAYA_SMART_STATE_DECISION = 'on';
 const captured = [];
 const brainPath = require.resolve('../brain');
 require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, exports: { requireRealEnv() {}, streamSpeech: async () => {}, sparkComplete: async () => '{}', sparkStream: async (...a) => { captured.push(JSON.stringify(a.filter((x) => typeof x !== 'function' && !(x && x.aborted !== undefined)))); return 'Okay.'; } } };

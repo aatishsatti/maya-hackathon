@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-decision-'));
 process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles'); process.env.MAYA_CARE_DIR = path.join(tmp, 'care');
-process.env.MAYA_SMART_COMPANION = 'on'; process.env.MAYA_SMART_DECISION = 'on'; process.env.MAYA_SMART_CARDS = 'on'; process.env.MAYA_SMART_GUARD = 'on';
+process.env.MAYA_SMART_COMPANION = 'on'; process.env.MAYA_SMART_STATE_DECISION = 'on'; process.env.MAYA_SMART_STATE_CARDS = 'on'; process.env.MAYA_SMART_STATE_GUARD = 'on';
 const brainPath = require.resolve('../brain');
 require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, exports: { requireRealEnv() {}, streamSpeech: async () => {}, sparkComplete: async () => '{}', sparkStream: async (_h, _r, _s, d) => { if (d) d('Okay.'); return 'Okay.'; } } };
 const memory = require('../memory'); const care = require('../care'); const smart = require('../smart'); const social = require('../social'); const setrem = require('../setrem'); const state = require('../state');
@@ -119,6 +119,6 @@ test('10 stop all calls is a consent change: a later request is ASKED about, onl
 });
 
 test('11 DECISION off: the older behaviour is unchanged (no decision facts)', () => {
-  delete process.env.MAYA_SMART_DECISION;
-  try { const id = senior(), s = sess(id); saveCall(s); const r = say(s, 'can you call me every Monday Wednesday and Friday at 4 pm'); assert.ok(!r || !/^social-decide/.test(r[0])); } finally { process.env.MAYA_SMART_DECISION = 'on'; }
+  delete process.env.MAYA_SMART_STATE_DECISION;
+  try { const id = senior(), s = sess(id); saveCall(s); const r = say(s, 'can you call me every Monday Wednesday and Friday at 4 pm'); assert.ok(!r || !/^social-decide/.test(r[0])); } finally { process.env.MAYA_SMART_STATE_DECISION = 'on'; }
 });

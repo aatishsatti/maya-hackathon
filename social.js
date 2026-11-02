@@ -35,9 +35,9 @@ const CHANGE = /\b(?:change|move|switch|reschedule|make)\b[^.?!]{0,25}\b(?:call|
 // The senior asking for a daily call themselves (so a recent "no" does not apply): "call me every day", "can you ring me daily".
 const SELF_ASK = /\b(?:can|could|would|will) you (?:please )?(?:call|ring|phone) me\b[^.?!]{0,40}\b(?:every ?day|daily|each day|every (?:morning|afternoon|evening))\b|\b(?:call|ring|phone) me (?:every ?day|daily|each day|every (?:morning|afternoon|evening))\b|\bi(?:'d| would) (?:like|love) (?:you to |a )?(?:call|ring|chat)[^.?!]{0,30}\b(?:every ?day|daily)\b/i;
 
-// ---- DECISION (smart.js flag MAYA_SMART_DECISION): Spark may read the request; THIS code validates the operation, the target and what the scheduler really supports. Nothing here widens the scheduler:
+// ---- DECISION (smart.js flag MAYA_SMART_STATE_DECISION): Spark may read the request; THIS code validates the operation, the target and what the scheduler really supports. Nothing here widens the scheduler:
 // the companion call is ONE daily call at ONE time of day. Several weekdays in one schedule and a second daily call do not exist, so they are explained as exactly that limit (never "family needed", never "I cannot schedule").
-const D = () => require('./smart').flag('DECISION');
+const D = () => require('./smart').stateFlag('DECISION');
 const CALL_ASK = /\b(?:call|ring|phone)\s+me\b|\b(?:daily|every ?day)\s+(?:call|chat)s?\b|\bdaily calls?\b|\bgive me a (?:call|ring)\b/i;
 const DAILYW = /\b(?:every ?day|daily|each day|every (?:morning|afternoon|evening))\b/i;
 const DOW = '(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?s?';

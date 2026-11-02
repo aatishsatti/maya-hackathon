@@ -27,7 +27,7 @@ const ctx = () => ({ intent: 'smalltalk', callsOk: true, safe: true });
 const say = (s, t, at = NOW + 10) => social.step(s, t, ctx(), at);
 const saveCall = (id, s, time = '3 pm', day = 'tomorrow') => { say(s, 'could you ring me every day please'); say(s, `${time} ${day}`); return say(s, 'yes perfect'); };
 const recs = (id) => care.get(id).reminders.filter((r) => r.social);
-const setFlags = (on) => { for (const l of ['CARDS', 'GUARD', 'DECISION']) { if (on.includes(l)) process.env[`MAYA_SMART_${l}`] = 'on'; else delete process.env[`MAYA_SMART_${l}`]; } };
+const setFlags = (on) => { for (const l of ['CARDS', 'GUARD', 'DECISION']) { if (on.includes(l)) process.env[`MAYA_SMART_STATE_${l}`] = 'on'; else delete process.env[`MAYA_SMART_STATE_${l}`]; } };
 test.beforeEach(() => setFlags([]));
 test.after(() => { setFlags([]); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });
 
