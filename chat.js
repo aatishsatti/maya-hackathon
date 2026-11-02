@@ -118,6 +118,7 @@ class ChatSession {
     this.familyDeclined = false; this.said = []; this.reminderShown = null; this.seenShown = false; this.safetyAsked = new Set(); this.safetyFreshShown = false; this.healthFreshShown = false; this.scamOwed = null; this.rc = require('./official').newRc();   // rc: the one clarifying question about which company / link (official.js); as in call.js: a no to telling family lasts the whole chat; what they said, for recall asks
     this.prevDelivery = null; this.askWhat = false;
     this.reminderFacts = null; this.reminderPending = null; this.awaitAck = null; this.nameChance = 0;
+    this.scamAt = 0;   // when this conversation last had a scam turn: the follow-ups of a scam talk ("okay", "he called again") are part of it and must not read as a health emergency (call.js inScamTurn)
   }
 
   push(msg) {
@@ -178,6 +179,7 @@ class ChatSession {
     this.firstEver = !priorMaya && care.callCount(id) === 0 && !this.safety && !this.health && !scam && isHello(heard);   // only a hello (or a few words): a real question on the very first line is simply answered
     this.metBefore = priorMaya || care.callCount(id) > 0;
     this.setFocus(heard, `${extra} ${note}`.trim());
+    if (scam || care.scamPending(id)) this.scamAt = Date.now();
     this.shortReply = (short || Boolean(scam)) && !ASKS_MORE.test(heard);   // a web / scam / lookup answer is the gist in one or two sentences unless they asked for more
     this.scamReply = scam;   // 'warn' | 'caution' | null: the shape of THIS reply (see reply())
     try {
@@ -276,11 +278,12 @@ class ChatSession {
     if (this.firstEver && !again && this.plainHello(feelRaw) && !IDENTITY_LINE.test(all)) return this.reply(`${note} Your draft did not say who you are. Write it again: this is the very first message to a new person, so say in your own fresh words that you are Maya, their companion, with one small warm line, in at most two short sentences and no question.`, { again: true });
     // A reminder is being set up and she was handed a question to ask (is that right? how? where?): if her draft closes without asking it ("Perfect", "Got it", "that's noted"), it is written again
     // once. The reminder is saved only by their answer, so a skipped question must never look like an answer.
-    if (!again && (this.factLabels || []).some((l) => /^setrem-(ask|confirm|lost)/.test(l)) && !/\?/.test(all)) return this.reply(`${note} Your draft did not ask the question you were told to ask, and nothing is saved yet. Write it again: ask that ONE question in your own words, and do not say it is done, noted or set.`, { again: true });
-    const askLabel = (this.factLabels || []).find((l) => /^setrem-(ask|lost)/.test(l));
+    if (!again && (this.factLabels || []).some((l) => /^(setrem-(ask|confirm|lost)|scam-(family-owed|resume|lost))/.test(l)) && !/\?/.test(all)) return this.reply(`${note} Your draft did not ask the question you were told to ask, and nothing is saved yet. Write it again: ask that ONE question in your own words, and do not say it is done, noted or set.`, { again: true });
+    const askLabel = (this.factLabels || []).find((l) => /^(setrem-(ask|lost)|scam-(family-owed|resume|lost))/.test(l));
     if (again && askLabel && !/\?/.test(all)) {   // asked again and she STILL did not ask: the plain question closes her reply
-      const q = require('./setrem').pendingQuestion(this.profile.id, askLabel);
-      const names = /whatsapp/i.test(q) ? /\bwhatsapp\b/i.test(all) : (all.match(/\b(?:call|text|voice)/gi) || []).length >= 2;   // she did name the choices, only without a question mark: leave it
+      const SCAM_Q = { 'scam-family-owed': 'Would you like me to let your family know about this?', 'scam-resume': 'Would you like me to let your family know about that?', 'scam-lost': 'What happened, and would you like me to let your family know?' };
+      const q = SCAM_Q[askLabel] || require('./setrem').pendingQuestion(this.profile.id, askLabel);
+      const names = /whatsapp/i.test(q || '') ? /\bwhatsapp\b/i.test(all) : /^scam/.test(askLabel) ? /famil/i.test(all) : (all.match(/\b(?:call|text|voice)/gi) || []).length >= 2;   // she did name the choices, only without a question mark: leave it
       if (q && !names) { pieces.push({ text: q, kind: null }); all = `${all} ${q}`.trim(); }
     }
     this.history.push({ role: 'assistant', content: all });
@@ -295,6 +298,7 @@ class ChatSession {
     care.trendTurn(this.profile.id, delivery);   // counts only (see call.js)
     this.lastReplyAsked = isQuestion(all);
     this.lastExclaimed = /!/.test(all);
+    care.scamAskedOut(this.profile.id, all);   // an open scam question that her reply really asked (or asked again) is now ASKED, as of now
     if (this.safety) care.addLine(this.profile.id, 'safety', all);
     this.askHistory = [...this.askHistory, this.lastReplyAsked].slice(-4);
     if (this.safety && /\bsafe\b/i.test(all) && isQuestion(all)) care.safeAsked(this.profile.id);
@@ -389,17 +393,19 @@ const thread = (profileId) => { session(profileId); return sessions.get(profileI
 // "shall I tell your family?" question is answered, not re-asked.
 async function talkCheck(profileId, words) {
   const scam = require('./scam');
-  if (!scam.needsCheck(words) || care.hasActiveSafety(profileId) || care.scamPending(profileId) || selfHarmText(words)) return null;
+  if (!scam.needsCheck(words) || care.hasActiveSafety(profileId) || care.scamFresh(profileId) || selfHarmText(words)) return null;
   try { return await deps.scamText(words); } catch (e) { console.error('scam check failed:', e.message); return null; }
 }
 // Official source (official.js), typed chat only: on a warn / pause the company they named is looked up on its official site; if none is clear, ONE
 // reconfirm question is asked first (type the link, or send a photo) and the family question waits for their answer. Returns facts for Spark.
-const familyState = (profileId, type) => ({ told: Boolean(care.scamTold(profileId)), declined: Boolean(type && care.scamDeclined(profileId, type)), pending: Boolean(care.scamPending(profileId)) });
+const familyState = (profileId, type) => ({ told: Boolean(care.scamTold(profileId)), declined: Boolean(type && care.scamDeclined(profileId, type)), pending: care.scamAsked(profileId) });
 const officialStep = (s, profileId, words, scam) => require('./official').step(s.rc, { words, scam, channel: 'text', run: (w, o) => deps.official(w, o), web: (w, o) => deps.web(w, o), background: (w) => require('./checks').start(profileId, w, { official: deps.official, web: deps.web }), family: familyState(profileId, (scam || s.rc.scam || {}).type) });
 // After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
-const afterTalkReply = (profileId, scam, channel, off = null) => {
-  if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { channel, pause: off.askFor.level === 'pause', official: off.askFor.official }); else care.scamOfficial(profileId, off.official); return; }   // the reconfirm was answered: the family question now, if it is still owed
-  if (scam && (scam.level === 'warn' || scam.level === 'pause') && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause', official: off ? off.official : null });
+const afterTalkReply = (profileId, scam, channel, off = null, text = '') => {
+  const asked = care.asksFamilyQ(text);   // the family question is registered as ASKED only if her reply really put it; otherwise it is owed and asked next (care.scamAsk asked:false)
+  if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { channel, pause: off.askFor.level === 'pause', official: off.askFor.official, asked }); else care.scamOfficial(profileId, off.official); return; }   // the reconfirm was answered: now the family question
+  if (scam && (scam.level === 'warn' || scam.level === 'pause') && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { channel, pause: scam.level === 'pause', official: off ? off.official : null, asked });
+  else care.scamAskedOut(profileId, text);
 };
 const talkTurn = (scam, profileId, off = null) => ({ note: [scam && !(off && off.resolved) ? require('./scam').talkNote(scam, { told: Boolean(care.scamTold(profileId)), declined: Boolean(care.scamDeclined(profileId, scam.type)) }) : '', off ? off.note : ''].filter(Boolean).join(' '), scam: scam && scam.level !== 'none' ? scam.level : null });
 
@@ -429,7 +435,7 @@ async function sendText(profileId, text, tz, opts = {}) {
   const due = care.checkDueIds(profileId);
   const r = await s.turn({ heard: t, ...tt });
   care.checkDelivered(profileId, due);   // a finished lookup was handed to her with this reply: told once
-  afterTalkReply(profileId, scam, 'text', off);
+  afterTalkReply(profileId, scam, 'text', off, r.text);
   return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text, ...(sources.length ? { sources } : {}) })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
 }
 
@@ -483,7 +489,7 @@ async function sendVoiceNote(profileId, wav, tz, opts = {}) {
   // A schedule told by voice, or a spoken yes / no to her question about it: the same steps as typed words (schedule.js); her reply is written, so it can be read back.
   if (opts.source !== 'whatsapp') { const sc = await require('./schedule').handle(profileId, words, { tz: s.tz }); if (sc) return { messages: [you, s.push({ role: 'maya', kind: 'text', text: sc.text })], scam: 'none' }; }
   const r = await s.turn({ heard: words, how: 'voice', ...talkTurn(scam, profileId) });
-  afterTalkReply(profileId, scam, 'spoken');
+  afterTalkReply(profileId, scam, 'spoken', null, r.text);
   // A live call has the voice: the note's answer is text only, so two Mayas never talk at once.
   if (callLive(profileId)) return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], voice: 'suppressed-call-live' };
   try {
@@ -545,8 +551,10 @@ async function sendImage(profileId, buf, caption, tz, opts = {}) {
   const r = await s.turn({ heard: said, message, how: 'image', note, scam: shaped && shaped.level !== 'none' ? shaped.level : null });
   care.checkDelivered(profileId, due);
   // Her one question is out: from now on the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
-  if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { official: off.askFor.official }); else care.scamOfficial(profileId, off.official); }
-  else if (photoWarn && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { official: off ? off.official : null });
+  const askedNow = care.asksFamilyQ(r.text);
+  if (off && off.resolved) { if (off.askFor) care.scamAsk(profileId, off.askFor.type, { official: off.askFor.official, asked: askedNow }); else care.scamOfficial(profileId, off.official); }
+  else if (photoWarn && !care.scamTold(profileId)) care.scamAsk(profileId, scam.type, { official: off ? off.official : null, asked: askedNow });
+  else care.scamAskedOut(profileId, r.text);
   const level = scam ? scam.level : 'none';
   // A warning is read aloud (a voice note) unless a call is live: then it is written, so two Mayas never talk at once.
   if (level !== 'none' && !callLive(profileId)) {
@@ -716,7 +724,7 @@ async function sendPdf(profileId, buf, name, tz, opts = {}) {
   const due = care.checkDueIds(profileId);
   const r = await s.turn({ heard: '', message, how: 'document', note, scam: scam && scam.level !== 'none' ? scam.level : null });
   care.checkDelivered(profileId, due);
-  afterTalkReply(profileId, scam, 'text');
+  afterTalkReply(profileId, scam, 'text', null, r.text);
   const answered = s.push({ role: 'maya', kind: 'text', text: r.text });
   // A PDF that is a schedule: after the plain answer, she asks which items they want as reminders (nothing is set until they say yes).
   const asked = (!scam || scam.level === 'none') && require('./schedule').looksLikeSchedule(read.text) ? await require('./schedule').propose(profileId, read.text) : null;

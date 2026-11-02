@@ -22,7 +22,7 @@ const care = require('../care');
 const chat = require('../chat');
 
 const tag = (o) => `[[feel: ${Object.entries(o).map(([k, v]) => `${k}=${v}`).join(' ')}]]`;
-const PLAIN = `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} Thank you for showing me that. I am glad you did.`;
+const PLAIN = `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} Thank you for showing me that. I am glad you did. Would you like me to let your family know?`;
 const FALL = `${tag({ emotion: 'anxious', intensity: 4, intent: 'share', concern: 'urgent', pain: 1 })} Oh no, I am so sorry. I am letting your family know right now.`;
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const LETTER = /lottery|winner|wire the|gift card|bank account|\$\d|transcript/i;
@@ -150,16 +150,18 @@ test('an urgent matter comes first: after a fall, a "yes" can never become a sca
   assert.ok(!/alert saying only what kind of message/.test(lastRoster()));
 });
 
-test('an unclear answer is not a yes: she leans in at most once more, then lets it go, and a later yes does nothing', async () => {
+test('an unclear answer is not a yes: the question stays open, but after two answers that were not an answer a yes does nothing until she has restated the worry and asked again', async () => {
   const id = senior();
   chat.deps.scam = check('warn', 'prize scam', 'money', 'payment'); reset(PLAIN);
   await chat.sendImage(id, PNG, '', null);
-  reset(PLAIN); await chat.sendText(id, 'What time is it now', null);
+  const NOQ = PLAIN.replace(' Would you like me to let your family know?', '');   // replies that do not ask it again
+  reset(NOQ); await chat.sendText(id, 'What time is it now', null);
   assert.match(lastRoster(), /not answered that yet/); assert.ok(care.scamPending(id));
-  reset(PLAIN); await chat.sendText(id, 'The weather looks grey', null);
-  assert.equal(care.scamPending(id), null);
+  reset(NOQ); await chat.sendText(id, 'The weather looks grey', null);
+  assert.equal(care.scamFresh(id), false, 'two answers that were not an answer: no longer fresh'); assert.ok(care.scamPending(id), 'but the incident is not lost');
   reset(PLAIN); await chat.sendText(id, 'Yes', null);
-  assert.equal(care.view(id).scams.length, 0, 'a late yes about something else is not an alert');
+  assert.match(lastRoster(), /left open while they were away and NOTHING has been sent/);
+  assert.equal(care.view(id).scams.length, 0, 'a late yes about something else is not an alert: she restates and asks again first');
 });
 
 test('wiring: the scam check runs beside the description (not instead), only with a Meta key, and the family text carries no letter words', () => {

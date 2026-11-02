@@ -99,7 +99,7 @@ test('a scam warning that was cut off is owed again on the next reply; the famil
 });
 
 test('a scam warning that was spoken is not repeated on the next reply', async () => {
-  const { c } = mkCall(); calls = 0; callDeps.scamText = verdict('warn'); reset(PLAIN2);
+  const { c } = mkCall(); calls = 0; callDeps.scamText = verdict('warn'); reset(`${PLAIN2} Would you like me to let your family know?`);   // the reply really asks the family question
   await say(c, TOLD); assert.ok(care.scamPending(c.profile.id));
   callDeps.scamText = async () => null; await say(c, 'Thank you, dear.');
   assert.equal(c.scamLater, null); assert.doesNotMatch(lastRoster(), /SCAM CHECK|scam/i);

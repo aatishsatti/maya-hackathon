@@ -111,15 +111,16 @@ test('scam: unseen it closes after 2 days (the light rule, not the 3-day safety 
   assert.ok(ev.length > 0);
 });
 
-test('scam question: pending lasts 20 minutes, an unclear answer leans in once more then lets go, and a clear one clears it', () => {
+test('scam question: it stays open (24 hours) however many unclear answers; only an answer settles it; once it has run out a late yes does nothing (and the incident is remembered as lost)', () => {
   const id = senior();
   care.scamAsk(id, 'payment scam');
-  care.scamUnclear(id); assert.ok(care.scamPending(id), 'one more try');
-  care.scamUnclear(id); assert.equal(care.scamPending(id), null, 'then she lets it go');
-  care.scamAsk(id, 'payment scam'); care.get(id).pendingScam.at -= 21 * 60000;
-  assert.equal(care.scamPending(id), null, 'a stale question is gone');
-  assert.equal(care.scamAnswer(id, true), null, 'so a late yes does nothing');
-  assert.equal(care.view(id).scams.length, 0);
+  care.scamUnclear(id); care.scamUnclear(id); care.scamUnclear(id); assert.ok(care.scamPending(id), 'unclear answers no longer drop it (they used to after two, which lost the incident)');
+  care.get(id).pendingScam.at -= 21 * 60000; care.get(id).pendingScam.askedAt -= 21 * 60000;
+  assert.ok(care.scamPending(id), 'twenty minutes later it is still open (it is restated before a yes counts: see scam-resume)'); assert.equal(care.scamFresh(id), false, 'but no longer fresh');
+  care.get(id).pendingScam.at -= 25 * 3600000; care.get(id).pendingScam.askedAt -= 25 * 3600000;
+  assert.equal(care.scamPending(id), null, 'after a day it is gone');
+  assert.equal(care.scamAnswer(id, true), null, 'so a late yes does nothing here');
+  assert.equal(care.view(id).scams.length, 0); assert.equal(care.scamLost(id).type, 'payment scam', 'and the incident is remembered as lost, so a later yes is not taken for a vague contact request');
 });
 
 test('dashboard data: call count and scams are in the one view; the picker counts a scam alert as an alert and a scam flag as a flag', () => {

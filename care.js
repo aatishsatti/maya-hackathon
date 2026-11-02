@@ -692,6 +692,12 @@ function concernAlert(id) {
 // or the photo); "Seen" closes it; unseen it closes after the light 2 days (cfg.expireLightMs: not an emergency, and a stale warning is
 // worth little). If the person says no, only a dashboard Flag is kept: no notification, no push, and Maya never asks again.
 const SCAM_ASK_MS = 20 * MIN;
+// The family question about a scam is a durable open item, not a 2-turn or 20-minute one: it stays until the person answers it (yes -> alert, no -> flag), for SCAM_OPEN_MS. A yes that arrives after a GAP
+// (SCAM_GAP_MS since she last asked it) is never acted on: she restates the worry and asks again first. A question that was never actually asked ('asked' false: the reply was about something else, for
+// example a request for the link or a photo) is owed and is asked next. An incident whose question ran out unanswered is remembered (lostScam) so a later yes is not taken for a vague contact request.
+const SCAM_OPEN_MS = 24 * 3600000, SCAM_GAP_MS = 15 * MIN, SCAM_LOST_MS = 7 * 24 * 3600000;
+// Did this reply of hers put the family question? ("...would you like me to let your family know?") Words only decide whether it was asked; they never decide yes or no.
+const asksFamilyQ = (text) => /\bfamily\b/i.test(String(text || '')) && /\?/.test(String(text || ''));
 const SCAM_KEEP = 30;
 const SCAM_CHANNELS = new Set(['photo', 'text', 'spoken']);
 // The family's sentence about how Maya learned of it: the kind of scam and the channel only, never any words from the message or the call.
@@ -716,20 +722,38 @@ function scamAsk(id, type, opts = {}) {
   const p = get(id);
   if (!p) return null;
   if (scamDeclined(id, type)) return null;   // they said no to this one: never asked again
-  p.pendingScam = { type, left: 2, at: Date.now(), channel: SCAM_CHANNELS.has(opts.channel) ? opts.channel : 'photo', pause: opts.pause === true, official: opts.official || null }; save(id);
+  const asked = opts.asked !== false, now = Date.now();
+  p.pendingScam = { type, left: 2, at: now, asked, askedAt: asked ? now : 0, channel: SCAM_CHANNELS.has(opts.channel) ? opts.channel : 'photo', pause: opts.pause === true, official: opts.official || null }; p.lostScam = null; save(id);
   return p.pendingScam;
 }
 function scamPending(id) {
   const p = get(id);
   if (!p || !p.pendingScam) return null;
-  if (Date.now() - p.pendingScam.at > SCAM_ASK_MS) { p.pendingScam = null; save(id); return null; }
+  const last = Math.max(p.pendingScam.at || 0, p.pendingScam.askedAt || 0);
+  if (Date.now() - last > SCAM_OPEN_MS) { p.lostScam = { type: p.pendingScam.type, at: Date.now(), channel: p.pendingScam.channel, pause: p.pendingScam.pause === true }; p.pendingScam = null; save(id); return null; }
   return p.pendingScam;
+}
+// The family question was really put to them (it is in a reply of hers): from now on their yes or no settles it. Called with every reply she gives.
+function scamAskedOut(id, text) {
+  const p = get(id);
+  if (!p || !p.pendingScam || !asksFamilyQ(text)) return false;
+  p.pendingScam.asked = true; p.pendingScam.askedAt = Date.now(); p.pendingScam.unclear = 0; save(id); return true;
+}
+const scamAsked = (id) => { const q = scamPending(id); return Boolean(q && q.asked); };
+// Asked and still fresh: the only state in which a yes or a no is taken as the answer.
+const scamFresh = (id) => { const q = scamPending(id); return Boolean(q && q.asked && Date.now() - q.askedAt <= SCAM_GAP_MS && (q.unclear || 0) < 2); };   // two answers that were not an answer: the talk has moved on, so the question is restated before a yes counts
+// An incident whose question was left unanswered and ran out (or was never settled), still unresolved: nothing was sent, no flag was made.
+function scamLost(id) {
+  const p = get(id);
+  if (!p || !p.lostScam || Date.now() - p.lostScam.at > SCAM_LOST_MS) return null;
+  if ((p.scams || []).some((x) => x.status === 'active' && (x.level === 'alert' || x.level === 'flag') && x.createdAt >= p.lostScam.at - SCAM_OPEN_MS)) return null;   // it was settled (told or declined) after all
+  return p.lostScam;
 }
 // The unseen scam alert, if their family was already told (until they see it): the one fact every reply and every new incident goes by.
 function scamTold(id) { const p = get(id); return (p && (p.scams || []).find((x) => x.level === 'alert' && x.status === 'active')) || null; }
 function scamClear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam = null; save(id); } }
 // An answer that is neither yes nor no: she may lean in once more, then it is dropped (no nagging).
-function scamUnclear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam.left -= 1; if (p.pendingScam.left <= 0) p.pendingScam = null; save(id); } }
+function scamUnclear(id) { const p = get(id); if (p && p.pendingScam) { p.pendingScam.unclear = (p.pendingScam.unclear || 0) + 1; save(id); } }   // an answer that is neither yes nor no no longer drops the question (it used to after two turns, which lost the incident); it waits, and a late yes is restated first
 function scamTicket(p, type, level, how = {}) {
   const now = Date.now();
   const sc = { id: uid(), level, type, createdAt: now, status: 'active', notified: 'none', notifId: null, resolvedAt: null, channel: SCAM_CHANNELS.has(how.channel) ? how.channel : 'photo', pause: how.pause === true, official: how.official ? { checked: true, found: how.official.found === true, name: how.official.found === true ? String(how.official.name || '').slice(0, 60) : null } : null };
@@ -750,6 +774,7 @@ function scamAlert(id, type, how = {}) {
   const n = makeNotif(p, { to: 'family', kind: 'alert', text, ref: sc.id, incident: sc.id });
   sc.notifId = n.id;
   if (pushFamily('notify', { id, notifId: n.id, kind: 'alert', text })) advance(p, n, 'delivered');
+  p.lostScam = null;
   console.log('care scam alert', JSON.stringify({ profile: id, type }));
   save(id); pushFamily('refresh', { id });
   return { isNew: true, ticket: sc };
@@ -760,6 +785,7 @@ function scamFlag(id, type, how = {}) {
   const sc = p.scams.find((x) => x.status === 'active');
   if (sc) return { isNew: false, ticket: sc };
   const t = scamTicket(p, type, 'flag', how);
+  p.lostScam = null;
   console.log('care scam flag', JSON.stringify({ profile: id, type }));
   save(id); // dashboard only: no notification and no push
   return { isNew: true, ticket: t };
@@ -1949,7 +1975,7 @@ module.exports = {
   recentLines, isRepeatLine, addLine, seenToTell, clearSeenToTell,
   familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
-  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
+  startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamAskedOut, scamAsked, scamFresh, scamLost, asksFamilyQ, SCAM_GAP_MS, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
   addReminder, addSeniorReminder, quietEndsAt, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };

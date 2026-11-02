@@ -2,7 +2,7 @@
 - Done: F1 voice loop, F2 per-profile memory, F3 calling-first (reminders, call-back, smart alerts, safety escalation, family Seen).
 - Done: one Maya (cheerful start, soft/calm by conversation), pain ladder, greeting rules, no-repeat (identity once, normal replies), profile isolation.
 - Stack: Meta Transcribe + Spark, ElevenLabs. Keys in server env only; data/ git-ignored. Call audio is never kept; call lines are kept in the chat history (latest 200 per person), see the privacy page.
-- Tests: node --test test/*.test.js (933 checks: 929 pass and 4 are skipped because they need live keys). Skipped ones need live keys (MAYA_REAL_SPARK=1). Evaluation: npm run eval (Meta, text only); numbers on docs/meta-models.html.
+- Tests: node --test test/*.test.js (938 checks: 934 pass and 4 are skipped because they need live keys). Skipped ones need live keys (MAYA_REAL_SPARK=1). Evaluation: npm run eval (Meta, text only); numbers on docs/meta-models.html.
 - Done: Maya rings an open app, and a closed Android phone through push (built; not yet proven on a real phone). The family is rung too (open page and closed Android app). WhatsApp text, voice notes and photos are live (passed live on 5a5e54c); the closed-window template with a Got it button is built, not yet proven live.
 - Open: no fall detection; safety-line wording can still repeat; tired brightness is prompt-only (no code hook).
 - Done since: F4 scam shield, F5 family dashboard (with family accounts and a login lock), F6 WhatsApp, the senior menu, quiet-hours wording, the first-message introduction. Next: demo and submission.

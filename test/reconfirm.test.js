@@ -40,7 +40,7 @@ const BANK = {
 const useWeb = (pages) => { O.cache.clear(); fetched.length = 0; const f = (w, o) => O.check(w, { ...o, fetch: web(pages) }); chat.deps.official = f; callDeps.official = f; };
 
 const tag = (o) => `[[feel: ${Object.entries(o).map(([k, v]) => `${k}=${v}`).join(' ')}]]`;
-const PLAIN = `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} Okay.`;
+const PLAIN = `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} Okay. Would you like me to let your family know?`;
 let n = 0; const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 + (k % 26)) + o; k = Math.floor(k / 26) - 1; } while (k >= 0); return o; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const reset = () => { queue.length = 0; queue.push(PLAIN); asked.length = 0; };
