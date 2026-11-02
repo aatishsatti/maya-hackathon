@@ -22,7 +22,7 @@ class El {
 }
 
 function browser({ inCall = false, hidden = false, permission = null } = {}) {
-  const log = { starts: [], freqs: [], peaks: [], ctxMade: 0, ctxClosed: 0, posts: [], started: [], notes: [], noteClosed: 0, asked: 0 };
+  const log = { starts: [], freqs: [], peaks: [], ctxMade: 0, ctxClosed: 0, posts: [], started: [], notes: [], noteClosed: 0, asked: 0, events: [] };
   let now = 0, id = 0; const timers = new Map();
   const setTimeout_ = (fn, ms) => { id += 1; timers.set(id, { fn, at: now + ms }); return id; };
   const clearTimeout_ = (i) => timers.delete(i);
@@ -46,8 +46,9 @@ function browser({ inCall = false, hidden = false, permission = null } = {}) {
   const fire = (ev) => (handlers[ev] || []).forEach((f) => f({ target: { closest: () => null } }));
   if (permission !== null) { window.Notification = class N { constructor(title, o) { log.notes.push({ title, ...o }); this.close = () => { log.noteClosed += 1; }; } static get permission() { return permission; } static requestPermission() { log.asked += 1; permission = 'granted'; return Promise.resolve('granted'); } }; }
   window.focus = () => {};
+  window.dispatchEvent = (ev) => { log.events.push([ev.type, ev.detail]); (handlers[ev.type] || []).forEach((f) => f(ev)); return true; };
   const document = { getElementById: () => inboxEl, createElement: (t) => new El(t), hidden, hasFocus: () => !hidden, title: 'Maya' };
-  const sandbox = { window, document, EventSource: ES, fetch: (u, o) => { log.posts.push(u); return Promise.resolve(); }, setTimeout: setTimeout_, clearTimeout: clearTimeout_, Intl, encodeURIComponent, JSON, Date, console };
+  const sandbox = { window, document, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } }, EventSource: ES, fetch: (u, o) => { log.posts.push(u); return Promise.resolve(); }, setTimeout: setTimeout_, clearTimeout: clearTimeout_, Intl, encodeURIComponent, JSON, Date, console };
   vm.runInNewContext(SRC, sandbox);
   fire('maya-profile'); // connect
   return { window, fire, es: () => sources[sources.length - 1], inboxEl, log, advance, setInCall(v) { inCall = v; window.mayaInCall = () => v; }, ring: () => JSON.parse(JSON.stringify(window.mayaInbox.ring())),
@@ -123,18 +124,18 @@ test('R5 a family message is a soft chime only (not the phone ring), never a loo
   assert.ok(Math.max(...b.log.peaks) <= 0.08 + 1e-9);
   assert.equal(b.ring().key, null);
   b.advance(30000); assert.equal(b.log.starts.length, 2);
-  const bt = b.cards()[0].all('button'); assert.deepEqual(bt.map((x) => x.textContent), ['Open', 'Got it'], 'a card with two plain buttons');
+  const bt = b.cards()[0].all('button'); assert.deepEqual(bt.map((x) => x.textContent), ['Got it'], 'a card with the one button');
 });
 
-test('a reminder card: "Your reminder" for the person\'s own, "Reminder from your family" for the family\'s, a bell, and two plain buttons (Open, Got it) that both report Seen', async () => {
+test('a pop-up card (a notice with no chat message): "Your reminder" for the person\'s own, "Reminder from your family" for the family\'s, a bell, ONE button (Got it) that reports Seen once', async () => {
   const b = browser(); b.fire('pointerdown'); await tick();
   b.es().emit('notice', { notifId: 'r1', kind: 'reminder', by: 'senior', text: 'Take your tablets' });
   assert.equal(b.cards()[0].children[0].children[1].textContent, 'Your reminder');
   assert.equal(b.cards()[0].children[1].textContent, 'Take your tablets');
-  button(b, 'Got it').handlers.click(); assert.ok(b.log.posts.some((u) => /notifications\/r1\/seen/.test(u)), 'Got it reports Seen'); assert.equal(b.cards().length, 0);
+  assert.deepEqual(b.cards()[0].all('button').map((x) => x.textContent), ['Got it'], 'no Open: there is nothing to open');
+  button(b, 'Got it').handlers.click(); assert.equal(b.log.posts.filter((u) => /notifications\/r1\/seen/.test(u)).length, 1, 'Got it reports Seen once'); assert.equal(b.cards().length, 0);
   b.es().emit('notice', { notifId: 'r2', kind: 'reminder', text: 'Drink water' });
   assert.equal(b.cards()[0].children[0].children[1].textContent, 'Reminder from your family');
-  button(b, 'Open').handlers.click(); assert.ok(b.log.posts.some((u) => /notifications\/r2\/seen/.test(u)), 'Open reports Seen too'); assert.equal(b.cards().length, 0);
 });
 
 test('a page that is hidden: the reminder also becomes a browser notification (once allowed), and closing the card closes it; a visible page makes none', async () => {
@@ -171,4 +172,36 @@ test('a click removes the card at once, reports Seen exactly once, and a Seen on
   assert.equal(b.log.posts.filter((u) => /notifications\/z2\/seen/.test(u)).length, 0, 'and this page does not report it again');
   b.es().emit('notice', { notifId: 'z1', kind: 'reminder', by: 'senior', text: 'Take your meds' }); b.es().emit('notice', { notifId: 'z2', kind: 'reminder', by: 'senior', text: 'Drink water' });
   assert.equal(b.cards().length, 0, 'a replay of a notice already answered raises nothing');
+});
+
+// ---- a reminder is a chat message first (the server put it in the thread): in front -> in the chat, no card; not in front -> pop-up, whose Got it brings the chat to the message
+const MSG = (nid, text, by = 'senior') => ({ id: `m${nid}`, role: 'maya', kind: 'text', text, reminder: { notifId: nid, by, seen: false } });
+
+test('chat in front: the reminder arrives IN the chat (one chime, no pop-up, no Open); its Got it reports Seen exactly once', async () => {
+  const b = browser({ hidden: false }); b.fire('pointerdown'); await tick();
+  b.es().emit('notice', { notifId: 'c1', kind: 'reminder', by: 'senior', text: 'Your reminder: take my meds.', message: MSG('c1', 'Your reminder: take my meds.') });
+  assert.equal(b.cards().length, 0, 'no pop-up over the chat'); assert.deepEqual(b.log.events.filter(([n]) => n === 'maya-reminder').map(([, d]) => d.message.text), ['Your reminder: take my meds.']);
+  assert.deepEqual(b.log.starts, [523.25, 659.25], 'the one gentle chime');
+  b.window.dispatchEvent(new (class { constructor() { this.type = 'maya-reminder-got'; this.detail = { notifId: 'c1' }; } })());
+  b.window.dispatchEvent(new (class { constructor() { this.type = 'maya-reminder-got'; this.detail = { notifId: 'c1' }; } })());
+  assert.equal(b.log.posts.filter((u) => /notifications\/c1\/seen/.test(u)).length, 1, 'Seen exactly once, however often it is pressed');
+  b.es().emit('notice', { notifId: 'c1', kind: 'reminder', by: 'senior', text: 'x', message: MSG('c1', 'x') });
+  assert.equal(b.log.events.filter(([n]) => n === 'maya-reminder').length, 1, 'a replay of an answered reminder adds nothing'); assert.equal(b.cards().length, 0);
+});
+
+test('chat NOT in front: the message is in the chat AND a pop-up (and a browser notification) appears with Got it only; its Got it brings the chat to that message, shown as done, Seen once', async () => {
+  const b = browser({ hidden: true, permission: 'granted' }); b.fire('pointerdown'); await tick();
+  b.es().emit('notice', { notifId: 'h9', kind: 'reminder', by: 'senior', text: 'Your reminder: take my meds.', message: MSG('h9', 'Your reminder: take my meds.') });
+  assert.equal(b.log.events.filter(([n]) => n === 'maya-reminder').length, 1, 'the message is in the chat for when they come back');
+  assert.equal(b.cards().length, 1); assert.deepEqual(b.cards()[0].all('button').map((x) => x.textContent), ['Got it']); assert.deepEqual(b.log.notes.map((n) => n.title), ['Your reminder']);
+  button(b, 'Got it').handlers.click();
+  assert.equal(b.log.posts.filter((u) => /notifications\/h9\/seen/.test(u)).length, 1); assert.equal(b.cards().length, 0); assert.equal(b.log.noteClosed, 1);
+  const show = b.log.events.find(([n]) => n === 'maya-show-reminder'); assert.ok(show && show[1].id === 'h9' && show[1].done === true, 'the chat is brought to that message, as done');
+});
+
+test('two pages: Seen on the other page (noticeSeen) marks the in-chat message done here and takes any card down, with no second Seen', async () => {
+  const b = browser({ hidden: false }); b.fire('pointerdown'); await tick();
+  b.es().emit('notice', { notifId: 't1', kind: 'reminder', by: 'senior', text: 'x', message: MSG('t1', 'Your reminder: x') });
+  b.es().emit('noticeSeen', { notifId: 't1' });
+  assert.deepEqual(b.log.events.filter(([n]) => n === 'maya-reminder-done').map(([, d]) => d.notifId), ['t1']); assert.equal(b.log.posts.filter((u) => /notifications\/t1\/seen/.test(u)).length, 0, 'this page does not report it again');
 });

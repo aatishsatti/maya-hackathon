@@ -474,6 +474,18 @@ function deliverText(profileId, text) {
   return { message: m, reached: care.pushSenior(profileId, 'chat', { message: m }) };
 }
 
+// A text reminder for the app, as a normal chat message that stays in the thread (the open page shows it in the chat when it is in front, or as a pop-up when it is not). Not pushed here: care.js sends the one
+// 'notice' event that carries it. reminder: { notifId, by, seen }: Got it marks it seen (reminderSeen) and every open page shows it as done.
+function deliverReminder(profileId, { notifId, text, by = null }) {
+  const s = session(profileId);
+  return s.push({ role: 'maya', kind: 'text', text: String(text || ''), reminder: { notifId, by, seen: false } });
+}
+function reminderSeen(profileId, notifId) {
+  const s = session(profileId); const m = s.thread.find((x) => x.reminder && x.reminder.notifId === notifId);
+  if (!m || m.reminder.seen) return false;
+  m.reminder.seen = true; saveThread(profileId, s.thread); return true;
+}
+
 async function deliverVoiceNote(profileId, spoken, text) {
   const s = session(profileId);
   const pcm = await deps.speak(spoken);
@@ -760,4 +772,4 @@ function forget(profileId) {
 // Test and shutdown helper: files every open chat into memory now.
 function endAll() { for (const [id, s] of sessions) { sessions.delete(id); s.finish(); } }
 
-module.exports = { scheduleText, loadThread, threadFile, continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deliverText, deps, sendText, sendVoiceNote, sendImage, sendPdf, pdfText, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };
+module.exports = { deliverReminder, reminderSeen, scheduleText, loadThread, threadFile, continuity, lastWrittenAt, mirrorSpoken, deliverVoiceNote, deliverText, deps, sendText, sendVoiceNote, sendImage, sendPdf, pdfText, thread, readMedia, forget, endAll, callLive, pcmToWav, isWav, imageMime, ChatError, ChatSession, sessions };

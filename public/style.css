@@ -333,3 +333,10 @@ body[data-ringing='true'] .shell, body[data-ringing='true'] .backdrop { visibili
 .inbox-done { position: fixed; z-index: 60; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); padding: 12px 22px; border-radius: 24px; background: #17342f; color: #fff; font-size: 17px; font-weight: 600; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25); animation: noticeIn 0.25s ease-out; }
 .msg.reminder-shown .bubble { border: 1.5px solid var(--trust); }
 @media (prefers-reduced-motion: reduce) { .inbox-done { animation: none; } }
+
+/* a reminder in the chat: one Got it button under it, then a ticked done line */
+.msg.reminder-msg .bubble { border: 1.5px solid #d7def7; }
+.rem-foot { margin-top: 10px; }
+.rem-got { min-height: 44px; padding: 0 22px; border-radius: 22px; border: 0; background: var(--trust); color: #fff; font-size: 17px; font-weight: 700; }
+.rem-got:disabled { opacity: 0.6; }
+.rem-done { display: inline-block; padding: 8px 14px; border-radius: 18px; background: #e1f1e5; color: #2c6a43; font-size: 16px; font-weight: 700; }

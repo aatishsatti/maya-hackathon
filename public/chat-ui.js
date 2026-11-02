@@ -110,6 +110,13 @@
       img.addEventListener('load', scrollDown);
       b.append(img);
     }
+    if (m.reminder && m.reminder.notifId) {   // a reminder in the chat: one button, Got it; once pressed (here, or on another page of theirs) it is a ticked "Marked as seen"
+      row.dataset.reminder = String(m.reminder.notifId); row.classList.add('reminder-msg');
+      const foot = el('div', 'rem-foot'); foot.dataset.foot = '1';
+      if (m.reminder.seen) { foot.classList.add('is-done'); foot.append(el('span', 'rem-done', '\u2713 Marked as seen')); }
+      else { const g = el('button', 'rem-got', 'Got it'); g.type = 'button'; g.addEventListener('click', () => { g.disabled = true; markReminderDone(row); window.dispatchEvent(new CustomEvent('maya-reminder-got', { detail: { notifId: m.reminder.notifId } })); }); foot.append(g); }
+      b.append(foot);
+    }
     row.append(b);
     if (m.voiceError) row.append(el('p', 'voice-fail', m.voiceError));
     if (Array.isArray(m.sources) && m.sources.length) row.append(sourceBox(m.sources));
@@ -387,13 +394,22 @@
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!sheet.hidden) closeSheet(); else if (picked) closePreview(); } });
 
   // Maya's own unprompted line (the family has seen the worry): it joins the thread as her message.
-  // Open on a reminder card: the reminder is shown in the chat, once, in the words the server gave (it is not saved here; the chat's own thread is unchanged).
-  window.addEventListener('maya-show-reminder', (e) => {
-    const d = e.detail || {}; if (!d.text) return;
-    if (thread.querySelector(`[data-reminder="${String(d.id).replace(/[^\w-]/g, '')}"]`)) { scrollDown(); return; }
-    const r = append({ id: '', role: 'maya', kind: 'text', text: d.text }); r.dataset.reminder = String(d.id).replace(/[^\w-]/g, ''); r.classList.add('reminder-shown');
-    if (typeof r.scrollIntoView === 'function') r.scrollIntoView({ block: 'end' });
-    const box = document.getElementById('msgIn'); if (box && !(window.mayaInCall && window.mayaInCall())) box.focus({ preventScroll: true });
+  // ---- reminders in the chat. The server put the reminder in the thread (with reminder: { notifId, seen }); this page shows it with its Got it. A pop-up elsewhere, or Got it on another page of theirs, comes back here.
+  const remRow = (nid) => thread.querySelector(`[data-reminder="${String(nid).replace(/[^\w-]/g, '')}"]`);
+  function markReminderDone(row) {
+    if (!row) return; const foot = row.querySelector('[data-foot]'); if (!foot || foot.classList.contains('is-done')) return;
+    foot.classList.add('is-done'); foot.replaceChildren(el('span', 'rem-done', '\u2713 Marked as seen'));
+  }
+  window.addEventListener('maya-reminder', (e) => {   // a new reminder reached this page: it appears in the chat, once
+    const m = e.detail && e.detail.message; if (!m || !m.reminder) return;
+    if (remRow(m.reminder.notifId) || (m.id && thread.querySelector(`[data-id="${m.id}"]`))) return;
+    append(m);
+  });
+  window.addEventListener('maya-reminder-done', (e) => markReminderDone(remRow(e.detail && e.detail.notifId)));   // Got it on another page: this one shows it done too
+  window.addEventListener('maya-show-reminder', (e) => {   // Got it on a pop-up (or its notification): the chat comes to that same message
+    const d = e.detail || {}; const row = remRow(d.id); if (!row) return;
+    if (d.done) markReminderDone(row);
+    row.classList.add('reminder-shown'); if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
   });
   window.addEventListener('maya-chat-message', (e) => {
     const m = e.detail; if (!m) return;

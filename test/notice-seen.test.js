@@ -23,3 +23,22 @@ test('Seen on one page is pushed to every open page of the senior (noticeSeen), 
   assert.equal(stranger.ev.filter(([k]) => k === 'noticeSeen').length, 0, 'another person\'s page is not');
   tabA.detach(); tabB.detach(); stranger.detach();
 });
+
+test('a text reminder for the app is a normal chat message that stays in the thread (once), carried on the notice; Seen marks that message seen; the wording is the senior\'s own or the family\'s', async () => {
+  const chat = require('../chat');
+  const id = memory.createProfile('Nseenc', 'female').id; care.setTimezone(id, 'Asia/Kolkata', 'manual');
+  const tab = page(id);
+  care.addSeniorReminder(id, { task: 'take my meds', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'text', channel: 'app', origin: 'app' });
+  care.addReminder(id, { task: 'drink water', dueAt: Date.now() + 3000, repeat: 'none', deliver: 'text', channel: 'app' });
+  care.tick(Date.now() + 5000); await new Promise((r) => setTimeout(r, 50));
+  const notices = tab.ev.filter(([k]) => k === 'notice').map(([, d]) => d);
+  assert.equal(notices.length, 2, 'one notice per reminder: no duplicate firing');
+  const own = notices.find((d) => /meds/.test(d.text)), fam = notices.find((d) => /water/i.test(d.text));
+  assert.equal(own.message.text, 'Your reminder: take my meds'); assert.equal(fam.message.text, 'Reminder from your family: drink water');
+  assert.deepEqual([own.message.reminder.notifId, own.message.reminder.seen], [own.notifId, false]);
+  const thread = chat.loadThread(id).filter((m) => m.reminder); assert.equal(thread.length, 2, 'both stay in the chat history, once each');
+  care.markNotif(id, own.notifId, 'seen');
+  const after = chat.loadThread(id).filter((m) => m.reminder); assert.equal(after.find((m) => m.reminder.notifId === own.notifId).reminder.seen, true); assert.equal(after.find((m) => m.reminder.notifId === fam.notifId).reminder.seen, false);
+  care.markNotif(id, own.notifId, 'seen'); assert.equal(tab.ev.filter(([k, d]) => k === 'noticeSeen' && d.notifId === own.notifId).length >= 1, true);
+  tab.detach();
+});

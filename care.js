@@ -343,7 +343,7 @@ function markNotif(id, nid, status) {
   if (!n || !['delivered', 'seen'].includes(status)) return false;
   advance(p, n, status);
   if (n.to === 'senior' && n.app) appNotifStatus(p, n.id, status);
-  if (status === 'seen' && n.to === 'senior') pushSenior(id, 'noticeSeen', { notifId: nid });   // every OTHER page of theirs that still shows this card (a second tab, their phone) takes it down too
+  if (status === 'seen' && n.to === 'senior') { try { require('./chat').reminderSeen(id, nid); } catch { /* no chat thread */ } pushSenior(id, 'noticeSeen', { notifId: nid }); }   // every OTHER page of theirs that still shows this card (a second tab, their phone) takes it down too
   if (status === 'seen' && n.to === 'family') {
     for (const f of p.flags) if (f.safety && f.status === 'active' && f.notifId === n.id) resolveSafety(p, f, 'family');
     for (const sc of p.scams || []) if (sc.status === 'active' && sc.notifId === n.id) { sc.status = 'resolved'; sc.resolvedAt = Date.now(); sc.resolvedBy = 'family'; } // a scam warning clears when the family sees it, like any alert
@@ -1354,8 +1354,11 @@ function fireReminderApp(p, r, now, chan, opts = {}) {
   const rid = r.id, words = require('./whatsapp').reminderWords(r.task, false, r.by);
   const asText = (voiceFailed) => {
     const n = makeNotif(p, { to: 'senior', kind: 'reminder', text: words.text, ref: null }); n.app = true; if (r.by === 'senior') n.by = 'senior'; holder.notifId = n.id;
-    const reached = pushSenior(id, 'notice', { notifId: n.id, kind: 'reminder', text: words.text, ...(n.by ? { by: n.by } : {}) });
-    if (reached === 0) { textToChatAndPush(id, n, words.text, 'reminder'); holder.inChat = true; }
+    // The reminder is a normal chat message first (it stays in the thread and its Got it is on it); the open page shows it in the chat, or as a pop-up only when the chat is not in front.
+    let msg = null; const text = r.by === 'senior' ? `Your reminder: ${r.task}` : `Reminder from your family: ${r.task}`;
+    try { msg = require('./chat').deliverReminder(id, { notifId: n.id, text, by: n.by || null }); n.inChat = true; holder.inChat = true; } catch (e) { console.log('push', JSON.stringify({ event: 'reminder not put in chat', reason: String((e && e.message) || e).slice(0, 60) })); }
+    const reached = pushSenior(id, 'notice', { notifId: n.id, kind: 'reminder', text: words.text, ...(n.by ? { by: n.by } : {}), ...(msg ? { message: msg } : {}) });
+    if (reached === 0) { if (msg) pushMessage(id, { via: 'text', what: 'reminder', notifId: n.id }); else { textToChatAndPush(id, n, words.text, 'reminder'); holder.inChat = true; } }
     holder.state = 'app_sent'; holder.sentAt = Date.now(); holder.via = 'text'; if (voiceFailed) holder.voiceUnavailable = true;
     save(id); pushFamily('refresh', { id }); waLog({ event: 'app sent', via: 'text', reached: reached > 0, voiceUnavailable: Boolean(voiceFailed) });
   };

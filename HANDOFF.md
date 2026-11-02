@@ -4,7 +4,7 @@ Maya: voice companion for older adults. Branch `render-test` is the working and 
 
 ## State
 - Live at the time of writing: `97f808b`. The car-prize / conversation work is local only until the push word.
-- Tests: `node --test test/*.test.js` -> 949 checks, 945 pass, 4 skipped (need live keys), 0 fail.
+- Tests: `node --test test/*.test.js` -> 953 checks, 949 pass, 4 skipped (need live keys), 0 fail.
 - `docs/maya-prompt.md` is 7,494 of 7,500 characters (a test enforces < 7,500): never add words without trimming.
 
 ## The scam family question (this change)
@@ -29,6 +29,9 @@ Changes: `scam.promote` (live pipeline only; stubs untouched) treats a one-sign 
 
 ## Third round (reminder card stays on screen) - local, not pushed
 Live report: Open / Got it did nothing visible, the card stayed, the family dashboard showed Seen. Could NOT be reproduced with one tab (real mouse events, desktop and phone width, real mode, the exact chat flow): the card closed. Reproduced with the senior page open in TWO tabs: Got it in one reported Seen and left the other tab's card up (the server never told the other page). Fix: `care.markNotif` pushes `noticeSeen` to every open page of that senior; `public/inbox.js` drops the card on it, removes the clicked card by element at once, shows a short "Done. Marked as seen" line, ignores a replay of an answered notice (no second Seen); Open shows the reminder in the chat (`maya-show-reminder` in `chat-ui.js`). Family dashboard logic unchanged.
+
+## Fourth round (reminder in the chat first) - local, not pushed (457c0cf is already pushed)
+Rule (web senior chat): a text reminder for the app is a normal chat message in the thread (server: `chat.deliverReminder`, `reminder: { notifId, by, seen }`, wording "Your reminder: <task>" / "Reminder from your family: <task>"), carried on the one `notice` event. Chat focused and visible: it appears in the chat with ONE button, Got it; no pop-up, no Open. Hidden / not focused: the message is also in the chat, plus the pop-up and browser notification with Got it only; Got it there marks Seen and brings the chat to that message, shown done. Seen is reported once per notice per page (`inbox.js seen`), the server marks the thread message seen (`markNotif` -> `chat.reminderSeen`) and pushes `noticeSeen` so every other open page shows it done; a replay of an answered notice does nothing. The Flutter app also sees the new thread message (it still has its own notice bar): app follow-up. Welfare and family-message notices still use the pop-up card.
 
 ## Proof status (needs Render + phone)
 - Scam fixes: proven locally with real Spark (fresh seniors); NOT yet live.

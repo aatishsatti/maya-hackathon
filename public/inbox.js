@@ -99,7 +99,7 @@
     if (!('Notification' in window) || window.Notification.permission !== 'granted' || !away()) return;
     try {
       const n = new window.Notification(title, { body, tag: key, requireInteraction: true });
-      n.onclick = () => { window.focus(); n.close(); };
+      n.onclick = () => { window.focus(); n.close(); const nid = String(key).replace(/^n/, ''); if (/^n/.test(key)) emit('maya-show-reminder', { id: nid }); };
       osNotes.set(key, n);
     } catch { /* a browser that refuses to build one: the card is still there */ }
   }
@@ -195,7 +195,10 @@
     dropCard(key);
   }
   function dropCard(key) { if (ring.key === key) stopRing(); const el = cards.get(key); if (el) { el.remove(); cards.delete(key); } if (![...cards.keys()].some((k) => k.startsWith('o'))) ringing(false); }
-  const seen = (nid) => post(`/api/care/${pid}/notifications/${nid}/seen`);
+  // Seen is reported exactly once per notice from this page: Got it in the chat bubble and Got it on a pop-up both come through here.
+  const seen = (nid) => { if (answered.has(nid)) return; answered.add(nid); post(`/api/care/${pid}/notifications/${nid}/seen`); };
+  const emit = (name, detail) => { try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch { /* no chat page to tell */ } };
+  window.addEventListener('maya-reminder-got', (e) => { const nid = e.detail && e.detail.notifId; if (!nid) return; seen(nid); drop(`n${nid}`); });   // Got it on the chat message
 
   function connect() {
     disconnect();
@@ -228,14 +231,15 @@
       const d = JSON.parse(e.data);
       if (answered.has(d.notifId)) return;
       post(`/api/care/${id}/notifications/${d.notifId}/delivered`);
+      // A reminder is a chat message first (the server put it in the thread): it is shown IN the chat, with its Got it. A pop-up (and a browser notification) comes only when the chat is not in front of them.
+      if (d.message) { emit('maya-reminder', { message: d.message }); if (!away()) { chime(); return; } }   // (the pop-up below makes its own one chime)
       noticeCard(`n${d.notifId}`, noteLabel(d), d.text, [
-        // Open: reported as Seen, and the reminder is shown in the chat (the chat page comes forward and scrolls to it).
-        { label: 'Open', done: 'Marked as seen', run: () => { answered.add(d.notifId); seen(d.notifId); window.focus(); try { window.dispatchEvent(new CustomEvent('maya-show-reminder', { detail: { id: d.notifId, label: noteLabel(d), text: d.text } })); } catch { /* no chat page to show it in */ } } },
-        { label: 'Got it', cls: 'primary', done: 'Done. Marked as seen', run: () => { answered.add(d.notifId); seen(d.notifId); } },
+        // Got it (the only button): reported as Seen, the pop-up goes, and the chat comes forward at that same reminder, shown as done.
+        { label: 'Got it', cls: 'primary', done: 'Done. Marked as seen', run: () => { seen(d.notifId); window.focus(); emit('maya-show-reminder', { id: d.notifId, label: noteLabel(d), text: d.text, done: true }); } },
       ]);
     });
     // Seen on another page of theirs (a second tab, their phone): this card goes too.
-    es.addEventListener('noticeSeen', (e) => { try { const nid = JSON.parse(e.data).notifId; answered.add(nid); drop(`n${nid}`); } catch { /* ignore a bad event */ } });
+    es.addEventListener('noticeSeen', (e) => { try { const nid = JSON.parse(e.data).notifId; answered.add(nid); drop(`n${nid}`); emit('maya-reminder-done', { notifId: nid }); } catch { /* ignore a bad event */ } });
   }
   function disconnect() { stopRing(); if (es) es.close(); es = null; for (const k of [...cards.keys()]) drop(k); }
   window.addEventListener('maya-profile', connect);
