@@ -703,7 +703,14 @@ function scamToldLine(sc, name, type) {
 // After a no on an incident Maya never asks again about it: an open dashboard flag of the same kind of scam means they already said no.
 // A different kind of scam is a new incident and is asked about as usual. (Enforced here, so a call, the chat and a photo all obey it.)
 const scamKind = (t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
-function scamDeclined(id, type) { const p = get(id); return (p && (p.scams || []).find((x) => x.level === 'flag' && x.status === 'active' && scamKind(x.type) === scamKind(type))) || null; }
+// A "no" to telling the family covers THE INCIDENT, not one label: Spark may call the same conversation a "prize scam" and then a "fee-demand scam" a minute later, and she must not ask again. So an active flag
+// answers for the same kind of scam at any time, and for any kind while it is recent (INCIDENT_MS, the same conversation). A different scam on another day is asked about afresh.
+const INCIDENT_MS = 30 * 60000;
+function scamDeclined(id, type) {
+  const p = get(id); if (!p) return null;
+  const flags = (p.scams || []).filter((x) => x.level === 'flag' && x.status === 'active');
+  return flags.find((x) => scamKind(x.type) === scamKind(type)) || flags.find((x) => Date.now() - (x.createdAt || 0) < INCIDENT_MS) || null;
+}
 function scamAsk(id, type, opts = {}) {
   const p = get(id);
   if (!p) return null;

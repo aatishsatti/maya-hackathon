@@ -166,7 +166,7 @@ test('7d the same rule guards the older "is something wrong?" yes', () => {
 });
 
 // ---- never ask again after a no ----
-test('8 after a no on an incident she never asks again; a different kind of scam is a new incident', () => {
+test('8 after a no on an incident she never asks again; a different kind of scam, well after, is a new incident', () => {
   const { id, c } = senior();
   care.scamAsk(id, 'pension scam', { channel: 'spoken' });
   c.careNotes('no, do not tell them');
@@ -174,8 +174,9 @@ test('8 after a no on an incident she never asks again; a different kind of scam
   assert.equal(care.scamAsk(id, 'pension scam', { channel: 'spoken', pause: true }), null, 'the same incident is not asked about again');
   assert.equal(care.scamAsk(id, 'Pension  Scam', { channel: 'text' }), null, 'however the kind is spelt');
   assert.equal(care.scamPending(id), null);
-  assert.ok(care.scamAsk(id, 'tech support scam', { channel: 'spoken' }), 'a different scam is asked about as usual');
-  assert.equal(care.scamDeclined(id, 'tech support scam'), null);
+  assert.equal(care.scamAsk(id, 'tech support scam', { channel: 'spoken' }), null, 'another label in the same conversation is the same incident (found live: prize scam -> fee-demand scam)');
+  const real = Date.now; Date.now = () => real() + 40 * 60000;
+  try { assert.equal(care.scamDeclined(id, 'tech support scam'), null, 'well after, another kind is not covered by the old no'); assert.ok(care.scamAsk(id, 'tech support scam', { channel: 'spoken' }), 'a different scam well after is asked about as usual'); } finally { Date.now = real; }
 });
 
 test('8b a repeat incident after a no: flag state, no question in her note, still the safety words; and a typed turn gets the same', () => {
@@ -205,3 +206,15 @@ test('the chat borrows the same guards (health alert, already-told note)', () =>
 });
 
 test.after(() => { calls.forEach((c) => c.end && c.end()); chat.endAll(); care.stop(); setTimeout(() => process.exit(), 50).unref(); });
+
+// Found live: after a "no" about a "prize scam", Spark called the same caller's next message a "fee-demand scam" and she asked the family question AGAIN. The no covers the incident.
+test('8d the no covers the SAME INCIDENT even if Spark gives it another label a minute later; a different scam on another day is asked about afresh', () => {
+  const { id } = senior();
+  care.scamAsk(id, 'prize scam', { channel: 'spoken' }); care.scamAnswer(id, false);
+  assert.ok(care.scamDeclined(id, 'prize scam'), 'the same label');
+  assert.ok(care.scamDeclined(id, 'fee-demand scam'), 'another label, the same conversation: still declined');
+  assert.equal(care.scamAsk(id, 'fee-demand scam', { channel: 'spoken' }), null, 'never asked again on the same incident'); assert.equal(care.scamPending(id), null);
+  const real = Date.now; Date.now = () => real() + 40 * 60000;
+  try { assert.equal(care.scamDeclined(id, 'phone-number scam'), null, 'a different kind of scam well after: asked afresh'); assert.ok(care.scamDeclined(id, 'prize scam'), 'the same kind is still a no'); assert.ok(care.scamAsk(id, 'phone-number scam', { channel: 'spoken' })); }
+  finally { Date.now = real; }
+});
