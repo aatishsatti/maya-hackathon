@@ -195,7 +195,9 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
       case 'incoming':
         Api.postJson('/api/care/$id/notifications/${e.data['notifId']}/delivered').catchError((_) => null);
         if (_inCall) return; // never ring over a live call
-        NativeCall.instance.dismiss('${e.data['outreachId']}'); // the app is open: it rings here, not on the system call screen too
+        // The system call screen is NOT taken down here. A closed app is rung by the system (full-screen on a locked phone); opening it to show this card used to cancel that very notification a moment
+        // later, and the call screen vanished after about two seconds and only came back on unlock. An open app is never pushed a system ring, so there is nothing to dismiss: the system ring goes
+        // down when the person answers or declines, when the server ends the ring, or when its own ring time is over.
         setState(() => _incoming = e.data);
         _ringTimer?.cancel();
         _ringTimer = Timer.periodic(const Duration(milliseconds: 1400), (_) {
@@ -225,6 +227,8 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   }
 
   void _dropIncoming() {
+    final oid = _incoming?['outreachId'];
+    if (oid != null) NativeCall.instance.dismiss('$oid');   // answered, declined or ended: the system ring goes down WITH the card
     _ringTimer?.cancel();
     _ringEnd?.cancel();
     if (mounted) setState(() => _incoming = null);

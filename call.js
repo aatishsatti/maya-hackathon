@@ -85,6 +85,7 @@ const WHATSAPP_GOODBYE_FULL = `[[feel: emotion=neutral intensity=1 intent=farewe
 const BYE_ASKED = 'Do you have any questions?', BYE_NOMORE = "Okay that's all. Bye-bye.", BYE_TIMEOUT = "Okay, I'll let you go then. Bye-bye.", BYE_SAID = 'Okay, goodbye. Take care.';
 const CLOSE_WAIT_MS = 8000;
 const PLAIN_FACTS = new Set(['family-written-reminder', 'reminder-acknowledged-placed-call']);   // facts that say nothing about safety, health, a scam or a promise: they never stop a goodbye
+const HANGUP_OK = /^(?:smart-(?:style|calls|thread|shape|ledger|switch)|social-.*)$/;   // fact labels that say nothing about safety, health, a scam or a promise that is owed
 const plainWords = (t) => String(t || '').toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
 const NO_MORE = /^(no|nope|nah|no thanks|no thank you|nothing|nothing else|nothing more|that'?s all|that is all|that'?s it|i'?m fine|i am fine|all good|i'?m good|not really|no questions|none|i don'?t have any|no i don'?t|no i'?m fine)( thanks| thank you| dear| maya)?$/;
 const BYE_WORDS = /\b(good ?bye|bye( bye)?|good ?night|see you|talk (to you )?later|take care|i have to go|i must go|got to go|gotta go|you can (hang up|go now|go)|hang up now|let you go|we are done|we'?re done|(please )?hang up( the call| maya)?$)\b/;
@@ -663,6 +664,7 @@ class Call {
       this.fakeAudio = this.noVoice && m.fakeAudio === true;   // only ever together with noVoice
       if (this.noVoice) console.log(this.fakeAudio ? 'call noVoice+fakeAudio: ElevenLabs is skipped; a synthetic voice is used' : 'call noVoice: ElevenLabs is skipped for this call');
       this.starting = true; this.startAt = Date.now();   // the start message arrived (greeting timing log)
+      care.callStarting(this.profile.id);   // from now on this person is on a call: a daily chat due in the next moments is skipped, not rung
       // Maya rang them and they pressed Accept: the id must match a live ring for THIS profile, else it is an ordinary call.
       if ((m.reason === 'callback' || m.reason === 'reminder' || m.reason === 'welfare') && typeof m.outreachId === 'string') this.outreach = care.claim(this.profile.id, m.outreachId);
       // Words a crashed or unfinished earlier call left behind are filed first, so this call knows them.
@@ -1537,17 +1539,21 @@ class Call {
   // ---- the daily chat they agreed to (social.js): the pickup opening. Spark writes it; code only keeps it varied, short, free of invented facts and free of the reminder wording. ----
   async socialLine(rem, signal) {
     const name = this.profile.name, id = this.profile.id, useName = Math.random() < this.nameChance;
+    const bySenior = rem.by === 'senior';   // from the SAVED record, never from what a draft says
     const recent = care.recentLines(id, 'social').slice(-6);
     const check = (said) => {
       if (/time to talk to maya|you just set it|set it for yourself|your reminder|reminder/i.test(said)) return 'Do not mention a reminder or that they set this up: you are simply calling for a friendly chat.';
-      if (/\b(?:lonely|alone|bored|miss(?:ed)? you|all by yourself)\b/i.test(said)) return 'Do not assume how they feel or that they are lonely.';
+      if (/\b(?:lonely|alone|bored|miss(?:ed)? you|all by yourself|thinking (?:about|of) you)\b/i.test(said)) return 'Do not assume how they feel or that you have been thinking about them.';
+      if (bySenior && /\b(?:family|daughter|son|grand\w*|children|kids|asked me to|sent me|check(?:ing)? in on you|check(?:ing)? on you)\b/i.test(said)) return 'Nobody else asked you to call: they asked for this daily chat themselves. Do not mention their family or anyone asking you to check on them.';
+      if (/\b(?:are you (?:ok|okay|alright|all right)|you (?:ok|okay|alright)\b|is everything (?:ok|okay|alright|all right)|make sure you(?:'re| are))\b/i.test(said)) return 'This is a friendly chat, not a welfare check: do not ask whether they are okay. Open like a friend ringing for a chat.';
       if (!useName && new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(said)) return 'Leave their name out this time.';
       if (recent.length && sameOpening(said, recent[recent.length - 1])) return 'That opens the same way as your last call. Open differently.';
       return null;
     };
-    const what = `You have just rung ${name} for the friendly daily chat they asked you for. They picked up. Say a short, natural, warm opening in ONE or two short sentences, the way a friend who rings every day would (for example a hello and how the day is going, or a light comment on the time of day). VARY how you open: never the same opening as before, never a canned line. Mention a personal detail ONLY if it is something they actually told you that is in what you know about them and is clearly still relevant; otherwise mention none. Never invent an interest, an event or the weather, never assume they are lonely or unwell, and do not say you are calling for a reminder. ${useName ? `You may use their name, ${name}, once.` : 'Do not use their name.'}`;
+    const who = bySenior ? 'THEY asked for this daily chat themselves, in a conversation with you. Their family did not ask you to call and you are not checking up on them.' : 'Their family arranged this daily chat for them; you may say so once, lightly, without any alarm.';
+    const what = `You have just rung ${name} for the friendly daily chat. ${who} They picked up. Say a short, natural, warm opening in ONE or two short sentences, the way a friend who rings every day would (a hello and something light: how the day is going, what they have been up to, a light comment on the time of day). It is a chat, not a welfare check: never ask whether they are okay. VARY how you open: never the same opening as before, never a canned line. Mention a personal detail ONLY if it is something they actually told you that is in what you know about them and is clearly still relevant; otherwise mention none. Never invent an interest, an event or the weather, never assume they are lonely or unwell, never say you were thinking about them, and do not say you are calling for a reminder. ${useName ? `You may use their name, ${name}, once.` : 'Do not use their name.'}`;
     const line = await this.dynamicLine({ pool: 'social', signal, what, check, sentences: 2 });
-    if (check(line.said)) { const opts = ['Hello! I thought I would ring and see how your day is going.', 'Hi there, it is Maya. How has today been so far?', 'Good to hear your voice. How are you getting on today?', 'Hello, it is Maya again. What have you been up to?']; const said = opts.find((o) => !care.isRepeatLine(id, 'social', o) && !(recent.length && sameOpening(o, recent[recent.length - 1]))) || opts[Date.now() % opts.length]; return { full: said, said }; }
+    if (check(line.said)) { const opts = ['Hello! I thought I would ring for our chat. How has your day been so far?', 'Hi there, it is Maya. What have you been up to today?', 'Hello again! Good to be talking. How are you getting on today?', 'Hi, it is Maya. How is your day going?']; const said = opts.find((o) => !care.isRepeatLine(id, 'social', o) && !(recent.length && sameOpening(o, recent[recent.length - 1]))) || opts[Date.now() % opts.length]; return { full: said, said }; }
     return line;
   }
 
@@ -1686,7 +1692,7 @@ class Call {
     const heardAll = turns.map((t) => t.text).join(' ');
     const endNow = this.ws.outbound ? outboundEnd(heardAll, this.closing === 'asked') : (saysBye(heardAll) ? 'bye' : null); this.closing = null; clearTimeout(this.closeTimer);
     // Only when no fact of any weight is in play. The reminder's own 'what the family wrote' fact rides along for the next four turns, so 'no extra at all' was never true right after a reminder (found live: 'No, thank you.' went to Spark).
-    const plain = (this.factLabels || []).every((l) => PLAIN_FACTS.has(l));
+    const plain = (this.factLabels || []).every((l) => PLAIN_FACTS.has(l) || HANGUP_OK.test(l));   // style / calls / thread / daily-chat facts never keep a goodbye from ending the call (found live: "You can hang up now" was answered politely and the call stayed open)
     if (endNow) console.log(this.ws.outbound ? 'outbound end' : 'app call end', JSON.stringify({ rule: endNow, plain, safety: Boolean(this.safety || this.health) }));   // booleans and a rule name only
     if (plain && !this.safety && !this.health && endNow) return this.sayFixed(endNow === 'nomore' ? BYE_NOMORE : BYE_SAID, { bye: true });
     if (this.abort) this.abort.abort(); // never two replies at once

@@ -39,7 +39,7 @@ const recs = (id) => p_(id).reminders.filter((r) => r.social);
 // A fake push service so rings can be pushed and the "end" messages seen.
 const sent = []; push.deps.configured = () => true; push.deps.send = async (d, payload) => { sent.push(payload); return { ok: true }; };
 
-test.after(() => { care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });
+test.after(() => { for (const c of calls) { try { c.end(); } catch { /* already over */ } } care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });
 
 test('1 the offer: only after a few warm turns, once, with a known time zone; never when stopped, declined (30 days), already arranged, at night or with no way to ring', () => {
   const id = senior(), s = sess(id);
@@ -72,7 +72,7 @@ test('2 + 1 consent: "tomorrow afternoon" alone saves nothing; every missing pie
   assert.equal(say(s, '"yes" is what he said'), null, 'a quoted yes is not permission');
   assert.equal(recs(id).length, 0);
   r = say(s, 'yes');
-  assert.equal(r[0], 'social-saved'); assert.match(r[1], /the record exists now/); assert.match(r[1], /skip a day, change the time or cancel/);
+  assert.equal(r[0], 'social-saved'); assert.match(r[1], /the record exists now/); assert.match(r[1], /skip today, change the time or cancel the daily calls/);
   const [rec] = recs(id); assert.ok(rec); assert.equal(rec.repeat, 'daily'); assert.equal(rec.deliver, 'call'); assert.equal(rec.channel, 'app'); assert.equal(rec.by, 'senior');
   assert.deepEqual([rec.social.h, rec.social.mi, rec.social.tz, rec.social.start], [15, 0, TZ, '2026-11-06']);
   assert.equal(rec.dueAt, setrem.zonedEpoch(2026, 11, 6, 15, 0, TZ));
@@ -250,4 +250,80 @@ test('10 the ring is one bounded attempt and the phone\'s call screen comes down
   const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'senior', 'senior_screen.dart'), 'utf8');
   assert.match(dart, /_ringEnd = Timer\(Duration\(milliseconds: \(\(e\.data\['ringMs'\] as num\?\)\?\.toInt\(\) \?\? 30000\) \+ 3000\), _dropIncoming\)/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'app', 'android', 'app', 'src', 'main', 'kotlin', 'com', 'mayateam', 'maya_app', 'NativeCalls.kt'), 'utf8'), /setTimeoutAfter\(ringMs\)/);
+});
+
+// ================= the five live defects (Mathew, 3 Nov, 2:35 am) =================
+const calls = [];
+const fakeWs = () => { const rec = { sent: [], closed: [] }; return { rec, ws: { send: (d) => rec.sent.push(typeof d === 'string' ? JSON.parse(d) : d), close: (c) => rec.closed.push(c), onmessage: null, onclose: null } }; };
+
+test('D1 "You can hang up now" ENDS the call on a web or app voice call even with the style / calls / daily-chat facts in play; with a real fact (safety, a scam question, an open reminder question) it still goes to Spark', async () => {
+  const id = senior(); const said = [];
+  const run = async (labels, text) => {
+    const { ws } = fakeWs(); const call = new Call(ws, 'k'); clearInterval(call.endTimer); calls.push(call); call.profile = memory.load(id);
+    call.sayFixed = async (t, o) => { said.push([t, o.bye]); }; call.careNotes = function () { this.factLabels = labels.slice(); return ''; };   // the facts this turn gave Spark (names only)
+    call.pending = [{ text, partial: '', completedAt: Date.now(), endedAt: Date.now() }];
+    call.attribute = (t) => [{ label: 'A', text: t.text }]; call.respond = Call.prototype.respond;
+    try { await Promise.race([call.respond(0), sleep(300)]); } catch { /* the rest of respond needs a live Spark: only the decision to end matters here */ }
+  };
+  for (const t of ['You can hang up now.', 'You can hang up.', 'Please hang up', 'Okay, goodbye then']) await run(['smart-style', 'smart-calls', 'smart-thread', 'smart-shape', 'social-active', 'smart-ledger'], t);
+  assert.deepEqual(said, Array(4).fill(["Okay, goodbye. Take care.", true]), 'each one: the close and the hang-up');
+  said.length = 0; await run(['smart-style'], "You're still here."); await run(['smart-style'], "Please don't hang up"); assert.deepEqual(said, [], 'not a goodbye: carries on');
+  said.length = 0; await run(['setrem-confirm'], 'You can hang up now.'); await run(['scam-warn'], 'You can hang up now.'); assert.deepEqual(said, [], 'a question still open or a scam in play: answered as before, not cut');
+});
+
+test('D2 a call that begins while the chat is due, queued or ringing: the chat is skipped, closed cleanly, never rung twice, never caught up; a start message alone already counts as busy', async () => {
+  // (a) the call's start message arrived but it is not registered yet
+  const a = senior(); open(a); const ra = arrange(a); care.callStarting(a, DUE); care.tick(DUE + 1000);
+  assert.equal([...care.outreaches.values()].some((x) => x.profileId === a), false, 'busy at due'); assert.equal(ra.last.reason, 'busy'); assert.equal(ra.dueAt, setrem.zonedEpoch(2026, 11, 7, 15, 0, TZ), 'tomorrow stays, today is not caught up');
+  // (b) the ring is queued, then a call starts before it rings
+  const b = senior(); open(b); const rb = arrange(b); care.tick(DUE + 1000); const ob = [...care.outreaches.values()].find((x) => x.profileId === b); assert.ok(ob && ob.social, 'queued');
+  sent.length = 0; care.callStarted(b, { deliverReminder: () => true, ws: {} }, TZ); await sleep(30);
+  assert.equal([...care.outreaches.values()].some((x) => x.profileId === b), false, 'the queued chat is closed'); assert.equal(rb.active, null, 'the record is not left half open (it used to stay "calling" and block every later day)');
+  assert.equal(rb.last.state, 'social_skipped'); assert.equal(rb.last.reason, 'busy'); assert.equal(sent.filter((x) => x.outreachId === ob.id && x.type === 'incoming').length, 0, 'no ring went out');
+  care.callEnded(b, { }, 'normal');
+  // (c) a call is going at the moment of ringing (registered between dispatch and ring)
+  const c = senior(); open(c); const rc = arrange(c); care.tick(DUE + 1000); const oc = [...care.outreaches.values()].find((x) => x.profileId === c); assert.ok(oc);
+  const live = { deliverReminder: () => true, ws: {} }; care.liveCallsForTest ? care.liveCallsForTest.set(c, live) : null;
+  care.callStarting(c, Date.now()); await sleep(30); assert.equal([...care.outreaches.values()].some((x) => x.profileId === c), false, 'rechecked at ringing: skipped'); assert.equal(rc.last.reason, 'busy');
+  // (d) tomorrow only while authorised
+  assert.ok(rc.dueAt > DUE);
+});
+
+test('D3 the call screen is not taken down when the app opens on the ring: no dismiss on `incoming`; it goes down with answer, decline, the server\'s end or its own ring time', () => {
+  const dart = fs.readFileSync(path.join(__dirname, '..', 'app', 'lib', 'senior', 'senior_screen.dart'), 'utf8');
+  const incoming = dart.slice(dart.indexOf("case 'incoming':"), dart.indexOf("case 'incomingEnd':"));
+  assert.doesNotMatch(incoming, /NativeCall\.instance\.dismiss/, 'the cause of the ~2 second vanish: the open-up of the app cancelled the very notification that launched it');
+  const drop = dart.slice(dart.indexOf('void _dropIncoming()'), dart.indexOf('Future<void> _acceptIncoming()'));
+  assert.match(drop, /NativeCall\.instance\.dismiss\('\$oid'\)/, 'answer, decline, end and timeout all pass through here');
+  assert.match(dart, /_ringEnd = Timer\(/); assert.match(dart, /case 'incomingEnd':[\s\S]*_dropIncoming\(\)/);
+  const kt = fs.readFileSync(path.join(__dirname, '..', 'app', 'android', 'app', 'src', 'main', 'kotlin', 'com', 'mayateam', 'maya_app', 'NativeCalls.kt'), 'utf8');
+  assert.match(kt, /"end" -> NativeCalls\.cancel\(this, oid\)/); assert.match(kt, /setTimeoutAfter\(ringMs\)/);
+});
+
+test('D4 the pickup opening: authorship from the saved record, never family wording for a senior-set chat, never the welfare question, fresh and varied', async () => {
+  const id = senior(); const rem = arrange(id); const profile = memory.load(id); assert.equal(rem.by, 'senior');
+  let seenWhat = '';
+  const mk = (said, r = rem) => ({ profile, nameChance: 0, dynamicLine: async ({ check, what }) => { seenWhat = what; return { said, full: said, bad: check(said) }; } });
+  const live = "Hello I was thinking about you and your family asked me to check in. Are you okay right now?";
+  const a = await Call.prototype.socialLine.call(mk(live), rem, undefined);
+  assert.doesNotMatch(a.said, /family|asked me|thinking about you|are you okay/i, 'the live line is refused'); assert.match(seenWhat, /THEY asked for this daily chat themselves/); assert.match(seenWhat, /Their family did not ask you to call/); assert.match(seenWhat, /never ask whether they are okay/);
+  for (const bad of ['Hello, are you okay?', 'Hi, I am just checking in on you.', "Your daughter asked me to ring.", 'Hello, I was thinking of you.', "It's time to talk to Maya."]) { const x = await Call.prototype.socialLine.call(mk(bad), rem, undefined); assert.equal(x.said === bad, false, bad); }
+  const good = 'Hi there! What have you been up to today?'; const g = await Call.prototype.socialLine.call(mk(good), rem, undefined); assert.equal(g.said, good, 'a fresh friendly opening passes'); care.addLine(id, 'social', good);
+  const again = await Call.prototype.socialLine.call(mk('Hi there! How is the afternoon going?'), rem, undefined); assert.notEqual(again.said, good);
+  const same = await Call.prototype.socialLine.call(mk('Hi there! Everything fine at home?'), rem, undefined); assert.notEqual(same.said, 'Hi there! Everything fine at home?', 'the same opening as the last call is refused');
+  const fam = { ...rem, by: 'family' }; await Call.prototype.socialLine.call(mk(good), fam, undefined); assert.match(seenWhat, /Their family arranged this daily chat/); assert.doesNotMatch(seenWhat, /THEY asked/);
+  // the lock screen reads the saved record too
+  open(id); care.tick(DUE + 1000); const o = [...care.outreaches.values()].find((x) => x.profileId === id); assert.match(o.notif.text, /the chat you asked for/); assert.doesNotMatch(o.notif.text, /family/i);
+});
+
+test('D5 natural yes answers to THAT confirm question save ("yes", "yes please", "yes perfect", "yes that sounds good", "sure", "perfect"); quoted, unrelated or conditional ones do not; before the question is asked nothing saves; the saved fact asks for time + start + controls in one sentence', () => {
+  for (const yes of ['yes', 'Yes please', 'yes perfect', 'Yes, that sounds good', 'sure', 'perfect', 'okay that works', 'yes thank you Maya']) {
+    const id = senior(), s = sess(id); warm(s, id); say(s, 'tomorrow at 3 pm');
+    const r = say(s, yes); assert.equal(r[0], 'social-saved', yes); assert.equal(recs(id).length, 1, yes);
+    assert.match(r[1], /ONE short sentence that holds all three: the time, the day it starts, and that they can say skip today, change the time or cancel the daily calls/);
+  }
+  for (const no of ['"yes"', 'my daughter said yes', 'yes but not on fridays', 'yes?', 'no', 'yes I like the garden too']) {
+    const id = senior(), s = sess(id); warm(s, id); say(s, 'tomorrow at 3 pm'); say(s, no); assert.equal(recs(id).length, 0, no);
+  }
+  const id = senior(), s = sess(id); warm(s, id); assert.notEqual(say(s, 'yes perfect')[0], 'social-saved', 'a yes before the confirm question was asked is nothing'); assert.equal(recs(id).length, 0);
 });

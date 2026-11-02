@@ -15,7 +15,17 @@ const DECLINE_MS = 30 * 86400000;         // a "no" is remembered: Maya does not
 const OFFER_GAP_MS = 24 * 3600000;        // and an offer nobody answered is not repeated within a day
 const WARM_MIN = 4;                       // warm turns before the first offer
 
-const YES_ALONE = /^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|please do|go ahead|that'?s right|that is right|correct|sounds good|yes,? please|yes,? that'?s (?:right|fine|good))\s*[.!]*\s*$/i;
+// A natural plain yes to the question just asked: "yes", "yes please", "yes perfect", "yes that sounds good", "sure", "perfect". It must be NOTHING BUT yes-words and filler (so "my daughter said yes",
+// "yes but not on Fridays", a question, or a quoted "yes" are not it), and it only counts when it answers the confirm question that was asked.
+const YES_CORE = new Set(['yes', 'yeah', 'yep', 'yup', 'sure', 'ok', 'okay', 'perfect', 'correct', 'right', 'absolutely', 'definitely', 'certainly', 'exactly', 'works', 'good', 'great', 'lovely', 'fine', 'wonderful']);
+const YES_FILLER = new Set(['please', 'thanks', 'thank', 'you', 'that', 'thats', 'sounds', 'sound', 'is', 'it', 'be', 'would', 'do', 'go', 'ahead', 'of', 'course', 'dear', 'maya', 'very', 'so', 'much', 'to', 'me', 'too', 'for', 'all', 'works', 'work', 'nice', 'brilliant', 'just', 'what', 'i', 'want', 'like', 'love', 'a', 'the', 'idea', 'plan', 'yes', 'yeah', 'yep', 'yup', 'sure', 'ok', 'okay', 'perfect', 'correct', 'right', 'absolutely', 'definitely', 'certainly', 'exactly', 'good', 'great', 'lovely', 'fine', 'wonderful', 'well', 'then', 'thing']);
+function isYes(text) {
+  const raw = String(text || '');
+  if (/["“”?]/.test(raw)) return false;
+  const w = raw.toLowerCase().replace(/[‘’]/g, "'").replace(/'/g, '').replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean);
+  return w.length >= 1 && w.length <= 7 && w.every((x) => YES_FILLER.has(x)) && w.some((x) => YES_CORE.has(x));
+}
+const YES_ALONE = { test: isYes };   // kept for callers that used the old pattern
 const DECLINE = /^\s*(?:no|nope|nah)\b|\bnot (?:now|today|really|interested)\b|\bno,? thanks?\b|\bno,? thank you\b|\bmaybe later\b|\bi(?:'d| would) rather not\b|\bi don'?t (?:want|need)\b|\bleave it\b/i;
 const VAGUE = /\b(?:after (?:lunch|dinner|breakfast|tea|supper|my (?:nap|walk))|before (?:lunch|dinner|bed)|sometime|some time|later|whenever|any ?time|in the (?:morning|afternoon|evening)|afternoon|morning|evening|around then)\b/i;
 const SKIP = /\b(?:skip|miss|pass on)\b[^.?!]{0,25}\b(?:today|this one|the call)\b|\bdon'?t call me today\b|\bno call today\b|\bnot today\b/i;
@@ -172,7 +182,7 @@ function save(s, id, offer, now = Date.now()) {
   try {
     const r = offer.mode === 'change' ? care.socialChangeTime(id, offer.time, now) : care.socialSave(id, { offerId: offer.id, h: offer.time.h, mi: offer.time.mi, start: offer.start, tz: offer.tz }, now);
     zput(id, { offer: null }); s._exec.social = true;
-    return ['social-saved', `${offer.mode === 'change' ? 'CHANGED' : 'SAVED'} (the record exists now): a call from you every day at ${clockWords(r.h, r.mi)}, their own local time${offer.mode === 'change' ? '' : `, starting ${dateWords(offer.start)}`}. You may now say it is arranged, in one short sentence. Add, in plain words, that they can skip a day, change the time or cancel the daily calls whenever they like. Promise nothing else.`];
+    return ['social-saved', `${offer.mode === 'change' ? 'CHANGED' : 'SAVED'} (the record exists now): a call from you every day at ${clockWords(r.h, r.mi)}, their own local time${offer.mode === 'change' ? '' : `, starting ${dateWords(offer.start)}`}. Now say it is arranged in ONE short sentence that holds all three: the time, the day it starts, and that they can say skip today, change the time or cancel the daily calls whenever they like. Promise nothing else.`];
   } catch (e) {
     zput(id, { offer: null }); s._exec.socialFailed = true;
     return ['social-failed', `NOT SAVED: ${String(e.message || 'it did not work').slice(0, 140)} Tell them plainly, in one short sentence, that it did not work and nothing is set up. Do NOT say scheduled, arranged or booked, and do not say you will try again by yourself.`];
@@ -183,4 +193,4 @@ function save(s, id, offer, now = Date.now()) {
 const SCHEDULED_CLAIM = /\b(?:i(?:'ve| have| will)?\s+(?:scheduled|arranged|booked|set (?:it|that|this) up)|(?:is|'s|has been|have been|all)\s+(?:scheduled|arranged|booked)|i(?:'ll| will) call you (?:every|each|tomorrow|daily))\b/i;
 function claimsScheduled(text) { return SCHEDULED_CLAIM.test(String(text || '')); }
 
-module.exports = { step, claims, onNoCalls, onCallsBack, claimsScheduled, slots, YES_ALONE, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };
+module.exports = { step, claims, onNoCalls, onCallsBack, claimsScheduled, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };

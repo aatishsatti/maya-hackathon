@@ -190,6 +190,9 @@ function addLine(id, pool, text, now = Date.now()) {
 
 // ---------------------------------------------------------------- activity / calls
 const liveCalls = new Map(); // profileId -> Call (so a due reminder can be spoken in the live call)
+const startingCalls = new Map(); // profileId -> when a call's start message arrived, until it is registered in liveCalls (the gap in which a ring used to slip through)
+const callStarting = (id, now = Date.now()) => { startingCalls.set(id, now); };
+const STARTING_MS = 30000;
 const liveChats = new Map(); // profileId -> text chat session (chat.js), so the family's Seen reaches a senior who is chatting, not calling
 
 // source: 'maya' | 'app' | 'whatsapp'. App pings are ignored while a Maya call is live (the click that started it
@@ -265,7 +268,7 @@ function chatNote(id, channel = 'text') {
 function callStarted(id, call, tz) {
   const p = get(id);
   if (!p) return;
-  liveCalls.set(id, call);
+  liveCalls.set(id, call); startingCalls.delete(id);
   if (call && typeof call === 'object' && !(call.ws && call.ws.outbound)) { const e = logPush(p, { id: uid(), kind: 'call', source: call.ws && call.ws.noRingback ? 'whatsapp' : 'app', at: Date.now(), endedAt: null, seconds: 0, talked: false, how: null }); call.logId = e.id; }
   p.callCount += 1;
   if (tz) tzmod.setZone(p, tz, 'device');
@@ -273,7 +276,8 @@ function callStarted(id, call, tz) {
   touch(id, 'maya');
   trendEvent(id, { kind: 'call' });
   const o = activeByProfile.get(id);
-  if (o && o.state !== 'answered') { if (o.safety) { const f = safetyFlag(p); if (f) f.callbackState = 'answered'; } closeOutreach(o, 'answered'); } // they called Maya themselves: stop ringing
+  if (o && o.social && o.state !== 'answered') { const r = p.reminders.find((x) => x.id === o.reminderId); socialEnd(p, o, r, 'social_skipped', 'busy'); }   // a call began while the chat was ringing / about to: the chat is skipped (its record is closed, nothing is left half-open)
+  else if (o && o.state !== 'answered') { if (o.safety) { const f = safetyFlag(p); if (f) f.callbackState = 'answered'; } closeOutreach(o, 'answered'); } // they called Maya themselves: stop ringing
   save(id);
 }
 // how: 'quiet' (Maya hung up after silence), 'safety' (a safety concern was raised in it), 'left' (the senior ended it), 'normal'.
@@ -1290,7 +1294,7 @@ function socialBlock(p, r, now, { ringing = false } = {}) {
   if (!p.tz || p.tz !== sc.tz) { sc.paused = 'timezone'; return 'timezone changed'; }
   if (sc.skipDate && sc.skipDate === localDate(now, sc.tz)) return 'skipped today';
   if (inQuiet(p.id, now)) return 'quiet hours';
-  if (liveCalls.has(p.id)) return 'busy';
+  if (liveCalls.has(p.id) || (startingCalls.has(p.id) && now - startingCalls.get(p.id) < STARTING_MS)) return 'busy';
   const cur = activeByProfile.get(p.id); if (cur && !(ringing && cur.social && cur.reminderId === r.id)) return 'busy';
   if (!appOpen(p.id) && !pushReady(p.id)) return 'app closed';
   return null;
@@ -2114,6 +2118,6 @@ module.exports = {
   familyHooks, escalationAct, escalationTick, setFamilyConsent, ESC, ringFamily, attachSenior, attachFamily, pushFamily, appOpen,
   statusLabel, markNotif, makeNotif, advance,
   startOutreach, claim, decline, silenceHangup, suddenSilence, selfHarmAlert, healthAlert, whatsappStatus, familyAsk, concernAlert, scamAsk, scamAskedOut, scamAsked, scamFresh, scamLost, asksFamilyQ, SCAM_GAP_MS, scamOfficial, checkStart, checkDone, checkFacts, checkDueIds, checkDelivered, scamDeclined, scamTold, scamPending, scamClear, scamUnclear, scamAnswer, scamAlert, scamFlag, safetyCut, onSeniorSpoke, hasActiveFlag, hasActiveSafety, safetyHistoryNote, familyToldTopics, familyFacts, familyEventRecent, assess, raise, ring,
-  persistSmart, addReminder, addSeniorReminder, quietEndsAt, quietOn, setQuietHours, socialOf, socialSave, socialRevoke, socialRestore, socialCancel, socialSkipToday, socialChangeTime, hourQuiet, localDate, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
+  persistSmart, addReminder, addSeniorReminder, quietEndsAt, quietOn, setQuietHours, callStarting, socialOf, socialSave, socialRevoke, socialRestore, socialCancel, socialSkipToday, socialChangeTime, hourQuiet, localDate, waitingUntil, rescheduleReminder, updateReminder, seniorSetCount, setTimezone, whatsappLinked, waWhy, chatNote, reminderAckApp, notificationAck, appThreadOpened, setWelfareSender, pushMessage, welfareEntry, welfareAppSend, welfareAppRing, welfareAppRingBlock, welfareReplyApp, welfareFailed, welfareDropSince, WELFARE_WORDS, welfareScheduleStart, SCHEDULE_PRESETS, SCHEDULE_CUSTOM_WARNING, welfareScheduleStop, welfareScheduleView, welfarePaused, welfareCallStart, welfareCallEnded, welfareCallCancel, reminderCallStart, reminderCallCancel, reminderCallEnded, reminderViaMessage, deleteReminder, findReminder, reminderAck, seniorMenu, stopSeniorReminder, reminderNoAck, setReminderSender, reminderStatus, reminderAckWhatsApp, reminderContext, consumeAck, withTurnChannel, turnChannel, setDelivery, flush,
   setMode, view, overview, fmtTime, inQuietHours, inQuiet, outreaches, activeByProfile,
 };
