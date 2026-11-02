@@ -91,7 +91,7 @@ class MayaCallState {
 // and sends the call's token so the server hands the same call back. Gives up after WINDOW_MS (the server holds the call for a little longer).
 // Heartbeat: the page pings every PING_MS and expects to hear anything from the server within DEAD_MS, else the line counts as lost.
 const MayaLine = {
-  WINDOW_MS: 18000, RETRY_MS: [300, 1000], PING_MS: 2500, DEAD_MS: 6000, ATTEMPT_MS: 4000, SLOW_MS: 5000,   // a silent (half-open) line is noticed in 6 s (a pong every 2.5 s; a mic stall is about 1 s); after SLOW_MS of trying the page says so plainly
+  WINDOW_MS: 18000, RETRY_MS: [300, 1000], PING_MS: 2500, DEAD_MS: 6000, ATTEMPT_MS: 4000, SLOW_MS: 5000, SLOW_TEXT: 'Still trying to reconnect. You can press End call and call again.',   // a silent (half-open) line is noticed in 6 s (a pong every 2.5 s; a mic stall is about 1 s); after SLOW_MS of trying the page says so plainly
   // First loss at lostAt; `attempt` is how many reconnects were tried. -> { retry, delay } or { retry: false }.
   next({ now, lostAt, attempt, hasToken }) {
     if (!hasToken || now - lostAt >= this.WINDOW_MS) return { retry: false };
@@ -518,9 +518,9 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       c.thinkTimer = setTimeout(() => { if (call === c) endCall('Maya did not answer in time. Please call again.'); }, THINK_TIMEOUT_MS);
     }
     switch (ev.type) {
-      case 'ready': c.ready = true; c.token = ev.resume; c.lostAt = 0; chime(c); break;
+      case 'ready': c.ready = true; c.token = ev.resume; c.lostAt = 0; clearTimeout(c.slowTimer); c.slowTimer = null; c.slowShown = false; chime(c); break;
       case 'resumed': // the server gave this call back after the line dropped: carry on
-        c.ready = true; c.lostAt = 0; c.attempt = 0; clearTimeout(c.attemptTimer);
+        c.ready = true; c.lostAt = 0; c.attempt = 0; clearTimeout(c.attemptTimer); clearTimeout(c.slowTimer); c.slowTimer = null; c.slowShown = false;
         if (callState.muted && c.ws.readyState === WebSocket.OPEN) { c.ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; }
         setState(voiceSources.size ? 'speaking' : 'listening');
         break;
@@ -653,8 +653,9 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (!step.retry) { endCall(LINE_LOST_MSG); return; }
     c.attempt += 1;
     setState('thinking', 'reconnecting');
-    clearTimeout(c.slowTimer);
-    c.slowTimer = setTimeout(() => { if (myGen === gen && call === c && !c.ready) statusEl.textContent = 'Still trying to reconnect. You can press End call and call again.'; }, MayaLine.SLOW_MS);
+    // After SLOW_MS of trying, say so plainly. Armed ONCE per lost line (each failed attempt comes back through here, and re-arming it every time meant it never fired); the words stay up while the attempts go on.
+    if (!c.slowTimer) c.slowTimer = setTimeout(() => { c.slowShown = true; if (myGen === gen && call === c && !c.ready) statusEl.textContent = MayaLine.SLOW_TEXT; }, Math.max(0, MayaLine.SLOW_MS - (now - c.lostAt)));
+    if (c.slowShown) statusEl.textContent = MayaLine.SLOW_TEXT;
     c.reconnectTimer = setTimeout(() => { if (myGen === gen && call === c) openSocket(c, myGen, true); }, step.delay);
   }
 

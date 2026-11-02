@@ -89,6 +89,67 @@
   for (const ev of ['pointerdown', 'keydown', 'touchstart', 'click']) window.addEventListener(ev, () => { audio(); if (ring.key && !ring.sounding) startLoop(); }, { passive: true });
   window.mayaInbox = { ring: () => ({ key: ring.key, sounding: ring.sounding, blocked: ring.blocked }) };
 
+  // ---- A reminder or a message: a card with a bell and two buttons, a gentle chime, and (when this page is hidden or in the background) a browser notification, if the person has allowed them.
+  // The browser asks for that permission only when the person presses Allow, never by itself; refused or unsupported, the card says so plainly and everything else still works.
+  const away = () => Boolean(document.hidden) || (typeof document.hasFocus === 'function' && !document.hasFocus());
+  const osNotes = new Map();   // card key -> the browser notification, closed when the card is
+  let titleFlash = null, baseTitle = document.title;
+  function osNotify(key, title, body) {
+    if (!('Notification' in window) || window.Notification.permission !== 'granted' || !away()) return;
+    try {
+      const n = new window.Notification(title, { body, tag: key, requireInteraction: true });
+      n.onclick = () => { window.focus(); n.close(); };
+      osNotes.set(key, n);
+    } catch { /* a browser that refuses to build one: the card is still there */ }
+  }
+  function flashTitle(on, text) {
+    clearTimeout(titleFlash); titleFlash = null;
+    if (!on) { document.title = baseTitle; return; }
+    let x = false; document.title = text;
+    const step = () => { x = !x; document.title = x ? baseTitle : text; titleFlash = setTimeout(step, 1200); };
+    titleFlash = setTimeout(step, 1200);
+  }
+  if (typeof document.addEventListener === 'function') document.addEventListener('visibilitychange', () => { if (!document.hidden && !cards.size) flashTitle(false); });
+  window.addEventListener('focus', () => { if (!cards.size) flashTitle(false); });
+  const BELL = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.500 2.500 0 0 0 2.450-2h-4.900A2.500 2.500 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.500-6.850V3.500a1.500 1.500 0 0 0-3 0v.650A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>';
+  const noteLabel = (d) => (d.kind === 'reminder' ? (d.by === 'senior' ? 'Your reminder' : 'Reminder from your family') : d.kind === 'welfare' ? 'Check-in from your family' : 'Message from your family');
+  function permissionLine() {
+    if (!('Notification' in window)) return null;
+    const p = document.createElement('div'); p.className = 'notice-perm';
+    if (window.Notification.permission === 'default') {
+      const t = document.createElement('small'); t.textContent = 'Allow notifications so Maya can tell you even when this page is hidden.';
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'notice-allow'; b.textContent = 'Allow';
+      b.addEventListener('click', () => { try { window.Notification.requestPermission().then((r) => { p.textContent = r === 'granted' ? 'Notifications are on.' : 'Notifications stay off. Maya can still tell you while this page is open.'; }); } catch { p.remove(); } });
+      p.append(t, b);
+    } else if (window.Notification.permission === 'denied') {
+      const t = document.createElement('small'); t.textContent = 'Notifications are off for this page, so Maya can only tell you while it is open. You can turn them on in the browser settings for this site.'; p.append(t);
+    } else return null;
+    return p;
+  }
+  function noticeCard(key, label, text, buttons) {
+    drop(key);
+    const el = document.createElement('div');
+    el.className = 'inbox-card notice'; el.setAttribute('role', 'alert'); el.setAttribute('aria-label', label);
+    const top = document.createElement('div'); top.className = 'notice-top';
+    const ico = document.createElement('span'); ico.className = 'notice-ico'; ico.innerHTML = BELL;
+    const lab = document.createElement('small'); lab.className = 'notice-label'; lab.textContent = label;
+    top.append(ico, lab);
+    const p = document.createElement('p'); p.className = 'notice-text'; p.textContent = text;
+    el.append(top, p);
+    const perm = permissionLine(); if (perm) el.append(perm);
+    const row = document.createElement('div'); row.className = 'inbox-row';
+    for (const b of buttons) {
+      const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = b.label; btn.className = `inbox-btn ${b.cls || ''}`.trim();
+      btn.addEventListener('click', () => { drop(key); b.run(); });
+      row.append(btn);
+    }
+    el.append(row); inbox.append(el); cards.set(key, el);
+    const first = buttons.findIndex((b) => b.cls === 'primary'); const btns = row.children;
+    (btns[first >= 0 ? first : 0]).focus({ preventScroll: true });
+    chime();   // one gentle chime (silent, card only, until the browser has allowed sound); never a loop
+    osNotify(key, label, text); if (away()) flashTitle(true, `● ${label}`);
+  }
+
   const ringing = (on) => { if (document.body) document.body.dataset.ringing = String(on); };   // the page behind the card hides while a ring is on screen
   // Why Maya is calling, from the KIND of call only (never any private words).
   const WHY = {
@@ -121,7 +182,12 @@
     el.querySelector('button').focus({ preventScroll: true });
     if (cls === 'incoming') ringing(true);
   }
-  function drop(key) { if (ring.key === key) stopRing(); const el = cards.get(key); if (el) { el.remove(); cards.delete(key); } if (![...cards.keys()].some((k) => k.startsWith('o'))) ringing(false); }
+  function drop(key) {
+    const on = osNotes.get(key); if (on) { try { on.close(); } catch { /* gone */ } osNotes.delete(key); }
+    if (!cards.has(key) || cards.size <= 1) flashTitle(false);
+    dropCard(key);
+  }
+  function dropCard(key) { if (ring.key === key) stopRing(); const el = cards.get(key); if (el) { el.remove(); cards.delete(key); } if (![...cards.keys()].some((k) => k.startsWith('o'))) ringing(false); }
   const seen = (nid) => post(`/api/care/${pid}/notifications/${nid}/seen`);
 
   function connect() {
@@ -140,15 +206,24 @@
         { label: 'Accept', cls: 'inbox-btn accept', run: () => { seen(d.notifId); window.mayaStartCall({ reason: d.kind, outreachId: d.outreachId }); } },
       ], 'incoming', 'Maya is calling');
       startRing(`o${d.outreachId}`);
+      osNotify(`o${d.outreachId}`, 'Maya is calling', whyOf(d.kind));
     });
     // Maya's own unprompted chat message (the family's Seen, said in her words) goes to the chat thread (chat-ui.js).
-    es.addEventListener('chat', (e) => { try { window.dispatchEvent(new CustomEvent('maya-chat-message', { detail: JSON.parse(e.data).message })); } catch { /* ignore a bad event */ } });
+    es.addEventListener('chat', (e) => {
+      try {
+        const m = JSON.parse(e.data).message;
+        window.dispatchEvent(new CustomEvent('maya-chat-message', { detail: m }));
+        if (m && m.role === 'maya' && !m.spoken) osNotify(`c${m.id}`, 'Maya', m.kind === 'voice' ? 'Maya sent you a voice note.' : m.text || 'Maya wrote to you.');   // a call's lines are not news; a message or a voice note is
+      } catch { /* ignore a bad event */ }
+    });
     es.addEventListener('incomingEnd', (e) => drop(`o${JSON.parse(e.data).outreachId}`));
     es.addEventListener('notice', (e) => {
       const d = JSON.parse(e.data);
       post(`/api/care/${id}/notifications/${d.notifId}/delivered`);
-      chime();
-      card(`n${d.notifId}`, `${d.kind === 'reminder' ? 'Reminder from your family' : d.kind === 'welfare' ? 'Check-in from your family' : 'Message from your family'}: ${d.text}`, [{ label: 'Close', run: () => seen(d.notifId) }]);
+      noticeCard(`n${d.notifId}`, noteLabel(d), d.text, [
+        { label: 'Open', run: () => { seen(d.notifId); window.focus(); const box = document.getElementById('msgIn'); if (box && !(window.mayaInCall && window.mayaInCall())) box.focus({ preventScroll: false }); } },
+        { label: 'Got it', cls: 'primary', run: () => seen(d.notifId) },
+      ]);
     });
   }
   function disconnect() { stopRing(); if (es) es.close(); es = null; for (const k of [...cards.keys()]) drop(k); }

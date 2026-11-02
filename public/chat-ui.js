@@ -68,6 +68,13 @@
     wave.addEventListener('click', (e) => seek(e.clientX));
     wave.addEventListener('keydown', (e) => { if (!audio.duration) return; if (e.key === 'ArrowRight') audio.currentTime = Math.min(audio.duration, audio.currentTime + 5); else if (e.key === 'ArrowLeft') audio.currentTime = Math.max(0, audio.currentTime - 5); else return; e.preventDefault(); paint(); shown(); });
     btn.addEventListener('pause-all', () => { audio.pause(); btn.innerHTML = PLAY; });
+    // Maya's voice note arrived while the page is open (a voice reminder): it starts by itself if the browser allows sound here (the person has used this page), and says nothing if it does not; the play button is always there.
+    btn.addEventListener('auto-play', () => {
+      if (!audio.paused) return;
+      if (player && player.audio !== audio) { player.audio.pause(); player.btn.innerHTML = PLAY; }
+      player = { audio, btn }; btn.innerHTML = PAUSE;
+      audio.play().catch(() => { btn.innerHTML = PLAY; });
+    });
     b.dataset.maya = m.role === 'maya' ? '1' : '';
     return b;
   }
@@ -380,7 +387,13 @@
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!sheet.hidden) closeSheet(); else if (picked) closePreview(); } });
 
   // Maya's own unprompted line (the family has seen the worry): it joins the thread as her message.
-  window.addEventListener('maya-chat-message', (e) => { if (e.detail) append(e.detail); });
+  window.addEventListener('maya-chat-message', (e) => {
+    const m = e.detail; if (!m) return;
+    const row = append(m);
+    if (m.kind === 'voice' && m.role === 'maya' && m.mediaUrl && !m.spoken && !(window.mayaInCall && window.mayaInCall()) && navigator.userActivation && navigator.userActivation.hasBeenActive) {
+      const b = row && row.querySelector('.play'); if (b) b.dispatchEvent(new CustomEvent('auto-play'));
+    }
+  });
   window.addEventListener('maya-profile', () => { if (recording) stopRecording(false); if (picked) closePreview(); stopAllAudio(); loadThread(); syncControls(); });
 
   // The visible height follows the keyboard where the browser reports it, so the text box stays above the keyboard.

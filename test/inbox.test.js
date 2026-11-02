@@ -21,8 +21,8 @@ class El {
   all(sel, out = []) { for (const c of this.children) { if (c.matches(sel)) out.push(c); c.all(sel, out); } return out; }
 }
 
-function browser({ inCall = false } = {}) {
-  const log = { starts: [], freqs: [], peaks: [], ctxMade: 0, ctxClosed: 0, posts: [], started: [] };
+function browser({ inCall = false, hidden = false, permission = null } = {}) {
+  const log = { starts: [], freqs: [], peaks: [], ctxMade: 0, ctxClosed: 0, posts: [], started: [], notes: [], noteClosed: 0, asked: 0 };
   let now = 0, id = 0; const timers = new Map();
   const setTimeout_ = (fn, ms) => { id += 1; timers.set(id, { fn, at: now + ms }); return id; };
   const clearTimeout_ = (i) => timers.delete(i);
@@ -44,7 +44,9 @@ function browser({ inCall = false } = {}) {
     addEventListener(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); },
   };
   const fire = (ev) => (handlers[ev] || []).forEach((f) => f({ target: { closest: () => null } }));
-  const document = { getElementById: () => inboxEl, createElement: (t) => new El(t) };
+  if (permission !== null) { window.Notification = class N { constructor(title, o) { log.notes.push({ title, ...o }); this.close = () => { log.noteClosed += 1; }; } static get permission() { return permission; } static requestPermission() { log.asked += 1; permission = 'granted'; return Promise.resolve('granted'); } }; }
+  window.focus = () => {};
+  const document = { getElementById: () => inboxEl, createElement: (t) => new El(t), hidden, hasFocus: () => !hidden, title: 'Maya' };
   const sandbox = { window, document, EventSource: ES, fetch: (u, o) => { log.posts.push(u); return Promise.resolve(); }, setTimeout: setTimeout_, clearTimeout: clearTimeout_, Intl, encodeURIComponent, JSON, Date, console };
   vm.runInNewContext(SRC, sandbox);
   fire('maya-profile'); // connect
@@ -121,5 +123,39 @@ test('R5 a family message is a soft chime only (not the phone ring), never a loo
   assert.ok(Math.max(...b.log.peaks) <= 0.08 + 1e-9);
   assert.equal(b.ring().key, null);
   b.advance(30000); assert.equal(b.log.starts.length, 2);
-  assert.match(b.cards()[0].all('button')[0].textContent, /Close/);
+  const bt = b.cards()[0].all('button'); assert.deepEqual(bt.map((x) => x.textContent), ['Open', 'Got it'], 'a card with two plain buttons');
+});
+
+test('a reminder card: "Your reminder" for the person\'s own, "Reminder from your family" for the family\'s, a bell, and two plain buttons (Open, Got it) that both report Seen', async () => {
+  const b = browser(); b.fire('pointerdown'); await tick();
+  b.es().emit('notice', { notifId: 'r1', kind: 'reminder', by: 'senior', text: 'Take your tablets' });
+  assert.equal(b.cards()[0].children[0].children[1].textContent, 'Your reminder');
+  assert.equal(b.cards()[0].children[1].textContent, 'Take your tablets');
+  button(b, 'Got it').handlers.click(); assert.ok(b.log.posts.some((u) => /notifications\/r1\/seen/.test(u)), 'Got it reports Seen'); assert.equal(b.cards().length, 0);
+  b.es().emit('notice', { notifId: 'r2', kind: 'reminder', text: 'Drink water' });
+  assert.equal(b.cards()[0].children[0].children[1].textContent, 'Reminder from your family');
+  button(b, 'Open').handlers.click(); assert.ok(b.log.posts.some((u) => /notifications\/r2\/seen/.test(u)), 'Open reports Seen too'); assert.equal(b.cards().length, 0);
+});
+
+test('a page that is hidden: the reminder also becomes a browser notification (once allowed), and closing the card closes it; a visible page makes none', async () => {
+  const away = browser({ hidden: true, permission: 'granted' }); away.fire('pointerdown'); await tick();
+  away.es().emit('notice', { notifId: 'h1', kind: 'reminder', by: 'senior', text: 'Take your tablets' });
+  assert.deepEqual(away.log.notes.map((n) => [n.title, n.body, n.requireInteraction]), [['Your reminder', 'Take your tablets', true]]);
+  button(away, 'Got it').handlers.click(); assert.equal(away.log.noteClosed, 1);
+  away.incoming(7); assert.equal(away.log.notes.at(-1).title, 'Maya is calling', 'a ring too');
+  const here = browser({ hidden: false, permission: 'granted' }); here.fire('pointerdown'); await tick();
+  here.es().emit('notice', { notifId: 'h2', kind: 'family_message', text: 'Dinner at 6' }); assert.equal(here.log.notes.length, 0, 'the page is in front: the card is enough');
+});
+
+test('notification permission is asked only when the person presses Allow; refused or unsupported says so plainly or says nothing', async () => {
+  const ask = browser({ hidden: false, permission: 'default' }); ask.fire('pointerdown'); await tick();
+  ask.es().emit('notice', { notifId: 'p1', kind: 'family_message', text: 'Hello' });
+  assert.equal(ask.log.asked, 0, 'never asked by itself');
+  const allow = ask.cards()[0].all('button').find((x) => x.textContent === 'Allow'); assert.ok(allow, 'a plain Allow button on the card');
+  allow.handlers.click(); assert.equal(ask.log.asked, 1);
+  const no = browser({ permission: 'denied' }); no.fire('pointerdown'); await tick(); no.es().emit('notice', { notifId: 'p2', kind: 'family_message', text: 'Hello' });
+  assert.ok(!no.cards()[0].all('button').some((x) => x.textContent === 'Allow'));
+  assert.match(no.cards()[0].all('small').map((x) => x.textContent).join(' '), /Notifications are off for this page, so Maya can only tell you while it is open/);
+  const none = browser(); none.fire('pointerdown'); await tick(); none.es().emit('notice', { notifId: 'p3', kind: 'family_message', text: 'Hello' });
+  assert.equal(none.cards()[0].all('small').filter((x) => /Notifications/.test(x.textContent)).length, 0, 'a browser with no notifications: no line at all');
 });

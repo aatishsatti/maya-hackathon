@@ -196,7 +196,7 @@ test('web reminders: the channel choice (WhatsApp / Maya app / Both) is on the A
   assert.match(html, /id="channelPick"[\s\S]*?data-v="whatsapp">WhatsApp<[\s\S]*?data-v="app">Maya app<[\s\S]*?data-v="both">Both</); assert.match(html, /id="delivChan"[\s\S]*?value="whatsapp">On WhatsApp<[\s\S]*?value="app">In the Maya app<[\s\S]*?value="both">On both</);
   page.el('delivChan').value = 'both'; page.el('delivChan').handlers.change(); await new Promise((r) => setTimeout(r, 30)); assert.deepEqual(page.posts.at(-1).body, { channel: 'both' });
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'family.js'), 'utf8'); assert.match(src, /\.\.\.\(channelSeg\.get\(\) \? \{ channel: channelSeg\.get\(\) \} : \{\}\)/); assert.match(src, /\['call', 'Calls'\]/); assert.match(src, /ACT_WHERE = \{ app: 'App', whatsapp: 'WhatsApp', both: 'App \+ WhatsApp' \}/);
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'public', 'inbox.js'), 'utf8'), /d\.kind === 'reminder' \? 'Reminder from your family'/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'public', 'inbox.js'), 'utf8'), /d\.kind === 'reminder' \? \(d\.by === 'senior' \? 'Your reminder' : 'Reminder from your family'\)/);
 });
 
 test('reminders on WhatsApp still go as a call, a text and a voice note (the existing rules: window, calls); the app does the same three without them', async () => {

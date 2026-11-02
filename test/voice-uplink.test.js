@@ -25,5 +25,6 @@ test('frames are dropped, and counted, while the line is backed up; the counts a
 test('a silent line is noticed within seconds, and the page says so plainly if reconnecting takes long', () => {
   assert.ok(MayaLine.DEAD_MS <= 6000 && MayaLine.PING_MS * 2 < MayaLine.DEAD_MS, 'a pong every 2.5 s, dead after 6 s: well above a 1 s mic stall');
   assert.ok(MayaLine.SLOW_MS < MayaLine.WINDOW_MS && MayaLine.WINDOW_MS < RESUME_GRACE_MS);
-  assert.match(src, /Still trying to reconnect\. You can press End call and call again\./);
+  assert.equal(MayaLine.SLOW_TEXT, 'Still trying to reconnect. You can press End call and call again.');
+  assert.match(src, /if \(!c\.slowTimer\) c\.slowTimer = setTimeout/, 'armed once per lost line: re-arming it on every failed attempt meant it never fired');
 });
