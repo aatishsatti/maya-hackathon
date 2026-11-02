@@ -34,8 +34,9 @@ function zonedEpoch(y, m, d, h, mi, tz) {   // local wall time in tz -> epoch ms
 const validTz = (tz) => { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return Boolean(tz); } catch { return false; } };
 
 // ---------------------------------------------------------------- reading the words
-const IS_REQUEST = /\bremind me\b|\bset (?:me )?(?:up )?(?:a|an|another|the|some)?\s*(?:daily |hourly |new )?(?:reminder|alarm)s?\b|\b(?:i (?:need|want|would like)|can i (?:get|have)|could i have) (?:a |an )?(?:daily |hourly )?reminder\b/i;   // a QUESTION about reminders ("any reminders for me?") is not a request
-const NOT_A_SETUP = /\b(?:next time|when i (?:call|ring|phone) (?:you )?again|the next call)\b/i;   // "remind me next time I call" is the next-call reminder (recall.js), not this
+const UNIT = '(?:seconds?|secs?|minutes?|mins?|hours?|hrs?)';
+const IS_REQUEST = new RegExp(String.raw`\bremind(?:ing)? me\b|\b(?:start|begin|first|let'?s start)\s+(?:off\s+)?(?:with\s+)?remind(?:ing|er)|\bset (?:me )?(?:up )?(?:a|an|another|the|some)?\s*(?:daily |hourly |new )?(?:reminder|alarm)s?\b|\b(?:i (?:need|want|would like)|can i (?:get|have)|could i have) (?:a |an )?(?:daily |hourly )?reminder\b|\b(?:tell me|let me know|ping me|nudge me|buzz me|alert me|notify me)\b[^.?!]{0,50}\b(?:in|after)\s+(?:\d+|an?|one|two|three|four|five|six|ten|fifteen|twenty|thirty|half an?)\s*${UNIT}\b|\b(?:set|start|make|put|use)\s+(?:me\s+|up\s+)?(?:a|an)\s+(?:[\w-]+\s+){0,2}timer\b`, 'i');   // a QUESTION about reminders ("any reminders for me?") is not a request; "remind me", "reminding me", "start with reminding me", "tell me in 5 minutes to...", "set a timer for..." are
+const NOT_A_SETUP = /^\s*(?:do|can|could|will|would|are)\s+(?:you|u)\s+(?:\w+\s+){0,2}(?:set|make|do|have|keep|give)\s+(?:\w+\s+){0,2}(?:reminders?|timers?)\s*[?!.]*\s*$|\b(?:next time|when i (?:call|ring|phone) (?:you )?again|the next call)\b|\b(?:stop|keep|kept|don'?t|do not|never|quit|no need to|why (?:do|did) you)\s+(?:\w+\s+){0,2}remind(?:ing)?\s+me\b/i;   // "remind me next time I call" is the next-call reminder (recall.js), not this
 // "Call me back in ten minutes", "ring me tonight at 9": a promise to call. It is a real reminder by CALL, so the call really happens (or she says plainly that she cannot); she never just agrees.
 const CALLBACK = /\b(?:call|ring|phone) me (?:back|again)\b|\b(?:call|ring|phone) me (?:in|after|at|every|tomorrow|tonight|this|on)\b|\bgive me a (?:call|ring) (?:back|in|after|at|tomorrow|tonight|this|on)\b/i;
 const isRequest = (text) => (IS_REQUEST.test(String(text || '')) || CALLBACK.test(String(text || ''))) && !NOT_A_SETUP.test(String(text || ''));
@@ -57,8 +58,10 @@ function readTime(text, { bare = false } = {}) {
   cut(/\b(?:every|each)\s+(?:day|morning|afternoon|evening|night)\b|\bdaily\b|\bonce a day\b|\bevery\s+single\s+day\b/g, (m) => { o.repeat = 'daily'; o.every = 1; const dp = /morning|afternoon|evening|night/.exec(m[0]); if (dp) o.daypart = dp[0]; });
   cut(new RegExp(`\\bevery\\s+(${WEEKDAYS.join('|')})s?\\b`, 'g'), (m) => { o.repeat = 'weekly'; o.every = 1; o.weekday = WEEKDAYS.indexOf(m[1]); });
   cut(/\b(?:every|each)\s+week\b|\bweekly\b|\bonce a week\b/g, () => { o.repeat = o.repeat || 'weekly'; o.every = o.every || 1; });
+  // "a 5 minute timer", "a 1 minute reminder": the length is the time
+  cut(/\b(\d+(?:\.\d+)?|[a-z]+)[ -]?(seconds?|secs?|minutes?|mins?|hours?|hrs?)\s+(?:timer|reminder|alarm)\b/g, (m) => { const n = num(m[1]); if (!n) return; o.rel = Math.round(n * (/^h/.test(m[2]) ? HOUR : /^s/.test(m[2]) ? 1000 : MIN)); });
   // "in 30 minutes", "in an hour", "in half an hour", "in two hours", "in an hour and a half"
-  cut(/\b(?:in|after|within)\s+(half an hour|half hour|an hour and a half|(\d+(?:\.\d+)?|[a-z]+)(?:\s+and a half)?\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?))\b/g, (m) => {
+  cut(/\b(?:in|after|within|(?<=timer )(?:for|of))\s+(half an hour|half hour|an hour and a half|(\d+(?:\.\d+)?|[a-z]+)(?:\s+and a half)?\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?))\b/g, (m) => {
     if (/^half/.test(m[1])) { o.rel = 30 * MIN; return; }
     if (/^an hour and a half/.test(m[1])) { o.rel = 90 * MIN; return; }
     const n = num(m[2]); if (!n) return;
@@ -101,9 +104,10 @@ const FILLER_TASK = /^(?:it|that|this|something|stuff|things?|a thing|me|you|ple
 // What to remind them of: the words after the LAST "remind me" / "reminder", with the time words already blanked out. Their own words, pronouns untouched.
 function readTask(rest) {
   let t = rest;
-  const idx = [...t.matchAll(/\bremind(?:er)?s?(?:\s+me)?\b/gi)];
+  const idx = [...t.matchAll(/\bremind(?:ing|ers?|s)?(?:\s+me)?\b|\b(?:tell|ping|nudge|buzz|alert|notify)\s+me\b|\blet\s+me\s+know\b/gi)];
   if (idx.length) { const last = idx[idx.length - 1]; t = t.slice(last.index + last[0].length); }
-  else t = t.replace(/^.*?\bset (?:me )?(?:a|an|another|the|some)?\s*(?:daily |hourly )?(?:reminder|alarm)s?\b/i, '');
+  else t = t.replace(/^.*?\b(?:set|start|make|put|use) (?:me )?(?:up )?(?:a|an|another|the|some)?\s*(?:[\w-]+\s+){0,2}?(?:daily |hourly )?(?:reminder|alarm|timer)s?\b/i, '');
+  t = t.replace(/^.*?\b(?:set|start|make|put)\s+(?:me\s+)?(?:a|an)\s+(?=(?:to|for|about)\b)/i, '');   // "set a [5 minute timer] to check the oven": the timer words went with the time
   t = t.replace(/^[\s,.:;-]+/, '').replace(/^so\s+(?:that\s+)?(?:i|we)\s+(?:will|can|would|do|won'?t forget to|remember to|don'?t forget to)\s+/i, '').replace(/^(?:please\s+|and\s+|also\s+)+/i, '').replace(/^(?:to|that|about|of|for)\s+/i, '');
   t = t.replace(/^(?:i|we)\s+(?:need|have|has|must|should|want|ought|got)\s+to\s+/i, '').replace(/^(?:i|we)\s+(?:need|have|has|must|should|got)\s+(?=\S)/i, (m) => m);
   t = t.replace(/\b(?:please|thanks|thank you)\b[\s.!?,]*$/i, '').replace(/\s+(?:and|then|so)\s*$/i, '').replace(/[\s.!?,;:]+$/g, '').replace(/\s+/g, ' ').trim();
@@ -129,14 +133,17 @@ function takeDelivery(rest) {
 // How they want it delivered / where. Looked for in the words that are NOT the task, so "remind me to call my sister" never means a call.
 function readDelivery(rest) {
   const s = ` ${norm(rest).toLowerCase()} `;
-  let deliver = null, channel = null;
-  if (/\bvoice (?:note|message|memo)s?\b|\bvoice\b|\baudio\b|\brecording\b|\bsay it\b|\bspeak\b/.test(s) && !/\bvoice call\b/.test(s)) deliver = 'voice';
-  if (/\b(?:call|ring|phone) me\b|\bgive me a (?:call|ring)\b|\bby (?:a )?(?:phone )?call\b|\bwith a (?:phone )?call\b|\bvoice call\b|\ba (?:phone )?call\b|^ ?(?:a )?(?:phone )?call ?$|\bcall\b|\bring\b|\bphone\b/.test(s)) deliver = 'call';
-  else if (!deliver && /\btext(?:ing)?\b|\bwritten\b|\bwriting\b|\bwrite\b|\bmessage me\b|\bsms\b|\ba message\b|\bmessage\b/.test(s)) deliver = 'text';
-  if (/\bboth\b|\bwhats ?app and (?:the )?(?:maya )?app\b|\b(?:maya )?app and whats ?app\b/.test(s)) channel = 'both';
-  else if (/\bwhats ?app\b|\bwhat'?s app\b/.test(s)) channel = 'whatsapp';
+  let channel = null; const kinds = []; const s2 = s.replace(/\bvoice (?:note|message|memo)s?\b|\bvoice call\b/g, ' ');   // "a voice message" is one way, not a voice and a message
+  if (/\bvoice (?:note|message|memo)s?\b|\bvoice\b|\baudio\b|\brecording\b|\bsay it\b|\bspeak\b/.test(s) && !/\bvoice call\b/.test(s)) kinds.push('voice');
+  if (/\b(?:call|ring|phone) me\b|\bgive me a (?:call|ring)\b|\bby (?:a )?(?:phone )?call\b|\bwith a (?:phone )?call\b|\bvoice call\b|\ba (?:phone )?call\b|^ ?(?:a )?(?:phone )?call ?$|\bcall\b|\bring\b|\bphone\b/.test(s)) kinds.push('call');
+  if (/\btext(?:ing)?\b|\bwritten\b|\bwriting\b|\bwrite\b|\bmessage me\b|\bsms\b|\ba message\b|\bmessage\b/.test(s2)) kinds.push('text');
+  // Two ways named ("a text or a voice note", "text and voice"): the person is asked to pick ONE; it is never guessed. (A call word with a voice word is the old "voice, by call" shape: the call wins as before.)
+  let deliver = kinds.includes('call') ? 'call' : kinds.length === 1 ? kinds[0] : null, multi = null;
+  if (!kinds.includes('call') && kinds.length > 1) multi = kinds;
+  if (/\bwhats ?app\b|\bwhat'?s app\b/.test(s)) channel = /\bboth\b|\bwhats ?app and (?:the )?(?:maya )?app\b|\b(?:maya )?app and whats ?app\b/.test(s) ? 'both' : 'whatsapp';
+  else if (/\bboth\b/.test(s)) channel = 'both';
   else if (/\b(?:the |your |maya )?(?:maya )?app\b|\bin app\b/.test(s)) channel = 'app';
-  return { deliver, channel };
+  return { deliver, channel, ...(multi ? { multi } : {}) };
 }
 
 // ---------------------------------------------------------------- the reminder, from words
@@ -420,6 +427,11 @@ function answer(id, st, heard, ctx) {
   if (st.stage === 'delivery' || st.stage === 'channel') {
     if (CANCEL.test(heard) || (sayNo(heard) && st.stage === 'delivery')) { states.delete(id); return cancelNote('They said no to it.'); }
     const dl = readDelivery(heard);
+    if (st.stage === 'delivery' && dl.multi && !dl.deliver) {   // two ways named: never guessed, they pick ONE
+      st.unclear += 1; if (st.unclear >= 3) { states.delete(id); return cancelNote('They did not pick one way.'); }
+      const ways = dl.multi.map((k) => (k === 'voice' ? 'voice note' : k)).join(' or ');
+      return note('setrem-ask-delivery', `They named more than one way (${dl.multi.map((k) => (k === 'voice' ? 'voice note' : k)).join(' and ')}). Do NOT pick for them and do not save anything. Ask as ONE short question which ONE they want: "${ways}, pick one?" ${COMMON}`);
+    }
     if (st.stage === 'delivery') {
       if (dl.deliver) spec.deliver = dl.deliver;
       if (dl.channel) spec.channel = dl.channel;

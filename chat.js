@@ -282,6 +282,12 @@ class ChatSession {
     }
     if (!pieces.length) throw new ChatError('Maya could not answer right now: no reply came back.'); // never a faked reply
     let all = pieces.map((p) => p.text).join(' ').replace(/\s+([,.;:!?])/g, '$1');
+    // Her own power: she does set reminders (and short ones) herself. A draft that refuses, invents a limit or sends them to their family is written again once; and while a set-up is still open (nothing saved yet) a draft that says it is
+    // set / saved / done is written again too: she says it only after the app saved it (the saved note is a different label).
+    const REFUSES = /\b(?:i|maya)\b[^.?!]{0,25}\b(?:can'?t|cannot|can not|don'?t|do not|won'?t|am not able to|not able to|unable to|am unable to)\b[^.?!]{0,25}\b(?:set|create|make|do|add|start)\b[^.?!]{0,30}\b(?:reminders?|timers?|alarms?)\b|\bi (?:don'?t|do not) set\b[^.?!]{0,30}\b(?:reminders?|timers?)\b|\b(?:your|ask your|get your)\s+(?:son|daughter|family|grandson|granddaughter|children|kids)\b[^.?!]{0,40}\b(?:add|set|create|put)\b[^.?!]{0,30}\breminders?\b/i;
+    const openSetup = (this.factLabels || []).some((l) => /^setrem-(confirm|ask)/.test(l));
+    const CLAIMS_DONE = /\b(?:all set|it'?s (?:all )?(?:set|saved|done|ready)|i(?:'ve| have) (?:set|saved)|that'?s (?:set|saved|done)|reminder (?:is )?(?:set|saved)|(?:is|are) (?:all )?(?:set|saved))\b|\bdone[.!,]/i;
+    if (!again && (REFUSES.test(all) || (openSetup && CLAIMS_DONE.test(all)))) return this.reply(`${note} Your draft ${REFUSES.test(all) ? 'said you cannot set reminders or sent them to their family, which is false: you set reminders yourself, from one minute away. Do not say it again.' : 'said the reminder is set or done, but nothing is saved yet.'} Write it again: do what the facts above say, in your own words.`, { again: true });
     // A warning (or pause) with the family question due this turn: her reply must put it. If the draft left it out it is written again once, and after a second miss the plain question closes it.
     const owesScamQ = ['warn', 'pause'].includes(this.scamReply) && !care.scamTold(this.profile.id) && !care.scamDeclined(this.profile.id, '') && !require('./official').asking(this.rc) && !care.asksFamilyQ(all) && !this.safety && !this.health;
     if (owesScamQ && !again) return this.reply(`${note} Your draft did not ask whether they would like their family to know about the possible scam. Write it again and end with that ONE short question in your own words.`, { again: true });
@@ -294,7 +300,7 @@ class ChatSession {
     if (again && askLabel && !/\?/.test(all)) {   // asked again and she STILL did not ask: the plain question closes her reply
       const SCAM_Q = { 'scam-family-owed': 'Would you like me to let your family know about this?', 'scam-resume': 'Would you like me to let your family know about that?', 'scam-lost': 'What happened, and would you like me to let your family know?' };
       const q = SCAM_Q[askLabel] || require('./setrem').pendingQuestion(this.profile.id, askLabel);
-      const names = /whatsapp/i.test(q || '') ? /\bwhatsapp\b/i.test(all) : /^scam/.test(askLabel) ? /famil/i.test(all) : (all.match(/\b(?:call|text|voice)/gi) || []).length >= 2;   // she did name the choices, only without a question mark: leave it
+      const names = /whatsapp/i.test(q || '') ? /\bwhatsapp\b/i.test(all) : /^scam/.test(askLabel) ? /famil/i.test(all) : (all.match(/\b(?:call|text|voice)/gi) || []).length >= 2 && /\b(?:or|pick|which|choose)\b/i.test(all);   // she did put the choices ("text or voice note"), only without a question mark: leave it
       if (q && !names) { pieces.push({ text: q, kind: null }); all = `${all} ${q}`.trim(); }
     }
     this.history.push({ role: 'assistant', content: all });

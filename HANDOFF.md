@@ -4,7 +4,7 @@ Maya: voice companion for older adults. Branch `render-test` is the working and 
 
 ## State
 - Live at the time of writing: `97f808b`. The car-prize / conversation work is local only until the push word.
-- Tests: `node --test test/*.test.js` -> 953 checks, 949 pass, 4 skipped (need live keys), 0 fail.
+- Tests: `node --test test/*.test.js` -> 957 checks, 953 pass, 4 skipped (need live keys), 0 fail.
 - `docs/maya-prompt.md` is 7,494 of 7,500 characters (a test enforces < 7,500): never add words without trimming.
 
 ## The scam family question (this change)
@@ -32,6 +32,9 @@ Live report: Open / Got it did nothing visible, the card stayed, the family dash
 
 ## Fourth round (reminder in the chat first) - local, not pushed (457c0cf is already pushed)
 Rule (web senior chat): a text reminder for the app is a normal chat message in the thread (server: `chat.deliverReminder`, `reminder: { notifId, by, seen }`, wording "Your reminder: <task>" / "Reminder from your family: <task>"), carried on the one `notice` event. Chat focused and visible: it appears in the chat with ONE button, Got it; no pop-up, no Open. Hidden / not focused: the message is also in the chat, plus the pop-up and browser notification with Got it only; Got it there marks Seen and brings the chat to that message, shown done. Seen is reported once per notice per page (`inbox.js seen`), the server marks the thread message seen (`markNotif` -> `chat.reminderSeen`) and pushes `noticeSeen` so every other open page shows it done; a replay of an answered notice does nothing. The Flutter app also sees the new thread message (it still has its own notice bar): app follow-up. Welfare and family-message notices still use the pop-up card.
+
+## Fifth round (her own reminder power) - local, not pushed
+Live bug: "can u start with reminding me to take my headache meds in 1 minute" got "I don't set one-minute reminders / I can't create timers, your son can add a reminder" (both false). Cause: `setrem.IS_REQUEST` only matched the literal "remind me" / "set a reminder", so "start with reminding me" (also "tell me in 1 minute", "ping me", "set a timer") never entered the set-up and Spark improvised a limit. Changes: wider `IS_REQUEST` (+ "reminding me", "start with reminding", "tell me / let me know / ping me in N units", "set a timer"), timer lengths ("a 5 minute timer", "timer for 1 minute"), cleaner task words, a negative guard (stop / keep reminding me, a bare "do you set reminders?"); `REMINDER POWER` fact in `call.js limitsFacts` whenever reminders / timers come up (sets them herself, from one minute, no minimum, never send them to family); the abilities list item (2) now says she sets reminders herself; `chat.js` rewrites a draft that refuses / invents a limit / sends them to family, and one that says set / done before the app saved; two ways named ("text or voice note") are never guessed, they pick ONE (`readDelivery` multi). No minimum time exists in code (one minute works). Order kept: say back -> yes -> how -> save.
 
 ## Proof status (needs Render + phone)
 - Scam fixes: proven locally with real Spark (fresh seniors); NOT yet live.
