@@ -215,8 +215,11 @@ function notes(s, heard) {
   if (flag('COMPANION')) { const f = ledger(s, heard); if (f) out.push(['smart-ledger', f]); }
   if (flag('COMPANION') && (it === 'smalltalk' || it === 'followup') && !s.safety && !s.health) out.push(['smart-style', 'YOU ARE their friend, not a tool, not a menu and never a romantic partner. Respond to what they just said first, warmly, in short fresh words (begin differently from your last replies). A question is optional, never more than ONE: when something they said invites it, ask the small question a friend would (gardening: what they grow), about every second or third reply, and otherwise answer with a warm short remark. No interview.']);
   if (flag('COMPANION') && (it === 'ability' || /\b(?:call|ring|phone)\b/i.test(heard))) out.push(['smart-calls', callsOk(s) ? 'CALLS: you can help ARRANGE a call from you when they ask (it is saved as a reminder). Arranging is not scheduled: say a call is scheduled ONLY when the RECORD below says reminder saved: yes.' : 'CALLS: do not offer or arrange a call from you (ringing them is not possible right now, or they told you to stop). If they ask, say so plainly and kindly.']);
-  if (flag('COMPANION') && s.profile) { const sf = require('./social').step(s, heard, { intent: it, callsOk: callsOk(s), safe: !s.safety && !s.health && it !== 'scam' }); if (sf) out.push(sf); }   // the daily-call offer and its consent (social.js)
-  if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s); if (c) out.push(['smart-app-state', c]); }   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
+  s._compact = false;
+  let sched = false;
+  try { const pz = s.profile && care_().get(s.profile.id), o = pz && pz.smart && pz.smart.social && pz.smart.social.offer; if (o && Date.now() - o.at < 20 * 60000) sched = !s.safety && !s.health; } catch { /* no state */ }   // a proposal is pending: this is a scheduling turn even when the words were only a fragment
+  if (flag('COMPANION') && s.profile) { const sf = require('./social').step(s, heard, { intent: it, callsOk: callsOk(s), safe: !s.safety && !s.health && it !== 'scam' }); if (sf) { out.push(sf); sched = /^social-(?!offer)/.test(sf[0]) && !s.safety && !s.health && it !== 'scam'; } }   // the daily-call offer and its consent (social.js)
+  if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s, sched); if (c) out.push(['smart-app-state', c]); s._compact = Boolean(sched && c); }   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
   if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and at most ONE question, only when it helps (often none); say what you see, what you are unsure of, and one next step if there is one; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
   if (flag('GENERAL') && it !== 'scam' && !s.safety) {
@@ -268,9 +271,10 @@ function notes(s, heard) {
 }
 
 // The senior's own state card (state.js) as text. s.profile.id is the authenticated senior; nothing typed in the chat selects whose card this is. Kept on s._card for the draft guard.
-function appState(s) {
+const care_ = () => require('./care');
+function appState(s, short = false) {
   const st_ = require('./state');
-  try { const card = st_.build(s.profile.id, { channel: s.channel === 'chat' ? 'chat' : 'call' }); s._card = card; return st_.render(card); }
+  try { const card = st_.build(s.profile.id, { channel: s.channel === 'chat' ? 'chat' : 'call' }); s._card = card; return short ? st_.compact(card) : st_.render(card); }
   catch { s._card = null; return 'APP STATE: UNKNOWN (the app could not read it this turn). Say you cannot see their saved calls right now; never say they have none, and never say anything is saved or scheduled.'; }
 }
 
@@ -336,6 +340,8 @@ function fallback(s) {
   if (s._guardWhy) {   // a plain line that is true from the app's own records (checked again here, never from the bad draft)
     const c = (() => { try { return require('./state').build(s.profile.id, { channel: 'chat' }); } catch { return null; } })();
     const live = c && Array.isArray(c.records) && c.records.find((r) => r.type === 'daily-call' && /^(active|today)/.test(r.status));
+    const tx = c && c.transaction;
+    if (tx && tx.pending && tx.proposed && tx.proposed.time && tx.proposed.start && /confirm/.test(tx.stage)) return `Just to check: shall I call you every day at ${tx.proposed.time}, starting ${tx.proposed.start}? Nothing is saved until you say yes.`;   // a real read-back of the proposal, so a yes can bind to what was actually said
     if (!c || !Array.isArray(c.records)) return "I can't see your saved calls right now, so I don't want to say anything wrong. Could you ask me again in a moment?";
     if (s._exec && s._exec.socialFailed) return 'That did not save, so nothing is set up yet. Would you like to try once more?';
     if (live) return `Your daily call is saved for ${live.time}. You can ask me to skip one, change the time or cancel it.`;

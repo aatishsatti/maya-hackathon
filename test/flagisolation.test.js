@@ -15,7 +15,8 @@ let n = 0; const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 
 const senior = () => { const p = memory.createProfile(`Iso${letters(n++)}`, 'female'); care.get(p.id).tz = TZ; return p.id; };
 const sess = (id) => ({ profile: memory.load(id), channel: 'chat', factLabels: [], outreach: null, _exec: {}, lastHeard: () => '' });
 const ctx = () => ({ intent: 'smalltalk', callsOk: true, safe: true });
-let clock = 0; const say = (s, t) => social.step(s, t, ctx(), NOW + 10 + (clock += 5));
+const spoke = (s, r) => { const o = r && /^social-(?:confirm|decide-ambiguous)/.test(r[0]) && care.get(s.profile.id).smart.social.offer; if (o && o.stage === 'confirm' && o.time) social.markAsked(s.profile.id, `Shall I call you every day at ${o.time.h % 12 || 12}:${String(o.time.mi).padStart(2, '0')} ${o.time.h < 12 ? 'am' : 'pm'}?`); return r; };   // what Spark SPEAKS: a yes binds only to a confirm question that was really said
+let clock = 0; const say = (s, t) => spoke(s, social.step(s, t, ctx(), NOW + 10 + (clock += 5)));
 test.afterEach(() => reset());
 test.after(() => { reset(); care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });
 

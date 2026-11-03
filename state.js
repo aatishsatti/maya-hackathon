@@ -155,6 +155,24 @@ function render(card) {
   return L.join(' ');
 }
 
+// The compact, authoritative block for a scheduling turn (voice or chat): ownership, web-call eligibility, the current and pending call, and the latest verified action result. Near the END of a short prompt.
+// It carries only what the senior's own session may know. Unknown stays unknown.
+function compact(card) {
+  if (!card || card.unknown || !card.records) return 'APP TRUTH: the saved calls could not be read this turn. Say you cannot see them right now; claim nothing is set or saved, and do not say there are none.';
+  const L = ['APP TRUTH (read now for this senior only; it beats everything else you remember or were told):'];
+  const dc = Array.isArray(card.records) ? card.records.find((r) => r.type === 'daily-call') : null;
+  L.push('The senior owns their daily call. Maya sets it up herself with them: their family is NOT needed and a registered phone is NOT needed; a call rings in the Maya web page or app while it is open. Never say the family arranges it, that you cannot set it up, or that it is app-only. Closed-browser or locked-screen ringing is unverified: promise none.');
+  L.push(`DAILY CALL: ${!Array.isArray(card.records) ? 'unknown' : dc ? `${dc.status}, every day at ${dc.time}${dc.next ? `, next ${dc.next}` : ''}` : 'none saved'}.`);
+  const h = Array.isArray(card.history) ? card.history.filter((x) => x.type === 'daily-call').slice(-1)[0] : null;
+  if (h && !dc) L.push(`EARLIER: their daily call${h.time ? ` at ${h.time}` : ''} was cancelled on ${h.at} by the ${h.actor}; it was real and is not a refusal of new calls.`);
+  const t = card.transaction;
+  if (t && t.status !== 'unknown' && t.pending) L.push(`PENDING (nothing saved by it): ${t.op}; time ${t.proposed.time || 'NOT GIVEN'}, start ${t.proposed.start || 'NOT GIVEN'}, ${t.proposed.tz}, every day; ${t.stage}. A yes counts only for exactly this.`);
+  if (t && t.lastSave) L.push(`LATEST ACTION: ${t.lastSave.op} ${t.lastSave.result}${t.lastSave.error ? ` (${t.lastSave.error})` : ''} ${t.lastSave.at}. Say it is saved ONLY if this says saved and DAILY CALL above shows it.`);
+  else L.push('LATEST ACTION: none. Nothing has been saved by you this call.');
+  if (card.time && card.time.tz) L.push(`Their zone ${card.time.tz}; quiet hours ${card.time.quiet.enabled ? card.time.quiet.window : 'off'}.`);
+  return L.join(' ');
+}
+
 // A reference typed by someone resolves ONLY inside this senior's own card (another senior's reference gives null; nothing is ever acted on from a reference in chat).
 function resolveRef(id, r) {
   const card = build(id); const all = [...(Array.isArray(card.records) ? card.records : []), ...(Array.isArray(card.history) ? card.history : [])];
@@ -169,6 +187,8 @@ const FAMILY_NEEDED = [
   /\b(?:ask|need|require|get|have|let)\w*\b[^.?!]{0,30}\b(?:your |the )?(?:family|son|daughter|children|carer|caregiver)\b[^.?!]{0,40}\b(?:set|schedule|arrange|organi[sz]e|add|book)\w*\b[^.?!]{0,30}\b(?:call|calls|it|that|one)\b/i,
   /\b(?:only|has to|have to|must)\b[^.?!]{0,20}\b(?:be\s+)?(?:set up|arranged|scheduled|set)\b[^.?!]{0,10}\bby (?:your |the )?(?:family|son|daughter)\b/i,
   /\byour (?:family|son|daughter)\b[^.?!]{0,25}\b(?:needs? to|must|has to|have to|will need to)\b[^.?!]{0,20}\b(?:set|schedule|arrange|organi[sz]e|book)\w*\b/i,
+  /\b(?:family|son|daughter|children|carer|caregiver)\b[^.?!]{0,25}\b(?:arranges?|sets? (?:it |that |those |them )?up|organi[sz]es?|handles?|takes? care of|does that|do that)\b/i,
+  /\b(?:something|that'?s|that is|it'?s|it is|up to|left to)\s+(?:for\s+|to\s+)?your\s+(?:family|son|daughter|children)\b/i,
 ];
 const APP_ONLY = /\b(?:calls?|ring\w*|calling|talk\w*)\b[^.?!]{0,40}\b(?:only|just)\b[^.?!]{0,15}\b(?:in|through|on|via|with)\b[^.?!]{0,10}\b(?:the )?(?:maya )?app\b|\b(?:only|just)\b[^.?!]{0,12}\b(?:in|through|on|via)\b[^.?!]{0,10}\bthe (?:maya )?app\b[^.?!]{0,30}\bcalls?\b|\bnot (?:on|in|through) the (?:web|website|browser)\b[^.?!]{0,20}\bcalls?\b/i;
 const NO_PHONE = /\b(?:without|no)\b[^.?!]{0,16}\b(?:registered )?phone(?: number)?\b[^.?!]{0,50}\b(?:can(?:'|no)t|cannot|won'?t|unable|nothing|no way|not possible|isn'?t possible|doesn'?t work)\b|\bneed(?:s)? (?:a|your) (?:registered )?phone number\b[^.?!]{0,30}\b(?:call|ring)/i;
@@ -213,4 +233,4 @@ function checkDraft(text, card, ctx = {}) {
 }
 function clockMinutes(s) { const m = /^(\d{1,2}):(\d{2}) ([ap]m)/.exec(s); if (!m) return -1; let h = Number(m[1]) % 12; if (m[3] === 'pm') h += 12; return h * 60 + Number(m[2]); }
 
-module.exports = { build, render, resolveRef, ref, checkDraft, SCHEDULER };
+module.exports = { build, render, compact, resolveRef, ref, checkDraft, SCHEDULER };

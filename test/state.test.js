@@ -24,7 +24,8 @@ const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 + (k % 26))
 const senior = (name, tz = TZ) => { const p = memory.createProfile(`${name}${letters(n++)}`, 'female'); if (tz) { care.get(p.id).tz = tz; care.get(p.id).tzSource = 'device'; } return p.id; };
 const sess = (id) => ({ profile: memory.load(id), channel: 'chat', factLabels: [], outreach: null, _exec: {}, lastHeard: () => '' });
 const ctx = () => ({ intent: 'smalltalk', callsOk: true, safe: true });
-const say = (s, t, at = NOW + 10) => social.step(s, t, ctx(), at);
+const spoke = (s, r) => { const o = r && /^social-(?:confirm|decide-ambiguous)/.test(r[0]) && care.get(s.profile.id).smart.social.offer; if (o && o.stage === 'confirm' && o.time) social.markAsked(s.profile.id, `Shall I call you every day at ${o.time.h % 12 || 12}:${String(o.time.mi).padStart(2, '0')} ${o.time.h < 12 ? 'am' : 'pm'}?`); return r; };   // what Spark SPEAKS: a yes binds only to a confirm question that was really said
+const say = (s, t, at = NOW + 10) => spoke(s, social.step(s, t, ctx(), at));
 const saveCall = (id, s, time = '3 pm', day = 'tomorrow') => { say(s, 'could you ring me every day please'); say(s, `${time} ${day}`); return say(s, 'yes perfect'); };
 const recs = (id) => care.get(id).reminders.filter((r) => r.social);
 const setFlags = (on) => { for (const l of ['CARDS', 'GUARD', 'DECISION']) { if (on.includes(l)) process.env[`MAYA_SMART_STATE_${l}`] = 'on'; else delete process.env[`MAYA_SMART_STATE_${l}`]; } };

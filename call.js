@@ -1067,7 +1067,16 @@ class Call {
 
   who(label) { return label ? (this.names.get(label) || `Speaker ${label}`) : 'Someone'; }
 
+  // A scheduling turn (the daily call, state CARDS on): NO full profile, memory notes, app facts or limits; who they are, the local time, and the turn's facts (the compact APP TRUTH block is among them, near the end). Brain.js pairs it with the short style block.
+  compactRoster(note) {
+    try { const rn = this.replyNote(); if (note.startsWith(rn)) note = `The conversation is under way: do not greet them. ${note.slice(rn.length)}`; } catch { /* keep the note whole */ }   // the long reply-style note stays out of a scheduling turn
+    let local = '';
+    try { const q = require('./setrem').partsIn(Date.now(), this.tz); local = ` It is ${q.y}-${String(q.m).padStart(2, '0')}-${String(q.d).padStart(2, '0')} ${String(q.h).padStart(2, '0')}:${String(q.mi).padStart(2, '0')} where they are (${this.tz}).`; } catch { /* no zone: no time */ }
+    return `[[COMPACT]]You are talking with ${(this.profile && this.profile.name) || 'someone'}.${local} FACTS FOR THIS TURN (for you, never read out as written; say them in plain companion words): ${note}`.trim();
+  }
+
   roster(note = '', heard = '') {
+    if (this._compact && !this.safety && !this.health) return this.compactRoster(note);
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
     return `${memory.profileNote(this.profile, this.tz, this.focus)}${callWords(this.said, heard || (this.focus && this.focus.text))} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id, Date.now(), { family: this.familyRelevant(heard) })}${this.limitsFacts(heard)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
@@ -1740,6 +1749,7 @@ class Call {
     } else {
       this.scamReply = scamTurn.scam ? scamTurn.scam.level : null; this.officialNow = scamTurn.official && scamTurn.askFor === null ? scamTurn.official : null; this.scamAskFor = 'askFor' in scamTurn ? scamTurn.askFor : scamTurn.scam && !scamTurn.told && ['warn', 'pause'].includes(scamTurn.scam.level) ? scamTurn.scam : null;
       this.setFocus(turns.map((t) => t.text).join(' '), extra || scamTurn.note);
+      this.turnFacts = `${extra} ${scamTurn.note || ''}`.trim();   // a rewrite of a blocked draft gets the SAME facts (it used to get none)
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}${this.ws.outbound ? OUTBOUND_NOTE : ''}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
     this.scamOwed = scamTurn && scamTurn.scam && scamTurn.scam.level !== 'none' ? scamTurn.scam : null;
@@ -1954,6 +1964,7 @@ class Call {
     let delivery = null;
     let feel = null;
     let repeated = null;
+    let lockedPlain = false;
     let retryWhy = 'repeat';
     const splitter = new ChunkSplitter({
       stripInterjection: (record && this.openedWithInterjection) || Boolean(leadIn),
@@ -1988,10 +1999,15 @@ class Call {
         return d;
       },
       onPiece: (text, kind, next) => {
+        if (lockedPlain) return;
         if (record && !jobs.length && !this.repeatRetried && !this.safety) {
           const why = this.breaksFacts(text) ? 'facts' : this.repeatsOpening(text) ? 'repeat' : this.beatBlocks(text, delivery) ? 'beat' : null;
           if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
         } // nothing spoken yet: write it again
+        else if (lockedPlain) return;   // the rewrite broke the facts too: only the plain true line is spoken
+        else if (record && !jobs.length && this.repeatRetried && !this.safety && this.breaksFacts(text)) {   // the SECOND draft is checked too (it used to be spoken unchecked): a plain line that is true from the app's own record
+          lockedPlain = true; text = require('./smart').fallback(this); kind = null;
+        }
         else if (jobs.length && this.breaksFacts(text)) return;   // already speaking: a later piece that claims what the app never did, or a stock counselling line, is simply dropped
         const job = { chunks: [], done: false, err: null, tone: Boolean(kind), kind, text, sent: Boolean(this.noVoice && !this.fakeAudio) };   // sent: some of this piece's audio went to the browser (a no-voice test call has no audio, so its words count as sent)
         jobs.push(job); allJobs.push(job);
@@ -2089,11 +2105,11 @@ class Call {
       this.abort = new AbortController();
       this.responding = true;
       const again = retryWhy === 'facts'
-        ? `Your draft began "${repeated}", which says something the app's facts do not support (a family alert that was never made, a reason nobody gave, or a stock comfort line). Write the whole reply again from the start in plain, short, direct words: say only what the FAMILY ALERTS fact says, no excuse, no soothing line.`
+        ? `Your draft began "${repeated}", which says something the app's facts do not support (a family alert that was never made, a reason nobody gave, a stock comfort line, or a call or refusal the APP TRUTH does not support${this._why ? `: ${this._why}` : ''}). Write the whole reply again from the start in plain, short, direct words: say only what the facts and APP TRUTH say, no excuse, no soothing line.`
         : retryWhy === 'beat'
         ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.`
         : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`;
-      const rs2 = startReply(this.history, this.roster(`${this.replyNote()} ${again}`), this.abort.signal);
+      const rs2 = startReply(this.history, this.roster(`${this.replyNote()} ${this.turnFacts || ''} ${again}`), this.abort.signal);
       const r = await this.speakReply(rs2, timing, gen2, { record: true, stripGreeting: true, holdBack });
       this.repeatRetried = false;
       return r;

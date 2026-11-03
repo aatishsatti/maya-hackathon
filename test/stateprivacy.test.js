@@ -18,7 +18,8 @@ const mk = (name, tz) => { const p = memory.createProfile(name, 'female'); care.
 const callFor = (id) => { const c = new Call({ send() {}, close() {}, onmessage: null, onclose: null }, 'k'); clearInterval(c.endTimer); c.profile = memory.load(id); c.channel = 'chat'; c.factLabels = []; return c; };
 const sess = (id) => ({ profile: memory.load(id), channel: 'chat', factLabels: [], outreach: null, _exec: {}, lastHeard: () => '' });
 const ctx = () => ({ intent: 'smalltalk', callsOk: true, safe: true });
-const say = (s, t, tz) => social.step(s, t, ctx(), setrem.zonedEpoch(2026, 11, 5, 10, 0, tz) + (clock += 5));
+const spoke = (s, r) => { const o = r && /^social-(?:confirm|decide-ambiguous)/.test(r[0]) && care.get(s.profile.id).smart.social.offer; if (o && o.stage === 'confirm' && o.time) social.markAsked(s.profile.id, `Shall I call you every day at ${o.time.h % 12 || 12}:${String(o.time.mi).padStart(2, '0')} ${o.time.h < 12 ? 'am' : 'pm'}?`); return r; };   // what Spark SPEAKS: a yes binds only to a confirm question that was really said
+const say = (s, t, tz) => spoke(s, social.step(s, t, ctx(), setrem.zonedEpoch(2026, 11, 5, 10, 0, tz) + (clock += 5)));
 const save = (id, tz, time) => { const s = sess(id); say(s, 'could you ring me every day please', tz); say(s, `${time} tomorrow`, tz); return say(s, 'yes perfect', tz); };
 const A = mk('Aaliyah', TZ_A), B = mk('Bridget', TZ_B);
 test.after(() => { care.stop(); for (const o of care.outreaches.values()) clearTimeout(o.timer); });

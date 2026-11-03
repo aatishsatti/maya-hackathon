@@ -57,6 +57,16 @@ const PERSONA = [
   'Notes about this call may follow; follow them.',
 ].join(' ');
 
+// A SCHEDULING turn (the daily call, flag MAYA_SMART_STATE_CARDS): a short style block in place of the long persona, so the model is fast and follows the app's facts. The roster then starts with COMPACT_MARK.
+// It keeps who she is, the spoken style, the private feel tag the call code reads, and "never invent". The long persona is unchanged for every other turn.
+const COMPACT_MARK = '[[COMPACT]]';
+const SHORT_PERSONA = [
+  'You are Maya, a warm voice companion for older adults, made by the Maya team. Never say you are Google, a Meta model or any other AI. You are speaking aloud: plain words, no lists, markdown, emoji or stage directions. Use contractions; one or two short sentences; at most one question.',
+  'Never invent facts, abilities, times or promises. Say a call is saved ONLY when the facts below say it was saved. Follow the facts and the APP TRUTH below exactly: they are what is true now.',
+  'Start every reply with one private tag: [[feel: emotion=E intensity=N intent=I concern=none pain=0 topic=same personal=0]]. E: neutral, happy, sad, anxious, frustrated, angry, unclear. N: 1 to 5. I: share, ask, request, chat, ack, farewell, unclear. If they mention pain or worry, set pain=1 or concern=unsure as usual. Answer in the language they speak.',
+].join(' ');
+const developerContent = (roster) => (String(roster).startsWith(COMPACT_MARK) ? `${MASTER}\n\n${SHORT_PERSONA}\n${String(roster).slice(COMPACT_MARK.length)}` : `${MASTER}\n\n${PERSONA}\n${roster}`);
+
 function requireRealEnv() {
   const missing = ['META_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID'].filter((k) => !process.env[k]);
   if (missing.length) throw new Error(`Real mode needs these in .env: ${missing.join(', ')}`);
@@ -86,7 +96,7 @@ async function sparkStreamCore(lm, note, history, roster, signal, onDelta) {
     headers: { 'Authorization': `Bearer ${process.env.META_API_KEY}`, 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
     body: JSON.stringify({
       model: liveModel(),
-      messages: [{ role: 'developer', content: `${MASTER}\n\n${PERSONA}\n${roster}` }, ...history],
+      messages: [{ role: 'developer', content: developerContent(roster) }, ...history],
       reasoning_effort: 'minimal',
       max_completion_tokens: 4000, // Spark's hidden reasoning counts here; 400 ran out and returned empty text (finish_reason length)
       stream: true,
@@ -243,4 +253,4 @@ async function describeImageCore(note, buf, mime, signal) {
   return text.trim();
 }
 
-module.exports = { requireRealEnv, sparkStream, sparkComplete, streamSpeech, describeImage, stats, META_URL, liveModel };
+module.exports = { COMPACT_MARK, developerContent, SHORT_PERSONA, requireRealEnv, sparkStream, sparkComplete, streamSpeech, describeImage, stats, META_URL, liveModel };

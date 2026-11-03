@@ -25,7 +25,32 @@ function isYes(text) {
   const w = raw.toLowerCase().replace(/[‘’]/g, "'").replace(/'/g, '').replace(/[^a-z ]/g, ' ').split(/\s+/).filter(Boolean);
   return w.length >= 1 && w.length <= 7 && w.every((x) => YES_FILLER.has(x)) && w.some((x) => YES_CORE.has(x));
 }
-const YES_ALONE = { test: isYes };   // kept for callers that used the old pattern
+const YES_ALONE = { test: isYes };
+// A "no" that carries more ("No, you just said you can call me every day", "no, five ten") is a CORRECTION of what was said, not a refusal of the call. Only a bare no / no thanks / not now is a decline.
+const LEAD_NO = /^\s*(?:no|nope|nah)\b[\s,.!-]*/i;
+const PLAIN_NO_REST = /^(?:thanks?|thank you|not (?:now|today|really|interested)|i(?:'d| would) rather not|i don'?t (?:want|need)(?: it| that| to)?|maybe later|leave it|it'?s (?:ok|okay|fine)|that'?s (?:ok|okay|fine)|no)(?:\s+(?:thanks?|thank you|maya|dear))?$/;
+function isDecline(t) {
+  const x = String(t || ''); if (!DECLINE.test(x)) return false;
+  if (!D()) return true;
+  const m = LEAD_NO.exec(x); if (!m) return true;
+  const rest = x.slice(m[0].length).replace(/[.!?,]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  return !rest || PLAIN_NO_REST.test(rest);
+}
+const isCorrection = (t) => D() && LEAD_NO.test(String(t || '')) && !isDecline(t);
+// "Yeah, 5.10 am" after "shall I call you every day at 5:10 am starting today?": a yes that only restates the proposal IS the yes. Anything that differs, adds a condition or asks something is not.
+const RESTATE_OK = new Set(['today', 'tomorrow', 'every', 'day', 'daily', 'morning', 'afternoon', 'evening', 'night', 'at', 'starting', 'start', 'from', 'call', 'me', 'please', 'thats', 'right', 'correct', 'its', 'is', 'the', 'time', 'am', 'pm', 'a', 'm', 'p', 'i', 'want', 'like', 'that', 'sounds', 'good', 'yes']);
+function confirmsProposal(heard, offer, tz, now) {
+  if (!D() || !offer || offer.stage !== 'confirm' || !offer.time) return false;
+  const raw = String(heard || ''); if (/["“”?]/.test(raw)) return false;
+  const w = raw.toLowerCase().replace(/[‘’']/g, '').split(/[^a-z0-9.:]+/).filter(Boolean);
+  if (!w.length || w.length > 12 || !YES_CORE.has(w[0].replace(/[.:]/g, ''))) return false;
+  if (/\b(?:but|except|only|unless|not|dont|no|instead|though)\b/i.test(w.join(' '))) return false;
+  const sl = slots(raw, tz, now);
+  if (sl.ambiguous || sl.notDaily || (sl.time && (sl.time.h !== offer.time.h || sl.time.mi !== offer.time.mi))) return false;
+  if (sl.start && offer.start && sl.start !== offer.start) return false;
+  const rest = normSpeech(raw).toLowerCase().replace(/[‘’']/g, '').replace(/\b\d{1,2}(?::\d{2})?\b/g, ' ').replace(/[^a-z ]+/g, ' ').split(/\s+/).filter(Boolean);
+  return rest.every((x) => YES_FILLER.has(x) || YES_CORE.has(x) || RESTATE_OK.has(x));
+}   // kept for callers that used the old pattern
 const DECLINE = /^\s*(?:no|nope|nah)\b|\bnot (?:now|today|really|interested)\b|\bno,? thanks?\b|\bno,? thank you\b|\bmaybe later\b|\bi(?:'d| would) rather not\b|\bi don'?t (?:want|need)\b|\bleave it\b/i;
 const VAGUE = /\b(?:after (?:lunch|dinner|breakfast|tea|supper|my (?:nap|walk))|before (?:lunch|dinner|bed)|sometime|some time|later|whenever|any ?time|in the (?:morning|afternoon|evening)|afternoon|morning|evening|around then)\b/i;
 const READBACK = /\b(?:what|which|any)\b[^.?!]{0,30}\b(?:calls?|chats?)\b[^.?!]{0,25}\b(?:do i have|have i (?:got|set)|(?:are|is) (?:set|arranged|scheduled|saved)|set up)\b|\bwhat time (?:do|will|are) you (?:call|ring|phone)\b|\bis my (?:daily )?(?:call|chat) (?:still )?(?:on|set|arranged|saved)\b|\b(?:do i have|have i got) (?:a |any )?(?:daily )?(?:call|calls)\b/i;
@@ -125,10 +150,27 @@ function onCallsBack(id, now = Date.now()) {
   return `They asked for calls again. They used to have a daily call from you at ${clockWords(arr.h, arr.mi)} (their time) that was stopped. It is NOT back on. Ask ONE yes/no question: do they want that daily call back at ${clockWords(arr.h, arr.mi)}? Only a plain yes to that question brings it back; say nothing is scheduled until then.`;
 }
 
+// ---- spoken times (DECISION): a voice transcript says "5.10 am", "five ten", "ten past five", "a.m.". setrem.readTime reads "5.10 am" as 10 am, so spoken forms are turned into "5:10 am" first.
+const HW = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const MW = { 'oh five': 5, 'zero five': 5, ten: 10, fifteen: 15, twenty: 20, 'twenty five': 25, 'twenty-five': 25, thirty: 30, 'thirty five': 35, 'thirty-five': 35, forty: 40, 'forty five': 45, 'forty-five': 45, fifty: 50, 'fifty five': 55, 'fifty-five': 55 };
+const HWRE = Object.keys(HW).join('|'), MWRE = Object.keys(MW).sort((a, b) => b.length - a.length).join('|');
+function normSpeech(text) {
+  let t = String(text || '').replace(/\b([ap])\.\s?m\b\.?/gi, '$1m').replace(/\b(\d{1,2})\.(\d{2})\b(?!\s?(?:%|dollars?|pounds?|rupees?))/g, '$1:$2');
+  t = t.replace(new RegExp(`\\b(half|quarter) past (${HWRE})\\b`, 'gi'), (_, q, h) => `${HW[h.toLowerCase()]}:${q.toLowerCase() === 'half' ? '30' : '15'}`);
+  t = t.replace(new RegExp(`\\bquarter to (${HWRE})\\b`, 'gi'), (_, h) => `${((HW[h.toLowerCase()] + 10) % 12) + 1}:45`);
+  t = t.replace(new RegExp(`\\b(${MWRE}|twenty|ten|five) (past|to) (${HWRE})\\b`, 'gi'), (_, m, w, h) => { const mm = MW[m.toLowerCase()] || (m.toLowerCase() === 'five' ? 5 : 0); const hh = HW[h.toLowerCase()]; return w.toLowerCase() === 'past' ? `${hh}:${pad2(mm)}` : `${((hh + 10) % 12) + 1}:${pad2(60 - mm)}`; });
+  t = t.replace(new RegExp(`\\b(?:at )?(${HWRE}) (${MWRE})(?= ?(?:am|pm)\\b|\\s*$|\\s*[,.]|\\s+(?:every|starting|today|tomorrow|please))`, 'gi'), (_, h, m) => `${HW[h.toLowerCase()]}:${pad2(MW[m.toLowerCase()])}`);
+  return t;
+}
+const AP_ONLY = /^\s*(?:(?:yes|yeah|ok|okay|sure|and)[\s,]+)?(?:in the )?(am|pm|morning|afternoon|evening|night)\s*[.!]?\s*$/i;
+const apOf = (w) => (/^(?:am|morning)$/i.test(w) ? 'am' : 'pm');
+const with24 = (h, mi, ap) => ({ h: ap === 'am' ? (h === 12 ? 0 : h) : (h < 12 ? h + 12 : h), mi });
 function slots(heard, tz, now) {
+  if (D()) heard = normSpeech(heard);
   const { found } = setrem.readTime(heard, { bare: true }), out = { time: null, start: null, daily: false, notDaily: false, ambiguous: false, vague: false };
-  if (found.clock) { const c = setrem.resolveClock(found.clock, found.daypart); if (c.ok) out.time = { h: c.h, mi: c.mi }; else if (c.ambiguous) out.ambiguous = true; }
+  if (found.clock) { const c = setrem.resolveClock(found.clock, found.daypart); if (c.ok) out.time = { h: c.h, mi: c.mi }; else if (c.ambiguous) { out.ambiguous = true; out.amb = { h: c.h, mi: c.mi }; } }
   else if (found.daypart || VAGUE.test(heard)) out.vague = true;
+  out.daypart = found.daypart || null;
   const today = nowParts(tz, now), todayStr = `${today.y}-${pad2(today.m)}-${pad2(today.d)}`;
   if (found.day === 'today') out.start = todayStr; else if (found.day === 'tomorrow') out.start = addDays(todayStr, 1);
   else if (found.weekday != null) out.start = addDays(todayStr, ((found.weekday - today.wd + 7) % 7) || 7);
@@ -209,28 +251,42 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
       try { const r = care.socialRestore(id, now); zput(id, { offer: null }); return ['social-restored', `RESTORED: the daily call is back on at ${clockWords(r.h, r.mi)} each day. Say so in one short sentence, and that they can skip a day, change the time or cancel whenever they like.`]; }
       catch (e) { zput(id, { offer: null }); return ['social-failed', `NOT RESTORED: ${e.message} Tell them plainly that it is not back on. Do not say scheduled or arranged.`]; }
     }
-    if (DECLINE.test(heard)) { zput(id, { offer: null }); return ['social-declined', 'They do not want the daily call back. Accept it in one short, friendly sentence.']; }
+    if (isDecline(heard)) { zput(id, { offer: null }); return ['social-declined', 'They do not want the daily call back. Accept it in one short, friendly sentence.']; }
     return null;
   }
   const sl = slots(heard, tz, now);
   const was = { time: offer.time, start: offer.start };
   const hadConfirm = offer.stage === 'confirm';
-  // a plain yes to the confirm question is the only thing that saves
-  if (hadConfirm && yes && offer.time && (offer.start || offer.mode === 'change')) return save(s, id, offer, now);
+  // Split speech ("at five ten" / "every morning starting" / "today" / "am"): ONE pending proposal keeps what each fragment gave. A bare am/pm (or a daypart) settles the clock time that was waiting for it; a bare am/pm that comes first waits for the time.
+  if (D()) {
+    const apm = AP_ONLY.exec(String(heard || ''));
+    if (sl.ambiguous && sl.amb) { const ap = offer.ap || (sl.daypart ? apOf(sl.daypart) : null); if (ap) { sl.time = with24(sl.amb.h, sl.amb.mi, ap); sl.ambiguous = false; offer.ap = null; offer.amb = null; } else offer.amb = sl.amb; }
+    else if (apm || (sl.daypart && offer.amb && !sl.time)) { const ap = apOf(apm ? apm[1] : sl.daypart); if (offer.amb) { sl.time = with24(offer.amb.h, offer.amb.mi, ap); offer.amb = null; sl.vague = false; } else if (apm) { offer.ap = ap; sl.apOnly = true; } }
+    else if (sl.daypart && !sl.time && !sl.ambiguous && !offer.amb) offer.ap = apOf(sl.daypart);   // "every morning" said first: the clock time that follows is a morning one
+    if (sl.time) offer.amb = null;
+  }
+  const restated = !yes && confirmsProposal(heard, offer, tz, now);
+  // a plain yes to the confirm question (or a yes that only restates it) is the only thing that saves, and only a confirm question that was really SPOKEN counts (noteSpoken): a proposal Maya never said aloud cannot be agreed to
+  if (hadConfirm && (yes || restated) && offer.time && (offer.start || offer.mode === 'change')) {
+    if (D() && !offer.asked) { offer.stage = 'confirm'; offer.at = now; zput(id, { offer }); return [offer.mode === 'change' ? 'social-confirm' : 'social-confirm', (offer.mode === 'change' ? confirmChangeFact(offer, tz) : confirmFact(offer, tz)) + ' (They said yes, but this exact question has not been put to them yet, so nothing is saved: ask it now.)']; }
+    return save(s, id, offer, now);
+  }
   let correction = '';
   if (sl.time) { if (was.time && (was.time.h !== sl.time.h || was.time.mi !== sl.time.mi)) correction = 'They corrected the time: acknowledge the new time in a few words (for example that you have noted it) and carry on; there is no limit on how many times they may change it.'; offer.time = sl.time; }
   if (sl.start && offer.mode !== 'change') { if (was.start && was.start !== sl.start) correction = correction || 'They corrected the start day: acknowledge it in a few words and carry on.'; offer.start = sl.start; }
   const changed = (sl.time && (!was.time || was.time.h !== sl.time.h || was.time.mi !== sl.time.mi)) || (sl.start && was.start !== sl.start);
   if (!changed && !yes && !fresh && (offer.stage === 'confirm') && /^\s*(?:yes|yeah|yep|sure|ok(?:ay)?)\b[^.?!]*\b(?:but|except|only|unless|though|however)\b/i.test(heard)) {
-    offer.stage = 'collect'; offer.at = now; zput(id, { offer });   // the old question no longer stands: a later bare yes does not save it
+    offer.stage = 'collect'; offer.at = now; offer.asked = null; zput(id, { offer });   // the old question no longer stands: a later bare yes does not save it
     return ['social-condition', 'They said yes BUT added a condition. NOTHING is saved. Ask ONE short question about what they would like to change, and do not say anything is arranged, noted or scheduled.'];
   }
-  const related = fresh || yes || changed || sl.daily || sl.notDaily || sl.ambiguous || sl.vague || DECLINE.test(heard);
+  const corrected = isCorrection(heard) && !yes;
+  const related = fresh || yes || changed || sl.daily || sl.notDaily || sl.ambiguous || sl.vague || sl.apOnly || corrected || Boolean(sl.time && offer.stage === 'collect') || isDecline(heard);
   if (!related) return null;   // something else was said: the offer waits (it lapses by itself), nothing is asked twice
-  if (!changed && !fresh && DECLINE.test(heard) && !yes) {
+  if (!changed && !fresh && isDecline(heard) && !yes) {
     zput(id, { offer: null, ...(offer.mode === 'new' ? { declinedAt: now } : {}) });
     return ['social-declined', offer.mode === 'new' ? 'They do not want the daily call. Accept that in one short, friendly sentence. Do not persuade and do not offer again.' : 'They do not want to change the call time. Accept that in one short sentence; the daily call stays as it is.'];
   }
+  if (changed || corrected || sl.apOnly) offer.asked = null;   // the proposal moved: the old spoken question no longer stands
   offer.at = now;
   // the quiet hours
   if (offer.time && care.hourQuiet(p, offer.time.h)) {
@@ -244,6 +300,7 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
   }
   const pre = D() && !offer.ack && offer.mode === 'new' ? predecessor(id, p, now) : '';
   if (pre) offer.ack = true;
+  if (corrected && !changed) correction = correction || 'They said "no" but that was a CORRECTION of something you said, NOT a refusal of the call: nothing is cancelled and the call is still wanted. Acknowledge it in a few words, put right whatever they objected to (you CAN set up this daily call yourself: the family is not needed, and a registered phone is not needed to be called through Maya open in a browser or the app), and ask the confirm question again.';
   const notes = [pre, correction, sl.notDaily ? 'They mentioned a different rhythm: say plainly that this is a DAILY call only, and ask if daily suits them.' : '', sl.ambiguous ? 'The time they gave could be morning or evening: ask whether it is am or pm.' : '', sl.vague && !sl.time ? 'What they gave is not a clock time: ask what time exactly.' : ''].filter(Boolean).join(' ');
   if (offer.mode === 'change') {
     if (!offer.time) { offer.stage = 'collect'; zput(id, { offer }); return ['social-ask', `SOCIAL CALL, CHANGE OF TIME (nothing is changed yet): ask ONE question: what time would they like the daily call instead? ${NEED.time}.${notes ? ` ${notes}` : ''}`]; }
@@ -261,6 +318,7 @@ function save(s, id, offer, now = Date.now()) {
     const r = offer.mode === 'change' ? care.socialChangeTime(id, offer.time, now) : care.socialSave(id, { offerId: offer.id, h: offer.time.h, mi: offer.time.mi, start: offer.start, tz: offer.tz }, now);
     zput(id, { offer: null, lastSave: { at: now, ok: true, op: offer.mode, offerId: offer.id, rid: (r && r.id) || null } }); s._exec.social = true;
     const rec = care.socialOf(id) || r;   // the words come from the PERSISTED record, not from what was proposed
+    if (D() && offer.mode !== 'change' && !(rec && rec.h === offer.time.h && rec.mi === offer.time.mi && rec.tz === offer.tz && !rec.revoked)) throw new Error('The saved call could not be read back, so it is not confirmed.');   // verified BEFORE any success language
     const when = `${clockWords(rec.h, rec.mi)} ${rec.tz}`;
     return ['social-saved', offer.mode === 'change'
       ? `CHANGED (read from the saved record): the daily call is now at ${when}. Tell them in your own words, in ONE short sentence, this content: "Your daily call is now at ${when}; you can tell me here anytime to skip one call, change the time, or cancel these daily calls." Promise nothing else.`
@@ -276,24 +334,37 @@ function save(s, id, offer, now = Date.now()) {
 const ARRANGED = /\b(?:noted|locked in|lock(?:ed)? it in|scheduled|arranged|booked|all set|set up|saved|i(?:'ll| will) (?:call|ring|phone) you|i(?:'ve| have) (?:got|put) (?:it|that|you) (?:down|in)|see you (?:at|then|tomorrow))\b/i;
 const CALL_CONTEXT = /\b(?:call|ring|chat|daily)\b|\b\d{1,2}:\d{2}\b|\b\d{1,2}\s?(?:am|pm)\b/i;
 const DENIAL = /\b(?:not|no|nothing|isn'?t|hasn'?t|haven'?t|didn'?t|can'?t|cannot|yet|unless|if|would|could|once|until)\b/i;
+// GUARD (state): promises of an arrangement that are not worded "scheduled": "I'll get that 5:13 call ready for you", "I'll pass that along", "I'll get that set", "on it".
+const COMMIT = /\bI(?:'ll| will|'m going to| am going to)\s+(?:\w+\s+){0,2}(?:get|set|put|sort|line up|have|make|arrange|pass|send|book|note|jot)\b[^.?!]{0,30}\b(?:ready|set|up|along|down|in place|sorted|booked|for you|that|it|this)\b|\bready for you\b|\bpass(?:ing)?\s+(?:that|it|this)\s+along\b|\bgot (?:it|that) down\b|\bon it\b|\bI(?:'ve| have) (?:got|made|put|set|noted|written)\b[^.?!]{0,20}\b(?:that|it|this|down|up)\b/i;
+const G = () => require('./smart').stateFlag('GUARD');
+const promises = (t, s) => ARRANGED.test(t) || (G() && COMMIT.test(t) && (CALL_CONTEXT.test(t) || CALL_CONTEXT.test(String(s && s.lastHeard ? s.lastHeard() : ''))));
 function claimsScheduled(text) { const t = String(text || ''); return ARRANGED.test(t) && CALL_CONTEXT.test(t) && !DENIAL.test(t); }
 // May a sentence claiming a call is arranged be said on this turn? Only when the record says so: saved this turn, read back from the record, or an ordinary reminder was saved.
 const OK_LABELS = /^(?:social-(?:saved|readback|active|restored|skip|tz)|setrem-saved)/;
-const PENDING_LABELS = /^social-(?:offer|ask|confirm|failed|declined|quiet|past|condition|cancel|correct)/;
+const PENDING_LABELS = /^social-(?:offer|ask|confirm|failed|declined|quiet|past|condition|cancel|correct|decide-(?:days|second|ambiguous|which|revoked))/;
 function claimBlocked(text, s) {
   const labels = s.factLabels || [], id = s.profile && s.profile.id;
   if (s._exec && s._exec.social) return false;
   const t = String(text || '');
-  if (labels.some((l) => PENDING_LABELS.test(l)) && ARRANGED.test(t) && !DENIAL.test(t)) return true;   // in a turn about the daily call, "all set" / "scheduled" / "noted" can only mean that call
-  if (!claimsScheduled(text)) return false;
+  if (labels.some((l) => PENDING_LABELS.test(l)) && promises(t, s) && !DENIAL.test(t)) return true;   // in a turn about the daily call, "all set" / "scheduled" / "noted" can only mean that call
+  if (!claimsScheduled(text) && !(G() && promises(t, s) && !DENIAL.test(t) && !labels.some((l) => OK_LABELS.test(l)))) return false;
   if (labels.some((l) => OK_LABELS.test(l))) return false;
   if (s._exec && s._exec.reminder && !/\d|\bdaily\b|\bevery day\b/i.test(t)) return false;   // the senior has an ordinary reminder and this names no time: the older rule (smart.js CLAIM) judges it
   return !(id && care.socialOf(id));
 }
 // A claim got through (or was said before it could be stopped): the next turn corrects the impression.
+// What Maya REALLY said aloud: a confirm question that was spoken (a question naming the proposed time) is the one a later yes binds to. Nothing else binds it.
+function timesIn(text) { const out = [], re = /\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)?\b/gi; let m; while ((m = re.exec(text))) { const h = Number(m[1]), mi = Number(m[2] || 0); if (h >= 0 && h <= 24 && (m[2] || m[3])) out.push({ h, mi, ap: m[3] ? m[3].toLowerCase() : null }); } return out; }
+function markAsked(id, text, now = Date.now()) {
+  const z = zget(id), o = z.offer; if (!o || o.stage !== 'confirm' || o.asked || !o.time || !/\?/.test(text)) return;
+  const ok = timesIn(String(text)).some((t) => t.h % 12 === o.time.h % 12 && t.mi === o.time.mi && (!t.ap || (t.ap === 'am') === (o.time.h < 12)));
+  if (ok) zput(id, { offer: { ...o, asked: { at: now } } });
+}
 function noteSpoken(s, text) {
-  const id = s.profile && s.profile.id; if (!id || !claimBlocked(text, s)) return;
+  const id = s.profile && s.profile.id; if (!id) return;
+  if (D()) markAsked(id, text);
+  if (!claimBlocked(text, s)) return;
   zput(id, { misled: Date.now() });
 }
 
-module.exports = { step, claims, onNoCalls, onCallsBack, claimsScheduled, claimBlocked, noteSpoken, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };
+module.exports = { markAsked, normSpeech, isDecline, confirmsProposal, step, claims, onNoCalls, onCallsBack, claimsScheduled, claimBlocked, noteSpoken, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };
