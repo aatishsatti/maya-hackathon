@@ -201,6 +201,8 @@ function ledger(s, heard) {
 }
 
 // ---------------------------------------------------------------- the notes for one turn: [[label, text], ...]
+// The companion style fact (the ONLY fact on a routine smalltalk turn when no state flag is on). Exported so call.js can give a speculative guess the very same note (speculation reuse, call.js).
+const STYLE_NOTE = 'YOU ARE their friend, not a tool, not a menu and never a romantic partner. Respond to what they just said first, warmly, in short fresh words (begin differently from your last replies). A question is optional, never more than ONE: when something they said invites it, ask the small question a friend would (gardening: what they grow), about every second or third reply, and otherwise answer with a warm short remark. No interview.';
 function notes(s, heard) {
   const out = [];
   if (!any()) return out;
@@ -213,7 +215,7 @@ function notes(s, heard) {
   if (it !== 'followup') x.topic = it;
   if (it !== 'scam' && switched && old === 'scam') { x.kind = null; x.incident = null; x.asked = []; x.known = {}; x.disclosed = false; }
   if (flag('COMPANION')) { const f = ledger(s, heard); if (f) out.push(['smart-ledger', f]); }
-  if (flag('COMPANION') && (it === 'smalltalk' || it === 'followup') && !s.safety && !s.health) out.push(['smart-style', 'YOU ARE their friend, not a tool, not a menu and never a romantic partner. Respond to what they just said first, warmly, in short fresh words (begin differently from your last replies). A question is optional, never more than ONE: when something they said invites it, ask the small question a friend would (gardening: what they grow), about every second or third reply, and otherwise answer with a warm short remark. No interview.']);
+  if (flag('COMPANION') && (it === 'smalltalk' || it === 'followup') && !s.safety && !s.health) out.push(['smart-style', STYLE_NOTE]);
   if (flag('COMPANION') && (it === 'ability' || /\b(?:call|ring|phone)\b/i.test(heard))) out.push(['smart-calls', callsOk(s) ? 'CALLS: you can help ARRANGE a call from you when they ask (it is saved as a reminder). Arranging is not scheduled: say a call is scheduled ONLY when the RECORD below says reminder saved: yes.' : 'CALLS: do not offer or arrange a call from you (ringing them is not possible right now, or they told you to stop). If they ask, say so plainly and kindly.']);
   s._compact = false;
   let sched = false;
@@ -359,4 +361,4 @@ function fallback(s) {
     : 'I want to get this right. Could you tell me a little more about what you mean?';
 }
 
-module.exports = { stateFlag, STATE_LAYERS, appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
+module.exports = { STYLE_NOTE, stateFlag, STATE_LAYERS, appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
