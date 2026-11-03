@@ -105,3 +105,16 @@ test('explicit answers still work: yes, all, yes to some, none', () => {
   assert.deepEqual(v('yes to 1 and 3'), { 1: 'yes', 2: 'unsaid', 3: 'yes' }); assert.deepEqual(v('yes, set 1'), { 1: 'yes', 2: 'unsaid', 3: 'unsaid' });
   assert.deepEqual(v('yes to 1 and 3, not the walk'), { 1: 'yes', 2: 'no', 3: 'yes' }); assert.deepEqual(v('none'), { 1: 'no', 2: 'no', 3: 'no' });
 });
+
+// One reminder per time: a schedule item at a time that already has a reminder is NOT set as a second one; Maya says one is already there.
+test('one reminder per time: an item at a time that already has a reminder is not set twice - she says one is already there', async () => {
+  const id = person();
+  const setrem = require('../setrem');
+  const spec = setrem.parseRequest('remind me every day at 8:00 am to drink water', { now: Date.now(), tz: 'Asia/Kolkata' });
+  care.addSeniorReminder(id, { task: 'drink water', dueAt: spec.dueAt, repeat: 'daily', every: 1, deliver: 'text', channel: 'app', origin: 'app' });
+  await talk(id, TEXT);
+  const r = await talk(id, 'yes to 1');   // item 1 is 8:00 AM every day - the same time as the existing reminder
+  assert.match(last(r), /already have a reminder at that time/i);
+  assert.equal(mine(id).length, 1, 'no second reminder at 8:00');
+  assert.match(mine(id)[0].task, /drink water/, 'the original is untouched');
+});

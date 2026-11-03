@@ -110,12 +110,13 @@ function mentions(t, items) {
   return found;
 }
 
-// One item -> one reminder (a call at its time, in the app). true when it was set.
+// One item -> one reminder (a call at its time, in the app). true when it was set, 'exists' when a reminder is already saved at that time (never a silent second), false when it could not be set.
 function createFor(profileId, it, { tz, now }) {
   const care = require('./care'), setrem = require('./setrem');
   const phrase = `remind me ${it.repeat === 'daily' ? 'every day' : it.repeat === 'weekly' ? `every ${WEEKDAYS[it.weekday].toLowerCase()}` : it.weekday != null ? `on ${WEEKDAYS[it.weekday].toLowerCase()}` : 'today'} at ${h12(it.time).toLowerCase()} to ${it.task}`;
   const spec = setrem.parseRequest(phrase, { now, tz });
   if (!spec.dueAt || spec.noTz) return false;
+  if (setrem.existingAt(profileId, spec, { now, origin: 'app' })) return 'exists';   // ONE reminder per time
   try { care.addSeniorReminder(profileId, { task: it.task, dueAt: spec.dueAt, repeat: spec.repeat, every: spec.every || 1, deliver: 'call', channel: 'app', origin: 'app' }); return true; } catch { return false; }
 }
 
@@ -123,16 +124,20 @@ function createFor(profileId, it, { tz, now }) {
 function answer(profileId, text, { tz = null, now = Date.now() } = {}) {
   const s = pending(profileId, now); if (!s) return null;
   const verdict = readAnswer(text, s.items); if (!verdict) return null;
-  const set = [], skipped = [], failed = [];
+  const set = [], skipped = [], failed = [], exists = [];
   for (const [id, v] of verdict) {
     const it = s.items.find((x) => x.id === id);
     if (v !== 'yes') { it.status = 'no'; skipped.push(it); continue; }
-    if (createFor(profileId, it, { tz, now })) { it.status = 'set'; set.push(it); } else failed.push(it);
+    const c = createFor(profileId, it, { tz, now });
+    if (c === 'exists') { it.status = 'no'; exists.push(it); }
+    else if (c) { it.status = 'set'; set.push(it); }
+    else failed.push(it);
   }
   for (const it of failed) it.status = 'proposed';
   save(profileId, s);
   const parts = [];
   if (set.length) parts.push(`Done. I will call you for: ${set.map(lineOf).join('; ')}.`);
+  if (exists.length) parts.push(`I already have a reminder at that time, so I did not set another one there: ${exists.map(lineOf).join('; ')}.`);
   if (skipped.length) parts.push(`I did not set: ${skipped.map((i) => i.task).join('; ')}.`);
   if (failed.length) parts.push(`I could not set ${failed.map((i) => i.task).join('; ')} just now. Tell me again and I will try.`);
   if (!set.length && !failed.length) parts.unshift('Okay, I have not set any reminders.');
@@ -152,7 +157,9 @@ function setChosen(profileId, ids, { tz = null, now = Date.now() } = {}) {
   for (const it of s.items) {
     if (it.status === 'set') continue;
     if (!want.has(it.id)) { out.skipped.push(it.task); continue; }
-    if (createFor(profileId, it, { tz, now })) { it.status = 'set'; out.set.push(lineOf(it)); } else out.failed.push(it.task);
+    const c = createFor(profileId, it, { tz, now });
+    if (c === 'exists') { out.skipped.push(it.task); continue; }   // ONE reminder per time: never a silent second
+    if (c) { it.status = 'set'; out.set.push(lineOf(it)); } else out.failed.push(it.task);
   }
   save(profileId, s);
   return out;

@@ -378,3 +378,50 @@ test('a real save failure says plainly it could not be set just now, or that the
   for (let i = 0; i < setrem.MAX_OPEN; i++) care.addSeniorReminder(id, { task: `t${i}`, dueAt: Date.now() + 3600000 + i * 1000, repeat: 'none', deliver: 'text', channel: 'app', origin: 'app' });
   const full = setrem.step(id, 'Remind me in 20 minutes to rest', o); assert.equal(full.label, 'setrem-full'); assert.match(full.text, /My Reminders/); assert.doesNotMatch(full.text, /their family can|family can add/i);
 });
+
+// DUPLICATE REMINDERS (Mathew, 3 Nov: the same water reminder asked twice in one call became TWO reminders at 6:17 PM, both fired).
+// Rule: only ONE reminder can be made at the same time. A repeat ask at that time is never saved as a second one: Maya says one is
+// already saved there and asks keep or change. The daily-call record (social) is never matched and never touched.
+test('one reminder per time: a repeat ask at the same time (different words) is NOT saved twice - "already saved, keep or change?"; keep leaves it, change replaces it; the daily call stays untouched', async () => {
+  quiet(); const { id } = linked(true); care.get(id).tz = 'Asia/Kolkata';
+  const real = Date.now, at = Date.parse('2026-11-03T10:00:00Z');   // 15:30 in Kolkata, so 6:17 pm is still ahead
+  Date.now = () => at;
+  const menu = () => care.seniorMenu(id).reminders;
+  try {
+    const say = talker(id, 'call');
+    const a = await say('Remind me today at 6:17 pm to drink lots of water.');
+    has(a, 'setrem-confirm'); assert.match(a.text, /today at 6:17 PM/); assert.equal(menu().length, 0, 'nothing saved before the yes');
+    const b = await say('Yes.'); has(b, 'setrem-saved'); assert.equal(menu().length, 1);
+    assert.match(menu()[0].task, /drink lots of water/);
+    // the repeat ask, slightly different wording, same time: said back, yes - and then NOT saved, one is already there
+    const c = await say('Remind me at 6:17 pm to drink loads of water.');
+    has(c, 'setrem-confirm'); assert.equal(menu().length, 1, 'still one before any answer');
+    const d = await say('Yes, that is right.');
+    has(d, 'setrem-exists'); assert.match(d.text, /ALREADY saved/); assert.match(d.text, /shall I change it to drink loads of water\?/);
+    assert.equal(menu().length, 1, 'NO second reminder at 6:17 pm');
+    assert.match(menu()[0].task, /lots of water/, 'the original is untouched');
+    // "keep": nothing changes at all
+    const k = await say('No, keep it.'); has(k, 'setrem-kept'); assert.match(k.text, /stays exactly as it is/);
+    assert.equal(menu().length, 1); assert.match(menu()[0].task, /lots of water/);
+    // ask again, then change: still exactly one, now with the new words
+    await say('Remind me at 6:17 pm to drink loads of water.');
+    const e = await say('Yes.'); has(e, 'setrem-exists'); assert.equal(menu().length, 1);
+    const f = await say('Yes, change it.'); has(f, 'setrem-saved');
+    assert.equal(menu().length, 1, 'still exactly ONE reminder at that time');
+    assert.match(menu()[0].task, /loads of water/, 'changed to the new words');
+    // an unclear answer to keep-or-change is asked once more, then dropped; still one reminder
+    await say('Remind me at 6:17 pm to drink a glass of water.');
+    const g = await say('Yes.'); has(g, 'setrem-exists');
+    const u1 = await say('Hmm.'); has(u1, 'setrem-exists'); assert.equal(menu().length, 1);
+    const u2 = await say('Maybe later.'); has(u2, 'setrem-dropped'); assert.equal(menu().length, 1, 'dropped: nothing changed, nothing added');
+    // the daily-call record (social) is never a match and never touched, even at the very same time
+    const social = { id: 'soc1', social: { kind: 'daily-call' }, by: 'senior', task: 'daily call', dueAt: at + 3 * 3600000, repeat: 'daily', every: 1, deliver: 'call', channel: 'app', status: 'open' };
+    care.get(id).reminders.push(social);
+    setrem.reset(id);
+    const h = await say('Remind me in 3 hours to stretch.'); has(h, 'setrem-confirm');
+    const s = await say('Yes.'); has(s, 'setrem-saved', 'the daily call is not a reminder: a reminder at its time is still set');
+    const still = care.get(id).reminders.find((r) => r.id === 'soc1');
+    assert.ok(still && still.dueAt === social.dueAt && still.status === 'open', 'the daily-call record is untouched');
+    assert.equal(mine(id).filter((r) => !r.social).length, 2, 'one at 6:17, one in 3 hours');
+  } finally { Date.now = real; }
+});

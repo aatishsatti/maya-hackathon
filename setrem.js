@@ -376,6 +376,32 @@ function needChannel(id, st, ctx) {
   if (!spec.channel) { st.stage = 'channel'; st.unclear = 0; return channelQuestionNote(st.noWa); }
   return save(id, st, ctx);
 }
+// ---------------------------------------------------------------- one reminder per time
+// Only ONE reminder can be made at the same time. An open senior-set reminder (never the daily-call record, which carries `social`)
+// already at this time means NO second one is saved: Maya says one is already there and asks keep or change.
+function existingAt(id, spec, { now = Date.now(), origin = null } = {}) {
+  const care = require('./care');
+  const p = care.get(id);
+  if (!p || !Array.isArray(p.reminders)) return null;
+  const mine = afterCall(spec, { origin }) ? now + Math.max(20000, spec.relMs) : spec.dueAt;
+  if (!Number.isFinite(mine)) return null;
+  const w = waiting.get(id) || [];
+  for (const r of p.reminders) {
+    if (!r || r.by !== 'senior' || r.social || (r.status && r.status !== 'open')) continue;   // the daily-call record is never a match; a stopped one is not either
+    const x = w.find((y) => y.rid === r.id);
+    const due = x ? now + x.delay : r.dueAt;   // a parked (after-hang-up) reminder's real time is the asked delay, not the park time
+    if (Number.isFinite(due) && Math.floor(due / MIN) === Math.floor(mine / MIN)) return { r, due };
+  }
+  return null;
+}
+const exWhenWords = (st, ctx) => whenWords({ repeat: st.existing.repeat, every: st.existing.every, dueAt: st.existingDue, relMs: null }, { tz: ctx.tz, now: ctx.now || Date.now(), origin: st.origin });
+const existsQuestion = (st, ctx) => `You already have a reminder ${exWhenWords(st, ctx)} - shall I change it to ${second(st.spec.task)}?`;
+function existsNote(st, ctx) {
+  return note('setrem-exists', `A reminder is ALREADY saved for this time (${exWhenWords(st, ctx)}: "${second(st.existing.task)}"), so NOTHING new was saved and nothing was changed. Ask them ONE short question and nothing else: "${existsQuestion(st, ctx)}" A no, or "keep it", leaves the existing reminder exactly as it is; only a yes changes it to the new one. Never say a second reminder was set. ${COMMON}`);
+}
+function keepNote(st, ctx, why) {
+  return note('setrem-kept', `${why} The reminder already saved for ${exWhenWords(st, ctx)} ("${second(st.existing.task)}") stays exactly as it is: nothing was changed and no new reminder was set. Say that in one short sentence, and that they can ask to change it any time. ${COMMON}`);
+}
 function save(id, st, ctx) {
   const spec = st.spec, care = require('./care');
   // They went away between the question and the answer and the time they asked for ("in 2 minutes") has passed: saving it would fail. Not a failure and not "ask your family": say it plainly and ask the time again,
@@ -385,6 +411,13 @@ function save(id, st, ctx) {
     st.spec = { ...spec, dueAt: null, relMs: null, clock: null, day: null, weekday: null, daypart: null, startsInHour: false, ask: ['time'] };
     st.stage = 'clarify'; st.asks = 1; st.unclear = 0; st.at = ctx.now || Date.now(); states.set(id, st);
     return note('setrem-ask-detail', `The time they asked for (${was}) has already passed while they were away, so nothing is set yet. Say sorry plainly in one short sentence that that time has gone, and then ask ONE short question and nothing else: "${QUESTION.time}" ${COMMON}`);
+  }
+  const dup = existingAt(id, spec, { now: ctx.now || Date.now(), origin: st.origin });
+  if (dup) {   // ONE reminder per time: never a silent second; she says one is already saved and asks keep or change
+    st.stage = 'exists'; st.existing = dup.r; st.existingDue = dup.due; st.unclear = 0; st.at = ctx.now || Date.now();
+    st.say = existsQuestion(st, ctx);
+    states.set(id, st);
+    return existsNote(st, ctx);
   }
   states.delete(id);
   try {
@@ -410,6 +443,26 @@ function answer(id, st, heard, ctx) {
     const next = parseRequest(heard, { ...ctx, bare: true, base: spec });
     st.spec = next;
     return progress(id, st, ctx);
+  }
+  if (st.stage === 'exists') {
+    if (CANCEL.test(heard)) { states.delete(id); return keepNote(st, ctx, 'They said never mind.'); }
+    const ch = /\b(?:change|replace|swap|update|instead|new one)\b/i.test(heard);
+    const kp = /\b(?:keep|kept|leave it|as it is|old one|first one|stays?)\b/i.test(heard);
+    if ((ch && !kp) || (sayYes(heard) && !sayNo(heard) && !kp)) {
+      // change: the old one is stopped and the new one saved in its place (still exactly one at that time)
+      const care = require('./care');
+      let stopped = false;
+      try { stopped = care.stopSeniorReminder(id, st.existing.id) === true; } catch { stopped = false; }
+      const w = waiting.get(id);
+      if (w) { const i = w.findIndex((y) => y.rid === st.existing.id); if (i >= 0) w.splice(i, 1); if (!w.length) waiting.delete(id); }
+      if (!stopped) { states.delete(id); return note('setrem-not-saved', `The reminder at that time could NOT be changed just now (a problem on your side). Tell them kindly in one short sentence that you could not change it just now, and that the one they already have stays as it is; they can ask you again in a moment. Do not say anything new was set. ${COMMON}`); }
+      st.existing = null; st.stage = 'confirm';
+      return save(id, st, ctx);
+    }
+    if (sayNo(heard) || kp) { states.delete(id); return keepNote(st, ctx, 'They said to keep the one they already have.'); }
+    st.unclear += 1;
+    if (st.unclear >= 2) { states.delete(id); return cancelNote('They did not say whether to keep it or change it.'); }
+    return existsNote(st, ctx);
   }
   if (st.stage === 'confirm') {
     const asNew = readTime(heard, { bare: false }).found; const changed = asNew.repeat || asNew.rel != null || asNew.clock || asNew.weekday != null || asNew.unsupported || (asNew.day && (sayNo(heard) || /\b(?:make it|change|instead|rather|actually)\b/i.test(heard)));   // a bare "today" in some other sentence is not a change
@@ -487,8 +540,9 @@ function pendingQuestion(id, label = '') {
   if (label === 'setrem-lost') return 'What would you like me to remind you about, and when?';
   const st = states.get(id); if (!st) return null;
   if (st.stage === 'confirm' && st.say) return st.say;   // the say-back with its "Is that right?" (the only question left to ask)
+  if (st.stage === 'exists' && st.say) return st.say;   // the keep-or-change question about the reminder already saved at that time
   if (st.stage === 'channel') return st.noWa ? 'Is the Maya app okay for that?' : 'Would you like that on the Maya app, on WhatsApp, or both?';
   if (st.stage === 'clarify' && st.spec && st.spec.ask && st.spec.ask.length) return questionFor(st.spec);
   return null;
 }
-module.exports = { resolveClock, norm, pendingQuestion, quietHold, hourWords, savedText, afterHangup, afterCall, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };
+module.exports = { resolveClock, norm, pendingQuestion, quietHold, hourWords, savedText, afterHangup, afterCall, existingAt, CALL_TASK, EVERY_MAX, step, isRequest, parseRequest, readTime, confirmText, whenWords, second, deliveryWords, reset, pending, MAX_OPEN, TTL_MS, HOUR, DAY, MIN, zonedEpoch, partsIn };
