@@ -38,7 +38,7 @@ const tavily = (table, { status = 200, throws = false, big = false } = {}) => as
 };
 const PAGES = {
   harbour: [{ title: 'Harbour Light Bank - Home', url: 'https://www.harbourlight.example/', content: 'Harbour Light Bank is a small regional bank. We will never ask for your PIN by text.' }, { title: 'Beware of scams', url: 'https://www.harbourlight.example/scams', content: 'dup host' }],
-  metformin: [{ title: 'Metformin: medicine uses', url: 'https://www.nhs.example/metformin', content: 'Metformin is taken with food. Ask a pharmacist before changing how you take it.' }, { title: 'bad http', url: 'http://plain.example/x', content: 'insecure' }, { title: 'ip', url: 'https://10.0.0.5/x', content: 'private' }, { title: 'port', url: 'https://evil.example:8443/x', content: 'port' }],
+  flood: [{ title: 'Kerala floods', url: 'https://www.news.example/kerala-floods', content: 'Heavy rain has caused floods across Kerala this week.' }, { title: 'bad http', url: 'http://plain.example/x', content: 'insecure' }, { title: 'ip', url: 'https://10.0.0.5/x', content: 'private' }, { title: 'port', url: 'https://evil.example:8443/x', content: 'port' }],
   'free-gift-prize': [{ title: 'Scam alert: free-gift-prize.example', url: 'https://scamwatch.example/reports/free-gift-prize', content: 'Reports say this site collects card details.' }],
 };
 const useWeb = (table = PAGES, o = {}) => { W.cache.clear(); W.spent.length = 0; sent.length = 0; chat.deps.web = (w, opts) => W.lookup(w, { ...opts, fetch: tavily(table, o), key: o.key === undefined ? KEY : o.key }); chat.deps.official = (w, opts) => O.check(w, { ...opts, fetch: async () => ({ ok: false, status: 404, headers: { get: () => null }, text: async () => '' }) }); };
@@ -59,9 +59,11 @@ test('extract: code only, what needs checking; no phone number, no long digits, 
   assert.deepEqual(k('They sent a link free-gift-prize.example/claim and I should click it', { scam: true }), ['link']);
   assert.deepEqual(k('A man from Harbour Light Bank rang', { company: 'Harbour Light Bank', scam: true }), ['company']);
   assert.deepEqual(k('My doctor said I am taking Metformin for my sugar'), [], 'a statement about their own medicine asks the web nothing (Step 2: research needs a request for outside facts)');
-  assert.deepEqual(k('Is it safe to take Metformin with my breakfast?'), ['health']);
+  assert.deepEqual(k('Is it safe to take Metformin with my breakfast?'), [], 'a medicine question is never a research topic (medical.js refuses it)');
+  assert.deepEqual(k('What is the latest news about the flood in Kerala?'), ['news']);
   assert.deepEqual(k('I heard that the pension is going up next month, is it true?'), ['claim']);
-  const all = W.extract('Is it safe to take aspirin with my account 12345678 or call me on 0412 345 678 or mail a.b@mail.example?').map((t) => t.query).join(' ');
+  const all = W.extract('I heard that the pension is going up next month, my account 12345678 or call me on 0412 345 678 or mail a.b@mail.example, is it true?').map((t) => t.query).join(' ');
+  assert.ok(all.length > 0, 'a real query was built, so the privacy check below is not vacuous');
   assert.doesNotMatch(all, /\d{3}|@|a\.b/, all);
   assert.ok(W.extract('They sent a link free-gift-prize.example and chase.com/x and I heard that it is a scam, is it true?', { scam: true }).length <= 2, 'at most two searches a turn');
   assert.deepEqual(k('A man from Chase rang about chase.com/security', { scam: true }), [], 'an official address is not searched');
@@ -69,11 +71,11 @@ test('extract: code only, what needs checking; no phone number, no long digits, 
 
 test('search request follows the Tavily docs; the key is only in the Authorization header', async () => {
   useWeb();
-  const r = await W.search('metformin medicine', { fetch: tavily(PAGES), key: KEY });
+  const r = await W.search('flood kerala latest news', { fetch: tavily(PAGES), key: KEY });
   const { url, opts } = sent.at(-1);
   assert.equal(url, 'https://api.tavily.com/search'); assert.equal(opts.method, 'POST'); assert.equal(opts.headers.Authorization, `Bearer ${KEY}`); assert.equal(opts.headers['Content-Type'], 'application/json');
   const body = JSON.parse(opts.body); assert.equal(body.search_depth, 'basic'); assert.equal(body.max_results, 5); assert.equal(body.include_answer, false); assert.ok(!opts.body.includes(KEY));
-  assert.equal(r.failed, null); assert.deepEqual(r.results.map((x) => x.host), ['nhs.example'], 'http, IP, odd-port results are dropped');
+  assert.equal(r.failed, null); assert.deepEqual(r.results.map((x) => x.host), ['news.example'], 'http, IP, odd-port results are dropped');
 });
 
 test('results: https only, one per site, cleaned and short; nothing invented', async () => {
@@ -125,13 +127,18 @@ test('chat: a link not on the allow-list is searched IN THE BACKGROUND (backgrou
   assert.equal(mm.topics[0].address, 'mismatch'); assert.match(W.note(mm), /NOT one of the sites found; that alone does not prove anything/);
 });
 
-const NHS_METFORMIN = { metformin: [{ title: 'Metformin: how to take it', url: 'https://www.nhs.uk/medicines/metformin/', content: 'Metformin is safe to take with food, and taking it with meals can reduce side effects such as nausea. Ask a pharmacist before changing how you take it.' }, { title: 'bad http', url: 'http://plain.example/x', content: 'insecure' }] };   // a health-authority host: the trust rule (tierOf) is unchanged and does not whitelist the .example fixtures
-test('chat: a general question (medicine) is searched even without a scam', async () => {
-  const id = senior(); setup(NHS_METFORMIN);
-  await chat.sendText(id, 'Is it safe to take Metformin with my breakfast?', null);
+const BBC_KERALA = { flood: [{ title: 'Kerala floods', url: 'https://www.bbc.com/news/kerala-floods', content: 'Heavy rain has caused floods across Kerala this week and thousands of people have left their homes.' }, { title: 'bad http', url: 'http://plain.example/x', content: 'insecure' }] };   // a tier-2 news host: the trust rule (tierOf) is unchanged and does not whitelist the .example fixtures
+test('chat: a general (news) question is searched even without a scam', async () => {
+  const id = senior(); setup(BBC_KERALA);
+  await chat.sendText(id, 'What is the latest news about the flood in Kerala?', null);
   const r = roster();
-  assert.doesNotMatch(r, /SCAM CHECK/); assert.match(r, /WEB CHECK/); assert.match(r, /site nhs\.uk/); assert.match(r, /safe to take with food/); assert.match(r, /not medical advice: suggest their doctor or pharmacist/); assert.match(r, /NOT medical clearance for this person/);
-  assert.doesNotMatch(r, /plain\.example|10\.0\.0\.5|evil\.example/);
+  assert.doesNotMatch(r, /SCAM CHECK/); assert.match(r, /WEB CHECK/); assert.match(r, /site bbc\.com/); assert.match(r, /floods across Kerala/); assert.doesNotMatch(r, /plain\.example|10\.0\.0\.5|evil\.example/);
+});
+
+test('chat: a MEDICINE question is never searched: no Tavily request, no web note, the refusal constraints instead', async () => {
+  const id = senior(); setup(PAGES);
+  await chat.sendText(id, 'Is it safe to take Metformin with my breakfast?', null);
+  assert.equal(sent.length, 0, 'no outbound request'); assert.doesNotMatch(roster(), /WEB CHECK/); assert.match(roster(), /MEDICINE MATTER/); assert.match(roster(), /doctor or pharmacist/);
 });
 
 test('chat: no search service / search failure on a question: she is told it cannot be verified, the reply is not blocked, nothing invented', async () => {
@@ -142,7 +149,7 @@ test('chat: no search service / search failure on a question: she is told it can
     assert.match(roster(), /WEB CHECK/); assert.match(roster(), /NOTHING can be verified/); assert.match(roster(), /say plainly that you cannot verify it right now/); assert.doesNotMatch(roster(), /site [a-z0-9.-]+\.[a-z]+, titled/);
   }
   const id = senior(); setup(PAGES); chat.deps.web = async () => { throw new Error('boom'); };
-  const out = await chat.sendText(id, 'Is it safe to take Metformin with my breakfast?', null);
+  const out = await chat.sendText(id, 'I heard that the pension is going up next month, is it true?', null);
   assert.equal(out.messages[1].kind, 'text'); assert.match(roster(), /NOTHING can be verified/);
 });
 
@@ -162,7 +169,7 @@ test('ordinary chat, safety and self-harm: no search at all; the key never appea
   await chat.sendText(id, 'I feel like ending it all, is it true that nobody would notice?', null);
   assert.equal(sent.length, 0, 'never a web search on a safety turn');
   const id2 = senior(); setup(PAGES);
-  await chat.sendText(id2, 'Is it safe to take Metformin with my breakfast?', null);
+  await chat.sendText(id2, 'I heard that the pension is going up next month, is it true?', null);
   const everything = JSON.stringify({ asked, view: care.view(id2), thread: chat.thread(id2) });
   assert.ok(!everything.includes(KEY)); assert.ok(sent.every((x) => !x.opts.body.includes(KEY)));
 });

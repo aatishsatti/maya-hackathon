@@ -290,8 +290,17 @@ class ChatSession {
       if (lab) pieces.push({ text: Q[lab], kind: null });
     }
     if (!pieces.length && again && (require('./smart').flag('GUARD') || require('./smart').stateFlag('GUARD')) && this.guardBlocked) { pieces.push({ text: require('./smart').fallback(this), kind: null }); this.guardBlocked = false; }   // both drafts broke the guard: a plain true line, never the bad draft
+    if (!pieces.length && again && this._medical) { pieces.push({ text: require('./medical').FALLBACK, kind: null }); this._medicalFailed = true; }   // the drafts were blocked piece by piece: the plain no-content line, a recorded failure
     if (!pieces.length) throw new ChatError('Maya could not answer right now: no reply came back.'); // never a faked reply
     let all = pieces.map((p) => p.text).join(' ').replace(/\s+([,.;:!?])/g, '$1');
+    // A medicine matter: the final wording is validated BEFORE it is released. A draft that states any clinical content / reassurance / recommendation / alternative / outside source, claims a search, or has no referral is written
+    // again once; if the second draft also fails, a plain line that gives no medical content is shown, and that is recorded as a FAILURE, never as a successful refusal.
+    if (this._medical) {
+      const medical = require('./medical'), bad = medical.violates(all);
+      if (bad && !again) return this.reply(`${note} Your draft broke the medicine boundary (${bad.why}). ${medical.RETRY}`, { again: true });
+      if (bad) { pieces.length = 0; pieces.push({ text: medical.FALLBACK, kind: null }); all = medical.FALLBACK; this._medicalFailed = true; console.log('medical refusal failed twice', JSON.stringify({ why: bad.why })); }
+      else if (!this._medicalFailed) this.mrecent = [...(this.mrecent || []), all.replace(/\s+/g, ' ').slice(0, 70)].slice(-3);
+    }
     // Her own power: she does set reminders (and short ones) herself. A draft that refuses, invents a limit or sends them to their family is written again once; and while a set-up is still open (nothing saved yet) a draft that says it is
     // set / saved / done is written again too: she says it only after the app saved it (the saved note is a different label).
     const REFUSES = /\b(?:i|maya)\b[^.?!]{0,25}\b(?:can'?t|cannot|can not|don'?t|do not|won'?t|am not able to|not able to|unable to|am unable to)\b[^.?!]{0,25}\b(?:set|create|make|do|add|start)\b[^.?!]{0,30}\b(?:reminders?|timers?|alarms?)\b|\bi (?:don'?t|do not) set\b[^.?!]{0,30}\b(?:reminders?|timers?)\b|\b(?:your|ask your|get your)\s+(?:son|daughter|family|grandson|granddaughter|children|kids)\b[^.?!]{0,40}\b(?:add|set|create|put)\b[^.?!]{0,30}\breminders?\b/i;
@@ -455,15 +464,14 @@ async function sendText(profileId, text, tz, opts = {}) {
   // Anything else that needs checking (news, a claim, a medicine): the general web check; a failed search tells her she cannot verify it.
   const tt = talkTurn(scam, profileId, off);
   let sources = [], webFailed = false, g = null;
-  // Research context: ONLY the resolved subject and relationship of the immediately preceding factual question (never its answer or its sources). Any turn that is not a follow-up of it clears it; it also lapses after 10 minutes and with a new session.
-  const rprev = s.rctx && Date.now() - s.rctx.at < 10 * 60000 ? s.rctx : null; s.rctx = null;
   if (!off && (!scam || scam.level === 'none') && !care.hasActiveSafety(profileId) && !s.health && !s.safety && !selfHarmText(t)) {
-    const prior = (s.thread || []).filter((m) => m.role === 'senior' && m.kind === 'text'), prevUser = prior.length >= 2 ? String(prior[prior.length - 2].text || '').slice(0, 300) : '';   // only to resolve a bare "is that true?"
-    try { g = await deps.web(t, { scope: profileId, ctx: { prevUser, prior: rprev && rprev.prior, pending: rprev && rprev.pending } }); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; webFailed = true; }
-    const wn = require('./web').note(g); if (wn) { tt.note = [tt.note, wn].filter(Boolean).join(' '); tt.short = true; sources = require('./web').sources(g); }
-    const dec = g && g.decision, tp0 = g && g.topics && g.topics[0];
-    if (dec && dec.decision === 'research' && tp0 && tp0.kind === 'health' && tp0.meaning && tp0.meaning.ents && tp0.meaning.ents.length) s.rctx = { at: Date.now(), prior: { ents: tp0.meaning.ents.filter((e) => e !== 'food'), relation: tp0.meaning.relation } };
-    else if (dec && dec.decision === 'clarify') s.rctx = { at: Date.now(), prior: { ents: dec.clarify.prior, relation: dec.clarify.relation }, pending: { subject: dec.clarify.subject } };
+    // A medicine matter is decided HERE, before any lookup or cache read: no Tavily request, no sources (the refusal constraints are added by careNotes, in the same turn). It is not a failed search.
+    const medical = require('./medical');
+    if (!medical.classify(t, { prior: medical.fresh(s.mctx) })) {
+      const prior = (s.thread || []).filter((m) => m.role === 'senior' && m.kind === 'text'), prevUser = prior.length >= 2 ? String(prior[prior.length - 2].text || '').slice(0, 300) : '';   // only to resolve a bare "is that true?"
+      try { g = await deps.web(t, { scope: profileId, ctx: { prevUser } }); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; webFailed = true; }
+      const wn = require('./web').note(g); if (wn) { tt.note = [tt.note, wn].filter(Boolean).join(' '); tt.short = true; sources = require('./web').sources(g); }
+    }
   }
   const due = care.checkDueIds(profileId);
   // smart.js: what really ran this turn (the record card and the draft guard use it) and what the scam check said (the decision uses it). Read only there; a flag OFF ignores both.

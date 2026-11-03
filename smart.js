@@ -223,6 +223,7 @@ function guessNotes(s, heard) {
   // intent() calls care.scamPending(), which MOVES an expired pending-scam question to lostScam and saves it (a consent-state write). A guess must never write, so any scam context at all (open or lost) is a read-only "not ordinary" here.
   const pz = require('./care').get(s.profile.id);
   if (!pz || pz.pendingScam || pz.lostScam) return null;
+  if (require('./medical').classify(heard, { prior: require('./medical').fresh(s.mctx) })) return null;   // a medicine matter is never guessed at
   const it = intent(heard, s);
   if (it !== 'smalltalk' && it !== 'followup') return null;
   if (CALL_WORD.test(heard)) return null;

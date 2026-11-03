@@ -33,28 +33,28 @@ const sig = (...on) => Object.fromEntries(S.SIGNALS.map((k) => [k, on.includes(k
 const verdict = (level, type = 'gift card scam') => async () => ({ level, type, reading: 'Someone from a bank wants gift cards.', signals: sig('impersonation', 'payment'), reads: Object.fromEntries(S.READS.map((k) => [k, false])), count: 2 });
 const roster = () => asked.at(-1).roster;
 const reset = (...q) => { queue.length = 0; queue.push(...q); asked.length = 0; };
-const LONG = `${FEEL} Turmeric is a common spice. Some people take it as capsules. Studies are mixed about arthritis. Check the dose with a pharmacist. It can interact with blood thinners. Ask your doctor first.`;
-const PAGES = { turmeric: [{ title: 'Turmeric: what the research says', url: 'https://www.nhs.uk/turmeric', content: 'There is no good evidence that turmeric capsules cure arthritis. Ask a pharmacist.' }] };   // a tier-2 host whose passage states the claim: the evidence filter (web.js) judges support and suitability separately and whitelists nothing
+const LONG = `${FEEL} The council has said it will stop the Sunday buses next month. That affects three rural routes. Other days are not changing. Check the council website for the dates. Your family can help you plan.`;
+const PAGES = { council: [{ title: 'Council confirms Sunday bus changes', url: 'https://www.bbc.com/news/council-sunday-buses', content: 'The council will stop the Sunday buses next month on three rural routes.' }] };   // a tier-2 host whose passage states the claim: the evidence filter (web.js) judges support and suitability separately and whitelists nothing
 const tavily = (table) => async (url, opts) => { const q = JSON.parse(opts.body).query.toLowerCase(); const hit = Object.entries(table).find(([k]) => q.includes(k)); return { ok: true, status: 200, text: async () => JSON.stringify({ results: hit ? hit[1] : [] }) }; };
 const useWeb = () => { W.cache.clear(); W.spent.length = 0; chat.deps.web = (w, o) => W.lookup(w, { ...o, fetch: tavily(PAGES), key: 'k' }); };
 const made = [];
 const mkCall = (id) => { const ws = { send() {}, close() {}, onmessage: null, onclose: null }; const c = new Call(ws, 'k'); c.profile = memory.load(id); c.callId = `c${n}`; c.registered = true; c.noVoice = true; made.push(c); return c; };
 
 // ---- A. short replies, source behind the eye button ----
-test('A: a turmeric question gets two sentences at most; the source is stored apart and is not in the text', async () => {
+test('A: a public-claim question gets two sentences at most; the source is stored apart and is not in the text', async () => {
   const id = senior(); useWeb(); chat.deps.scamText = verdict('none'); reset(LONG);
-  const out = await chat.sendText(id, 'I heard that turmeric capsules cure arthritis, is it true?', null);
+  const out = await chat.sendText(id, 'I heard that the council will stop the Sunday buses next month, is it true?', null);
   const m = out.messages[1];
   assert.ok(sentences(m.text) <= 2, m.text);
-  assert.doesNotMatch(m.text, /nhs\.uk|research says|no good evidence/);
-  assert.equal(m.sources.length, 1); assert.equal(m.sources[0].site, 'nhs.uk'); assert.match(m.sources[0].excerpt, /no good evidence/);
+  assert.doesNotMatch(m.text, /bbc\.com|Council confirms/);
+  assert.equal(m.sources.length, 1); assert.equal(m.sources[0].site, 'bbc.com'); assert.match(m.sources[0].excerpt, /three rural routes/);
   assert.match(roster(), /ONE OR TWO SHORT SENTENCES/); assert.doesNotMatch(roster(), /name the site it came from/);
-  const stored = chat.thread(id).at(-1); assert.equal(stored.sources[0].site, 'nhs.uk');
+  const stored = chat.thread(id).at(-1); assert.equal(stored.sources[0].site, 'bbc.com');
 });
 
 test('A: they can still ask for more (the cap lifts)', async () => {
   const id = senior(); useWeb(); chat.deps.scamText = verdict('none'); reset(LONG);
-  const out = await chat.sendText(id, 'I heard that turmeric capsules cure arthritis, is it true? Please explain in full.', null);
+  const out = await chat.sendText(id, 'I heard that the council will stop the Sunday buses next month, is it true? Please explain in full.', null);
   assert.ok(sentences(out.messages[1].text) > 2, out.messages[1].text);
 });
 

@@ -1321,6 +1321,23 @@ class Call {
 
   // A piece that must never be spoken or shown: a stock counselling line, a family alert the app never made, or an invented self-harm reason.
   // Code reads the records (care.familyToldTopics); Spark only writes the words.
+  // A medicine matter on the voice path: the WHOLE draft is collected and validated before one word is spoken (a piece-by-piece check cannot enforce the referral). A bad draft is written once more; a second bad draft
+  // gets the plain no-content line, recorded as a FAILURE. A generation error is not turned into anything: it surfaces as the usual error (no medical fallback, no recorded refusal).
+  async medicalGuard(rs, heard) {
+    const medical = require('./medical');
+    const collect = async (r) => { let t = ''; try { for await (const x of r.chunks()) t += x; } catch (e) { return { error: e, text: t }; } return { text: t }; };
+    let out = await collect(rs);
+    if (out.error) return rs;
+    const bad = (o) => !o.text.trim() || medical.violates(stripTags(o.text));
+    if (bad(out)) {
+      const again = startReply(this.history, this.roster(`${this.replyNote()} ${this.turnFacts || ''} Your draft broke the medicine boundary. ${medical.RETRY}`.trim(), heard), this.abort.signal);
+      out = await collect(again); if (out.error) return again;
+    }
+    if (bad(out)) { this._medicalFailed = true; console.log('medical refusal failed twice'); return fixedReply(`[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0 topic=same personal=0]] ${medical.FALLBACK}`); }
+    this.mrecent = [...(this.mrecent || []), stripTags(out.text).replace(/\s+/g, ' ').slice(0, 70)].slice(-3);
+    return fixedReply(out.text);
+  }
+
   breaksFacts(piece) {
     this._voiceSearch = false;   // set again below only if THIS piece claims a search
     const t = String(piece || '').replace(/\u2019/g, "'");
@@ -1333,6 +1350,7 @@ class Call {
     if (!told.length && (SEEN_TALK.test(t) || (PAST_SEND_THEM.test(t) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|yet)\b/i.test(t) && this.familyRelevant()))) return true;   // no record: no past-tense send to "them", and nothing about what they have seen
     if (!told.length && t.split(/(?<=[.!?])\s+/).some((x) => SENT_CLAIM.test(x) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|wasn't|yet)\b/i.test(x))) return true;   // a denial ("no note was sent") is not a claim return true;   // "I can" is an ability; a note that "went over" or an invented "you'd asked" needs a record on the dashboard
     if (SELF_HARM_REASON.test(t) && !told.some((x) => /safety|health/.test(x))) return true;
+    if (this._medical && require('./medical').violates(t, { requireReferral: false })) { this._why = 'this is a medicine matter: state no clinical content, no reassurance, no recommendation, no alternative, no outside source; refer them to their doctor or pharmacist'; return true; }
     if (this.channel !== 'chat' && VOICE_SEARCH_CLAIM.test(t)) { this._why = VOICE_SEARCH_WHY; this._voiceSearch = true; return true; }   // voice: no lookup exists, so no claim of one (unconditional)
     if (require('./smart').breaks(t, this)) return true;   // smart.js GUARD (flag, OFF by default): "verified safe" / "100% scam", an invented link or number, "I checked / told" with no record
     return false;
@@ -1796,6 +1814,7 @@ class Call {
       this.turnFacts = `${extra} ${scamTurn.note || ''}`.trim();   // a rewrite of a blocked draft gets the SAME facts (it used to get none)
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}${this.ws.outbound ? OUTBOUND_NOTE : ''}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
+    if (this._medical) rs = await this.medicalGuard(rs, turns.map((t) => t.text).join(' '));
     this.scamOwed = scamTurn && scamTurn.scam && scamTurn.scam.level !== 'none' ? scamTurn.scam : null;
     try {
       await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent, bye: Boolean(this.endAfterReply), onDone: this.askQuestion ? () => { this.askQuestion = false; this.askAnyQuestions(); } : null });
@@ -1819,6 +1838,11 @@ class Call {
     this.factLabels = [];  // which kinds of fact this turn gave Spark (names only, for the 'reply facts' log line)
     const note = (label, text) => { notes.push(text); this.factLabels.push(label); };
     if (selfHarmText(heard)) this.enterSafety();
+    // MEDICINE: decided here, once per turn, in code, before anything else about the reply. A medicine matter gets a refusal (constraints for Spark, no sentence); urgent-safety handling above/below is independent and unchanged.
+    this._medical = false; this._medicalFailed = false;
+    { const medical = require('./medical'), med = !this.safety && !this.health ? medical.classify(heard, { prior: medical.fresh(this.mctx) }) : null;
+      if (med) { this._medical = true; note('medical-refusal', medical.note(med, this.mrecent || [])); }
+      this.mctx = med || medical.mentions(heard) ? { at: Date.now() } : null; }   // the ONLY carried context: "the last turn was a medicine matter, at this time". No substance, no evidence, no plan. Any other turn clears it; it lapses after 10 minutes; a new session starts empty.
     // Scam shield: Maya asked whether to let their family know about a message that looked like a scam (scam.js, care.js). Their answer
     // decides it: yes -> an alert (the kind of scam only), no -> a dashboard Flag only and she never asks again. A safety or health
     // matter comes first: the question is dropped. Works the same in a call and in the chat (the pending question lives in care.js).
