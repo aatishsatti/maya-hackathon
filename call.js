@@ -30,6 +30,8 @@ const HOLD_TRAILING_MS = 1500;  // trails off ("and", "my", ...) or is a fragmen
 // The reply is only spoken after Meta confirms the turn ended with the same words and labels.
 // Any change in words or labels throws the guess away.
 const SPEC_QUIET_MS = 250;
+const ORDINARY_LABELS = new Set(['smart-style', 'smart-app-state', 'smart-shape']);
+const speculationOn = () => process.env.MAYA_SPECULATION === 'on';   // default OFF: with the live flags a guess never matched the final turn, so it only burned 2 Spark requests per turn
 const SPEC_MAX_AGE_MS = 15000;   // a guess older than this is stale and never reused (it takes the normal path)
 // Meta sometimes leaves a short turn ("Okay.") open through silence. With no endpointing settings
 // to change, a turn whose words have stopped changing is completed here from its last partial.
@@ -994,11 +996,11 @@ class Call {
     if (this.spec) { for (const s of this.spec.byLabel.values()) s.abort.abort(); this.spec = null; }
   }
 
-  // A turn whose ONLY fact is the companion style note: no other label, no scam, no safety/health/consent state, not an outbound call. Anything else (e.g. smart-app-state with CARDS on, any social-* scheduling fact) is not eligible.
-  styleOnlyTurn(extra, scamTurn) {
-    const sm = require('./smart');
+  // An ORDINARY turn: its only facts are the style note, the app-state card and the reply shape (any of them, nothing else). No scam/official/note, not outbound, no safety/health/pending consent, not a scheduling turn.
+  // Any other label (social-*, concern-*, smart-calls, smart-ledger, reminders, ...) = not ordinary = the guess is discarded and the normal path writes the reply.
+  ordinaryTurn(extra, scamTurn) {
     const labels = this.factLabels || [];
-    return labels.length === 1 && labels[0] === 'smart-style' && extra === sm.STYLE_NOTE && !(scamTurn && (scamTurn.scam || scamTurn.note || scamTurn.official))
+    return labels.length > 0 && labels.every((l) => ORDINARY_LABELS.has(l)) && !(scamTurn && (scamTurn.scam || scamTurn.note || scamTurn.official))
       && !this.ws.outbound && !this.safety && !this.health && !this.pendingConcern && !this.familyDeclined && !this._sched && !this._compact;
   }
 
@@ -1007,7 +1009,8 @@ class Call {
   reuseSpec(extra, mySeq, cand) {
     const g = this.spec;
     if (!cand || !cand.rs || cand.rs.error || (cand.rs.done && !cand.rs.text.trim())) return false;   // a guess that already failed or came back empty is never spoken: the normal path writes a fresh reply
-    if (!g || g.styleNote !== extra || g.turnSeq !== mySeq - 1 || Date.now() - g.startedAt > SPEC_MAX_AGE_MS || JSON.stringify(this.history) !== g.histJson) return false;
+    if (/INCOMPLETE|APP STATE: UNKNOWN|\bUNKNOWN\b|: unknown\./.test(extra)) return false;   // a failed or incomplete state read is never reused, even when the guess's card failed the same way
+    if (!g || g.notes !== extra || JSON.stringify(g.labels) !== JSON.stringify(this.factLabels || []) || g.turnSeq !== mySeq - 1 || Date.now() - g.startedAt > SPEC_MAX_AGE_MS || JSON.stringify(this.history) !== g.histJson) return false;
     if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder) return false;
     const keep = this.focus; this.focus = pureFocus(g.partial);
     try { return this.roster(`${this.replyNote()} ${extra}`.trim(), g.partial) === g.roster; } catch { return false; } finally { this.focus = keep; }
@@ -1017,6 +1020,7 @@ class Call {
   // voice label heard so far plus the next unused one; the one that matches the final label is used.
   maybeSpeculate(t) {
     clearTimeout(this.specTimer);
+    if (!speculationOn()) return;   // MAYA_SPECULATION=on enables the early guess; unset/anything else = OFF (no guess requests, every turn is written when the turn is confirmed)
     if (this.pending.length || !t.partial.trim()) return;
     const key = this.textKey([{ text: t.partial }]);
     if (this.spec && this.spec.textKey !== key) this.dropSpec();
@@ -1026,12 +1030,13 @@ class Call {
       if (this.closed || this.spec) return;
       const next = 'ABCDEFGH'.split('').find((l) => !this.seen.has(l));
       const labels = [...new Set([...this.seen, next].filter(Boolean))].slice(0, 4);
-      // Guess carries the SAME style note the final turn would (companion style-only turn), built with a pure focus (no side effects): reuse is allowed only if the final turn proves it saw the same thing (reuseSpec).
-      const sm = require('./smart');
-      const styleNote = sm.flag('COMPANION') && !this.safety && !this.health ? sm.STYLE_NOTE : '';
+      // The guess carries the notes the final turn WOULD get (style / app-state card / reply shape), built by smart.guessNotes from the same constants and the same state builder, with no side effects. null = not ordinary talk: nothing is guessed.
+      // Reuse is allowed only if the final turn's OWN freshly built labels and text are identical (reuseSpec), so a final turn never inherits the guess's older state.
+      const gn = require('./smart').guessNotes(this, t.partial);
+      if (!gn) return;
       const keepFocus = this.focus; this.focus = pureFocus(t.partial);
-      let guessRoster; try { guessRoster = this.roster(`${this.replyNote()} ${styleNote}`.trim(), t.partial); } finally { this.focus = keepFocus; }
-      const spec = { textKey: key, byLabel: new Map(), partial: t.partial, roster: guessRoster, styleNote, histJson: JSON.stringify(this.history), turnSeq: this.turnSeq || 0, startedAt: Date.now() };
+      let guessRoster; try { guessRoster = this.roster(`${this.replyNote()} ${gn.text}`.trim(), t.partial); } finally { this.focus = keepFocus; }
+      const spec = { textKey: key, byLabel: new Map(), partial: t.partial, roster: guessRoster, labels: gn.labels, notes: gn.text, histJson: JSON.stringify(this.history), turnSeq: this.turnSeq || 0, startedAt: Date.now() };
       for (const label of labels) {
         const abort = new AbortController();
         const turn = { ...t, text: t.partial, spans: [{ label, end: t.partial.length }] };
@@ -1713,14 +1718,15 @@ class Call {
       if (cls && this.pre.has(cls)) { pre = this.pre.get(cls); this.pre.delete(cls); }
     }
     let spec = pre ? { rs: pre.rs, abort: pre.abort } : null;
+    if (this.spec && !speculationOn()) this.dropSpec();   // switched off while a guess was in flight: cancel it, this turn is written normally
     let focusSet = false;   // setFocus has side effects: it runs once per turn, here (style-only candidate) or in the normal branch below
     if (!pre && this.spec && this.spec.textKey === this.textKey(turns)) {
       const labels = new Set(turns.flatMap((t) => this.attribute(t).map((p) => p.label)));
       const [only] = labels;
       if (labels.size === 1 && this.spec.byLabel.has(only)) {
         // No facts: the old rule. Exactly the companion style fact and nothing else: reuse ONLY if reuseSpec proves the guess saw what the final turn sees.
-        let ok = !extra;
-        if (!ok && this.styleOnlyTurn(extra, scamTurn)) { this.setFocus(turns.map((t) => t.text).join(' '), extra); focusSet = true; ok = this.reuseSpec(extra, mySeq, this.spec.byLabel.get(only)); }
+        let ok = !extra && !this.spec.notes;   // no facts on either side: the old rule
+        if (!ok && extra && this.ordinaryTurn(extra, scamTurn)) { this.setFocus(turns.map((t) => t.text).join(' '), extra); focusSet = true; ok = this.reuseSpec(extra, mySeq, this.spec.byLabel.get(only)); }
         if (ok) { spec = this.spec.byLabel.get(only); this.spec.byLabel.delete(only); if (extra) spec.styleReuse = true; }
       }
     }

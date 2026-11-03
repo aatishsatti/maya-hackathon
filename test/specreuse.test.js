@@ -5,14 +5,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-specreuse-'));
 process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles'); process.env.MAYA_CARE_DIR = path.join(tmp, 'care');
-process.env.MAYA_SMART_COMPANION = 'on';
+process.env.MAYA_SMART_COMPANION = 'on'; process.env.MAYA_SPECULATION = 'on';   // speculation is OFF unless this is 'on' (call.js speculationOn)
 const TAG = '[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0 topic=same personal=0]]';
-let reqs = [], replyText = `${TAG} Sounds nice.`, failAfter = 0;
+const DEFAULT_REPLY = `${TAG} Sounds nice.`; let lineN = 0;
+const LINES = ['That sounds lovely to me.', 'Tea in the morning is a good start.', 'Nothing beats a quiet cup.', 'Mine would be the garden view.', 'Spring does bring out the best.', 'Birds are a joy to watch.', 'A good lunch makes the day.', 'Cookies from a neighbor, how kind.', 'Rain makes everything smell fresh.', 'Books are good company.', 'A card from family is a treat.', 'The market must have been busy.'];   // different words each reply, so the repeat guard never rewrites a stub reply
+let reqs = [], replyText = DEFAULT_REPLY, failAfter = 0;
 const brainPath = require.resolve('../brain');
 require.cache[brainPath] = { id: brainPath, filename: brainPath, loaded: true, exports: { requireRealEnv() {}, streamSpeech: async () => {}, sparkComplete: async () => '{}',
   sparkStream: (history, roster, signal, onDelta) => new Promise((res, rej) => {
     const r = { roster, last: history[history.length - 1].content, aborted: false, done: false }; reqs.push(r);
-    const tm = setTimeout(() => { if (failAfter) { r.failed = true; rej(new Error('Meta Spark failed (HTTP 500)')); return; } r.done = true; onDelta(replyText); res(replyText); }, failAfter || 40);
+    const tm = setTimeout(() => { if (failAfter) { r.failed = true; rej(new Error('Meta Spark failed (HTTP 500)')); return; } r.done = true; const out = replyText === DEFAULT_REPLY ? `${TAG} ${LINES[(lineN++) % LINES.length]}` : replyText; onDelta(out); res(out); }, failAfter || 40);
     signal.addEventListener('abort', () => { r.aborted = true; clearTimeout(tm); rej(Object.assign(new Error('aborted'), { name: 'AbortError' })); }, { once: true });
   }), stats: [], META_URL: '', liveModel: () => 'x', COMPACT_MARK: '[[COMPACT]]', developerContent: () => '', SHORT_PERSONA: '' } };
 const memory = require('../memory'); const care = require('../care'); const { Call } = require('../call');
@@ -32,11 +34,12 @@ async function turn(c, { partial = 'how is the weather today', final = 'How is t
   reqs = []; facts.length = 0; const id = `t${Math.random()}`;
   c.onMeta({ type: 'speechStart', turnId: id }); c.onMeta({ type: 'transcript', turnId: id, transcript: partial.split(' ').slice(0, 3).join(' ') }); c.onMeta({ type: 'transcript', turnId: id, transcript: partial });
   await sleep(wait);   // SPEC_QUIET_MS = 250: the guess is in flight now
-  const guesses = reqs.length;
+  const own = () => reqs.filter((r) => r.roster.includes(c.profile.name));   // only THIS call's requests (earlier calls in the file are still alive)
+  const guesses = own().length;
   if (between) await between(c);
   c.onMeta({ type: 'speaker', turnId: id, label }); c.onMeta({ type: 'speechEnd', turnId: id }); c.onMeta({ type: 'speechComplete', turnId: id, transcript: final });
   await sleep(300);
-  return { guesses, source: facts.length ? facts[facts.length - 1].source : null, labels: facts.length ? facts[facts.length - 1].labels : null, total: reqs.filter((r) => !/Write your short line now/.test(r.last)).length, aborted: reqs.filter((r) => r.aborted).length };
+  return { guesses, source: facts.length ? facts[facts.length - 1].source : null, labels: facts.length ? facts[facts.length - 1].labels : null, total: own().filter((r) => !/Write your short line now/.test(r.last)).length, aborted: own().filter((r) => r.aborted).length };
 }
 
 test('1 COMPANION only, routine turn, same words + label: the guess is reused (one fewer request, the other candidate cancelled)', async () => {
@@ -47,10 +50,36 @@ test('1 COMPANION only, routine turn, same words + label: the guess is reused (o
   assert.ok(c.history.some((m) => m.role === 'assistant'), 'the reply was recorded once');
 });
 
-test('2 CARDS on: smart-app-state is a second fact, so the guess is NEVER reused (normal path, a fresh request)', async () => {
-  process.env.MAYA_SMART_STATE_CARDS = 'on';
-  try { const c = mk(); const r = await turn(c); assert.equal(r.source, 'written-now'); assert.ok(r.labels.includes('smart-app-state')); assert.equal(r.total, 3, '2 guesses + the normal request'); assert.equal(r.aborted, 2); }
-  finally { delete process.env.MAYA_SMART_STATE_CARDS; }
+const LIVE = { MAYA_SMART_CONTRACT: 'on', MAYA_SMART_STATE_CARDS: 'on', MAYA_SMART_STATE_GUARD: 'on', MAYA_SMART_STATE_DECISION: 'on' };   // the live-equivalent set: labels [smart-style, smart-app-state, smart-shape]
+async function live(fn) { const keep = {}; for (const k of Object.keys(LIVE)) { keep[k] = process.env[k]; process.env[k] = LIVE[k]; } try { return await fn(); } finally { for (const k of Object.keys(LIVE)) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; } } }
+const warm = async (c) => { await turn(c, { partial: 'I had tea this morning', final: 'I had tea this morning.' }); };   // the first turn stamps "last seen" in the card; reuse needs the card identical
+
+test('2 GATE 0, the ACTUAL live configuration (COMPANION + CONTRACT + STATE_CARDS, profile id present): a genuine 3-label hit, and the final turn used its OWN freshly built notes', async () => {
+  await live(async () => {
+    const c = mk(); await warm(c); const r = await turn(c);
+    assert.deepEqual(r.labels, ['smart-style', 'smart-app-state', 'smart-shape']); assert.equal(r.source, 'guess-hit', 'eligible and a genuine hit'); assert.equal(r.total, 2, 'no new request: ' + JSON.stringify(reqs.filter((q) => q.roster.includes(c.profile.name)).map((q) => [q.last.slice(0, 45), q.aborted]))); assert.equal(r.aborted, 1);
+    const g0 = reqs.find((r) => r.roster.includes(c.profile.name)).roster; assert.match(g0, /APP STATE/); assert.match(g0, /REPLY SHAPE/); assert.match(g0, /friend, not a tool/, 'the guess carried style + card + shape');
+  });
+});
+
+test('2b state changed DURING generation: the card is different, so the guess is discarded and the final turn is written with its OWN fresh state (never the guess\'s older state)', async () => {
+  await live(async () => {
+    const c = mk(); await warm(c);
+    const r = await turn(c, { between: async (cc) => { care.get(cc.profile.id).tz = 'Asia/Kolkata'; } });
+    assert.equal(r.source, 'written-now'); assert.equal(r.aborted, 2, 'both guesses cancelled');
+    const mineR = reqs.filter((r) => r.roster.includes(c.profile.name) && !/Write your short line now/.test(r.last)); assert.match(mineR[mineR.length - 1].roster, /Asia\/Kolkata/, 'the final request carries the NEW state: ' + (mineR[mineR.length - 1].roster.match(/.{0,60}(zone|APP STATE).{0,160}/) || ['none'])[0] + ' // ' + JSON.stringify(mineR.map((q) => q.last.slice(0, 30)))); assert.doesNotMatch(mineR[0].roster, /Asia\/Kolkata/, 'the guess had the old one');
+  });
+});
+
+test('2c CARDS on does not widen what is ordinary: a pending scheduling proposal, a pain mention and a call word still discard the guess', async () => {
+  await live(async () => {
+    const social = require('../social'); const d = mk(); await warm(d);
+    social.step({ profile: d.profile, channel: 'call', factLabels: [], _exec: {}, lastHeard: () => '' }, 'could you call me every morning at six', { intent: 'smalltalk', callsOk: true, safe: true }, Date.now());
+    let r = await turn(d, { partial: 'yes please do that', final: 'Yes, please do that.' }); assert.notEqual(r.source, 'guess-hit', 'scheduling proposal pending');
+    const p = mk(); await warm(p); r = await turn(p, { partial: 'my knee hurts a little today', final: 'My knee hurts a little today.' }); assert.notEqual(r.source, 'guess-hit', 'pain');
+    const k = mk(); await warm(k); r = await turn(k, { partial: 'could you ring my daughter now', final: 'Could you ring my daughter now?' }); assert.notEqual(r.source, 'guess-hit', 'call word');
+    const e = mk(); await warm(e); e.pendingConcern = { left: 2 }; r = await turn(e); assert.equal(r.source, 'written-now', 'pending family consent');
+  });
 });
 
 test('3 mismatches take the normal path: extra final words, a different label, a corrected word, an interruption', async () => {
@@ -81,16 +110,16 @@ test('5 other facts always reject reuse: scheduling offer pending, a pain mentio
 test('6 late danger: a routine partial whose final words turn out to be a fall is NOT answered by the guess, and the alert is made exactly once', async () => {
   const alerts = []; const orig = care.concernAlert; care.concernAlert = (...a) => { alerts.push(a); return orig.apply(care, a); };
   try {
-    const c = mk(); replyText = `${TAG} Sounds nice.`;
+    const c = mk(); replyText = DEFAULT_REPLY;
     const r = await turn(c, { partial: 'I was just in the kitchen', final: 'I was just in the kitchen and I fell and hit my head.' });
     assert.equal(r.source, 'written-now'); assert.ok(r.aborted >= 2); assert.equal(alerts.length, 0, 'no alert from a guess');
-  } finally { care.concernAlert = orig; replyText = `${TAG} Sounds nice.`; }
+  } finally { care.concernAlert = orig; replyText = DEFAULT_REPLY; }
 });
 
 test('7 a reused reply carrying an urgent tag is processed once, like any reply (no duplicate alert)', async () => {
   const alerts = []; const orig = care.concernAlert; care.concernAlert = (...a) => { alerts.push(a); return orig.apply(care, a); };
   try { const c = mk(); replyText = '[[feel: emotion=anxious intensity=3 intent=share concern=urgent pain=1 topic=same personal=0]] I am here, are you hurt?'; const r = await turn(c); assert.equal(r.source, 'guess-hit'); assert.ok(alerts.length <= 1, `alerts: ${alerts.length}`); }
-  finally { care.concernAlert = orig; replyText = `${TAG} Sounds nice.`; }
+  finally { care.concernAlert = orig; replyText = DEFAULT_REPLY; }
 });
 
 // ---- gap tests (before any push) ----
@@ -162,4 +191,59 @@ test('11 a reused stream that errors AFTER acceptance: the call ends with the er
     assert.equal(out.filter((m) => m.type === 'error').length, 1, 'the error is reported once'); assert.equal(c.closed, true);
     assert.equal(assistantCount(c), 0, 'no reply, no fake reply'); assert.equal(mine(), n0, 'no duplicate request'); assert.equal(alerts.length, 0);
   } finally { failAfter = 0; care.concernAlert = orig; }
+});
+
+test('12 MAYA_SPECULATION unset = OFF: no guess request is ever made, every turn is written when the turn is confirmed (the speculation-off baseline)', async () => {
+  const keep = process.env.MAYA_SPECULATION; delete process.env.MAYA_SPECULATION;
+  try { const r = await turn(mk()); assert.equal(r.guesses, 0, 'no early request'); assert.equal(r.source, 'written-now'); assert.equal(r.aborted, 0, 'nothing to cancel'); assert.equal(r.total, 1, 'exactly one Spark request for the turn'); }
+  finally { process.env.MAYA_SPECULATION = keep; }
+});
+
+// ---- off-release review gates ----
+test('13 the switch is strictly "on": unset / off / OFF / true / 1 / empty / "on " all make ZERO early-guess requests and the turn is written normally', async () => {
+  const keep = process.env.MAYA_SPECULATION;
+  try {
+    for (const v of [undefined, 'off', 'OFF', 'true', '1', '', 'on ', 'yes']) {
+      if (v === undefined) delete process.env.MAYA_SPECULATION; else process.env.MAYA_SPECULATION = v;
+      const r = await turn(mk()); assert.equal(r.guesses, 0, `value ${JSON.stringify(v)}`); assert.equal(r.source, 'written-now'); assert.equal(r.total, 1);
+    }
+    process.env.MAYA_SPECULATION = 'on'; const on = await turn(mk()); assert.ok(on.guesses >= 1, 'on makes guesses');
+  } finally { process.env.MAYA_SPECULATION = keep; }
+});
+
+test('14 switched OFF while a guess is already in flight: the running guesses are cancelled and the turn is written normally (no reuse, one reply)', async () => {
+  const c = mk(); reqs = []; facts.length = 0; const id = 'sw';
+  c.onMeta({ type: 'speechStart', turnId: id }); c.onMeta({ type: 'transcript', turnId: id, transcript: 'how is the weather today' }); await sleep(450);
+  assert.ok(c.spec && c.spec.byLabel.size >= 1, 'guesses in flight');
+  process.env.MAYA_SPECULATION = 'off';
+  try {
+    c.onMeta({ type: 'speaker', turnId: id, label: 'A' }); c.onMeta({ type: 'speechEnd', turnId: id }); c.onMeta({ type: 'speechComplete', turnId: id, transcript: 'How is the weather today?' }); await sleep(300);
+    assert.equal(facts[facts.length - 1].source, 'written-now'); assert.equal(c.history.filter((m) => m.role === 'assistant').length, 1);
+    assert.ok(reqs.filter((r) => r.roster.includes(c.profile.name) && !/Write your short line/.test(r.last)).filter((r) => r.aborted).length >= 2, 'both running guesses were cancelled');
+  } finally { process.env.MAYA_SPECULATION = 'on'; }
+});
+
+test('15 guessNotes is PURE: no profile, care, history, consent or session change, including an EXPIRED pending-scam question that care.scamPending() would move to lostScam and save', async () => {
+  await live(async () => {
+    const smart = require('../smart'); const c = mk(); await warm(c); const id = c.profile.id;
+    const snap = () => JSON.stringify({ care: care.get(id), profile: memory.load(id), history: c.history, smart: c._smart || null, card: c._card || null, focus: c.focus, sched: c._sched, compact: c._compact, labels: c.factLabels, rec: c.userTurns, pc: c.pendingConcern, fd: c.familyDeclined, safety: c.safety, health: c.health });
+    const before = snap(); const g = smart.guessNotes(c, 'the garden looks lovely in spring'); assert.ok(g && g.labels.length === 3, 'ordinary talk is guessed'); assert.equal(snap(), before, 'a guess changed nothing');
+    // an expired pending-scam question: the guess must neither mutate it nor treat the turn as ordinary
+    care.get(id).pendingScam = { type: 'bank', at: 1, askedAt: 1, channel: 'spoken' };
+    const b2 = JSON.stringify(care.get(id)); assert.equal(smart.guessNotes(c, 'the garden looks lovely in spring'), null, 'scam context = not ordinary'); assert.equal(JSON.stringify(care.get(id)), b2, 'pendingScam NOT moved to lostScam by the guess');
+    assert.ok(care.get(id).pendingScam && !care.get(id).lostScam);
+    care.get(id).pendingScam = null;
+  });
+});
+
+test('16 a failed or incomplete state read is never reused, even when the guess and the final turn failed the SAME way (two matching UNKNOWN cards)', async () => {
+  await live(async () => {
+    const state = require('../state'); const realBuild = state.build;
+    try {
+      const c = mk(); await warm(c); state.build = () => { throw new Error('state unreadable'); };
+      let r = await turn(c); assert.equal(r.source, 'written-now', 'unreadable state: two identical UNKNOWN cards are still not reused');
+      const c2 = mk(); await warm(c2); state.build = (...a) => { const card = realBuild(...a); card.scope.complete = false; card.scope.errors.push('records'); return card; };
+      r = await turn(c2); assert.equal(r.source, 'written-now', 'an INCOMPLETE card is never reused');
+    } finally { state.build = realBuild; }
+  });
 });

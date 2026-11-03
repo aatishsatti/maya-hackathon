@@ -203,6 +203,33 @@ function ledger(s, heard) {
 // ---------------------------------------------------------------- the notes for one turn: [[label, text], ...]
 // The companion style fact (the ONLY fact on a routine smalltalk turn when no state flag is on). Exported so call.js can give a speculative guess the very same note (speculation reuse, call.js).
 const STYLE_NOTE = 'YOU ARE their friend, not a tool, not a menu and never a romantic partner. Respond to what they just said first, warmly, in short fresh words (begin differently from your last replies). A question is optional, never more than ONE: when something they said invites it, ask the small question a friend would (gardening: what they grow), about every second or third reply, and otherwise answer with a warm short remark. No interview.';
+const SHAPE_NOTE = 'REPLY SHAPE: at most two short sentences and at most ONE question, only when it helps (often none); say what you see, what you are unsure of, and one next step if there is one; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.';
+
+// The APP STATE card text WITHOUT side effects (appState() also stores s._card on the call): for a speculative guess only. Same builder, same renderer.
+function appStateText(s) {
+  const st_ = require('./state');
+  try { return st_.render(st_.build(s.profile.id, { channel: s.channel === 'chat' ? 'chat' : 'call' })); }
+  catch { return 'APP STATE: UNKNOWN (the app could not read it this turn). Say you cannot see their saved calls right now; never say they have none, and never say anything is saved or scheduled.'; }
+}
+// What notes() WOULD give an ordinary (smalltalk / follow-up) turn, built from the same constants and the same state builder, with NO side effects (no topic switch, no ledger, no social step, no s._card, no s._compact).
+// Returns { labels, text } (text = the notes joined exactly as careNotes joins them), or null when the partial is not ordinary talk (ability, reminder, health, scam, a call word, safety, a pending set-up): then nothing is guessed.
+// call.js reuses a guess ONLY if the final turn's own labels and text are identical to these, so a final turn never inherits older state.
+const CALL_WORD = /\b(?:call|ring|phone)\b/i;
+function guessNotes(s, heard) {
+  if (!any()) return { labels: [], text: '' };
+  if (s.safety || s.health || !s.profile || !s.profile.id) return null;
+  // intent() calls care.scamPending(), which MOVES an expired pending-scam question to lostScam and saves it (a consent-state write). A guess must never write, so any scam context at all (open or lost) is a read-only "not ordinary" here.
+  const pz = require('./care').get(s.profile.id);
+  if (!pz || pz.pendingScam || pz.lostScam) return null;
+  const it = intent(heard, s);
+  if (it !== 'smalltalk' && it !== 'followup') return null;
+  if (CALL_WORD.test(heard)) return null;
+  const out = [];
+  if (flag('COMPANION')) out.push(['smart-style', STYLE_NOTE]);
+  if (stateFlag('CARDS')) out.push(['smart-app-state', appStateText(s)]);
+  if (flag('CONTRACT')) out.push(['smart-shape', SHAPE_NOTE]);
+  return { labels: out.map((o) => o[0]), text: out.map((o) => o[1]).join(' ') };
+}
 function notes(s, heard) {
   const out = [];
   if (!any()) return out;
@@ -224,7 +251,7 @@ function notes(s, heard) {
   if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s, sched); if (c) out.push(['smart-app-state', c]); s._compact = Boolean(sched && c); }
   s._sched = Boolean(stateFlag('GUARD') && (sched || out.some(([l]) => /^social-/.test(l)) || (/\b(?:calls?|daily|ring)\b/i.test(heard) && (() => { try { return Boolean(care_().socialOf(s.profile.id)); } catch { return false; } })())));   // a SCHEDULING turn: the bounded-language check applies   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
-  if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and at most ONE question, only when it helps (often none); say what you see, what you are unsure of, and one next step if there is one; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
+  if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', SHAPE_NOTE]);
   if (flag('GENERAL') && it !== 'scam' && !s.safety) {
     const g = decideGeneral(heard, s._exec || {});
     if (g) out.push(['smart-decision-general', g.label === 'Checked' ? 'DECISION (made by the app): a web check ran. You may share what it returned as "what I found", never as proof, never "verified", "safe" or "guaranteed"; no diagnosis or medicine advice; they decide.' : `DECISION (made by the app): NOT SURE (${g.why}). You have NOT verified this. Say honestly that you cannot be sure, say a trusted source (their doctor or pharmacist, or the official site) is the place to confirm, and never say safe, verified, fine or guaranteed. No diagnosis or medicine advice; they decide.`]);
@@ -361,4 +388,4 @@ function fallback(s) {
     : 'I want to get this right. Could you tell me a little more about what you mean?';
 }
 
-module.exports = { STYLE_NOTE, stateFlag, STATE_LAYERS, appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
+module.exports = { STYLE_NOTE, SHAPE_NOTE, guessNotes, stateFlag, STATE_LAYERS, appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
