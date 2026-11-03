@@ -91,7 +91,11 @@ function build(id, ctx = {}) {
   const recs = Array.isArray(card.records) ? card.records : null;
   const social = recs ? recs.find((r) => r.type === 'daily-call') : null;
   card.consent = guard(card, 'consent', () => ({
-    callsRevoked: sm.noCalls ? { at: when(sm.noCalls.at, tz), source: sm.noCalls.source || 'chat', reason: sm.noCalls.reason || 'the senior asked Maya to stop calling', needs: 'a fresh yes from the senior before any call is scheduled again' } : null,
+    callsRevoked: sm.noCalls ? (() => {
+      const ev = [...(sm.stopEvents || [])].reverse().find((e) => e.type === 'stop');   // the bounded stop record (social.recordStopEvent); older stops have none
+      const prov = ev ? (ev.confirmation ? 'confirmed: they answered yes to the spoken question "' + String(ev.confirmation.question || '').slice(0, 120) + '"' : 'told Maya directly (the words named Maya)') : 'NO RECORD of what was said or whether they confirmed it';
+      return { at: when(sm.noCalls.at, tz), source: sm.noCalls.source || 'chat', reason: sm.noCalls.reason || 'the app marked the calls stopped', provenance: prov, hasRecord: Boolean(ev), needs: 'a fresh yes from the senior before any call is scheduled again' };
+    })() : null,
     callsRestored: sm.callsRestored ? { at: when(sm.callsRestored.at, tz), source: sm.callsRestored.source } : null,
     dailyCall: social ? { agreedAt: social.consentAt, scope: 'one daily call from Maya at the agreed time and zone', source: social.consent } : null,
   }));
@@ -142,7 +146,7 @@ function render(card) {
   const k = card.can;
   if (k.status !== 'unknown') L.push(`CAN: ${k.actions.join('; ')}. Maya schedules calls herself, the family is not required. LIMITS: daily call = every day, one time, ONE at a time; reminders = once, every N hours/days/weeks, one weekday each, max ${SCHEDULER.reminders.max} (${k.seniorRemindersUsed} used); no several-weekday pattern. Family: edits family-set records only, views senior-set ones (server refuses their change).${k.blocked.length ? ` BLOCKED: ${k.blocked.map((b) => `${b.action} (${b.why})`).join('; ')}.` : ''}`);
   const co = card.consent, cd = card.cooldown;
-  L.push(`CONSENT: ${co.status === 'unknown' ? 'unknown' : co.callsRevoked ? `calls STOPPED by the senior ${co.callsRevoked.at}, ${co.callsRevoked.needs}` : 'no stop-calls'}; ${co.dailyCall ? 'daily call agreed' : 'no daily-call agreement'}.${cd.status === 'unknown' ? ' OFFER COOLDOWN unknown.' : cd.offerDeclined ? ` OFFER COOLDOWN (separate, only limits Maya's own offers, never their request): declined ${cd.offerDeclined}.` : ''}`);
+  L.push(`CONSENT: ${co.status === 'unknown' ? 'unknown' : co.callsRevoked ? `calls STOPPED (marked ${co.callsRevoked.at}; ${co.callsRevoked.provenance}); ${co.callsRevoked.needs}. If asked why or when: ${co.callsRevoked.hasRecord ? 'say only what that record shows (the time is the marked time above)' : 'say exactly this and add no time, quote or blame: "The app shows your daily call was marked stopped. I may have misunderstood something you said about the other caller. I can\'t confirm that you meant to stop my calls."'}. Never say they told you to stop unless the record shows it` : 'no stop-calls'}; ${co.dailyCall ? 'daily call agreed' : 'no daily-call agreement'}.${cd.status === 'unknown' ? ' OFFER COOLDOWN unknown.' : cd.offerDeclined ? ` OFFER COOLDOWN (separate, only limits Maya's own offers, never their request): declined ${cd.offerDeclined}.` : ''}`);
   if (Array.isArray(card.records)) L.push(card.records.length ? `RECORDS (${card.records.length}): ${card.records.map(rec1).join(' | ')}.` : 'RECORDS: none saved (read OK).');
   else L.push(`RECORDS: UNKNOWN (${card.records.why}).`);
   if (Array.isArray(card.history)) { if (card.history.length) L.push(`CHANGES: ${card.history.slice(-4).map((h) => `[${h.ref}] ${h.what} ${h.reason} on ${h.at} by ${h.actor} via ${h.source}${h.time ? ` (was ${h.time})` : ''}`).join(' | ')}. A cancelled record was real: never say it was never agreed or never set up; it is not a refusal of future calls.`); }

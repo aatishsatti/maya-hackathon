@@ -130,11 +130,11 @@ const DUE = setrem.zonedEpoch(2026, 11, 6, 15, 0, TZ);
 test('4 stop calling me reaches the scheduler: the saved chat and a queued ring stop, and it is re-checked at dispatch; restoring needs an explicit yes to its own question', async () => {
   const id = senior(), s = sess(id), page = open(id); const r = arrange(id); assert.equal(r.dueAt, DUE);
   // (a) said in the conversation
-  const led = smart.ledger(s, 'please stop calling me'); assert.match(led, /CALLS REVOKED/);
+  const led = social.stopTurn(s, id, 'please stop calling me'); assert.match(led[1], /CALLS STOPPED/);
   assert.ok(r.social.revoked); assert.equal(r.dueAt, null); care.tick(DUE + 1000); assert.equal(care.outreaches.size, 0, 'nothing rings');
   // (b) already queued: a ring in the making comes down
   const id2 = senior(); open(id2); const r2 = arrange(id2); care.tick(DUE + 1000); const o = [...care.outreaches.values()].find((x) => x.profileId === id2); assert.ok(o && o.social, 'queued');
-  smart.ledger(sess(id2), 'do not call me'); assert.equal([...care.outreaches.values()].some((x) => x.profileId === id2), false, 'the queued ring is gone'); await sleep(30); assert.equal(sent.filter((x) => x.outreachId === o.id && x.type === 'incoming').length, 0);
+  social.stopTurn(sess(id2), id2, 'do not call me'); assert.equal([...care.outreaches.values()].some((x) => x.profileId === id2), false, 'the queued ring is gone'); await sleep(30); assert.equal(sent.filter((x) => x.outreachId === o.id && x.type === 'incoming').length, 0);
   // (c) revoked in the permission only (not through the ledger): rechecked at dispatch and again at ringing
   const id3 = senior(); open(id3); const r3 = arrange(id3); care.persistSmart(id3, { noCalls: { at: 1 } }); care.tick(DUE + 1000); assert.equal([...care.outreaches.values()].some((x) => x.profileId === id3), false, 'dispatch rechecks'); assert.equal(r3.dueAt, null);
   const id4 = senior(); open(id4); const r4 = arrange(id4); care.tick(DUE + 1000); care.persistSmart(id4, { noCalls: { at: 1 } }); await sleep(30);
@@ -208,7 +208,7 @@ test('7 + 8 + 9 declined, hung up, unanswered: one ring, no same-day chase, no f
   ({ id, r } = base()); care.tick(DUE + 1000); await sleep(15); const o2 = rings(id)[0]; const info = care.claim(id, o2.id); assert.equal(info.social, true); assert.equal(r.last.state, 'social_answered'); assert.equal(r.active, null);
   assert.ok(!care.reminderNoAck(id, r.id), 'nothing to acknowledge'); assert.equal(care.get(id).flags.length, 0); assert.deepEqual(whatsapp, []);
   // stopped after a decline: tomorrow does NOT happen
-  ({ id, r } = base()); care.tick(DUE + 1000); await sleep(15); care.decline(id, rings(id)[0].id); smart.ledger(sess(id), 'stop calling me'); assert.equal(r.dueAt, null);
+  ({ id, r } = base()); care.tick(DUE + 1000); await sleep(15); care.decline(id, rings(id)[0].id); social.stopTurn(sess(id), id, 'stop calling me'); assert.equal(r.dueAt, null);
   Object.assign(care.cfg, { ringMs: 30000, retryMinMs: 60000, retryMaxMs: 120000 });
 });
 

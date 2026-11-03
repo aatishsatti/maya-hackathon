@@ -189,12 +189,14 @@ function decideGeneral(heard, exec = {}) {
 // ---------------------------------------------------------------- the controls they can say out loud (COMPANION): a brushed-off topic (30 days, only her own raising of it), "stop calling me" (kept until THEY ask again, no expiry)
 const BRUSH = /\b(?:i (?:don'?t|do not) (?:want|wish) to (?:talk|discuss|speak) about|(?:let'?s|can we) (?:not talk about|drop|stop talking about)|drop it|not now|i'?d rather not|i would rather not|leave it)\b/i;
 const NOCALLS = /\b(?:stop calling me|don'?t (?:ever )?call me|do not call me|no more calls|never call me)\b/i;
+// Only an explicit permission lifts the stop at once (and it then ASKS about the restart). "Can you call me", "please call me", "call me at 1:26" are requests: they go to social.reconsent, which asks ONE question and needs a fresh yes.
+const CALLS_PERMISSION = /\b(?:you can|it'?s (?:ok|okay|fine) (?:to|for you to)|go ahead and|start) call(?:ing)? me\b|\bcall me again\b/i;
 const CALLS_BACK = /\b(?:you can|please|it'?s (?:ok|okay|fine) (?:to|for you to)|go ahead and|start) call(?:ing)? me\b|\bcall me again\b|\b(?:can|could|would) you (?:please )?call me\b|\bplease call me\b|\bcall me (?:tomorrow|later|at|every|daily)\b/i;
 function ledger(s, heard) {
   const care = require('./care'), id = s.profile && s.profile.id, p = id && care.get(id); if (!p) return null;
   const sm = p.smart || {}; const x = st(s); const prev = x.prevHeard; x.prevHeard = heard;
-  if (NOCALLS.test(heard)) { care.persistSmart(id, { noCalls: { at: Date.now(), source: 'chat', reason: 'the senior asked Maya to stop calling' } }); require('./social').onNoCalls(id); return 'CALLS REVOKED: they told you to stop calling them. Say kindly, in one short sentence, that you will not call them unless they ask you to again. Never offer, arrange or promise a call after this, until THEY ask for calls again. Do not change any reminder they set themselves.'; }
-  if (sm.noCalls && CALLS_BACK.test(heard)) { care.persistSmart(id, { noCalls: null, callsRestored: { at: Date.now(), source: 'chat: the senior asked for calls again' } }); const q = require('./social').onCallsBack(id); return q ? `CALLS RESTORED: they have asked for calls again. ${q}` : 'CALLS RESTORED: they have asked for calls again. You may offer to arrange one.'; }
+  // "stop calling me" is NOT handled here any more: who it is aimed at is decided in social.stopTurn (roleplay / third person change nothing, ambiguity gets one scoped question).
+  if (sm.noCalls && CALLS_PERMISSION.test(heard)) { care.persistSmart(id, { noCalls: null, callsRestored: { at: Date.now(), source: 'chat: the senior asked for calls again' } }); const q = require('./social').onCallsBack(id); return q ? `CALLS RESTORED: they have asked for calls again. ${q}` : 'CALLS RESTORED: they have asked for calls again. You may offer to arrange one.'; }
   if (BRUSH.test(heard) && (x.lastQ || prev)) { const w = contentWords(x.lastQ ? x.lastQ.t : prev); if (w.length >= 2) { care.persistSmart(id, { brush: [...(sm.brush || []).filter((b) => Date.now() - b.at < 30 * 86400000), { w, at: Date.now() }].slice(-6) }); return 'DROP IT: they do not want to talk about that. Say okay, lightly, and move on. Do not raise that topic yourself again; if THEY bring it up, talk about it normally.'; }
   }
   return null;
@@ -241,6 +243,7 @@ function notes(s, heard) {
   if (flag('ROUTER') && switched) out.push(['smart-switch', `TOPIC CHANGE: they have moved on from ${old} to ${it === 'smalltalk' ? 'something else' : it}. Answer what they just said first, and stay on it. Do not go back to ${old} unless they do${old === 'scam' ? '; the only exception is a family question that is still open, which you may repeat once, in one short sentence at the end' : ''}. (Any other FACT in this message still applies.)`]);
   if (it !== 'followup') x.topic = it;
   if (it !== 'scam' && switched && old === 'scam') { x.kind = null; x.incident = null; x.asked = []; x.known = {}; x.disclosed = false; }
+  if (flag('COMPANION') && s.profile && s.profile.id) { const sf = require('./social').stopTurn(s, s.profile.id, heard); if (sf) out.push(sf); }   // stop-calls targeting (provenance, scoped question)
   if (flag('COMPANION')) { const f = ledger(s, heard); if (f) out.push(['smart-ledger', f]); }
   if (flag('COMPANION') && (it === 'smalltalk' || it === 'followup') && !s.safety && !s.health) out.push(['smart-style', STYLE_NOTE]);
   if (flag('COMPANION') && (it === 'ability' || /\b(?:call|ring|phone)\b/i.test(heard))) out.push(['smart-calls', callsOk(s) ? 'CALLS: you can help ARRANGE a call from you when they ask (it is saved as a reminder). Arranging is not scheduled: say a call is scheduled ONLY when the RECORD below says reminder saved: yes.' : 'CALLS: do not offer or arrange a call from you (ringing them is not possible right now, or they told you to stop). If they ask, say so plainly and kindly.']);
@@ -380,6 +383,8 @@ function fallback(s) {
     if (tx && tx.pending && tx.proposed && tx.proposed.time && tx.proposed.start && /confirm/.test(tx.stage)) return `Just to check: shall I call you every day at ${tx.proposed.time}, starting ${tx.proposed.start}? Nothing is saved until you say yes.`;   // a real read-back of the proposal, so a yes can bind to what was actually said
     if (!c || !Array.isArray(c.records)) return "I can't see your saved calls right now, so I don't want to say anything wrong. Could you ask me again in a moment?";
     if (s._exec && s._exec.socialFailed) return 'That did not save, so nothing is set up yet. Would you like to try once more?';
+    const stopped = c && ((c.consent && c.consent.callsRevoked) || (Array.isArray(c.records) && c.records.some((r) => r.type === 'daily-call' && /^stopped/.test(String(r.status)))));
+    if (stopped) return 'Your daily call is still stopped, and I have not started it again. If you would like it back, tell me the time and I will ask you to confirm it first.';
     if (live) return `Your daily call is saved for ${live.time}. You can ask me to skip one, change the time or cancel it.`;
     return 'I do not have a daily call saved for you right now. I can set one up with you myself: what time would suit you?';
   }

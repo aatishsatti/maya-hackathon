@@ -201,8 +201,9 @@ test('COMPANION controls: a brushed-off topic is not raised by her for 30 days b
   c.lastHeard = () => 'my sister called me from Pune today'; c._q = 0; assert.equal(smart.breaks('How was the call with your sister in Pune?', c), null, 'they raised it themselves');
   c.lastHeard = () => 'ok'; c._q = 0; assert.equal(smart.breaks('What do you like to cook on Sundays?', c), null, 'other topics are free');
   const real = Date.now; const ago = 29 * 86400000; care.get(id).smart.brush[0].at = real() - ago; c._q = 0; assert.equal(smart.breaks('Is your sister coming to Pune soon?', c), 'brushed', 'still inside 30 days'); care.get(id).smart.brush[0].at = real() - 31 * 86400000; c._why = null; c._q = 0; assert.equal(smart.breaks('Is your sister coming to Pune soon?', c), null, 'after 30 days it is free again');
-  const d = session(); const did = d.profile.id; assert.match(d.careNotes('please stop calling me'), /CALLS REVOKED/); assert.equal(smart.callsOk(d), false);
+  const d = session(); const did = d.profile.id; assert.match(d.careNotes('please stop calling me'), /CALLS STOPPED/); assert.equal(smart.callsOk(d), false);
   care.get(did).smart.noCalls.at = real() - 400 * 86400000; assert.equal(smart.callsOk(d), false, 'no expiry, even a year on');
   assert.match(d.careNotes('can you tell me what you can do'), /do not offer or arrange a call/);
-  assert.match(d.careNotes('can you call me tomorrow'), /CALLS RESTORED/); assert.equal(Boolean(care.get(did).smart.noCalls), false); setAll(false);
+  d.careNotes('can you call me tomorrow'); assert.equal(Boolean(care.get(did).smart.noCalls), true, 'a request to call tomorrow is not a permission: the stop stands (social.reconsent asks one question)');
+  assert.match(d.careNotes('you can call me again'), /CALLS RESTORED/); assert.equal(Boolean(care.get(did).smart.noCalls), false); setAll(false);
 });

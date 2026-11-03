@@ -107,6 +107,20 @@ function decision(s, id, p, arr, offer, heard, now) {
 }
 // "Stop all calls" is a consent change: scheduling needs their fresh yes. A request for a daily call afterwards is ASKED about, and only a plain yes to that question lifts it.
 function reconsent(s, id, p, z, heard, now) {
+  const arr0 = care.socialOf(id);
+  if (D() && arr0 && arr0.revoked) {
+    const sl = slots(heard, p.tz || arr0.tz, now), timeGiven = Boolean(sl.time || (sl.ambiguous && sl.amb)), x = s._social || {};
+    if (timeGiven && !sl.negated && (ctxValid(x, now) || (z.reconsent && now - z.reconsent.at < OFFER_TTL_MS) || CALL_ASK.test(heard) || SELF_ASK.test(heard))) {
+      // a time while the call is STOPPED never restarts it by itself: ONE question covers the fresh consent, the restart, the exact time and the first day
+      if (!p.tz) return ['social-restore-blocked', 'Their daily call is STOPPED and their time zone is not known, so nothing can be restarted. Say plainly that it stays stopped, and ask which city or time zone they are in. Do not guess it.'];
+      let t = sl.time; if (!t) t = with24(sl.amb.h, sl.amb.mi, arr0.h < 12 ? 'am' : 'pm');
+      const np = nowParts(p.tz, now), todayStr = `${np.y}-${pad2(np.m)}-${pad2(np.d)}`;
+      const todayAt = setrem.zonedEpoch(np.y, np.m, np.d, t.h, t.mi, p.tz), passed = todayAt <= now + 60000;
+      const offer = { id: uid(), stage: 'restore', needAsk: true, mode: 'restore', reconsent: true, at: now, tz: p.tz, time: t, start: passed ? addDays(todayStr, 1) : todayStr, passed };
+      zput(id, { offer, reconsent: null });
+      return ['social-restore-ask', restoreAskFact(offer, p.tz)];
+    }
+  }
   const fresh = z.reconsent && now - z.reconsent.at < OFFER_TTL_MS;
   if (fresh && isYes(heard)) {
     care.persistSmart(id, { noCalls: null, callsRestored: { at: now, source: 'chat: yes to the fresh-consent question' } }); zput(id, { reconsent: null });
@@ -150,14 +164,85 @@ function onCallsBack(id, now = Date.now()) {
   return `They asked for calls again. They used to have a daily call from you at ${clockWords(arr.h, arr.mi)} (their time) that was stopped. It is NOT back on. Ask ONE yes/no question: do they want that daily call back at ${clockWords(arr.h, arr.mi)}? Only a plain yes to that question brings it back; say nothing is scheduled until then.`;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------
+// STOP-CALLS TARGETING (smart.notes runs this BEFORE the daily-call step, once per turn). Who a "stop calling me" is aimed at is decided here, in code:
+//   none      third-person, quoted or role-played speech (or a pretend talk): changes NOTHING, asks nothing
+//   direct    Maya is named, or "you" with no scam/pretend context: honoured at once, with a provenance record
+//   ambiguous anything else: ONE scoped question; only a fresh yes to THAT question (really spoken) authorizes the stop
+// Ending a conversation ("goodbye", "I have to go") is never a stop and never reaches this code.
+const STOP_PHRASE = /\b(?:stop calling me|don'?t (?:ever )?call me|do not call me|no more calls|never call me)\b/i;
+const MAYA_NAMED = /\bmaya\b/i;
+const MY_CALLS = /\b(?:my|your|the) daily (?:call|chat)s?\b|\bdaily calls?\b|\b(?:every ?day|regular) calls?\b|\b(?:stop|cancel|end) (?:calling|your calls|my calls)\b/i;
+const PLAY = /\b(?:pretend(?:ing)?|role-?play(?:ing)?|let'?s practi[cs]e|practi[cs]e (?:saying|with|how)|you be the|act (?:as|like)|imagine (?:you|he|she|they|a)|let'?s say)\b/i;
+const SCAMTALK = /\b(?:scam(?:mer|mers|s)?|fraud(?:ster|sters)?|phishing|con ?(?:man|artist)|the other (?:caller|person)|that (?:caller|man|woman|guy|lady|person)|password|pin number|social security|gift cards?|wire (?:the )?money|bank account|verification code|one[- ]time (?:code|password)|otp|credit card|how did you get my number|who is this|not (?:giving|telling|sending) you|the (?:bank|irs|police|government|microsoft|amazon) (?:called|says|said|is))\b/i;
+const THIRD_FRAME = /\b(?:i|we)\s+(?:said|told|say|tell|shouted|yelled|would say|will say)\b|\b(?:tell|told|say|said|shout|yell)\s+(?:to\s+)?(?:him|her|them|that \w+|the \w+)\b|\b(?:he|she|they|the (?:caller|man|guy|lady|woman|scammer|person)|someone|somebody)\s+(?:said|says|told|tells|asked|keeps?|kept)\b|["“”]/i;
+const recentText = (s) => (Array.isArray(s.history) ? s.history.slice(-6) : []).map((m) => String(m.content || '').replace(/\[\[[^\]]*\]\]/g, ' ')).join(' ');
+const aMeridiem = (h, mi) => `${h % 12 === 0 ? 12 : h % 12}:${pad2(mi)} ${h < 12 ? 'a.m.' : 'p.m.'}`;
+function stopClass(s, heard) {
+  const phrase = STOP_PHRASE.test(heard), cancel = CANCEL.test(heard);
+  if (!phrase && !cancel) return null;
+  const recent = recentText(s), named = MAYA_NAMED.test(heard) || (cancel && MY_CALLS.test(heard)) ;
+  const play = PLAY.test(heard) || PLAY.test(recent), frame = THIRD_FRAME.test(heard), scamCtx = SCAMTALK.test(heard) || SCAMTALK.test(recent) || Boolean(s._smart && s._smart.topic === 'scam');
+  const action = phrase ? 'revoke' : 'cancel';
+  if (!MAYA_NAMED.test(heard) && (frame || play)) return { kind: 'none', action };
+  if (named) return { kind: 'direct', action };
+  if (!scamCtx) return { kind: 'direct', action };   // bare words on a call with Maya and no scam / third-party context: aimed at her, honoured without a hurdle
+  return { kind: 'ambiguous', action };
+}
+const clip = (t, n) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, n);
+// A bounded, server-side record of why a stop (or a restart) happened. Transcriptions are speech-to-text of the audio, not guaranteed exact. Only the triggering words, two turns of context, the question and the answer are kept (never the whole conversation).
+function recordStopEvent(s, id, ev) {
+  const p = care.get(id); if (!p) return false;
+  const full = { id: uid(), kind: 'stop-calls-record', note: 'quoted text is a speech-to-text transcription, not guaranteed exact audio', at: ev.at || Date.now(), atIso: new Date(ev.at || Date.now()).toISOString(), tz: p.tz || null, channel: s.channel === 'chat' ? 'chat' : 'voice call', session: s.callId ? String(s.callId) : null, ...ev };
+  care.persistSmart(id, { stopEvents: [...(((p.smart || {}).stopEvents) || []), full].slice(-5) });
+  return full.id;
+}
+function applyStop(s, id, st, how, heard, now) {
+  const p = care.get(id), arr = care.socialOf(id), before = { noCalls: Boolean(p.smart && p.smart.noCalls), call: arr ? { status: arr.revoked ? 'stopped' : 'active', time: clockWords(arr.h, arr.mi), tz: arr.tz } : null };
+  const ctx = (Array.isArray(s.history) ? s.history.slice(-2) : []).map((m) => ({ role: m.role, transcription: clip(String(m.content || '').replace(/\[\[[^\]]*\]\]/g, ' '), 120) }));
+  let ok = false, afterNo = false, call2 = null;
+  try {
+    if (st.action === 'cancel') { care.socialCancel(id, { actor: 'senior', source: how === 'confirmed' ? 'chat: yes to the scoped stop question' : 'chat: direct request', reason: 'the senior asked to cancel the daily calls' }); zput(id, { offer: null }); ok = !care.socialOf(id); }
+    else { care.persistSmart(id, { noCalls: { at: now, source: s.channel === 'chat' ? 'chat' : 'voice call', reason: how === 'confirmed' ? 'the senior said yes to the question whether to stop Maya\'s calls' : 'the senior told Maya directly to stop calling' } }); onNoCalls(id); const q = care.get(id), r = care.socialOf(id); ok = Boolean(q.smart && q.smart.noCalls) && (!r || Boolean(r.revoked)); }
+    const q2 = care.get(id), r2 = care.socialOf(id); afterNo = Boolean(q2.smart && q2.smart.noCalls); call2 = r2 ? { status: r2.revoked ? 'stopped' : 'active', time: clockWords(r2.h, r2.mi) } : null;
+  } catch { ok = false; }
+  const evId = recordStopEvent(s, id, { type: 'stop', at: now, trigger: how === 'confirmed' ? 'scoped question answered yes' : 'directed at Maya', decision: how === 'confirmed' ? 'a fresh yes to the question that was actually spoken' : 'the words named Maya (or "you") with no scam or pretend context', action: st.action === 'cancel' ? 'cancel the daily call record' : 'stop the daily call and all new calls until they ask again',
+    scope: { affectedCall: arr ? { id: arr.id || null, time: clockWords(arr.h, arr.mi), tz: arr.tz } : null }, transcription: { text: clip(st.heard || heard, 200), context: ctx },
+    confirmation: how === 'confirmed' ? { question: st.question, askedAt: st.asked && st.asked.at, answer: { transcription: clip(heard, 160) }, answeredAt: now } : null, before, after: { noCalls: afterNo, call: call2 }, writeVerified: ok });
+  s._exec = s._exec || {}; if (!ok) s._exec.socialFailed = true;
+  if (!ok) return ['social-stop-failed', 'STOP NOT CONFIRMED: the app could not confirm that the calls were stopped. Say plainly that you could not confirm it went through and that you will check again if they ask. Do not say it is stopped.'];
+  return ['social-stopped', st.action === 'cancel' ? 'CANCELLED (verified in the app): the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.' : 'CALLS STOPPED (verified in the app): you will not call them unless they ask you to again. Say so kindly in one short sentence. Never offer, arrange or promise a call after this, until THEY ask for calls again. Do not change any reminder they set themselves.'];
+}
+function stopTurn(s, id, heard, now = Date.now()) {
+  heard = String(heard || '').replace(/\s+/g, ' ').trim(); if (!id || !heard) return null;
+  s._stopTurnRan = true;
+  const z = zget(id), sa = z.stopAsk;
+  if (sa && now - sa.at >= OFFER_TTL_MS) zput(id, { stopAsk: null });
+  else if (sa) {
+    if (!sa.asked) {   // the question was never put to them aloud: a yes binds to nothing
+      if (isYes(heard)) return ['social-stop-ask', `STOP-CALLS QUESTION (nothing is changed, and their yes did not answer anything yet because the question has not been put to them): ask exactly ONE yes/no question, in these words: "${sa.question}" Nothing changes unless they answer yes to that question.`];
+      zput(id, { stopAsk: null });
+    } else if (isYes(heard) && !STOP_PHRASE.test(heard)) { zput(id, { stopAsk: null }); return applyStop(s, id, sa, 'confirmed', heard, now); }
+    else { zput(id, { stopAsk: null }); if (DECLINE.test(heard) || isDecline(heard)) return ['social-stop-kept', 'They do NOT want the calls stopped. Nothing was changed. Say in one short, warm sentence that you will keep the call as it is.']; }
+  }
+  const st = stopClass(s, heard); if (!st || st.kind === 'none') return null;
+  if (st.action === 'cancel' && !care.socialOf(id)) return null;   // nothing to cancel: the ordinary path answers
+  if (st.kind === 'direct') return applyStop(s, id, st, 'direct', heard, now);
+  const arr = care.socialOf(id), question = arr && !arr.revoked ? `Do you mean you want me, Maya, to stop your daily ${aMeridiem(arr.h, arr.mi)} call?` : 'Do you mean you want me, Maya, to stop calling you?';
+  zput(id, { stopAsk: { id: uid(), at: now, asked: null, action: st.action, question, heard: clip(heard, 200), h: arr && !arr.revoked ? arr.h : null, mi: arr && !arr.revoked ? arr.mi : null, tz: arr ? arr.tz : (care.get(id).tz || null) } });
+  return ['social-stop-ask', `STOP-CALLS QUESTION (nothing is changed): what they just said may have been about someone else (a caller, or a pretend talk), not about you. Do NOT stop, cancel or change anything. Ask exactly ONE yes/no question, in these words: "${question}" Add nothing else about stopping. Nothing changes unless they answer yes to that question.`];
+}
+
 // ---- spoken times (DECISION): a voice transcript says "5.10 am", "five ten", "ten past five", "a.m.". setrem.readTime reads "5.10 am" as 10 am, so spoken forms are turned into "5:10 am" first.
 const HW = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const MW = { 'oh five': 5, 'zero five': 5, ten: 10, fifteen: 15, twenty: 20, 'twenty five': 25, 'twenty-five': 25, thirty: 30, 'thirty five': 35, 'thirty-five': 35, forty: 40, 'forty five': 45, 'forty-five': 45, fifty: 50, 'fifty five': 55, 'fifty-five': 55 };
 for (const [w, d] of Object.entries({ one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9 })) for (const z of ['oh', 'zero', 'o']) MW[`${z} ${w}`] = d;   // "six oh six", "six zero six", "six o six" are 6:06
+for (const [tw, tv] of Object.entries({ twenty: 20, thirty: 30, forty: 40, fifty: 50 })) for (const [uw, uv] of Object.entries({ one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9 })) { MW[`${tw} ${uw}`] = tv + uv; MW[`${tw}-${uw}`] = tv + uv; }   // "one twenty six" is 1:26
 const HWRE = Object.keys(HW).join('|'), MWRE = Object.keys(MW).sort((a, b) => b.length - a.length).join('|');
 function normSpeech(text) {
   let t = String(text || '').replace(/\b([ap])\.\s?m\b\.?/gi, '$1m').replace(/\b(\d{1,2})\.(\d{2})\b(?!\s?(?:%|dollars?|pounds?|rupees?))/g, '$1:$2');
   t = t.replace(/\b(1[0-2]|[1-9])\s*(?:oh|o|zero)\s*([1-9])\b/gi, (_, h, d) => `${h}:0${d}`);   // "6 oh 6"
+  t = t.replace(/\b(1[0-2]|[1-9])\s+([0-5]\d)\s*(am|pm)\b/gi, (_, h, m, ap) => `${h}:${m} ${ap}`);   // "1 26 PM" (a transcript that dropped the colon): readTime would read hour 26 (or 1:00 for "at 1 26 PM")
   if (t.trim().split(/\s+/).length <= 6) t = t.replace(/(?<![\d:.])\b(1[0-2]|[1-9])([0-5]\d)\b(?![\d:.])/g, (_, h, m) => `${h}:${m}`);   // "606", "1005" said as a clock time (only inside the daily-call flow)
   t = t.replace(new RegExp(`\\b(half|quarter) past (${HWRE})\\b`, 'gi'), (_, q, h) => `${HW[h.toLowerCase()]}:${q.toLowerCase() === 'half' ? '30' : '15'}`);
   t = t.replace(new RegExp(`\\bquarter to (${HWRE})\\b`, 'gi'), (_, h) => `${((HW[h.toLowerCase()] + 10) % 12) + 1}:45`);
@@ -194,7 +279,9 @@ function askFact(offer, extra = '') {
   const missing = [!offer.time && NEED.time, !offer.start && NEED.start].filter(Boolean);
   return `SOCIAL CALL (not arranged yet, nothing is saved): they are open to a daily call from you. Still needed: ${missing.join('; and ')}. Ask for it in ONE plain question (a clarifying question is fine, an interview is not). Do not say it is scheduled, arranged or booked.${extra ? ` ${extra}` : ''}`;
 }
-const restoreAskFact = (offer, tz) => `SOCIAL CALL, RESTART (nothing is restarted yet): their daily call was STOPPED. Say that, and ask ONE yes/no question that covers the restart and the exact time: should the stopped daily call START AGAIN at ${clockWords(offer.time.h, offer.time.mi)}, their local time (${tz})? It only restarts if they answer yes to that question.`;
+const restoreAskFact = (offer, tz) => offer.reconsent
+  ? `SOCIAL CALL, RESTART WITH FRESH CONSENT (nothing is restarted yet): their daily call is STOPPED because calls were stopped earlier. Say plainly that it is still stopped and stays stopped until they say yes. ${offer.passed ? `That time (${clockWords(offer.time.h, offer.time.mi)}) has already passed today, so the first call would be ${dateWords(offer.start)}. ` : ''}Ask ONE yes/no question that covers all of it: should I START CALLING YOU AGAIN every day at ${clockWords(offer.time.h, offer.time.mi)}, their local time (${tz}), starting ${dateWords(offer.start)}? Only a yes to that question restarts it; a time alone is not a yes.`
+  : `SOCIAL CALL, RESTART (nothing is restarted yet): their daily call was STOPPED. Say that, and ask ONE yes/no question that covers the restart and the exact time: should the stopped daily call START AGAIN at ${clockWords(offer.time.h, offer.time.mi)}, their local time (${tz})? It only restarts if they answer yes to that question.`;
 const confirmFact = (offer, tz, extra = '') => `SOCIAL CALL, CONFIRM (nothing is saved yet): ask ONE yes/no question that says all of it: a call from you EVERY DAY, starting ${dateWords(offer.start)}, at ${clockWords(offer.time.h, offer.time.mi)}, in their own local time (${tz}). Do not say it is scheduled, arranged or booked: it is only saved if they answer yes to this question.${extra ? ` ${extra}` : ''}`;
 const confirmChangeFact = (offer, tz, extra = '') => `SOCIAL CALL, CHANGE OF TIME (nothing is changed yet, the call stays at its OLD time until they say yes): say the COMPLETE new time aloud, with am or pm, and ask ONE yes/no question: should the daily call move to ${clockWords(offer.time.h, offer.time.mi)}, their local time (${tz})? ${offer.inferred ? 'You assumed am or pm to match their current call, so say it clearly so they can correct it. ' : ''}It only changes if they answer yes to that question. If they give another time, that new time REPLACES this one and you ask again.${extra ? ` ${extra}` : ''}`;
 
@@ -230,7 +317,11 @@ function stepCore(s, heard, ctx = {}, now = Date.now()) {
   // a stale or impossible offer is rejected HERE, in code: a new-call offer while a call exists, a change offer with nothing to change, or one older than its time
   if (D() && offer && ((offer.mode === 'new' && arr && !arr.revoked) || (offer.mode === 'change' && (!arr || arr.revoked)))) offer = null;
   if (z.offer && !offer) zput(id, { offer: null });
-  if (noCalls) { if (offer) zput(id, { offer: null }); return D() ? reconsent(s, id, p, z, heard, now) : null; }
+  if (noCalls) {
+    if (D() && offer && offer.stage === 'restore' && offer.reconsent && arr && arr.revoked) return advance(s, id, p, offer, heard, now);   // the restart question that also asks for the fresh consent
+    if (offer) zput(id, { offer: null });
+    return D() ? reconsent(s, id, p, z, heard, now) : null;
+  }
   if (D() && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard)) && !CANCEL.test(heard) && !SKIP.test(heard) && !READBACK.test(heard)) { const f = decision(s, id, p, arr, offer, heard, now); if (f) return f; }
 
   if (D() && !READBACK.test(heard)) { const q = questionReadback(p, arr, offer, heard, now, x); if (q) return q; }
@@ -243,7 +334,7 @@ function stepCore(s, heard, ctx = {}, now = Date.now()) {
 
   // ---- the controls on a saved daily call: skip today, change the time, cancel the daily calls
   if (arr && !arr.revoked && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard))) {
-    if (CANCEL.test(heard)) { care.socialCancel(id, { actor: 'senior', source: 'chat', reason: 'the senior asked to cancel the daily calls' }); zput(id, { offer: null }); return ['social-cancel', 'CANCELLED: the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.']; }
+    if (CANCEL.test(heard) && !s._stopTurnRan) { care.socialCancel(id, { actor: 'senior', source: 'chat', reason: 'the senior asked to cancel the daily calls' }); zput(id, { offer: null }); return ['social-cancel', 'CANCELLED: the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.']; }
     if (SKIP.test(heard)) {
       const r = care.socialSkipToday(id, now);
       if (r && r.skipped) return ['social-skip', `SKIPPED: today's call is skipped. Tomorrow's daily call is still on at ${clockWords(arr.h, arr.mi)}. Say so in one short sentence.`];
@@ -300,13 +391,20 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
       if (yes && !offer.asked) { offer.at = now; zput(id, { offer }); return ['social-restore-ask', `${restoreAskFact(offer, tz)} (They said yes, but this exact question has not been put to them yet, so nothing is restarted: ask it now.)`]; }
     }
     if (yes) {
+      const oldNo = offer.reconsent ? (care.get(id).smart || {}).noCalls || null : null;
       try {
+        if (offer.reconsent) { if (!offer.asked) throw new Error('The restart question was not put to them yet.'); care.persistSmart(id, { noCalls: null, callsRestored: { at: now, source: 'spoken yes to the restart question', offerId: offer.id } }); }
         const r = care.socialRestore(id, now);
         if (D() && offer.time && r && (offer.time.h !== r.h || offer.time.mi !== r.mi)) care.socialChangeTime(id, offer.time, now);
         const rec = D() ? care.socialOf(id) : r;
         if (D() && !(rec && !rec.revoked && (!offer.time || (rec.h === offer.time.h && rec.mi === offer.time.mi)))) throw new Error('The restarted call could not be read back, so it is not confirmed.');
+        if (offer.reconsent) {   // the first day is read back from storage too: a restart that cannot be seen on the right day is not reported
+          const pz = care.get(id), v = care.socialView(pz, pz.reminders.find((q) => q.social));
+          if (!(v && v.next && care.localDate(v.next, rec.tz) === offer.start)) throw new Error('The restarted call could not be read back on the day we agreed, so it is not confirmed.');
+          recordStopEvent(s, id, { type: 'restart', at: now, decision: 'fresh spoken yes to the restart question', question: offer.askedText || null, answer: { transcription: String(heard).slice(0, 160) }, restart: { time: clockWords(offer.time.h, offer.time.mi), start: offer.start, tz: offer.tz }, writeVerified: true });
+        }
         s._exec = s._exec || {}; s._exec.social = true; zput(id, { offer: null, lastSave: { at: now, ok: true, op: 'restore', offerId: offer.id, rid: rec && rec.id || null } }); return ['social-restored', `RESTORED: the daily call is back on at ${clockWords(rec.h, rec.mi)} each day. Say so in one short sentence, and that they can skip a day, change the time or cancel whenever they like.`]; }
-      catch (e) { zput(id, { offer: null, lastSave: { at: now, ok: false, op: 'restore', offerId: offer.id, error: String(e.message || '').slice(0, 100) } }); s._exec = s._exec || {}; s._exec.socialFailed = true; return ['social-failed', `NOT RESTORED: ${e.message} Tell them plainly that it is not back on. Do not say scheduled or arranged.`]; }
+      catch (e) { if (oldNo) { care.persistSmart(id, { noCalls: oldNo, callsRestored: null }); try { const pq = care.get(id), rq = pq.reminders.find((q) => q.social); if (rq && !rq.social.revoked) care.socialRevoke(id); } catch { /* the stop stands */ } } zput(id, { offer: null, lastSave: { at: now, ok: false, op: 'restore', offerId: offer.id, error: String(e.message || '').slice(0, 100) } }); s._exec = s._exec || {}; s._exec.socialFailed = true; return ['social-failed', `NOT RESTORED: ${e.message} Tell them plainly that it is not back on and that it stays stopped. Do not say scheduled or arranged.`]; }
     }
     if (isDecline(heard)) { zput(id, { offer: null }); return ['social-declined', 'They do not want the daily call back. Accept it in one short, friendly sentence.']; }
     return null;
@@ -432,16 +530,24 @@ function timesIn(text) { const out = [], re = /\b(\d{1,2})(?::(\d{2}))?\s?(am|pm
 function markAsked(id, text, now = Date.now()) {
   const z = zget(id), o = z.offer; if (!o || !(o.stage === 'confirm' || (o.stage === 'restore' && o.needAsk)) || o.asked || !o.time || !/\?/.test(text)) return;
   const ok = timesIn(String(text)).some((t) => t.h % 12 === o.time.h % 12 && t.mi === o.time.mi && (!t.ap || (t.ap === 'am') === (o.time.h < 12)));
-  if (ok) zput(id, { offer: { ...o, asked: { at: now } } });
+  if (ok) zput(id, { offer: { ...o, asked: { at: now }, askedText: String(text).slice(0, 200) } });
+}
+// The scoped stop question counts as ASKED only when the spoken words really put it (they name the daily call time or stopping calls, as a question).
+function markStopAsked(id, text, now = Date.now()) {
+  const za = zget(id).stopAsk; if (!za || za.asked || !/\?/.test(text)) return;
+  const named = za.h != null ? timesIn(String(text)).some((t) => t.h % 12 === za.h % 12 && t.mi === za.mi) : /\bcalling you\b|\bstop (?:your|my|the)\b/i.test(text);
+  if (named && /\bstop/i.test(text)) zput(id, { stopAsk: { ...za, asked: { at: now, said: String(text).slice(0, 200) } } });
 }
 // The confirm question is OWED when this turn's fact asked for one, the proposal is complete and Spark's words did not put it (a vague "Got that, 6:05", or a wrong draft replaced by a plain line that named nothing):
 // code then says the exact read-back itself, once, with the complete time. A yes binds to THIS, never to a proposal nobody heard.
 function owedReadback(s) {
   if (!D()) return null;
   const id = s.profile && s.profile.id; if (!id) return null;
+  const za = zget(id).stopAsk; if (za && !za.asked && (s.factLabels || []).includes('social-stop-ask')) return za.question;   // the scoped stop question, in code, when Spark's words did not put it
   const o = zget(id).offer;
   if (!o || !(o.stage === 'confirm' || (o.stage === 'restore' && o.needAsk)) || o.asked || !o.time) return null;
   if (!(s.factLabels || []).some((l) => /^social-(?:confirm|decide-ambiguous|restore-ask)/.test(l))) return null;
+  if (o.mode === 'restore' && o.reconsent) return `Just to check: your daily call is stopped. Shall I start calling you again every day at ${clockWords(o.time.h, o.time.mi)}, starting ${dateWords(o.start)}? It stays stopped until you say yes.`;
   if (o.mode === 'restore') return `Just to check: your daily call is stopped. Shall I start it again at ${clockWords(o.time.h, o.time.mi)}? It stays stopped until you say yes.`;
   if (o.mode === 'change') return `Just to check: shall I move your daily call to ${clockWords(o.time.h, o.time.mi)}? It stays as it is until you say yes.`;
   if (o.mode === 'new' && o.start) return `Just to check: shall I call you every day at ${clockWords(o.time.h, o.time.mi)}, starting ${dateWords(o.start)}? Nothing is saved until you say yes.`;
@@ -450,8 +556,9 @@ function owedReadback(s) {
 function noteSpoken(s, text) {
   const id = s.profile && s.profile.id; if (!id) return;
   if (D()) markAsked(id, text);
+  markStopAsked(id, text);
   if (!claimBlocked(text, s)) return;
   zput(id, { misled: Date.now() });
 }
 
-module.exports = { owedReadback, markAsked, normSpeech, isDecline, confirmsProposal, step, claims, onNoCalls, onCallsBack, claimsScheduled, claimBlocked, noteSpoken, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };
+module.exports = { stopTurn, stopClass, recordStopEvent, owedReadback, markAsked, normSpeech, isDecline, confirmsProposal, step, claims, onNoCalls, onCallsBack, claimsScheduled, claimBlocked, noteSpoken, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };

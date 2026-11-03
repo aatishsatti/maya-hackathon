@@ -90,9 +90,9 @@ test('6 revoking the family link: the signed session may still verify, but acces
 });
 
 test('7 senior B\'s card is built only after the action authorised by B\'s own session: a stop-all-calls by A leaves B untouched', () => {
-  smart.ledger(sess(A), 'please stop calling me');
+  require('../social').stopTurn(sess(A), A, 'please stop calling me');
   assert.ok(care.get(A).smart.noCalls); assert.equal(care.get(B).smart.noCalls || null, null);
-  assert.match(state.render(state.build(A)), /calls STOPPED by the senior/); assert.doesNotMatch(state.render(state.build(B)), /calls STOPPED/);
+  assert.match(state.render(state.build(A)), /calls STOPPED \(marked/); assert.doesNotMatch(state.render(state.build(B)), /calls STOPPED/);
   assert.equal(care.socialOf(B).revoked, false);
 });
 

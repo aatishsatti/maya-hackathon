@@ -111,7 +111,7 @@ test('9 "yes perfect" binds to the exact pending operation: a change question do
 
 test('10 stop all calls is a consent change: a later request is ASKED about, only a plain yes lifts it and then schedules; a cancelled schedule is not that', () => {
   const id = senior(), s = sess(id);
-  smart.ledger(s, 'please stop calling me'); assert.ok(care.get(id).smart.noCalls); assert.equal(care.get(id).smart.noCalls.source, 'chat');
+  social.stopTurn(s, id, 'please stop calling me'); assert.ok(care.get(id).smart.noCalls); assert.match(care.get(id).smart.noCalls.source, /chat|voice call/);
   let r = say(s, 'set up a daily call for me'); assert.equal(r[0], 'social-decide-revoked'); assert.match(r[1], /yes\/no question/); assert.equal(recs(id).length, 0);
   assert.equal(say(s, 'maybe'), null); assert.equal(recs(id).length, 0);
   r = say(s, 'yes please'); assert.equal(r[0], 'social-ask'); assert.equal(care.get(id).smart.noCalls, null); assert.ok(care.get(id).smart.callsRestored);
