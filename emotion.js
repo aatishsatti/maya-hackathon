@@ -4,10 +4,8 @@
 // said, falls back to neutral defaults on anything invalid or missing, and only ever returns the
 // small set of knobs below. Spark cannot pass any API parameter through it.
 //
-// Delivery on eleven_v4_turbo is wording, punctuation, sentence length and audio tags only.
-// The v4 family ignores speed and style (ElevenLabs v4 docs), so nothing here touches voice
-// settings: stability, similarity, speaker boost and speed stay identical on every request,
-// which keeps one consistent voice across all emotions.
+// Delivery on Meta MMS TTS is wording, punctuation, and sentence length only (no voice tone audio tags).
+// Voice settings stay identical on every request, which keeps one consistent voice across all emotions.
 const EMOTIONS = ['neutral', 'happy', 'excited', 'sad', 'lonely', 'grief', 'anxious', 'frustrated', 'angry', 'crisis', 'unclear'];
 const INTENTS = ['share', 'ask', 'request', 'chat', 'ack', 'farewell', 'story', 'recall', 'check', 'unclear'];
 const HEARTFELT = new Set(['sad', 'lonely', 'grief']);   // heavy feelings: soft wording, no exclamations, no cheer straight after

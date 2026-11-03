@@ -244,27 +244,28 @@ test('Fix 1.1 GUARD: (1) callback unconfirmed kind blocks assertion and allows q
   assert.match(said2, /You did tell me earlier that you like ginger and lemon tea since college/);
   assert.doesNotMatch(said2, /added the ginger part myself|I guessed/i);
 
-  // Also verify fallback when both drafts fail on true-record challenge ("I added it myself" then "I guessed that one")
+  // Also verify challenge retry when first two drafts fail on true-record challenge: code supplies fact+constraint for Spark to write in her own words (never a hard-coded challenge sentence) and rewrite passes GUARD
   queue.length = 0;
   queue.push(
     `${FEEL} You're right, I added the ginger part myself.`,
     `${FEEL} Sorry, I guessed that one.`,
+    `${FEEL} You did mention to me earlier that you like ginger and lemon tea since college, and I was only asking from that note.`,
   );
   const r2b = await chat.sendText(id, 'i never told you i liked ginger tea', 'America/New_York');
   const said2b = r2b.messages[r2b.messages.length - 1].text;
-  assert.match(said2b, /You did tell me earlier.*likes ginger and lemon tea since college/);
+  assert.match(said2b, /You did mention to me earlier that you like ginger and lemon tea since college/);
   assert.doesNotMatch(said2b, /added|guessed/i);
 
-  // (3) Challenge turn with NO record: false-memory claim is blocked; Maya honestly says she does not remember that
+  // (3) Challenge turn with NO record: false-memory claim and hard denial ("you never told me") are blocked; Maya honestly says she has no note of that
   queue.length = 0;
   queue.push(
     `${FEEL} You told me last week that you love chamomile tea.`,
-    `${FEEL} I don't remember you telling me that, and I don't have a note of it.`,
+    `${FEEL} I don't have a note of that, and I can't think of it right now.`,
   );
   const r3 = await chat.sendText(id, 'i never told you i liked chamomile tea', 'America/New_York');
   const said3 = r3.messages[r3.messages.length - 1].text;
-  assert.match(said3, /I don't remember you telling me that/);
-  assert.doesNotMatch(said3, /You told me last week/);
+  assert.match(said3, /I don't have a note of that/);
+  assert.doesNotMatch(said3, /You told me last week|you never told me/i);
 
   // (4) Direct tell turn (senior says fact herself): acknowledgement passes with no spontaneous callback and no denial
   queue.length = 0;
@@ -272,6 +273,38 @@ test('Fix 1.1 GUARD: (1) callback unconfirmed kind blocks assertion and allows q
   const r4 = await chat.sendText(id, 'I am having my ginger and lemon tea right now.', 'America/New_York');
   const said4 = r4.messages[r4.messages.length - 1].text;
   assert.match(said4, /Ginger and lemon tea is such a lovely choice/);
+
+  // (5) Fix 1.2: Later-turn assertion after callbackUsed is already true is blocked, and challenge with new kind ("ginger tea who told you I had ginger tea I had cinnamon tea") rewrites to scoped correction
+  queue.length = 0;
+  queue.push(
+    `${FEEL} Ginger tea with a friend hits just right.`,
+    `${FEEL} What kind of tea did you two have today — I remember you like ginger and lemon tea?`,
+  );
+  const r5 = await chat.sendText(id, 'and we had some tea', 'America/New_York');
+  const said5 = r5.messages[r5.messages.length - 1].text;
+  assert.match(said5, /What kind of tea did you two have today/);
+  assert.doesNotMatch(said5, /Ginger tea with a friend hits just right/);
+
+  queue.length = 0;
+  queue.push(
+    `${FEEL} You're right, my mistake - it was cinnamon tea. I don't remember you telling me about ginger tea.`,
+    `${FEEL} My mistake for assuming today was ginger — you did tell me earlier you like ginger and lemon tea since college, and cinnamon tea today sounds lovely.`,
+  );
+  const r6 = await chat.sendText(id, 'ginger tea who told you I had ginger tea I had cinnamon tea', 'America/New_York');
+  const said6 = r6.messages[r6.messages.length - 1].text;
+  assert.match(said6, /you did tell me earlier you like ginger and lemon tea since college, and cinnamon tea today sounds lovely/);
+  assert.doesNotMatch(said6, /I don't remember you telling me about ginger tea/);
+
+  // (6) Fix 1.2: Changed preference ("I don't like ginger tea anymore") blocks promise to forget/update and accepts current preference in conversation
+  queue.length = 0;
+  queue.push(
+    `${FEEL} I've updated my notes and removed ginger tea from your profile.`,
+    `${FEEL} Tastes change over time — cinnamon tea sounds like a wonderful choice whenever you feel like a cup.`,
+  );
+  const r7 = await chat.sendText(id, "I don't like ginger tea anymore", 'America/New_York');
+  const said7 = r7.messages[r7.messages.length - 1].text;
+  assert.match(said7, /Tastes change over time/);
+  assert.doesNotMatch(said7, /updated my notes|removed ginger tea/i);
 
   setAll(false);
 });

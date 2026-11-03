@@ -33,10 +33,6 @@ services:
         value: /var/data/media
       - key: META_API_KEY
         sync: false
-      - key: ELEVENLABS_API_KEY
-        sync: false
-      - key: ELEVENLABS_VOICE_ID
-        sync: false
       - key: WHATSAPP_TOKEN
         sync: false
       - key: WHATSAPP_APP_SECRET

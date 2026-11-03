@@ -255,11 +255,25 @@ function notes(s, heard) {
   if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s, sched); if (c) out.push(['smart-app-state', c]); s._compact = Boolean(sched && c); }
   s._sched = Boolean(stateFlag('GUARD') && (sched || out.some(([l]) => /^social-/.test(l)) || (/\b(?:calls?|daily|ring)\b/i.test(heard) && (() => { try { return Boolean(care_().socialOf(s.profile.id)); } catch { return false; } })())));   // a SCHEDULING turn: the bounded-language check applies   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
   if ((flag('GUARD') || stateFlag('GUARD')) && s.profile && s.profile.memory) {
-    const ch = require('./recall').challengeFact(s.profile.memory, heard, '', { ownerName: s.profile.name, lastCallback: s._lastCallback });
+    const R = require('./recall');
+    const ch = R.challengeFact(s.profile.memory, heard, '', { ownerName: s.profile.name, profileId: s.profile.id, lastCallback: s._lastCallback });
     s._challenge = ch;
-    if (ch) out.push(['smart-challenge', ch.status === 'recorded'
-      ? `MEMORY CHALLENGE (true senior-told record; fact: ${ch.fact}): they are challenging how you know this or saying they never told you. Stand by the record calmly and kindly in your own words: say they did tell you earlier and state only the record fact (${ch.fact}), while clarifying you were asking rather than assuming about today. NEVER say you added it yourself, guessed, or made it up.`
-      : 'MEMORY CHALLENGE (no record in their profile): they are challenging something that is NOT in your notes of what they told you. Say honestly and plainly in your own words that you do not remember them telling you that; NEVER claim they told you earlier and NEVER claim you remembered it.']);
+    const cp = !ch ? R.changedPreference(s.profile.memory, heard, { ownerName: s.profile.name }) : null;
+    s._changedPref = cp;
+    if (cp) {
+      s._changedPrefs = s._changedPrefs || new Set();
+      for (const w of (cp.specific.length ? cp.specific : cp.words)) s._changedPrefs.add(w);
+      out.push(['smart-changed-pref', `PREFERENCE CHANGE IN CONVERSATION (topic: ${cp.topic}): they just told you their preference has changed. Accept what they like or do not like now warmly in your own words; do NOT override them with an older preference in this conversation, and NEVER promise or claim to forget, delete, or update your saved notes.`]);
+    }
+    if (ch) {
+      if (ch.status === 'recorded') {
+        out.push(['smart-challenge', ch.challengeKind === 'event'
+          ? `MEMORY CHALLENGE (true senior-told record; challenge kind: event; remembered preference fact: ${ch.fact}; unsupported inference today: ${ch.topic}${ch.newToday ? `; current kind today: ${ch.newToday}` : ''}): give a SCOPED correction in your own words, never total denial and never arguing. Acknowledge the inference error about today (you did not know today's was ${ch.topic}), stand by the genuine preference record they told you earlier (${ch.fact})${ch.newToday ? `, and warmly accept ${ch.newToday} for today` : ''}. NEVER say you do not remember them telling you about ${ch.topic}, NEVER say you added it yourself, guessed, or made it up, and do NOT argue with them.`
+          : `MEMORY CHALLENGE (true senior-told record; challenge kind: preference; fact: ${ch.fact}): they are challenging how you know this or saying they never told you. Stand by the record calmly and kindly in your own words: say they did tell you earlier and state only the record fact (${ch.fact}), while clarifying you were asking rather than assuming about today. NEVER say you do not remember them telling you, NEVER say you added it yourself, guessed, or made it up, and do NOT argue with them.`]);
+      } else {
+        out.push(['smart-challenge', 'MEMORY CHALLENGE (no record in their profile): no eligible senior-told record substantiates this, which means your notes cannot confirm it (NOT proof they never said it). Say honestly and plainly in your own words that you do not have a note of that or cannot think of it right now; NEVER claim they told you earlier and NEVER claim you remembered it, and NEVER say "you never told me" or make a hard denial of their history.']);
+      }
+    }
   }
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
   if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', SHAPE_NOTE]);
@@ -339,6 +353,19 @@ const CLAIM = [
 ];
 const CHALLENGE_DENIAL_RE = /\b(?:i|maya)\s+(?:just\s+|only\s+)?(?:added|guessed|invented|made\s+(?:that\s+|it\s+)?up|filled\s+in|assumed|imagined)\b|\badded\s+the\s+\w+\s+part\s+myself\b|\bmade\s+(?:that|it)\s+up\s+myself\b|\b(?:just|only)\s+a\s+guess\b|\byou(?:'re|\s+are)\s+right\b[^.?!]{0,50}\b(?:you\s+(?:just|only|never|didn'?t)|i\s+(?:added|guessed|made|assumed|don'?t))\b|\byou\s+(?:never|didn'?t|did\s+not)\s+(?:tell|say|mention)\b|\bi\s+(?:don'?t|do\s+not|have\s+no)\s+(?:have\s+(?:a|any)\s+)?(?:record|note|memory)\b|\bi\s+(?:don'?t|do\s+not)\s+remember\s+you\s+(?:telling|saying|mentioning)\b/i;
 const CHALLENGE_CLAIM_RE = /\byou\s+(?:did\s+)?(?:tell|told|mention\w*|said\s+to|shared\s+with)\s+me\b|\byou\s+mentioned\s+(?:it|that|this|earlier|before|last\s+time)\b|\bi\s+(?:do\s+)?remember\s+(?:you\s+)?(?:telling|saying|mentioning|that)\b|\b(?:in|from)\s+my\s+notes?\b|\bmy\s+notes?\s+(?:say|show|have)\b|\bfrom\s+what\s+you\s+(?:told|shared\s+with)\s+me\b/i;
+const CHALLENGE_HARD_DENIAL_RE = /\byou\s+(?:never|didn'?t|did\s+not)\s+(?:ever\s+)?(?:tell|told|say|said|mention\w*|share\w*)\s+(?:me|that)\b|\byou\s+never\s+(?:said|told|mentioned)\b/i;
+const FORGET_PROMISE_RE = /\b(?:i(?:'ll|\s+will|\s+have|'ve|\s+can)?\s+(?:update|updated|change|changed|delete|deleted|remove|removed|erase|erased|forget|forgotten|clear|cleared|cross\s+out)\s+(?:that|it|my\s+note\w*|your\s+note\w*|my\s+memory|your\s+profile|that\s+from\s+my\s+notes?)|i\s+won'?t\s+remember\s+that\s+anymore|updated\s+my\s+notes?)\b/i;
+
+function challengeRetryNote(s) {
+  const ch = s && (s._challenge || (s.focus && s.focus.challenge));
+  if (ch && ch.status === 'recorded' && ch.fact) {
+    return ch.challengeKind === 'event'
+      ? `MEMORY CHALLENGE REWRITE (true senior-told record; challenge kind: event; remembered preference fact: ${ch.fact}; unsupported inference today: ${ch.topic}${ch.newToday ? `; current kind today: ${ch.newToday}` : ''}): write a short scoped correction in your own words. Acknowledge you did not know today's was ${ch.topic}, stand by the genuine preference record they told you earlier (${ch.fact})${ch.newToday ? `, and warmly accept ${ch.newToday} for today` : ''}. NEVER say you do not remember them telling you about ${ch.topic}, NEVER say you added it yourself or guessed, and do NOT argue with them.`
+      : `MEMORY CHALLENGE REWRITE (true senior-told record; challenge kind: preference; fact: ${ch.fact}): write a short calm response in your own words standing by the record (${ch.fact}) and clarifying you were asking rather than assuming about today. NEVER say you do not remember them telling you, NEVER say you added it yourself or guessed, and do NOT argue with them.`;
+  }
+  return 'MEMORY CHALLENGE REWRITE (no record in their profile): write one short sentence in your own words saying honestly that you do not have a note of that or cannot think of it right now. NEVER claim they told you earlier or that you remembered it, and NEVER say "you never told me".';
+}
+
 // Returns a reason string when the draft must be written again, else null. rec = s._exec (what really ran); known = the text the facts and the senior gave (a link or number must already be in it).
 function breaks(text, s) {
   const t = String(text || '').replace(/’/g, "'"); s._guardWhy = null; s._challengeWhy = null;
@@ -359,30 +386,81 @@ function breaks(text, s) {
   }
   if (flag('COMPANION') && require('./social').claimBlocked(t, s)) { s._why = 'nothing is saved: do not say the call is scheduled, arranged, noted or booked. Say what is still needed, or that it was not saved'; return 'claim'; }
   if (flag('GUARD') || stateFlag('GUARD')) {
-    const cb = s && s.focus && s.focus.callback && !s.focus.callback.confirmed ? s.focus.callback : null;
-    if (cb && Array.isArray(cb.unmentioned) && cb.unmentioned.length) {
-      const wSet = new Set(require('./recall').words(t));
-      if (cb.unmentioned.some((w) => wSet.has(w)) && !/\?/.test(t)) {
-        s._why = `they have not confirmed the kind in this turn: ask ONE short question referencing the liked fact (${cb.fact}) instead of asserting it`;
-        return 'callback-assert';
+    const R = require('./recall');
+    const heardNow = s && s.lastHeard ? s.lastHeard() : '';
+    const ch = (s && (s._challenge || (s.focus && s.focus.challenge))) || (s && s.profile && s.profile.memory && heardNow ? R.challengeFact(s.profile.memory, heardNow, '', { ownerName: s.profile.name, profileId: s.profile.id, lastCallback: s._lastCallback }) : null);
+    const cp = !ch ? ((s && (s._changedPref || (s.focus && s.focus.changedPref))) || (s && s.profile && s.profile.memory && heardNow ? R.changedPreference(s.profile.memory, heardNow, { ownerName: s.profile.name }) : null)) : null;
+    if (cp) {
+      if (FORGET_PROMISE_RE.test(t)) {
+        s._why = 'do NOT promise or claim to forget, delete, or update your saved notes or memory: simply accept their current preference in this conversation';
+        return 'changed-pref-promise';
+      }
+      if (cp.topic && new RegExp(`\\b(?:but\\s+|actually\\s+)?you\\s+(?:still\\s+|really\\s+|do\\s+|always\\s+)?(?:like|love|enjoy|prefer)\\b[^.?!]*\\b${cp.topic}\\b`, 'i').test(t) && !/\b(?:used\s+to|don'?t|do\s+not|no\s+longer)\b/i.test(t)) {
+        s._why = `do NOT override their current preference with an older note: accept that they do not want or like ${cp.topic} now`;
+        return 'changed-pref-override';
       }
     }
-    const ch = (s && (s._challenge || (s.focus && s.focus.challenge))) || (s && s.profile && s.profile.memory && s.lastHeard ? require('./recall').challengeFact(s.profile.memory, s.lastHeard(), '', { ownerName: s.profile.name, lastCallback: s._lastCallback }) : null);
+    if (!ch && !cp && !(s && s.focus && s.focus.full)) {
+      const unconfirmed = [];
+      if (s && s.focus && s.focus.callback && !s.focus.callback.confirmed) unconfirmed.push(s.focus.callback);
+      if (s && s.profile && s.profile.memory && heardNow) {
+        for (const uf of R.unconfirmedFacts(s.profile.memory, heardNow, '', { ownerName: s.profile.name, changed: s._changedPrefs })) {
+          if (!unconfirmed.some((x) => x.fact === uf.fact)) unconfirmed.push(uf);
+        }
+      }
+      if (unconfirmed.length) {
+        const wSet = new Set(R.words(t));
+        for (const uf of unconfirmed) {
+          const hitWords = (uf.unmentioned || []).filter((w) => wSet.has(w));
+          if (!hitWords.length) continue;
+          const w0 = hitWords[0];
+          if (!/\?/.test(t)) {
+            s._why = `they have not confirmed ${w0} in this turn: do NOT assert it; ask ONE short non-leading question about what kind they had/did today and reference their past preference (${uf.fact}) separately`;
+            return 'callback-assert';
+          }
+          const leadingYesNo = new RegExp(`\\b(?:did\\s+you(?:\\s+two|\\s+both)?\\s+(?:have|drink|make|eat|get)|was\\s+(?:it|that|today'?s)|were\\s+you(?:\\s+two|\\s+both)?\\s+(?:having|drinking|making))\\b[^?]*\\b${w0}\\b`, 'i').test(t)
+            && !/\b(?:what|which)\s+(?:kind|sort|type|one|tea|coffee|chocolate|drink)\b/i.test(t);
+          const separatesPref = /\b(?:what|which)\b/i.test(t) || /\b(?:like|liked|love|loved|enjoy\w*|prefer\w*|remember\w*|told|mentioned|since|usual|favourite|favorite)\b/i.test(t);
+          if (leadingYesNo || !separatesPref) {
+            s._why = `do not ask a leading question assuming today was ${w0}: separate past preference from today's event by asking what kind they had today and referencing their past preference (${uf.fact}) separately`;
+            return 'callback-assert';
+          }
+        }
+      }
+    }
     if (ch) {
       const sents = t.split(/(?<=[.!?])\s+/);
       if (ch.status === 'recorded') {
-        const denied = sents.some((x) => CHALLENGE_DENIAL_RE.test(x) && !/\b(?:didn'?t|did\s+not|never|not)\s+(?:just\s+)?(?:add|added|guess|guessed|make|made|invent|invented|assume|assumed)\b/i.test(x));
+        const denied = sents.some((x) => (CHALLENGE_DENIAL_RE.test(x) && !/\b(?:didn'?t|did\s+not|never|not)\s+(?:just\s+)?(?:add|added|guess|guessed|make|made|invent|invented|assume|assumed)\b/i.test(x))
+          || (/\byou(?:'re|\s+are)\s+right,\s*my\s+mistake\b/i.test(x) && !/\b(?:told|mentioned|said|remember|note|like\w*|love\w*|prefer\w*)\b/i.test(t)));
         if (denied) {
-          s._why = `that fact is in their record (${ch.fact}): stand by the record and say they did tell you earlier with the record fact; never say you added it yourself, guessed, or made it up`;
+          s._why = ch.challengeKind === 'event'
+            ? `give a scoped correction: acknowledge you did not know today's was ${ch.topic}, stand by the genuine preference record (${ch.fact})${ch.newToday ? `, and accept ${ch.newToday} today` : ''}; never say you do not remember them telling you about ${ch.topic} or that you guessed/added it yourself`
+            : `that fact is in their record (${ch.fact}): stand by the record and say they did tell you earlier with the record fact; never say you added it yourself, guessed, or made it up`;
           s._challengeWhy = 'recorded'; s._challenge = ch;
           return 'challenge-denial';
+        }
+        if (ch.challengeKind === 'event' && ch.topic) {
+          const argued = sents.some((x) => new RegExp(`\\byou\\s+(?:did\\s+)?(?:say|said|tell\\s+me|told\\s+me)\\s+(?:that\\s+)?(?:you|we)\\s+(?:had|drank|were\\s+having)\\s+[^.?!]*\\b${ch.topic}\\b`, 'i').test(x)
+            && !/\b(?:like\w*|love\w*|prefer\w*|enjoy\w*|earlier|before|college|yesterday)\b/i.test(x));
+          if (argued) {
+            s._why = `do NOT argue that they had ${ch.topic} today: acknowledge you did not know what kind they had today, stand by the preference record (${ch.fact})${ch.newToday ? `, and accept ${ch.newToday} today` : ''}`;
+            s._challengeWhy = 'recorded'; s._challenge = ch;
+            return 'challenge-argue';
+          }
         }
       } else if (ch.status === 'unrecorded') {
         const claimed = sents.some((x) => CHALLENGE_CLAIM_RE.test(x) && !/\b(?:no|not|never|don'?t|do\s+not|didn'?t|did\s+not|haven'?t|have\s+not|cannot|can'?t|nothing)\b/i.test(x));
         if (claimed) {
-          s._why = 'that fact is NOT in their record: say honestly that you do not remember them telling you that, and never claim they told you earlier or that you remembered it';
+          s._why = 'that fact is NOT in their record: say honestly that you do not have a note of that or cannot think of it right now, and never claim they told you earlier or that you remembered it';
           s._challengeWhy = 'unrecorded'; s._challenge = ch;
           return 'challenge-unrecorded';
+        }
+        const hardDenied = sents.some((x) => CHALLENGE_HARD_DENIAL_RE.test(x));
+        if (hardDenied) {
+          s._why = 'do NOT say "you never told me" or make a hard denial of their history: say honestly that you do not have a note of that or cannot think of it right now';
+          s._challengeWhy = 'unrecorded'; s._challenge = ch;
+          return 'challenge-hard-denial';
         }
       }
     }
@@ -408,11 +486,6 @@ function breaks(text, s) {
 function fallback(s) {
   const x = st(s);
   if (s._voiceSearch) { s._voiceSearch = false; return "I'm not able to look things up while we're talking, so I haven't checked that. I can tell you what I know, or you could ask your family, your doctor or your pharmacist."; }   // voice has no lookup: a plain true line, never a claim of one
-  if (s._challengeWhy) {
-    const why = s._challengeWhy, ch = s._challenge; s._challengeWhy = null;
-    if (why === 'recorded' && ch && ch.text) return `You did tell me earlier — my note from what you shared with me says: ${ch.text}. I was only asking from what you told me before.`;
-    return "I don't remember you telling me that, and I don't have a note of it.";
-  }
   if (/abilities/.test(s._why || '')) return ABILITY_FALLBACK;
   if (s.profile && s.profile.id && s._exec && (s._exec.socialFailed || s._exec.socialUnknown)) {   // from the app's own write result, whatever the blocked draft said; never "nothing changed" unless the record was read, never a new confirmation
     let rec = null, readable = true; try { rec = require('./care').socialOf(s.profile.id); } catch { readable = false; }
@@ -438,4 +511,4 @@ function fallback(s) {
     : 'I want to get this right. Could you tell me a little more about what you mean?';
 }
 
-module.exports = { STYLE_NOTE, SHAPE_NOTE, guessNotes, stateFlag, STATE_LAYERS, appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, kindOf, KINDS, CAN, QUESTIONS };
+module.exports = { STYLE_NOTE, SHAPE_NOTE, guessNotes, stateFlag, STATE_LAYERS, appState, ledger, abilityFact, callsOk, any, wantsAll, ABILITY_SHORT, decideGeneral, afterReply, threadLine, attributedToOther, trace, flag, intent, notes, decide, nextQuestion, breaks, fallback, challengeRetryNote, kindOf, KINDS, CAN, QUESTIONS };

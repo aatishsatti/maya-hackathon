@@ -147,11 +147,6 @@ body[data-page='home'] .home, body[data-page='chat'] .chat-page, body[data-page=
 .file-name { font-size: 17px; font-weight: 500; line-height: 1.3; overflow-wrap: anywhere; }
 .voice-fail { margin: 4px 6px 0; font-size: 13px; color: var(--alert); }
 .notice { margin: 8px 4px; padding: 10px 14px; border-radius: 14px; background: #fff; border: 1px solid var(--edge); color: var(--alert); font-size: 15px; }
-.msg .sources { margin: 2px 6px 0; max-width: 100%; }
-.msg .eye { min-width: 44px; min-height: 44px; font-size: 22px; line-height: 1; background: transparent; border: 1.5px solid var(--line); border-radius: 22px; }
-.msg .source-list { margin-top: 6px; }
-.msg .source { display: flex; flex-direction: column; margin-bottom: 8px; font-size: 14px; color: var(--soft); }
-.msg .source-title { font-weight: 600; }
 .busy, .mode-note, .voice-rule { flex: none; margin: 4px 16px; text-align: center; font-size: 15px; color: var(--soft); }
 
 /* the box at the bottom */

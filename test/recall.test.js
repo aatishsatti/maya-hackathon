@@ -231,9 +231,10 @@ test('callbackFact (4): second callback in same conversation -> blocked; reset o
 
   call.setFocus('I am making a cup of tea right now.');
   assert.ok(call.focus.callback, 'first matching turn in conversation gets callback');
-  assert.equal(call.callbackUsed, true);
   const note1 = memory.profileNote(profile, call.tz, call.focus);
   assert.match(note1, /RELEVANT MEMORY CALLBACK.*topic match: tea.*ginger and lemon tea since college/);
+  call.commitReminder('What kind of tea did you make, since I remember you like ginger and lemon tea?');
+  assert.equal(call.callbackUsed, true);
 
   call.setFocus('I might also have some coffee or chocolate later.');
   assert.equal(call.focus.callback, null, 'second callback in same call conversation is blocked');
@@ -244,6 +245,7 @@ test('callbackFact (4): second callback in same conversation -> blocked; reset o
   assert.equal(chat1.callbackUsed, false, 'new conversation starts with callbackUsed = false');
   chat1.setFocus('I am thinking about having some coffee.');
   assert.ok(chat1.focus.callback, 'eligible once in new chat conversation');
+  chat1.commitReminder('What kind of coffee are you thinking of, since you enjoy iced coffee?');
   assert.equal(chat1.callbackUsed, true);
   chat1.setFocus('And maybe some tea after.');
   assert.equal(chat1.focus.callback, null, 'second callback in same chat conversation is blocked');
@@ -315,9 +317,9 @@ test('Fix 1.1 (1): callback note instructs question form (not assertion) when ki
   assert.equal(call.focus.callback.ask, true);
   assert.ok(call.focus.callback.unmentioned.includes('ginger'));
   const note = memory.profileNote(profile, call.tz, call.focus);
-  assert.match(note, /question instruction: ask a question referencing this fact, do NOT assert it/);
+  assert.match(note, /question instruction: ask a non-leading question referencing this fact, do NOT assert it/);
   assert.match(note, /they have NOT confirmed the specific kind or detail in this turn, so do NOT assert or assume/);
-  assert.match(note, /ask ONE short question in your own words referencing the liked fact instead of asserting it/);
+  assert.match(note, /Separate past preference from today's event/);
 
   const confirmedFocus = { text: 'We had some ginger tea.', full: false, thread: '', callback: { ...call.focus.callback, confirmed: true, ask: false } };
   const confirmedNote = memory.profileNote(profile, call.tz, confirmedFocus);
@@ -334,8 +336,8 @@ test('Fix 1.1 (2 & 3): challengeFact distinguishes true senior-told record vs no
   assert.match(rec.fact, /Mathew: likes ginger and lemon tea since college; told 2026-10-18/);
   assert.equal(R.callbackFact(CB_MEM, 'i never told you i had ginger tea', TODAY, { ownerName: 'Mathew' }), null, 'no spontaneous callback on a challenge turn');
   const recNote = memory.profileNote(profile, 'America/New_York', { text: 'i never told you i had ginger tea', full: false, thread: '', callback: null, challenge: rec });
-  assert.match(recNote, /MEMORY CHALLENGE \(true senior-told record; fact: Mathew: likes ginger and lemon tea since college; told 2026-10-18\)/);
-  assert.match(recNote, /Stand by the record.*NEVER say you added it yourself, guessed, or made it up/);
+  assert.match(recNote, /MEMORY CHALLENGE \(true senior-told record;.*Mathew: likes ginger and lemon tea since college; told 2026-10-18/);
+  assert.match(recNote, /NEVER say you added it yourself, guessed, or made it up/);
 
   const unrec = R.challengeFact(CB_MEM, 'i never told you i had chamomile tea', TODAY, { ownerName: 'Mathew' });
   assert.ok(unrec);
@@ -343,7 +345,7 @@ test('Fix 1.1 (2 & 3): challengeFact distinguishes true senior-told record vs no
   assert.equal(unrec.fact, '');
   const unrecNote = memory.profileNote(profile, 'America/New_York', { text: 'i never told you i had chamomile tea', full: false, thread: '', callback: null, challenge: unrec });
   assert.match(unrecNote, /MEMORY CHALLENGE \(no record in their profile\)/);
-  assert.match(unrecNote, /Say honestly and plainly in your own words that you do not remember them telling you that; NEVER claim they told you earlier/);
+  assert.match(unrecNote, /Say honestly and plainly in your own words that you do not have a note of that or cannot think of it right now/);
 
   const famOnly = {
     people: [], events: [], current: [], topics: [], threads: [],
@@ -372,4 +374,258 @@ test('Fix 1.1 (4): direct tell turn (senior says fact herself) -> acknowledgemen
   assert.doesNotMatch(note, /RELEVANT MEMORY CALLBACK/);
   assert.doesNotMatch(note, /MEMORY CHALLENGE/);
 });
+
+test('Fix 1.2 (1): later-turn assertion after callbackUsed is blocked; leading question is blocked; non-leading question passes', () => {
+  const smart = require('../smart');
+  const { Call } = require('../call');
+  const prevGuard = process.env.MAYA_SMART_GUARD;
+  process.env.MAYA_SMART_GUARD = 'on';
+  try {
+    const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+    const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+    clearInterval(call.endTimer);
+    call.profile = profile;
+    call.tz = 'America/New_York';
+    call.callbackUsed = true; // callback already used earlier in this conversation
+
+    call.setFocus('and we had some tea');
+    assert.equal(call.focus.callback, null, 'callback not re-selected after callbackUsed = true');
+    assert.equal(smart.breaks('Ginger tea with a friend hits just right.', call), 'callback-assert', 'assertion on later turn without callback active is blocked');
+    assert.equal(smart.breaks('Did you two have ginger tea again together?', call), 'callback-assert', 'leading question assuming today was ginger is blocked');
+    assert.equal(smart.breaks('What kind of tea did you two have today — I remember you like ginger and lemon tea?', call), null, 'non-leading question separating past preference from today passes');
+  } finally {
+    if (prevGuard === undefined) delete process.env.MAYA_SMART_GUARD;
+    else process.env.MAYA_SMART_GUARD = prevGuard;
+  }
+});
+
+test('Fix 1.2 (2): challenge with new kind ("ginger tea who told you I had ginger tea I had cinnamon tea") returns recorded for ginger, GUARD blocks denial, rewrite gives scoped correction', () => {
+  const smart = require('../smart');
+  const { Call } = require('../call');
+  const prevGuard = process.env.MAYA_SMART_GUARD;
+  process.env.MAYA_SMART_GUARD = 'on';
+  try {
+    const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+    const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+    clearInterval(call.endTimer);
+    call.profile = profile;
+    call.tz = 'America/New_York';
+
+    const heard = 'ginger tea who told you I had ginger tea I had cinnamon tea';
+    const ch = R.challengeFact(CB_MEM, heard, TODAY, { ownerName: 'Mathew', profileId: 'fbde4db7' });
+    assert.ok(ch);
+    assert.equal(ch.status, 'recorded');
+    assert.equal(ch.challengeKind, 'event');
+    assert.equal(ch.topic, 'ginger');
+    assert.equal(ch.newToday, 'cinnamon');
+    assert.match(ch.fact, /Mathew: likes ginger and lemon tea since college; told 2026-10-18/);
+
+    call.setFocus(heard);
+    assert.equal(
+      smart.breaks("You're right, my mistake - it was cinnamon tea. I don't remember you telling me about ginger tea.", call),
+      'challenge-denial',
+      'GUARD blocks denial of recorded ginger tea preference',
+    );
+    const retryNote = smart.challengeRetryNote(call);
+    assert.match(retryNote, /remembered preference fact: Mathew: likes ginger and lemon tea since college; told 2026-10-18/);
+    assert.match(retryNote, /current kind today: cinnamon/);
+    const scopedRewrite = 'My mistake for assuming today was ginger — I only asked because you told me earlier you like ginger and lemon tea since college, and cinnamon tea today sounds lovely.';
+    assert.equal(smart.breaks(scopedRewrite, call), null, 'scoped correction acknowledging today inference, standing by ginger preference, and accepting cinnamon today passes GUARD');
+  } finally {
+    if (prevGuard === undefined) delete process.env.MAYA_SMART_GUARD;
+    else process.env.MAYA_SMART_GUARD = prevGuard;
+  }
+});
+
+test('Fix 1.2 (3): preference challenge vs event challenge: preference dispute stands by record; event dispute acknowledges today inference error without denying preference record and blocks arguing', () => {
+  const memory = require('../memory');
+  const smart = require('../smart');
+  const { Call } = require('../call');
+  const prevGuard = process.env.MAYA_SMART_GUARD;
+  process.env.MAYA_SMART_GUARD = 'on';
+  try {
+    const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+    const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+    clearInterval(call.endTimer);
+    call.profile = profile;
+    call.tz = 'America/New_York';
+
+    // Preference dispute ("i never told you i like ginger tea") -> challengeKind: 'preference'
+    const prefCh = R.challengeFact(CB_MEM, 'i never told you i like ginger tea', TODAY, { ownerName: 'Mathew', profileId: 'fbde4db7' });
+    assert.ok(prefCh);
+    assert.equal(prefCh.status, 'recorded');
+    assert.equal(prefCh.challengeKind, 'preference');
+    call.setFocus('i never told you i like ginger tea');
+    const prefNote = memory.profileNote(profile, call.tz, call.focus);
+    assert.match(prefNote, /challenge kind: preference; fact: Mathew: likes ginger and lemon tea since college; told 2026-10-18/);
+    assert.equal(smart.breaks('I guessed that one, sorry.', call), 'challenge-denial');
+    assert.equal(smart.breaks('You did tell me earlier that you like ginger and lemon tea since college, and I was only asking from that note.', call), null);
+
+    // Event dispute ("i never told you i had ginger tea today") -> challengeKind: 'event'
+    const evCh = R.challengeFact(CB_MEM, 'i never told you i had ginger tea today', TODAY, { ownerName: 'Mathew', profileId: 'fbde4db7' });
+    assert.ok(evCh);
+    assert.equal(evCh.status, 'recorded');
+    assert.equal(evCh.challengeKind, 'event');
+    call.setFocus('i never told you i had ginger tea today');
+    const evNote = memory.profileNote(profile, call.tz, call.focus);
+    assert.match(evNote, /challenge kind: event; remembered preference fact: Mathew: likes ginger and lemon tea since college; told 2026-10-18/);
+    assert.equal(smart.breaks("I don't remember you telling me about ginger tea.", call), 'challenge-denial', 'denying preference record is blocked');
+    assert.equal(smart.breaks('You did say that you had ginger tea today.', call), 'challenge-argue', 'arguing that they had ginger today is blocked');
+    assert.equal(smart.breaks('I did not know what kind of tea you had today — I only remembered you told me earlier that you like ginger and lemon tea since college.', call), null, 'scoped correction passes');
+  } finally {
+    if (prevGuard === undefined) delete process.env.MAYA_SMART_GUARD;
+    else process.env.MAYA_SMART_GUARD = prevGuard;
+  }
+});
+
+test('Fix 1.2 (4): no-record challenge blocks false-memory claim and hard denial ("you never told me"), allows honest "I don\'t have a note of that / I can\'t think of it right now"', () => {
+  const smart = require('../smart');
+  const { Call } = require('../call');
+  const prevGuard = process.env.MAYA_SMART_GUARD;
+  process.env.MAYA_SMART_GUARD = 'on';
+  try {
+    const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+    const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+    clearInterval(call.endTimer);
+    call.profile = profile;
+    call.tz = 'America/New_York';
+
+    const unrec = R.challengeFact(CB_MEM, 'how do you know i like hibiscus tea', TODAY, { ownerName: 'Mathew', profileId: 'fbde4db7' });
+    assert.ok(unrec);
+    assert.equal(unrec.status, 'unrecorded');
+
+    call.setFocus('how do you know i like hibiscus tea');
+    assert.equal(smart.breaks('You told me earlier that you love hibiscus tea.', call), 'challenge-unrecorded', 'false memory claim is blocked');
+    assert.equal(smart.breaks('You never told me that.', call), 'challenge-hard-denial', 'hard denial of senior history ("you never told me") is blocked');
+    assert.equal(smart.breaks("I don't have a note of that and I can't think of it right now.", call), null, 'honest unsubstantiated wording passes');
+  } finally {
+    if (prevGuard === undefined) delete process.env.MAYA_SMART_GUARD;
+    else process.env.MAYA_SMART_GUARD = prevGuard;
+  }
+});
+
+test('Fix 1.2 (5): bare challenge ("How do you know that?") resolves ONLY against last delivered callback in this conversation, not any convenient memory, not family-only fact, not another senior record, not after intervening topic', () => {
+  const { Call } = require('../call');
+  const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+
+  // Without a delivered callback -> unrecorded (does NOT retrieve any convenient memory from CB_MEM)
+  const noPrior = R.challengeFact(CB_MEM, 'How do you know that?', TODAY, { ownerName: 'Mathew', profileId: 'fbde4db7', lastCallback: null });
+  assert.ok(noPrior);
+  assert.equal(noPrior.status, 'unrecorded');
+
+  // Selected but NOT delivered callback -> unrecorded
+  const undelivered = R.challengeFact(CB_MEM, 'How do you know that?', TODAY, {
+    ownerName: 'Mathew',
+    profileId: 'fbde4db7',
+    lastCallback: { topic: 'tea', who: 'Mathew', text: 'likes ginger and lemon tea since college', told: '2026-10-18', fact: 'Mathew: likes ginger and lemon tea since college; told 2026-10-18', delivered: false, fresh: true, profileId: 'fbde4db7' },
+  });
+  assert.equal(undelivered.status, 'unrecorded');
+
+  // Another senior's record -> unrecorded
+  const otherSenior = R.challengeFact(CB_MEM, 'How do you know that?', TODAY, {
+    ownerName: 'Mathew',
+    profileId: 'fbde4db7',
+    lastCallback: { topic: 'tea', who: 'Other', text: 'likes ginger and lemon tea since college', told: '2026-10-18', fact: 'Other: likes ginger and lemon tea since college; told 2026-10-18', delivered: true, fresh: true, profileId: 'other-id' },
+  });
+  assert.equal(otherSenior.status, 'unrecorded');
+
+  // Family-only fact -> unrecorded
+  const famLast = R.challengeFact(CB_MEM, 'How do you know that?', TODAY, {
+    ownerName: 'Mathew',
+    profileId: 'fbde4db7',
+    lastCallback: { topic: 'tea', who: 'Mathew', text: 'likes ginger and lemon tea since college', by: 'family', told: '2026-10-18', fact: 'Mathew: likes ginger and lemon tea since college; told 2026-10-18', delivered: true, fresh: true, profileId: 'fbde4db7' },
+  });
+  assert.equal(famLast.status, 'unrecorded');
+
+  // Delivered callback in this conversation -> recorded; after an unrelated intervening turn -> unrecorded
+  const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+  clearInterval(call.endTimer);
+  call.profile = profile;
+  call.tz = 'America/New_York';
+  call.setFocus('We had some tea.');
+  call.commitReminder('What kind of tea did you have today, since I remember you like ginger and lemon tea?');
+  call.setFocus('How do you know that?');
+  assert.ok(call.focus.challenge);
+  assert.equal(call.focus.challenge.status, 'recorded');
+  assert.match(call.focus.challenge.fact, /likes ginger and lemon tea since college/);
+
+  // Intervening unrelated turn clears freshness of lastCallback for bare challenges
+  call.setFocus('The weather is sunny.');
+  call.commitReminder('A sunny afternoon sounds lovely.');
+  call.setFocus('How do you know that?');
+  assert.ok(call.focus.challenge);
+  assert.equal(call.focus.challenge.status, 'unrecorded', 'intervening unrelated topic prevents bare challenge from binding to stale callback');
+});
+
+test('Fix 1.2 (6): changed preference ("I don\'t like ginger tea anymore") is accepted in conversation, older preference does not override it, and no promise to forget/update is allowed', () => {
+  const memory = require('../memory');
+  const smart = require('../smart');
+  const { Call } = require('../call');
+  const prevGuard = process.env.MAYA_SMART_GUARD;
+  process.env.MAYA_SMART_GUARD = 'on';
+  try {
+    const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+    const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+    clearInterval(call.endTimer);
+    call.profile = profile;
+    call.tz = 'America/New_York';
+
+    call.setFocus("I don't like ginger tea anymore");
+    assert.ok(call.focus.changedPref);
+    assert.equal(call.focus.changedPref.topic, 'ginger');
+    const note = memory.profileNote(profile, call.tz, call.focus);
+    assert.match(note, /PREFERENCE CHANGE IN CONVERSATION.*NEVER promise or claim to forget, delete, or update/);
+
+    assert.equal(smart.breaks('But you always love ginger tea!', call), 'changed-pref-override', 'overriding current preference with older note is blocked');
+    assert.equal(smart.breaks("I've updated my notes and deleted ginger tea from your profile.", call), 'changed-pref-promise', 'promising to forget/update saved notes is blocked');
+    assert.equal(smart.breaks('Tastes change — what kind of tea do you enjoy having now?', call), null, 'accepting current preference in conversation passes');
+
+    // Subsequent tea turn in same conversation does NOT surface disavowed ginger preference
+    call.setFocus('I am making a cup of tea.');
+    assert.equal(call.focus.callback, null, 'disavowed preference is not offered as callback in same conversation');
+    const noteAfter = memory.profileNote(profile, call.tz, call.focus);
+    assert.doesNotMatch(noteAfter, /ginger and lemon tea/);
+  } finally {
+    if (prevGuard === undefined) delete process.env.MAYA_SMART_GUARD;
+    else process.env.MAYA_SMART_GUARD = prevGuard;
+  }
+});
+
+test('Fix 1.2 (7): delivery-counted once-only: selected but discarded callback does NOT consume allowance, delivered callback DOES, user-prompted recall does NOT reset spontaneous allowance', () => {
+  const memory = require('../memory');
+  const { Call } = require('../call');
+  const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+  const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+  clearInterval(call.endTimer);
+  call.profile = profile;
+  call.tz = 'America/New_York';
+
+  // Turn 1: callback selected, but reply omits the callback fact (e.g. senior's point took priority) -> allowance NOT consumed
+  call.setFocus('We had some tea.');
+  assert.ok(call.focus.callback, 'callback selected on turn 1');
+  assert.equal(call.callbackUsed, false, 'selection alone does not set callbackUsed');
+  call.commitReminder('That sounds like a lovely visit with your friend.');
+  assert.equal(call.callbackUsed, false, 'omitted/discarded callback does not consume once-per-conversation allowance');
+
+  // Turn 2: callback selected again and actually delivered -> allowance IS consumed
+  call.setFocus('Now I am having some coffee.');
+  assert.ok(call.focus.callback, 'callback still available because turn 1 did not deliver it');
+  assert.match(call.focus.callback.fact, /iced coffee/);
+  call.commitReminder('What kind of coffee are you having today, since I remember you like iced coffee?');
+  assert.equal(call.callbackUsed, true, 'delivered callback consumes allowance');
+
+  // Turn 3: user-prompted recall ("Tell me what we talked about?") stays allowed, does NOT reset spontaneous allowance, and notes already-mentioned fact
+  call.setFocus('Tell me what we talked about?');
+  assert.equal(call.focus.full, true, 'user-prompted recall sets full memory focus');
+  assert.equal(call.callbackUsed, true, 'user-prompted recall does not reset spontaneous callbackUsed');
+  const recallNote = memory.profileNote(profile, call.tz, call.focus);
+  assert.match(recallNote, /do NOT redundantly repeat a fact already mentioned earlier in this conversation \(Mathew: likes iced coffee; told 2026-10-19\)/);
+
+  // Turn 4: another spontaneous callback after user-prompted recall is still blocked
+  call.setFocus('I might have some chocolate later.');
+  assert.equal(call.focus.callback, null, 'spontaneous callback remains used after user-prompted recall');
+});
+
+
+
 

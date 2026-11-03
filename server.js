@@ -146,7 +146,7 @@ async function handleChat(req, res, url) {
     res.writeHead(200, { 'Content-Type': m.type, 'Cache-Control': 'private, no-store' });
     return res.end(m.data);
   }
-  if (MODE !== 'real') return sendJson(res, 503, { error: 'Chat needs real mode: it uses the Meta brain and ElevenLabs voice, and mock mode never invents a reply.' });
+  if (MODE !== 'real') return sendJson(res, 503, { error: 'Chat needs real mode: it uses the Meta brain and Meta MMS voice, and mock mode never invents a reply.' });
   const tzParam = url.searchParams.get('tz');
   const tz = /^[\w/+\-]{1,60}$/.test(tzParam || '') ? tzParam : null;
   if (care.get(pid)) { if (tz) care.setTimezone(pid, tz, 'device'); else require('./tz').learnFromIp(care, pid, require('./tz').clientIp(req)).catch(() => {}); }   // the device's own zone first; with none, the connection's
@@ -358,7 +358,7 @@ const server = http.createServer((req, res) => {
 if (MODE === 'real') {
   try { requireRealEnv(); } catch (e) { console.error(e.message); process.exit(1); }
   memory.recoverAll(); // file any words a crash left in a pending file
-  // The short lead-in clips are no longer rendered at server start (every deploy and every wake would make ElevenLabs requests): call.js renders
+  // The short lead-in clips are no longer rendered at server start: call.js renders
   // them once, after the first voiced call's greeting.
 }
 care.start(); // reminder scheduler (also runs in mock mode; rings need the page open)

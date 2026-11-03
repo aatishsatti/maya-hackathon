@@ -1,7 +1,7 @@
 // Instant first voice and routine prediction: the pure rules (no network, no state), so they can be tested alone.
 //
 // LEAD-IN: when the person has finished, Maya can say one very short true line at once (a clip of her own voice, rendered once
-// by ElevenLabs and kept in memory) while Spark writes the real reply. It is only an acknowledgement or "I am thinking": it never
+// by Meta MMS TTS and kept in memory) while Spark writes the real reply. It is only an acknowledgement or "I am thinking": it never
 // claims to know, promise or answer anything, never states a fact about the person, and it is never used for anything but a
 // plain, routine remark. No clip is ever faked: if the clips are not ready or the topic is not routine, nothing extra is said.
 // PREDICTION: only for routine topics. A guess is used only when what was really heard matches it exactly (see prethinkClass for

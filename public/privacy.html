@@ -52,7 +52,7 @@
     <li>Maya never sells data.</li>
     <li>Maya never gives anyone the exact words, audio, photos or phone numbers, other than the services that make her work, listed next. The family only ever gets the alert topic.</li>
   </ul>
-  <p><strong>Services that make Maya work.</strong> To understand and answer, the words, voice notes and photos go to Meta's AI services. Maya's spoken reply text goes to ElevenLabs to make her voice. When something needs checking, such as a news claim or a company, a short search text may go to a search service, and public company websites may be read. These services only see what is needed for that one step. Their own policies apply to what they receive.</p>
+  <p><strong>Services that make Maya work.</strong> To understand and answer, the words, voice notes and photos go to Meta's AI services. Maya's spoken reply text is turned into speech on our server using Meta's open-source MMS text-to-speech model. When a known company is named in a possible scam, its public official website from our allow-list may be read. These services only see what is needed for that one step. Their own policies apply to what they receive.</p>
 
   <h2>Keeping and deleting</h2>
   <ul>
@@ -73,7 +73,7 @@
 
   <h2>Reminders</h2>
   <ul>
-    <li>A reminder is sent on WhatsApp as a text or a voice note in Maya's voice. When WhatsApp's 24-hour window is closed, it goes as an approved template message whose text is the reminder, with a Got it button; if WhatsApp cannot deliver it, it goes to the Maya app instead. The reminder text goes to Meta for that, and to ElevenLabs when it is sent as a voice note.</li>
+    <li>A reminder is sent on WhatsApp as a text or a voice note in Maya's voice. When WhatsApp's 24-hour window is closed, it goes as an approved template message whose text is the reminder, with a Got it button; if WhatsApp cannot deliver it, it goes to the Maya app instead. The reminder text goes to Meta for WhatsApp delivery, and her voice note is rendered on our server with Meta MMS TTS.</li>
     <li>The family dashboard shows what happened to each reminder: scheduled, sent, delivered, read, answered or missed. A missed reminder is shown as missed, never hidden.</li>
     <li>Maya is a companion, not medical care. She gives no doses and no medical advice. A reminder is only a reminder: it can fail or arrive late, so never rely on Maya for medicine or anything time-critical.</li>
   </ul>

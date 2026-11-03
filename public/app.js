@@ -224,14 +224,14 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
 
   // ---- Speaking ----
 
-  let player = null; // current ElevenLabs audio element
+  let player = null; // current server audio element
 
   function stopSpeaking() {
     if (player) { player.onended = null; player.onerror = null; player.pause(); player = null; }
     if (window.speechSynthesis) speechSynthesis.cancel();
   }
 
-  // Real voice: server returns base64 mp3 from ElevenLabs. Resolves true if it played.
+  // Real voice: server returns base64 audio from Meta MMS TTS. Resolves true if it played.
   function playServerAudio(data, myGen, done) {
     return new Promise((resolve) => {
       const a = new Audio(`data:${data.audioType};base64,${data.audio}`);
@@ -242,7 +242,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     });
   }
 
-  // Mock-mode voice. Only a clear female en-US voice is used; never the system default,
+  // Device system/browser speechSynthesis fallback ONLY (never primary call voice, no TTS API call).
+  // Only a clear female en-US voice is used; never the system default,
   // which can be a male or novelty voice. Order: Samantha (Mac), Google US English
   // (Chrome), then the first en voice with a known female name.
   const VOICE_VOLUME = 1.0;
@@ -287,9 +288,9 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       data = { ...data, ttsError: 'Audio could not be played' };
     }
     if (data.ttsError) {
-      // ElevenLabs failed: browser voice, clearly labelled. Never silent, never fake.
-      captionEl.textContent = `Maya (MOCK voice, ElevenLabs failed): ${text}`;
-      showError(`ElevenLabs voice failed: ${data.ttsError}`);
+      // Device system/browser voice fallback only (no TTS API call), clearly labelled. Never silent, never fake.
+      captionEl.textContent = `Maya (device browser voice fallback): ${text}`;
+      showError(`Voice playback failed: ${data.ttsError}`);
     }
     if (!window.speechSynthesis) { setTimeout(done, 2500); return; }
     await voiceReady();
@@ -389,7 +390,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (now - c.lastVoice > SILENCE_MS || now - c.utterance.startedAt > MAX_UTTERANCE_MS) finishUtterance();
   }
 
-  // ---- Real mode: live socket to the server (Transcribe ears, Spark brain, ElevenLabs voice) ----
+  // ---- Real mode: live socket to the server (Transcribe ears, Spark brain, Meta MMS voice) ----
   // Mic goes up as Float32 mono at the browser's own rate; Maya's voice comes back as
   // PCM16 mono 24 kHz and is scheduled on the audio clock so the first chunk plays at once.
   const HEARING_STUCK_MS = 15000; // noise (TV, fan) that never turns into words must not hold the mic

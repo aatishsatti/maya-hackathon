@@ -1,4 +1,4 @@
-// One live call: browser socket <-> Meta Transcribe (ears) -> Spark (brain) -> ElevenLabs (voice).
+// One live call: browser socket <-> Meta Transcribe (ears) -> Spark (brain) -> Meta MMS TTS (voice).
 // Speaker labels are session-scoped, so the label->name map and the short history die with the call.
 // What carries across calls is the picked profile's memory file (memory.js): it is loaded at the start
 // and updated from this call's words after it ends. The words themselves are never stored.
@@ -8,7 +8,8 @@
 //   ready, speechStart, partial{text}, speechEnd, idle, thinking, speak{text},
 //   audioEnd{timing}, stopped, ttsFailed{text,error}, error{message}
 const { openTranscribe, Resampler } = require('./transcribe');
-const { streamSpeech, sparkStream } = require('./brain');
+const { streamSpeech, stripSpeechMarkup, warmSpeech, sparkStream } = require('./brain');
+const stripMarkup = (s) => (typeof stripSpeechMarkup === 'function' ? stripSpeechMarkup(s) : String(s || '').replace(/\[\[\s*whisper:\s*([^\]]*)\]\]/gi, '$1').replace(/\[\[[^\]]*\]\]|\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim());
 const { startReply, fixedReply, ChunkSplitter, stripTags, isQuestion } = require('./reply');
 const { mapEmotionToDelivery, selfHarmText, INTENTS } = require('./emotion');
 const lead = require('./lead');
@@ -51,7 +52,7 @@ const OWN_END_DANGLING_MS = 2250;
 const HOLD_BACK_MS = 300;
 // Loud sound over Maya's voice dips her volume at once (browser); the stop is only for real words.
 const DUCK_CONFIRM_MS = 1500;
-// Piece joins: each reply is several TTS requests. ElevenLabs pads every piece with silence, which would
+// Piece joins: each reply is several TTS requests. TTS pads every piece with silence, which would
 // be heard as a 200-400 ms gap between pieces, so each piece's tail is held back, its trailing silence
 // trimmed (about 60 ms kept) and its leading silence trimmed (about 15 ms kept).
 const TAIL_HOLD_BYTES = 350 * 48;  // 24 kHz s16 mono = 48 bytes per ms
@@ -260,13 +261,9 @@ const INTERRUPTED = "Sorry, I got interrupted, can you say that again?";
 const tokens = (text) => String(text || '').toLowerCase().match(/[\p{L}\p{N}'\u2019]+/gu) || [];
 const realTokens = (text) => tokens(text).filter((w) => !NOISE_WORDS.has(w));
 const RECOVERY = "Sorry, I didn't catch that, can you say that again?";
-// Measured: [excited] came out about twice as loud as normal speech on this voice. Scale it down so
-// the first phrase does not jump out; this changes level only, not the voice.
-const EXCITED_GAIN = 0.6; // measured: [excited] RMS 707 vs plain 397; 0.6 levels it to about plain
-// Delivery moments. Tag names are from the ElevenLabs v4 audio-tag docs (non-exhaustive list; [sympathetic], [warmly],
-// [happy] are used in their examples). Measured on this voice: none is read aloud (same duration as plain text);
-// they raise level (RMS vs plain 397: sympathetic 494, warmly 559, happy 671), so each gets a gain that levels it out.
-const TONES = { excited: ['[excited]', EXCITED_GAIN], soft: ['[sympathetic]', 0.85], warm: ['[warmly]', 0.8], bright: ['[happy]', 0.62] };
+// Meta MMS TTS (facebook/mms-tts-eng) does not support whisper/excited/gentle audio tags; all presentation tags are stripped before synthesis.
+const EXCITED_GAIN = 1.0;
+const TONES = { excited: ['', EXCITED_GAIN], soft: ['', 1.0], warm: ['', 1.0], bright: ['', 1.0] };
 // Clean boundary around a tone piece: its tail fades out over 30 ms (a tagged piece can end while still loud, which
 // sounds like its last word running into the next piece's first), 40 ms of silence follows, and its start fades in
 // over 8 ms. The browser already plays pieces strictly one after another (nextPlayTime), so they cannot overlap there.
@@ -396,7 +393,7 @@ const sameName = (a, b) => { const x = letters(a), y = letters(b); return x.leng
 // ---- Lead-in clips: Maya's own voice saying one short line, rendered once and kept (see lead.js). Real mode only; never faked. ----
 const leadClips = new Map();      // text -> { text, pcm } (PCM16 24 kHz, trimmed like any other piece)
 // Conversation brain step 3: lead-in clips are OFF. They are fixed sentences, so every first word Maya speaks is real Spark output instead.
-// MAYA_LEAD_INS=1 switches the old behaviour back on (read at call time). Off means no clip is chosen, played, or even rendered (no ElevenLabs request).
+// MAYA_LEAD_INS=1 switches the old behaviour back on (read at call time). Off means no clip is chosen, played, or even rendered (no TTS request).
 const leadInsOn = () => process.env.MAYA_LEAD_INS === '1';
 let leadLoad = null;
 async function renderLead(text) {
@@ -408,10 +405,10 @@ async function renderLead(text) {
   if (buf.length < 120 * 48) throw new Error('lead clip came back empty');
   return { text, pcm: fadeOut(fadeIn(buf), 'other') };
 }
-// TEMPORARY (render-test): a SYNTHETIC voice for a call that starts with { noVoice: true, fakeAudio: true }. It is NOT ElevenLabs and makes no network
-// request: speech-like PCM16 24 kHz is made in memory and handed to the same playback loop in ElevenLabs-like chunks (a first chunk after ~150 ms, then about
+// TEMPORARY (render-test): a SYNTHETIC voice for a call that starts with { noVoice: true, fakeAudio: true }. It makes no TTS
+// request: speech-like PCM16 24 kHz is made in memory and handed to the same playback loop in TTS-like chunks (a first chunk after ~150 ms, then about
 // four times real time), with a little silence before and after like a real TTS piece. It exists to test whether the playback path and the audio going
-// down the call (not the ElevenLabs request) is what upsets a small hosted server. Remove before the final version.
+// down the call (not the TTS synthesis) is what upsets a small hosted server. Remove before the final version.
 async function fakeSpeech(text, signal, onChunk, { firstChunkMs = 150, chunkBytes = 4096, everyMs = 20, msPerChar = 65 } = {}) {
   const speechMs = Math.max(600, String(text).length * msPerChar), leadMs = 120, tailMs = 150;
   const samples = Math.round(((leadMs + speechMs + tailMs) / 1000) * 24000), buf = Buffer.alloc(samples * 2);
@@ -421,7 +418,7 @@ async function fakeSpeech(text, signal, onChunk, { firstChunkMs = 150, chunkByte
   await sleep(firstChunkMs);
   for (let off = 0; off < buf.length; off += chunkBytes) {
     if (signal && signal.aborted) throw signal.reason || new Error('aborted');
-    onChunk(Buffer.from(buf.subarray(off, Math.min(off + chunkBytes, buf.length))));
+    onChunk(Buffer.from(buf.subarray(off, Math.min(chunkBytes, buf.length - off))));
     await sleep(everyMs);
   }
 }
@@ -439,11 +436,6 @@ function warmLeads() {
   return leadLoad;
 }
 
-// Keep-warm: idle sockets to ElevenLabs close after about 4 s, and every turn is further apart than that, so each voice request paid a
-// new TLS handshake (measured: first audio byte about 380 ms cold, about 210 ms warm). While a call is live, one tiny GET on the same
-// origin every 2.5 s keeps the socket open. It sends no text, uses no voice credits, and does not touch the voice model or its tags.
-const WARM_URL = 'https://api.elevenlabs.io/v1/models';
-const WARM_EVERY_MS = 2500;
 const TURN_DEBUG = Boolean(process.env.MAYA_TURN_DEBUG);
 const dbg = (...a) => { if (TURN_DEBUG) console.log('turn', ...a); };
 // What the 'latency' log line may show: numbers, flags and the guess kind only. The words the person said (heard / predicted) are never logged unless TURN_DEBUG is set:
@@ -491,7 +483,7 @@ class Call {
     this.duckTimer = null;
     this.endTimer = setInterval(() => this.endpointTick(), 100);
     this.warmTimer = null;       // keep-warm pings to the voice service while the call is live
-    this.noVoice = false;        // TEMPORARY test switch: no ElevenLabs request in this call (see the start handler)
+    this.noVoice = false;        // TEMPORARY test switch: no TTS request in this call (see the start handler)
     this.fakeAudio = false;      // TEMPORARY: with noVoice, use fakeSpeech() instead of silence (synthetic audio down the call)
     this.sayingText = '';        // what Maya has said so far in the current reply
     this.lastSaidAt = 0;
@@ -526,9 +518,12 @@ class Call {
     this.scamAskFor = null;      // the verdict whose one question to the family she is about to ask
     this.focus = null;           // this reply's memory focus (see setFocus); null for greetings, call-backs and silence lines
     this.followUpOffered = false; // a due follow-up was already offered to Spark in this call
-    this.callbackUsed = false;   // session-only: at most one relevant memory callback per conversation
-    this._lastCallback = null;   // session-only: the callback offered earlier in this conversation (for bare challenge turns)
+    this.callbackUsed = false;   // session-only: at most one relevant memory callback delivered per conversation
+    this.callbackShown = null;   // callback selected for this turn, committed to callbackUsed only once delivered
+    this._lastCallback = null;   // session-only: the callback delivered earlier in this conversation (for bare challenge turns)
     this._challenge = null;      // this turn's memory challenge decision (recorded vs unrecorded)
+    this._changedPref = null;    // this turn's preference change in conversation
+    this._changedPrefs = new Set(); // session-only disavowed preference words in this conversation
     this.beatCount = 0;          // replies she has given on the current light-chat subject (see beat.js); committed after each spoken reply
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
@@ -686,11 +681,11 @@ class Call {
       try { new Intl.DateTimeFormat('en-US', { timeZone: m.tz }); this.tz = m.tz; } catch { this.tz = null; }
       const rate = Number(m.sampleRate);
       if (!(rate >= 8000 && rate <= 96000)) return this.fatal('Bad microphone sample rate');
-      // TEMPORARY (render-test): a call that makes NO ElevenLabs request at all. The greeting and every reply go out as text events only; the mic path,
+      // TEMPORARY (render-test): a call that makes NO TTS request at all. The greeting and every reply go out as text events only; the mic path,
       // Meta Transcribe and Spark are the real ones. Used to tell whether a hosting failure is the mic path or the voice. Remove before the final version.
       this.noVoice = m.noVoice === true;
       this.fakeAudio = this.noVoice && m.fakeAudio === true;   // only ever together with noVoice
-      if (this.noVoice) console.log(this.fakeAudio ? 'call noVoice+fakeAudio: ElevenLabs is skipped; a synthetic voice is used' : 'call noVoice: ElevenLabs is skipped for this call');
+      if (this.noVoice) console.log(this.fakeAudio ? 'call noVoice+fakeAudio: TTS is skipped; a synthetic voice is used' : 'call noVoice: TTS is skipped for this call');
       this.starting = true; this.startAt = Date.now();   // the start message arrived (greeting timing log)
       care.callStarting(this.profile.id);   // from now on this person is on a call: a daily chat due in the next moments is skipped, not rung
       // Maya rang them and they pressed Accept: the id must match a live ring for THIS profile, else it is an ordinary call.
@@ -938,13 +933,8 @@ class Call {
   }
 
   startWarm() {
-    // OFF by default (new free ElevenLabs account after a termination: keep its traffic minimal). It saved about 150 ms per turn, so it can be
-    // switched back on later with MAYA_KEEPWARM=1. Nothing else about the voice changes.
-    if (process.env.MAYA_KEEPWARM !== '1') return;
-    if (this.warmTimer || !process.env.ELEVENLABS_API_KEY) return;
-    const ping = () => fetch(WARM_URL, { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY }, signal: AbortSignal.timeout(3000) }).then((r) => r.arrayBuffer()).catch(() => { /* a missed ping only means one cold connection */ });
-    ping();
-    this.warmTimer = setInterval(ping, WARM_EVERY_MS);
+    if (process.env.MAYA_KEEPWARM !== '1' || this.noVoice || typeof warmSpeech !== 'function') return;
+    warmSpeech().catch(() => { /* warm-up failure will surface on synthesis if still broken */ });
   }
 
   dropPre() {
@@ -1018,7 +1008,7 @@ class Call {
     if (!cand || !cand.rs || cand.rs.error || (cand.rs.done && !cand.rs.text.trim())) return false;   // a guess that already failed or came back empty is never spoken: the normal path writes a fresh reply
     if (/INCOMPLETE|APP STATE: UNKNOWN|\bUNKNOWN\b|: unknown\./.test(extra)) return false;   // a failed or incomplete state read is never reused, even when the guess's card failed the same way
     if (!g || g.notes !== extra || JSON.stringify(g.labels) !== JSON.stringify(this.factLabels || []) || g.turnSeq !== mySeq - 1 || Date.now() - g.startedAt > SPEC_MAX_AGE_MS || JSON.stringify(this.history) !== g.histJson) return false;
-    if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder || this.focus.callback || this.focus.challenge) return false;
+    if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder || this.focus.callback || this.focus.challenge || this.focus.changedPref) return false;
     const keep = this.focus; this.focus = pureFocus(g.partial);
     try { return this.roster(`${this.replyNote()} ${extra}`.trim(), g.partial) === g.roster; } catch { return false; } finally { this.focus = keep; }
   }
@@ -1225,13 +1215,24 @@ class Call {
 
   // The reply that carried a next-call reminder was spoken to the end (not cut off, not failed): now it counts as delivered, once, and "not
   // done yet" can reopen it. Until then the reminder stays due, so a cut reply never loses it. Chat borrows this too.
-  commitReminder() {
+  commitReminder(saidText = '') {
     // Generated is not heard: what must be TOLD to the person (a new family alert, a scam warning) is only counted as told when the reply that
     // carried it was spoken to the end. A cut or failed reply leaves it owed for the next one.
     if (this.safetyFreshShown) { this.safetyFresh = false; this.safetyFreshShown = false; }
     if (this.healthFreshShown) { this.healthFresh = false; this.healthFreshShown = false; }
     this.scamOwed = null;
     if (this.seenShown && this.profile) { this.seenShown = false; care.clearSeenToTell(this.profile.id); }   // the reply that carried "your family knows" was spoken
+    const cb = this.callbackShown; this.callbackShown = null;
+    if (cb) {
+      const wSet = saidText ? new Set(recall.words(saidText)) : null;
+      const delivered = !wSet || !(cb.unmentioned && cb.unmentioned.length) || cb.unmentioned.some((w) => wSet.has(w));
+      if (delivered) {
+        this.callbackUsed = true;
+        this._lastCallback = { ...cb, delivered: true, fresh: true, profileId: this.profile && this.profile.id };
+      }
+    } else if (this._lastCallback && !this._challenge) {
+      this._lastCallback.fresh = false;
+    }
     const tid = this.reminderShown; this.reminderShown = null;
     if (!tid || !this.profile) return;
     memory.deliverReminder(this.profile.id, tid, this.callId);
@@ -1244,11 +1245,18 @@ class Call {
   setFocus(heard, extra = '') {
     const full = STORY_ASK.test(heard) || RECALL_ASK.test(heard);
     const heavy = Boolean(extra || this.safety || this.health || this.pendingConcern || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
-    this.focus = { text: String(heard || ''), full, thread: '', callback: null, challenge: null };
-    this._challenge = null;
+    this._changedPrefs = this._changedPrefs || new Set();
+    this.focus = { text: String(heard || ''), full, thread: '', callback: null, challenge: null, changedPref: null, changed: this._changedPrefs, callbackUsed: this.callbackUsed, alreadyMentioned: this._lastCallback && this._lastCallback.delivered ? this._lastCallback.fact : '' };
+    this._challenge = null; this._changedPref = null; this.callbackShown = null;
     if (!this.profile) return;
-    const ch = recall.challengeFact(this.profile.memory, heard, memory.today(this.tz), { ownerName: this.profile.name, lastCallback: this._lastCallback });
+    const ch = recall.challengeFact(this.profile.memory, heard, memory.today(this.tz), { ownerName: this.profile.name, profileId: this.profile.id, lastCallback: this._lastCallback });
     if (ch) { this.focus.challenge = ch; this._challenge = ch; return; }
+    const cp = recall.changedPreference(this.profile.memory, heard, { ownerName: this.profile.name });
+    if (cp) {
+      for (const w of (cp.specific.length ? cp.specific : cp.words)) this._changedPrefs.add(w);
+      this.focus.changedPref = cp; this._changedPref = cp;
+      return;
+    }
     if (full) return;
     const t = recall.dueThread(this.profile.memory.threads, memory.today(this.tz), { heavy, askedThisCall: this.followUpOffered, callId: this.callId });
     if (t) {
@@ -1259,8 +1267,8 @@ class Call {
     }
     const ordinaryExtra = Boolean(extra) && Array.isArray(this.factLabels) && this.factLabels.length > 0 && this.factLabels.every((l) => ORDINARY_LABELS.has(l)) && extra.trim() === String(this._knownText || '').trim();
     const cbHeavy = Boolean((extra && !ordinaryExtra) || this.safety || this.health || this.pendingConcern || this._medical || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
-    const cb = recall.callbackFact(this.profile.memory, heard, memory.today(this.tz), { heavy: cbHeavy, callbackUsed: this.callbackUsed, ownerName: this.profile.name });
-    if (cb) { this.callbackUsed = true; this.focus.callback = cb; this._lastCallback = cb; }
+    const cb = recall.callbackFact(this.profile.memory, heard, memory.today(this.tz), { heavy: cbHeavy, callbackUsed: this.callbackUsed, ownerName: this.profile.name, changed: this._changedPrefs });
+    if (cb) { this.callbackShown = cb; this.focus.callback = cb; }
   }
 
   // Decides this reply's beat from Spark's tag (topic) and the care state, then enforces its limits on the delivery (see beat.js).
@@ -1839,7 +1847,7 @@ class Call {
       }
     }
     finally {
-      this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null; this.officialNow = null;
+      this.focus = null; this.reminderShown = null; this.callbackShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null; this.officialNow = null;
       if (this.scamOwed) { this.scamLater = { scam: this.scamOwed, at: Date.now() }; this.scamOwed = null; }   // cut off before it was heard: the next reply carries the warning again
     }
   }
@@ -2103,15 +2111,12 @@ class Call {
         if (!tEnqueue) { tEnqueue = Date.now(); if (timing) timing.firstPieceMs = tEnqueue - tStart; } // Spark started -> the first sentence is handed to the voice
         if (kind === 'excited') excited = true;
         pieces += 1;
-        // [excited] is an ElevenLabs v4 audio tag (docs); it covers only its own short opening piece.
-        // The excited piece is quieter-scaled below: in measurement the tag roughly doubled loudness.
-        const spoken = text.replace(/^[,;:\s]+/, ''); // a piece cut after an opening phrase can start with its comma
+        const spoken = stripMarkup(text.replace(/^[,;:\s]+/, '')); // strip any unsupported speech-presentation markup after feel/name processing
         const tone = TONES[kind];
-        const tagged = tone ? `${tone[0]} ${spoken}` : spoken;
         const gain = tone ? tone[1] : 1;
         const onVoiceChunk = (c) => { if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = Date.now() - tEnqueue; job.chunks.push(gain === 1 ? c : scale(c, gain)); };
-        if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no ElevenLabs request
-        else (this.noVoice ? fakeSpeech(tagged, signal, onVoiceChunk) : streamSpeech(tagged, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
+        if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no TTS request
+        else (this.noVoice ? fakeSpeech(spoken, signal, onVoiceChunk) : streamSpeech(spoken, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });
         said.push(text);
         this.sayingText = said.join(' ');
@@ -2194,7 +2199,7 @@ class Call {
       this.abort = new AbortController();
       this.responding = true;
       const again = retryWhy === 'facts'
-        ? `Your draft began "${repeated}", which says something the app's facts do not support (a family alert that was never made, a reason nobody gave, a stock comfort line, or a call or refusal the APP TRUTH does not support${this._why ? `: ${this._why}` : ''}). Write the whole reply again from the start in plain, short, direct words: say only what the facts and APP TRUTH say, no excuse, no soothing line.`
+        ? `Your draft began "${repeated}", which says something the app's facts do not support (a family alert that was never made, a reason nobody gave, a stock comfort line, or a call or refusal the APP TRUTH does not support${this._why ? `: ${this._why}` : ''}).${this._challengeWhy ? ` ${require('./smart').challengeRetryNote(this)}` : ''} Write the whole reply again from the start in plain, short, direct words: say only what the facts and APP TRUTH say, no excuse, no soothing line.`
         : retryWhy === 'beat'
         ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.`
         : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`;
@@ -2222,7 +2227,7 @@ class Call {
       return this.speak(RECOVERY);
     }
     keep();
-    this.commitReminder();
+    this.commitReminder(said.join(' '));
     this.responding = false;
     if (IDENTITY_LINE.test(said.join(' '))) this.identitySaid = true;
     if (record && said.length) {

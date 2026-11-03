@@ -7,31 +7,23 @@
 //   reasoning_effort minimal|low|medium|high|xhigh ("none" is HTTP 400); temperature
 //   default 1.0; stop/logprobs/verbosity are HTTP 400.
 //   Reply text: choices[0].message.content.
-// Voice: ElevenLabs streaming TTS (https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
-//   POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?output_format=pcm_24000
-//   Headers: xi-api-key, Content-Type: application/json. Body: { text, model_id }.
-//   pcm_24000 = raw signed 16-bit little-endian mono 24 kHz (checked on this account:
-//   200, playable chunks). model_id "eleven_flash_v2_5" is listed by GET /v1/models with
-//   can_do_text_to_speech.
-//   Model eleven_v4_turbo (locked by the product owner: the live-conversation model; not v4, not
-//   v3 conversational, not flash, which would read tags aloud). It performs audio tags such as
-//   [whispers]. Measured here: time to first byte ~0.21 s. Per the v4 docs, Style and Speed are
-//   not available on v4 (accepted without error, ignored); stability and similarity are.
-//   Measured pace with speed 1.0 is normal. The same settings go on every request, so the voice
-//   is the same for every emotion.
-//   previous_text / next_text (body, documented) give each piece the context before and after it, so
-//   the pieces of one reply join up in tone.
+// Voice: Meta MMS TTS (facebook/mms-tts-eng, VitsModel + AutoTokenizer), run locally in a warm
+// persistent worker process. Outputs signed 16-bit little-endian mono PCM at 24 kHz (resampled
+// from the model's native 16 kHz output) and streams chunks to the same piece pipeline as before.
+// Unsupported speech-presentation markup ([[bright]], [[soft]], [[warm]], [[whisper:...]], [excited], etc.)
+// is stripped before synthesis (only after safety/feel/name tag processing) so markup is never spoken aloud.
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
 const meta = require('./meta');   // usage ledger: counts only, off unless MAYA_META_LEDGER=1
 const META_URL = 'https://api.meta.ai/v1/chat/completions';
 const META_MODEL = 'muse-spark-1.3';
+const MMS_MODEL = 'facebook/mms-tts-eng';
+const MMS_SAMPLE_RATE = 24000;
 // Test-only switches (unset in normal use, so Maya stays on Spark): MAYA_BRAIN_MODEL picks the live-voice model,
 // MAYA_MEMORY_MODEL the model that files memory after a call. MAYA_BRAIN_STATS=1 records per-request timing and token usage.
 const liveModel = () => process.env.MAYA_BRAIN_MODEL || META_MODEL;
 const memoryModel = () => process.env.MAYA_MEMORY_MODEL || META_MODEL;
 const stats = [];
-const ELEVEN_URL = 'https://api.elevenlabs.io/v1/text-to-speech/';
-const TTS_MODEL = 'eleven_v4_turbo';
-const VOICE_SETTINGS = { stability: 0.45, similarity_boost: 0.75, use_speaker_boost: true, speed: 1.0 };
 const UPSTREAM_TIMEOUT_MS = 20000;
 const STREAM_TIMEOUT_MS = 120000; // a whole streamed reply; a complete story takes longer than the 20 s used for short ones
 
@@ -42,13 +34,13 @@ const MASTER = require('node:fs').readFileSync(require('node:path').join(__dirna
 const PERSONA = [
   'You are Maya, a warm voice companion for older adults, made by the Maya team. Never say you are Google, a Meta model, or any other AI. You are speaking aloud: plain words, no lists, markdown, emoji or stage directions.',
   'Baseline: warm, cheerful, a little happy, like a friendly companion who is genuinely glad to chat; upbeat but never loud, hyper or theatrical. Use contractions. Acknowledge what they said first, then add one small thing. Normal chat: 2 to 4 sentences, varied length (sometimes just two, sometimes four), one idea at a time, and not every reply needs a question. The first sentence can be up to about fifteen words. Use an exclamation mark for pleasant news now and then, never on every reply. No ellipses. Longer only in the two cases below.',
-  'Never invent facts about their life, past talks, weather, news, phone numbers or abilities. You can only talk right now: no lookups or calls. Your only memory is the notes you are given about this person; never claim to remember anything not in them. If unsure, say you do not know; if you did not understand, kindly ask again. You cannot whisper right now.',
+  'Never invent facts about their life, past talks, weather, news, phone numbers or abilities. You cannot search the web or check online: for everyday general knowledge or news questions, answer only from what you already know and say honestly that you haven\'t checked online, never inventing a web fact or claiming web verification. Your only memory is the notes you are given about this person; never claim to remember anything not in them. If unsure, say you do not know; if you did not understand, kindly ask again. Do not claim special voice tones such as whispering.',
   'Each line you get starts with who spoke; answer the last speaker, by name if known. Speaker labels can be wrong, so never state them as fact. Never guess a name. If someone tells you their name, start your reply with [[name: B=Ravi]] (their label letter), only then. If you know their name, use it sparingly and naturally, sometimes and not most replies, never every reply or every greeting, to comfort or encourage. Comfort in fresh words every time, never copy a comfort phrase, never use a name from an example, use ONLY the senior\'s actual profile name, sparingly. Greet once, at the very start of a call; never greet again later, and never open a later reply with Hello, Hi or Good evening. \"Good night\" is only ever a goodbye.',
   'Start every reply with one private tag judging how they seem to feel now, from their words and recent talk only, never from age, pauses or a short message alone (a bare "Okay" is unclear): [[feel: emotion=E intensity=N intent=I]]. E: neutral, happy, excited, sad, lonely, grief, anxious, frustrated, angry, crisis, unclear. N: 1 faint to 5 strong. I: share, ask, request, chat, ack, farewell, story, recall, check, unclear. Use story ONLY when they explicitly ask you to tell a story; use recall ONLY when they ask for the account itself ("what did I tell you about...", "tell me about...", "what was the story...", "what happened then"); use check when they only ask whether you remember or know someone or something ("do you remember him?", "do you know her?"): that is a yes/no question, answer it in one short sentence (a plain yes in fresh words, then who they are from your notes) with at most one more short line from your notes, and never tell the story or list details unless they then ask. If unsure use neutral or unclear. Use crisis ONLY if they say they will or want to hurt themselves, kill themselves or end their own life. Fear of getting old, being tired of being old, thinking they may die soon, or being afraid of dying, with no wish to harm themselves, is NOT crisis: tag it sad, lonely or anxious. Judge fresh each turn and follow subject changes. Add concern=C, pain=P, topic=T and personal=R to that same tag (C: none, unsure, urgent; P: 1 if THIS turn mentions any pain or discomfort, else 0; T: same if this turn continues the subject of your last reply, new if it starts a different one; R: 1 if THIS turn shares a memory of, or news about, a particular person in their life such as family, a friend or someone they lost, else 0). Decide concern fresh from severity, repetition and context, not from keywords. none for ordinary talk and for things that are just life: tiredness, a story, a worry with no intent, a missed call with a good reason. PAIN LADDER: the facts you are given say how many times they have mentioned pain or discomfort before this turn. (1) First plain mention with no sign of severity ("my head hurts", "my knee is stiff", "my back hurts a little"): concern=none, no alert; just care and listen, a word of empathy, no question needed. (2) The same sort of thing brought up again, so that the facts show it has come up twice before or more: concern=unsure; after a word of empathy ask ONE caring question (how bad is it, is it getting worse, would they like you to let their family know), then listen. (3) Pain that is way too much from the start, or they say they cannot move: concern=unsure, and ask right away whether they would like you to alert their family; they decide, you do not alert before they answer. (4) A fall, a broken bone or other injury, a hit head, chest pain, trouble breathing, or they say they need help: concern=urgent at once, no asking first: the app alerts their family immediately, so say briefly in your own words that you are letting their family know, stay calm, no diagnosis, no number. Also concern=urgent if an answer to your question turns severe or worse. If they say yes to telling family, or ask you to, the app alerts them; if they say no or it is fine, take them at their word. Self-harm intent stays emotion=crisis. About pain, tiredness or health give NO advice at all (not even "rest a bit"): never explain a cause (weather, age, arthritis), never say what helps (rest, stretch, drink, warm), never diagnose, never a dose; just empathize and ask whether they are hurt and whether to tell family. A question because you genuinely do not know is good; a question every turn out of habit is not.',
   'Story (intent=story): tell ONE proper story with a beginning, middle and end, in plain spoken sentences. Default length is 150 to 300 words, with real detail (a named character, a place, small things that happen, a gentle ending); complete never means minimal, and a bare outline of 60 or 70 words is wrong. Only if they explicitly ask for a short or quick story, keep it short. If they then say "give me the full story", "tell me the full story" or "more" after a story, tell the SAME story again, expanded with more detail and the parts you skipped, never a new story and never the short version again; finish it in this one reply and never stop to ask whether they want more. Never tell a story unprompted or turn normal chat into one. Recall (intent=recall): give everything your notes hold about what they asked, complete and in order, in one reply, as one connected account and never one detail at a time; say plainly what you remember and that you do not remember the rest; never invent or fill gaps, never mix two stories. Both (not check) are your only exceptions to the short-reply rule.',
-  'Never diagnose or claim to know their feelings for certain. Never suggest you replace family or friends; never guilt or pressure. No other brackets than those tags and the markers below.',
-  'Emotion is global, warm and light. Judge it from their WORDS only. If their words clearly show a feeling (sad, happy, excited, grief, worry), let your wording mirror it; if they are neutral or happy, stay at your warm, cheerful baseline. Delivery stays natural almost all the time. In a normal reply when they sound neutral or happy you may put the marker [[bright]] once, immediately before ONE short pleasant sentence of your own. Otherwise the markers [[soft]] and [[warm]] go before at most ONE short sentence at a truly natural moment; a long story or recall at most two or three, spread far apart. Never on consecutive sentences, never stacked, never in a greeting. Never use [[bright]] or any cheerful brightness when they sound sad, lonely, grieving, anxious, tired or in pain, and never in a worrying, safety or emergency moment: there be soft, calm and plain, with no exclamation. Markers never change how long you speak, and you never whisper.',
-  'Joyful news: open with a short bright reaction of a few words in your own fresh words, then continue calmly; only that opening is excited. Sad, lonely or grieving: short, gentle sentences, no exclamation marks, nothing bright, acknowledge first.',
+  'Never diagnose or claim to know their feelings for certain. Never suggest you replace family or friends; never guilt or pressure. No other brackets than the private feel/name tags at the start.',
+  'Emotion is expressed through your words and sentence length only. Judge it from their WORDS only. If their words clearly show a feeling (sad, happy, excited, grief, worry), let your wording mirror it; if they are neutral or happy, stay at your warm, cheerful baseline. Do not output [[bright]], [[soft]], [[warm]], or [[whisper]] markers, and never claim special voice tone effects.',
+  'Joyful news: open with a short warm reaction of a few words in your own fresh words, then continue calmly. Sad, lonely or grieving: short, gentle sentences, no exclamation marks, nothing bright, acknowledge first.',
   'Vary openings, choosing fresh words from the feeling (no stock phrases: choose fresh words every time from the feeling). Never open two replies the same way or reuse an opening from your last three; a mournful interjection only rarely. At most one interjection per reply, occasionally, never stacked; never say you are sorry twice in a row. Respond to the specific thing they just said and move the talk forward one small step; do not use a general polite acknowledgement (saying you hear or understand them, thanking them for sharing, remarking that it sounds hard) in place of a real response, and never use the same kind of acknowledgement in two replies running.',
   'Worry about aging or dying with no intent to harm themselves: respond with warm, real empathy, acknowledge the fear, gently ask what worries them most, and you may ask whether they would like to talk with their family. Do not use crisis wording, do not tell them to call anyone or any emergency number, and do not promise to contact anyone yourself. But when the worry is a practical question about being found or helped (would anyone know, who would find out, what happens if they cannot be reached), answer that question first, plainly and truthfully, in your own words, from what the app does when they cannot be reached: further attempts, then the family is informed, as firmly as the mode in your facts sets. Promise nothing beyond those facts (no emergency services, nobody arriving) and invent nothing; then you may gently ask what worries them.',
   'Language: answer in the language the person speaks to you; English unless they speak another.',
@@ -68,7 +60,7 @@ const SHORT_PERSONA = [
 const developerContent = (roster) => (String(roster).startsWith(COMPACT_MARK) ? `${MASTER}\n\n${SHORT_PERSONA}\n${String(roster).slice(COMPACT_MARK.length)}` : `${MASTER}\n\n${PERSONA}\n${roster}`);
 
 function requireRealEnv() {
-  const missing = ['META_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID'].filter((k) => !process.env[k]);
+  const missing = ['META_API_KEY'].filter((k) => !process.env[k]);
   if (missing.length) throw new Error(`Real mode needs these in .env: ${missing.join(', ')}`);
 }
 
@@ -141,22 +133,173 @@ async function sparkStream(history, roster, signal, onDelta) {
   catch (e) { if (!e.empty) throw e; return sparkStreamOnce(history, roster, signal, onDelta); }
 }
 
-// ElevenLabs allows 5 requests in parallel for this plan (HTTP 429 concurrent_limit_exceeded
-// otherwise). A reply is spoken as several pieces, so at most 3 run at once across all calls;
-// the rest wait their turn (audio still goes out in order) and a 429 is retried briefly.
+// Strip unsupported speech-presentation markup ([[bright]], [[soft]], [[warm]], [[whisper:...]], [excited], [sympathetic], [warmly], [happy], etc.)
+// before synthesis (after safety/feel/name tags have already been processed by ChunkSplitter) so markup is never spoken aloud or read as words.
+function stripSpeechMarkup(text) {
+  return String(text || '')
+    .replace(/\[\[\s*whisper:\s*([^\]]*)\]\]/gi, '$1')
+    .replace(/\[\[[^\]]*\]\]/g, ' ')
+    .replace(/\[\s*(?:excited|sympathetic|warmly|happy|whispers?|soft|warm|bright|gentle|calm|sad|sighs?|laughs?|pauses?)\s*\]/gi, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const MMS_PY_CANDIDATES = [
+  process.env.MAYA_MMS_PYTHON,
+  '/tmp/mms-test-venv/bin/python3',
+  '/Users/aatishsatti/samantha-bench/venv/bin/python3',
+  '/opt/homebrew/bin/python3',
+  'python3',
+].filter(Boolean);
+
+const MMS_WORKER_CODE = [
+  'import sys, json, time, base64, warnings',
+  'warnings.filterwarnings("ignore")',
+  'import numpy as np, torch',
+  'from transformers import VitsModel, AutoTokenizer',
+  'model_id = sys.argv[1] if len(sys.argv) > 1 else "facebook/mms-tts-eng"',
+  'target_sr = int(sys.argv[2]) if len(sys.argv) > 2 else 24000',
+  'model = VitsModel.from_pretrained(model_id)',
+  'tokenizer = AutoTokenizer.from_pretrained(model_id)',
+  'model.eval()',
+  'sr = int(getattr(model.config, "sampling_rate", 16000))',
+  'with torch.no_grad():',
+  '    _w = tokenizer("hello", return_tensors="pt")',
+  '    _ = model(**_w).waveform',
+  'sys.stdout.write(json.dumps({"ready": True, "model": model_id, "native_sr": sr, "target_sr": target_sr}) + "\\n")',
+  'sys.stdout.flush()',
+  'for line in sys.stdin:',
+  '    line = line.strip()',
+  '    if not line: continue',
+  '    req = json.loads(line)',
+  '    rid = req.get("id")',
+  '    text = (req.get("text") or "").strip()',
+  '    t0 = time.time()',
+  '    try:',
+  '        if not text:',
+  '            sys.stdout.write(json.dumps({"id": rid, "pcm_b64": "", "ms": 0.0}) + "\\n")',
+  '            sys.stdout.flush()',
+  '            continue',
+  '        inputs = tokenizer(text, return_tensors="pt")',
+  '        if inputs["input_ids"].shape[-1] == 0:',
+  '            sys.stdout.write(json.dumps({"id": rid, "pcm_b64": "", "ms": 0.0}) + "\\n")',
+  '            sys.stdout.flush()',
+  '            continue',
+  '        with torch.no_grad():',
+  '            wav = model(**inputs).waveform[0].cpu().numpy().astype(np.float64)',
+  '        n_in = len(wav)',
+  '        if sr != target_sr and n_in > 1:',
+  '            n_out = max(2, int(round(n_in * target_sr / sr)))',
+  '            x_old = np.linspace(0.0, 1.0, n_in, endpoint=False)',
+  '            x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)',
+  '            wav = np.interp(x_new, x_old, wav)',
+  '        peak = float(np.max(np.abs(wav))) if len(wav) else 0.0',
+  '        if peak > 0.98:',
+  '            wav = wav * (0.98 / peak)',
+  '        pcm16 = np.clip(np.round(wav * 32767.0), -32768, 32767).astype("<i2").tobytes()',
+  '        ms = round((time.time() - t0) * 1000.0, 2)',
+  '        sys.stdout.write(json.dumps({"id": rid, "pcm_b64": base64.b64encode(pcm16).decode("ascii"), "ms": ms}) + "\\n")',
+  '        sys.stdout.flush()',
+  '    except Exception as e:',
+  '        sys.stdout.write(json.dumps({"id": rid, "error": str(e)}) + "\\n")',
+  '        sys.stdout.flush()',
+].join('\n');
+
+function pickMmsPython() {
+  for (const p of MMS_PY_CANDIDATES) {
+    if (p === 'python3' || fs.existsSync(p)) return p;
+  }
+  return 'python3';
+}
+
+let mmsProc = null;
+let mmsReady = null;
+let mmsSeq = 0;
+let mmsBuf = '';
+const mmsPending = new Map();
+
+function closeSpeechWorker() {
+  if (mmsProc) {
+    try { mmsProc.kill(); } catch { /* ignore */ }
+    mmsProc = null;
+  }
+  mmsReady = null;
+  for (const [, p] of mmsPending) p.reject(new Error('MMS TTS worker closed'));
+  mmsPending.clear();
+}
+
+function warmSpeech() {
+  if (mmsReady) return mmsReady;
+  mmsReady = new Promise((resolve, reject) => {
+    const py = pickMmsPython();
+    const proc = spawn(py, ['-u', '-c', MMS_WORKER_CODE, MMS_MODEL, String(MMS_SAMPLE_RATE)], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (proc.unref) proc.unref();
+    if (proc.stdin && proc.stdin.unref) proc.stdin.unref();
+    if (proc.stdout && proc.stdout.unref) proc.stdout.unref();
+    if (proc.stderr && proc.stderr.unref) proc.stderr.unref();
+    mmsProc = proc;
+    mmsBuf = '';
+    let settled = false;
+    let errText = '';
+    proc.stderr.on('data', (d) => { errText = (errText + d.toString('utf8')).slice(-600); });
+    proc.stdout.on('data', (d) => {
+      mmsBuf += d.toString('utf8');
+      let nl;
+      while ((nl = mmsBuf.indexOf('\n')) !== -1) {
+        const line = mmsBuf.slice(0, nl).trim();
+        mmsBuf = mmsBuf.slice(nl + 1);
+        if (!line) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.ready && !settled) {
+          settled = true;
+          resolve(msg);
+          continue;
+        }
+        const waiter = mmsPending.get(msg.id);
+        if (waiter) {
+          mmsPending.delete(msg.id);
+          if (msg.error) waiter.reject(new Error(`Meta MMS TTS failed: ${msg.error}`));
+          else waiter.resolve({ pcm: Buffer.from(msg.pcm_b64 || '', 'base64'), ms: msg.ms || 0 });
+        }
+      }
+    });
+    const onFail = (err) => {
+      if (mmsProc === proc) { mmsProc = null; mmsReady = null; }
+      const e = err instanceof Error ? err : new Error(`Meta MMS TTS worker exited (${errText.trim() || err})`);
+      if (!settled) { settled = true; reject(e); }
+      for (const [, p] of mmsPending) p.reject(e);
+      mmsPending.clear();
+    };
+    proc.on('error', onFail);
+    proc.on('exit', (code) => onFail(new Error(`Meta MMS TTS worker exited with code ${code}: ${errText.trim()}`)));
+    if (proc.unref) proc.unref();
+    if (proc.stdin && proc.stdin.unref) proc.stdin.unref();
+    if (proc.stdout && proc.stdout.unref) proc.stdout.unref();
+    if (proc.stderr && proc.stderr.unref) proc.stderr.unref();
+  });
+  return mmsReady;
+}
+
 const MAX_TTS_CONCURRENT = 3;
 let ttsActive = 0;
 const ttsWaiters = [];
 
 async function acquireTtsSlot(signal) {
+  if (signal && signal.aborted) throw signal.reason || new Error('aborted');
   if (ttsActive < MAX_TTS_CONCURRENT) { ttsActive++; return; }
   await new Promise((resolve, reject) => {
     const w = { resolve };
     ttsWaiters.push(w);
-    signal.addEventListener('abort', () => {
-      const i = ttsWaiters.indexOf(w);
-      if (i !== -1) { ttsWaiters.splice(i, 1); reject(signal.reason); }
-    }, { once: true });
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        const i = ttsWaiters.indexOf(w);
+        if (i !== -1) { ttsWaiters.splice(i, 1); reject(signal.reason || new Error('aborted')); }
+      }, { once: true });
+    }
   });
 }
 function releaseTtsSlot() {
@@ -164,28 +307,61 @@ function releaseTtsSlot() {
   if (w) w.resolve(); else ttsActive--;
 }
 
-// Streams PCM16 24 kHz chunks to onChunk(Buffer) as ElevenLabs generates them.
-async function streamSpeech(text, signal, onChunk, previousText, nextText) {
-  await acquireTtsSlot(signal);
-  try {
-    let r;
-    for (let attempt = 0; ; attempt++) {
-      r = await fetch(`${ELEVEN_URL}${encodeURIComponent(process.env.ELEVENLABS_VOICE_ID)}/stream?output_format=pcm_24000`, {
-        method: 'POST',
-        headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, model_id: TTS_MODEL, voice_settings: VOICE_SETTINGS, ...(previousText ? { previous_text: previousText } : {}), ...(nextText ? { next_text: nextText } : {}) }),
-        signal: AbortSignal.any([signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]),
-      });
-      if (r.status !== 429 || attempt >= 2) break;
-      await new Promise((res) => setTimeout(res, 400 * (attempt + 1)));
+async function synthesizeMms(text, signal) {
+  const clean = stripSpeechMarkup(text);
+  if (!clean) return { pcm: Buffer.alloc(0), ms: 0 };
+  await warmSpeech();
+  if (signal && signal.aborted) throw signal.reason || new Error('aborted');
+  const id = ++mmsSeq;
+  return new Promise((resolve, reject) => {
+    let onAbort = null;
+    const cleanup = () => { if (signal && onAbort) signal.removeEventListener('abort', onAbort); };
+    if (signal) {
+      onAbort = () => {
+        mmsPending.delete(id);
+        cleanup();
+        reject(signal.reason || new Error('aborted'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
     }
-    if (!r.ok) throw await upstreamError('ElevenLabs', r);
-    let carry = null; // keep sample alignment: chunks can end mid-sample
-    for await (const part of r.body) {
-      let b = carry ? Buffer.concat([carry, part]) : Buffer.from(part);
-      carry = null;
-      if (b.length % 2) { carry = b.subarray(b.length - 1); b = b.subarray(0, b.length - 1); }
-      if (b.length) onChunk(b);
+    mmsPending.set(id, {
+      resolve: (v) => { cleanup(); resolve(v); },
+      reject: (e) => { cleanup(); reject(e); },
+    });
+    try {
+      mmsProc.stdin.write(`${JSON.stringify({ id, text: clean })}\n`);
+    } catch (e) {
+      mmsPending.delete(id);
+      cleanup();
+      reject(e);
+    }
+  });
+}
+
+// One-shot synthesis returning PCM16 24 kHz mono Buffer (and recording timing in stats when requested).
+async function speak(text, signal) {
+  const sig = signal || new AbortController().signal;
+  await acquireTtsSlot(sig);
+  try {
+    const { pcm } = await synthesizeMms(text, sig);
+    return pcm.length % 2 ? pcm.subarray(0, pcm.length - 1) : pcm;
+  } finally {
+    releaseTtsSlot();
+  }
+}
+
+// Streams PCM16 24 kHz mono chunks to onChunk(Buffer) from the warm local Meta MMS TTS worker.
+const MMS_CHUNK_BYTES = 4800; // 100 ms of 24 kHz 16-bit mono PCM (always even byte count)
+async function streamSpeech(text, signal, onChunk) {
+  const sig = signal || new AbortController().signal;
+  await acquireTtsSlot(sig);
+  try {
+    const { pcm } = await synthesizeMms(text, sig);
+    const aligned = pcm.length % 2 ? pcm.subarray(0, pcm.length - 1) : pcm;
+    for (let off = 0; off < aligned.length; off += MMS_CHUNK_BYTES) {
+      if (sig.aborted) throw sig.reason || new Error('aborted');
+      const slice = aligned.subarray(off, Math.min(off + MMS_CHUNK_BYTES, aligned.length));
+      if (slice.length) onChunk(Buffer.from(slice));
     }
   } finally {
     releaseTtsSlot();
@@ -253,4 +429,4 @@ async function describeImageCore(note, buf, mime, signal) {
   return text.trim();
 }
 
-module.exports = { COMPACT_MARK, developerContent, SHORT_PERSONA, requireRealEnv, sparkStream, sparkComplete, streamSpeech, describeImage, stats, META_URL, liveModel };
+module.exports = { COMPACT_MARK, developerContent, SHORT_PERSONA, requireRealEnv, sparkStream, sparkComplete, streamSpeech, speak, stripSpeechMarkup, warmSpeech, closeSpeechWorker, MMS_MODEL, MMS_SAMPLE_RATE, describeImage, stats, META_URL, liveModel };

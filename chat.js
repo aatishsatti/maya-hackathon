@@ -7,8 +7,8 @@
 //   - one session per profile id; nothing is shared between profiles (every note, memory and alert is keyed by profile id).
 // A reply is never faked: if Spark, Transcribe, vision or the voice fails, the error is returned as it is.
 //
-// Voice notes: the app uploads a WAV (Meta's file Transcribe takes WAV only, see transcribe.js); words -> the brain -> an
-// ElevenLabs voice (brain.streamSpeech, PCM 24 kHz) wrapped as WAV for playback. While a live call exists for the profile
+// Voice notes: the app uploads a WAV (Meta's file Transcribe takes WAV only, see transcribe.js); words -> the brain -> a
+// Meta MMS TTS voice (brain.streamSpeech, PCM 24 kHz) wrapped as WAV for playback. While a live call exists for the profile
 // the reply is text only (no second voice over the call).
 // Photos: Meta vision (brain.describeImage) writes a plain description; the brain answers it as it answers words.
 // Audio and photos are stored only under data/media/<profile id>/ (git-ignored), never in the repo.
@@ -38,10 +38,12 @@ const deps = {
   scam: (buf, mime) => (process.env.META_API_KEY ? Promise.resolve(require('./scam').assess(buf, mime)).then(require('./scam').promote) : null), // Spark vision: is this a scam? (null = no key, no check)
   scamText: (text) => (process.env.META_API_KEY ? Promise.resolve(require('./scam').assessText(text)).then(require('./scam').promote) : null), // Spark text: is what they typed or said a scam? (null = no key, no check)
   official: (words, opts) => require('./official').check(words, opts), // the company they named, looked up on its official site only (official.js; typed chat only). Lookup failure is a fact, never a guess
-  web: (words, opts) => require('./web').lookup(words, opts), // general web check (web.js, Tavily; key in the server env only): for what is not on the official allow-list. A failure is a fact (cannot verify), never a guess
-  speak: (text, previous) => new Promise((resolve, reject) => { // one ElevenLabs piece -> Buffer of PCM16 24 kHz
+  web: (words, opts) => require('./web').lookup(words, opts), // web search is disabled (web.js returns honest no-online-lookup facts only, no external search API)
+  speak: (text, previous) => new Promise((resolve, reject) => { // one Meta MMS TTS piece -> Buffer of PCM16 24 kHz
     const parts = [];
-    require('./brain').streamSpeech(text, new AbortController().signal, (c) => parts.push(c), previous).then(() => resolve(Buffer.concat(parts)), reject);
+    const brain = require('./brain');
+    const clean = typeof brain.stripSpeechMarkup === 'function' ? brain.stripSpeechMarkup(text) : String(text || '');
+    brain.streamSpeech(clean, new AbortController().signal, (c) => parts.push(c), previous).then(() => resolve(Buffer.concat(parts)), reject);
   }),
 };
 
@@ -111,7 +113,7 @@ class ChatSession {
     this.started = false;
     this.closed = false;
     // The same per-conversation state call.js keeps, with the same meaning.
-    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.callbackUsed = false; this._lastCallback = null; this._challenge = null; this.lastReplyAsked = false; this.askHistory = [];
+    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.callbackUsed = false; this.callbackShown = null; this._lastCallback = null; this._challenge = null; this._changedPref = null; this._changedPrefs = new Set(); this.lastReplyAsked = false; this.askHistory = [];
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
@@ -191,12 +193,12 @@ class ChatSession {
           if (owed) { said.text = `${said.text} ${owed}`; if (Array.isArray(said.pieces)) said.pieces.push(owed); const last = this.history[this.history.length - 1]; if (last && last.role === 'assistant') last.content = `${last.content} ${owed}`; social.markAsked(this.profile.id, owed); }
         } catch (e) { console.error('daily-call read-back failed:', e.message); }
       }
-      this.commitReminder();   // the reply is out: a next-call reminder it carried now counts as delivered
+      this.commitReminder(said && said.text);   // the reply is out: a next-call reminder or memory callback it carried now counts as delivered
       return said;
     } catch (e) {
       if (this.history.length && this.history[this.history.length - 1].role === 'user') this.history.pop(); // a failed turn cannot poison the next one
       throw e instanceof ChatError ? e : new ChatError(e.message);
-    } finally { this.scamReply = null; this.shortReply = false; this.firstEver = false; this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.armIdle(); }
+    } finally { this.scamReply = null; this.shortReply = false; this.firstEver = false; this.focus = null; this.reminderShown = null; this.callbackShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.armIdle(); }
   }
 
   // How Maya is in the written chat, as FACTS for her own words (never a script): the first ever message is a short, slow hello that says who she is; after it she is short and gentle, learns one small
@@ -222,7 +224,7 @@ class ChatSession {
   }
 
   // Runs Spark through the same splitter and delivery rules as speakReply, without audio. Returns { text, feel }.
-  async reply(note, { again = false, safetyRetry = false } = {}) {
+  async reply(note, { again = false, safetyRetry = false, challengeFinal = false } = {}) {
     if (!again) this.guardBlocked = false;
     this._q = 0; this._cats = null; if (!again) this._why = null;
     const signal = AbortSignal.timeout(REPLY_TIMEOUT_MS);
@@ -278,7 +280,7 @@ class ChatSession {
     } catch (e) {
       if (!(e && e.empty && !pieces.length)) throw new ChatError(`Maya could not answer: ${e.message}`);
     }
-    if (splitter.halted && repeated) return this.reply(`${note} ${retryWhy === 'facts' ? `Your draft said "${repeated}", which the app's facts do not support${this._why ? ` (${this._why})` : ''} (a family alert that was never made, a reason nobody gave, or a stock comfort line). Write the whole reply again in plain, short, direct words: say only what the FAMILY ALERTS fact says, no excuse, no soothing line.` : retryWhy === 'beat' ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.` : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`}`, { again: true });
+    if (splitter.halted && repeated) return this.reply(`${note} ${retryWhy === 'facts' ? `Your draft said "${repeated}", which the app's facts do not support${this._why ? ` (${this._why})` : ''}${this._challengeWhy ? `. ${require('./smart').challengeRetryNote(this)}` : ' (a family alert that was never made, a reason nobody gave, or a stock comfort line). Write the whole reply again in plain, short, direct words: say only what the FAMILY ALERTS fact says, no excuse, no soothing line.'}` : retryWhy === 'beat' ? `Your draft began "${repeated}", but this reply must not ask a question. Write the whole reply again from the start as a short statement, in your own words.` : `Your draft began "${repeated}", which repeats something you already said. Write the whole reply again from the start, opening in completely different words, with no stock comfort phrase and no mention of who you are.`}`, { again: true });
     if (splitter.halted && !safetyRetry) { // Spark read the person as in crisis before saying anything: Tier A, then the reply is written again with the safety note
       this.enterSafety();
       return this.reply(`${this.replyNote()} ${this.safetyNote()}`, { safetyRetry: true });
@@ -288,6 +290,10 @@ class ChatSession {
       const lab = (this.factLabels || []).find((l) => /^(scam-(family-owed|resume|lost))/.test(l));
       const Q = { 'scam-family-owed': 'Would you like me to let your family know about this?', 'scam-resume': 'Would you like me to let your family know about that?', 'scam-lost': 'I lost that set-up while you were away, so nothing was sent. What happened, and would you like me to let your family know?' };
       if (lab) pieces.push({ text: Q[lab], kind: null });
+    }
+    if (!pieces.length && again && !challengeFinal && (require('./smart').flag('GUARD') || require('./smart').stateFlag('GUARD')) && this.guardBlocked && this._challengeWhy) {
+      this.guardBlocked = false;
+      return this.reply(`${note} ${require('./smart').challengeRetryNote(this)}`, { again: true, challengeFinal: true });
     }
     if (!pieces.length && again && (require('./smart').flag('GUARD') || require('./smart').stateFlag('GUARD')) && this.guardBlocked) { pieces.push({ text: require('./smart').fallback(this), kind: null }); this.guardBlocked = false; }   // both drafts broke the guard: a plain true line, never the bad draft
     if (!pieces.length && again && this._medical) { pieces.push({ text: require('./medical').FALLBACK, kind: null }); this._medicalFailed = true; }   // the drafts were blocked piece by piece: the plain no-content line, a recorded failure
@@ -461,38 +467,38 @@ async function sendText(profileId, text, tz, opts = {}) {
   if (require('./official').asking(s.rc) && !care.hasActiveSafety(profileId) && !selfHarmText(t)) { off = await officialStep(s, profileId, t, null); if (off) scam = off.scam; }
   const chk = {};
   if (!off) { scam = await talkCheck(profileId, t, chk); if (scam && (scam.level === 'warn' || scam.level === 'pause')) off = await officialStep(s, profileId, t, scam); }
-  // Anything else that needs checking (news, a claim, a medicine): the general web check; a failed search tells her she cannot verify it.
+  // Web search is stripped: medicine is refused via medical.js; daily-life news/claims get the honest no-online-lookup constraint (no external search, no sources).
   const tt = talkTurn(scam, profileId, off);
-  let sources = [], webFailed = false, g = null;
   if (!off && (!scam || scam.level === 'none') && !care.hasActiveSafety(profileId) && !s.health && !s.safety && !selfHarmText(t)) {
-    // A medicine matter is decided HERE, before any lookup or cache read: no Tavily request, no sources (the refusal constraints are added by careNotes, in the same turn). It is not a failed search.
     const medical = require('./medical');
     if (!medical.classify(t, { prior: medical.fresh(s.mctx) })) {
-      const prior = (s.thread || []).filter((m) => m.role === 'senior' && m.kind === 'text'), prevUser = prior.length >= 2 ? String(prior[prior.length - 2].text || '').slice(0, 300) : '';   // only to resolve a bare "is that true?"
-      try { g = await deps.web(t, { scope: profileId, ctx: { prevUser } }); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; webFailed = true; }
-      const wn = require('./web').note(g); if (wn) { tt.note = [tt.note, wn].filter(Boolean).join(' '); tt.short = true; sources = require('./web').sources(g); }
+      const prior = (s.thread || []).filter((m) => m.role === 'senior' && m.kind === 'text'), prevUser = prior.length >= 2 ? String(prior[prior.length - 2].text || '').slice(0, 300) : '';
+      const g = await Promise.resolve().then(() => deps.web(t, { scope: profileId, ctx: { prevUser } })).catch(() => null);
+      const wn = require('./web').note(g);
+      if (wn) { tt.note = [tt.note, wn].filter(Boolean).join(' '); tt.short = true; }
     }
   }
   const due = care.checkDueIds(profileId);
   // smart.js: what really ran this turn (the record card and the draft guard use it) and what the scam check said (the decision uses it). Read only there; a flag OFF ignores both.
   s._scam = { scam, failed: Boolean(chk.failed), needed: require('./scam').needsCheck(t) };
-  s._exec = { scam: scam ? 'ran' : chk.failed ? 'failed' : null, web: sources.length ? 'ran' : webFailed ? 'failed' : null };
+  s._exec = { scam: scam ? 'ran' : chk.failed ? 'failed' : null, web: null };
   const r = await s.turn({ heard: t, ...tt });
-  if (g) sources = require('./web').boundSources(g, r.text);   // what is attributed is what the FINAL answer actually uses (a rewrite or fallback that dropped the research keeps nothing)
   require('./smart').afterReply(s, r.text);   // MEMORY flag: the questions she just asked (content words only, kept on the profile 14 days)
   care.checkDelivered(profileId, due);   // a finished lookup was handed to her with this reply: told once
   afterTalkReply(profileId, scam, 'text', off, r.text);
-  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text, ...(sources.length ? { sources } : {}) })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
+  return { messages: [you, s.push({ role: 'maya', kind: 'text', text: r.text })], ...(scam && scam.level !== 'none' ? { scam: scam.level } : {}) };
 }
 
-// Maya's voice for a written reply: each piece with the same delivery tag and gain as a call (call.js TONES), joined as WAV.
+// Maya's voice for a written reply: each piece stripped of speech-presentation markup and synthesized via Meta MMS TTS, joined as WAV.
 async function voiceFor(pieces) {
   const bufs = [];
   let previous;
+  const brain = require('./brain');
   for (const p of pieces) {
     const tone = TONES[p.kind];
-    const text = p.text.replace(/^[,;:\s]+/, '');
-    let pcm = await deps.speak(tone ? `${tone[0]} ${text}` : text, previous);
+    const rawText = p.text.replace(/^[,;:\s]+/, '');
+    const text = typeof brain.stripSpeechMarkup === 'function' ? brain.stripSpeechMarkup(rawText) : rawText;
+    let pcm = await deps.speak(text, previous);
     if (tone && tone[1] !== 1) pcm = scale(pcm, tone[1]);
     bufs.push(pcm, Buffer.alloc(120 * 48)); // 24 kHz s16 mono = 48 bytes per ms; a short breath between pieces
     previous = text.slice(-300);
@@ -569,8 +575,8 @@ function scamNote(scam, profileId) {
   const declined = Boolean(profileId && care.scamDeclined(profileId, scam.type)), told = Boolean(profileId && care.scamTold(profileId));
   const signs = require('./scam').said(scam.signals).join('; ');
   // Principles only (like the typed / spoken note in scam.js): Spark finds her own words for the warning; the app dictates no phrase.
-  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words of your own, in AT MOST THREE short sentences in all (the question below, when one is due, is the last of the three): first what it says, from this reading: ${scam.reading}, and that it looks like a scam, never that it is certain; then ask them not to pay, send money, share codes or details, or reply yet, and to check with the real company or bank themselves through a number or website they already trust; never give a number yourself. Spend no sentence on what you could or could not verify. ${declined ? 'They already said NO to letting their family know about this: do NOT ask again; nothing was sent.' : told ? 'Their family was ALREADY told about a possible scam earlier: do NOT ask whether to tell them, and do not say you have just told them.' : 'Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.)'} No diagnosis, no legal advice, no guarantee, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
-  return `SCAM CHECK (a fact from the app, not from them): what they showed you has one warning sign (${signs}). Say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. No phone numbers, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
+  if (scam.level === 'warn') return `SCAM CHECK (a fact from the app, not from them): what they showed you looks like a possible ${scam.type}, with several warning signs (${signs}). In plain, calm words of your own, in AT MOST THREE short sentences in all (the question below, when one is due, is the last of the three): first what it says, from this reading: ${scam.reading}, and that it looks like a possible scam, never that it is certain; then ask them not to pay, send money, share codes or details, or reply yet, and to check with the real company or bank themselves through a number or website they already trust; never give a number yourself, never claim web verification of a company or prize, and never claim you catch every scam. Spend no sentence on what you could or could not verify. ${declined ? 'They already said NO to letting their family know about this: do NOT ask again; nothing was sent.' : told ? 'Their family was ALREADY told about a possible scam earlier: do NOT ask whether to tell them, and do not say you have just told them.' : 'Then ask ONE short question: would they like you to let their family know? (This overrides any earlier instruction about not asking a question: ask it.)'} No diagnosis, no legal advice, no guarantee, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
+  return `SCAM CHECK (a fact from the app, not from them): what they showed you has one warning sign (${signs}). Say in one or two short sentences what it says, in your own words, from this reading: "${scam.reading}". Then gently suggest they check with their family or the real company before replying or paying. Do not call it a scam and do not ask about telling their family. Never claim web verification of a company or prize. No phone numbers, no names or blame. Keep it short, warm and plain.${SCAM_FEEL}`;
 }
 
 async function sendImage(profileId, buf, caption, tz, opts = {}) {
@@ -599,12 +605,7 @@ async function sendImage(profileId, buf, caption, tz, opts = {}) {
     else if (photoWarn) off = await O.look(`${seen} ${said}`, { run: (w, o) => deps.official(w, o) });
   }
   const shaped = off && off.scam ? off.scam : scam;
-  // A web address, e-mail or company on the screenshot that the allow-list did not settle: the web look-up runs in the BACKGROUND and she says she is looking into it.
-  let started = '';
-  if ((photoWarn || (off && off.resolved)) && !care.hasActiveSafety(profileId) && require('./web').extract(`${seen} ${said}`, { scam: true }).some((tp) => tp.kind === 'link' || tp.kind === 'company') && !(off && off.official && off.official.found)) {
-    if (require('./checks').start(profileId, `${seen} ${said}`, { official: deps.official, web: (x, o) => deps.web(x, { ...o, scope: profileId }), skipOfficial: true })) started = require('./checks').startedNote();
-  }
-  const note = [off && off.resolved ? '' : scamNote(scam, profileId), off ? off.note : '', started, require('./phone').fact(`${seen} ${said}`)].filter(Boolean).join(' ');
+  const note = [off && off.resolved ? '' : scamNote(scam, profileId), off ? off.note : '', require('./phone').fact(`${seen} ${said}`)].filter(Boolean).join(' ');
   const due = care.checkDueIds(profileId);
   const r = await s.turn({ heard: said, message, how: 'image', note, scam: shaped && shaped.level !== 'none' ? shaped.level : null });
   care.checkDelivered(profileId, due);

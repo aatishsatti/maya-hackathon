@@ -218,21 +218,29 @@ function focusedMemory(m, focus, tz) {
   const up = recall.upcoming(m, t);
   if (up.length) bits.push(`Dates around now, worked out for you: ${up.map((u) => `${u.text} ${u.when}`).join('; ')}`);
   const kind = { person: 'Person', story: 'Told about', event: 'Life event', likes: 'Likes', current: 'Happening around them', topic: 'Recent topic' };
-  const sel = recall.select(m, focus.text, t, { k: 6 }).filter((x) => x.kind !== 'person');
+  const sel = recall.select(m, focus.text, t, { k: 6, changed: focus.changed }).filter((x) => x.kind !== 'person');
   bits.push(sel.length
     ? `Notes that relate to what they just said (only what they told you): ${sel.map((x) => `${kind[x.kind]}${x.told ? `, told ${x.told}` : ''}${x.date ? `, date ${x.date}` : ''}: ${x.who ? `${x.who}: ` : ''}${x.text}`).join(' | ')}`
     : 'None of your other notes relate to what they just said.');
   let out = `What you remember, for this reply (only what they told you; other notes exist but are not shown now, so if they ask about something not shown, say honestly that you cannot think of it right now): ${bits.join('. ')}.`;
   if (focus.challenge) {
-    out += focus.challenge.status === 'recorded'
-      ? ` MEMORY CHALLENGE (true senior-told record; fact: ${focus.challenge.fact}): they are challenging how you know this or saying they never told you. Stand by the record calmly and kindly in your own words: say they did tell you earlier and state only the record fact (${focus.challenge.fact}), while clarifying you were asking rather than assuming about today. NEVER say you added it yourself, guessed, or made it up.`
-      : ' MEMORY CHALLENGE (no record in their profile): they are challenging something that is NOT in your notes of what they told you. Say honestly and plainly in your own words that you do not remember them telling you that; NEVER claim they told you earlier and NEVER claim you remembered it.';
+    if (focus.challenge.status === 'recorded') {
+      out += focus.challenge.challengeKind === 'event'
+        ? ` MEMORY CHALLENGE (true senior-told record; challenge kind: event; remembered preference fact: ${focus.challenge.fact}; unsupported inference today: ${focus.challenge.topic}${focus.challenge.newToday ? `; current kind today: ${focus.challenge.newToday}` : ''}): give a SCOPED correction in your own words, never total denial and never arguing. Acknowledge the inference error about today (you did not know today's was ${focus.challenge.topic}), stand by the genuine preference record they told you earlier (${focus.challenge.fact})${focus.challenge.newToday ? `, and warmly accept ${focus.challenge.newToday} for today` : ''}. NEVER say you do not remember them telling you about ${focus.challenge.topic}, NEVER say you added it yourself, guessed, or made it up, and do NOT argue with them.`
+        : ` MEMORY CHALLENGE (true senior-told record; challenge kind: preference; fact: ${focus.challenge.fact}): they are challenging how you know this or saying they never told you. Stand by the record calmly and kindly in your own words: say they did tell you earlier and state only the record fact (${focus.challenge.fact}), while clarifying you were asking rather than assuming about today. NEVER say you do not remember them telling you, NEVER say you added it yourself, guessed, or made it up, and do NOT argue with them.`;
+    } else {
+      out += ' MEMORY CHALLENGE (no record in their profile): no eligible senior-told record substantiates this, which means your notes cannot confirm it (NOT proof they never said it). Say honestly and plainly in your own words that you do not have a note of that or cannot think of it right now; NEVER claim they told you earlier and NEVER claim you remembered it, and NEVER say "you never told me" or make a hard denial of their history.';
+    }
+  } else if (focus.changedPref) {
+    out += ` PREFERENCE CHANGE IN CONVERSATION (topic: ${focus.changedPref.topic}): they just told you their preference has changed. Accept what they like or do not like now warmly in your own words; do NOT override them with an older preference in this conversation, and NEVER promise or claim to forget, delete, or update your saved notes.`;
   } else if (focus.thread && focus.reminder) out += ` REMINDER THEY ASKED YOU FOR (a fact for you, not words to say; they wanted you to remind them on their next call, and this is that call): ${focus.thread}. Remind them of it once, simply, in your own words, task first, early in this reply. Add no advice, no health or dose words and nothing about it that they did not say.`;
   else if (focus.thread) out += ` Open follow-up from an earlier call (a fact for you, not words to say): ${focus.thread}. If it fits the moment, ask about it once, simply, in your own words, early in this reply; if what they are saying makes it awkward, leave it.`;
   else if (focus.callback) {
     out += focus.callback.confirmed
       ? ` RELEVANT MEMORY CALLBACK (a fact they told you earlier, not words to copy; topic match: ${focus.callback.topic}; fact: ${focus.callback.fact}; confirmed this turn: yes): they confirmed this kind in this turn, so a warm acknowledgement in your own words is fine, no question needed; add nothing they did not tell you.`
-      : ` RELEVANT MEMORY CALLBACK (a fact they told you earlier, not words to copy; topic match: ${focus.callback.topic}; fact: ${focus.callback.fact}; question instruction: ask a question referencing this fact, do NOT assert it): they have NOT confirmed the specific kind or detail in this turn, so do NOT assert or assume they had or did that kind right now — ask ONE short question in your own words referencing the liked fact instead of asserting it, once only, and add nothing they did not tell you.`;
+      : ` RELEVANT MEMORY CALLBACK (optional — once-per-conversation ceiling, not a quota; omit entirely if it would interrupt grief, a task, or their actual point; a fact they told you earlier, not words to copy; topic match: ${focus.callback.topic}; fact: ${focus.callback.fact}; question instruction: ask a non-leading question referencing this fact, do NOT assert it): they have NOT confirmed the specific kind or detail in this turn, so do NOT assert or assume they had or did that kind right now, and do NOT ask a leading question assuming today was that kind. Separate past preference from today's event: ask ONE short question in your own words about what kind they had/did today while referencing the liked fact separately, once only, do not require an answer to continue, and add nothing they did not tell you.`;
+  } else if (sel.length) {
+    out += ` For any note above whose specific kind or detail they have NOT confirmed in this turn, do NOT assert or assume it happened today${focus.callbackUsed ? ' and do NOT bring up another spontaneous callback in this conversation' : '; if you reference it, ask ONE short non-leading question separating their past preference from today'}.`;
   }
   return out;
 }
@@ -291,8 +299,11 @@ function profileNote(p, tz, focus = null) {
   m.preferences.forEach((x) => mem.push(`Likes, told ${x.told}: ${who(x)}${x.text}`));
   m.current.forEach((x) => mem.push(`Happening around them, told ${x.told}: ${who(x)}${x.text}`));
   m.topics.slice(-5).forEach((x) => mem.push(`Recent topic, ${x.told}: ${x.text}`));
-  if (focus && !focus.full && (mem.length || focus.thread || focus.callback)) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
-  else lines.push(mem.length ? `What you remember (only what they told you; nothing else is known): ${mem.join(' | ')}` : 'You have no memories of this person yet.');
+  if (focus && !focus.full && (mem.length || focus.thread || focus.callback || focus.challenge || focus.changedPref)) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
+  else {
+    lines.push(mem.length ? `What you remember (only what they told you; nothing else is known): ${mem.join(' | ')}` : 'You have no memories of this person yet.');
+    if (focus && focus.full) lines.push(`USER-PROMPTED RECALL: answer ONLY what they asked using only their own senior-told notes above; do NOT introduce extra unrelated facts${focus.alreadyMentioned ? `, and do NOT redundantly repeat a fact already mentioned earlier in this conversation (${focus.alreadyMentioned}) unless they specifically asked about it` : ''}.`);
+  }
   return lines.join(' ');
 }
 

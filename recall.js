@@ -60,10 +60,15 @@ function score(item, userText, today) {
 
 // The few items worth putting in front of Spark for this turn. Returns [{ kind, who, text, told, score }], best first, at most k.
 // People are matched by name (and by what was told about them); a person named in the turn always brings their relationship.
-function select(memory, userText, today, { k = 6 } = {}) {
+function select(memory, userText, today, { k = 6, changed = null } = {}) {
   const m = memory || {};
+  const chSet = changedSetFrom(changed);
   const out = [];
-  const add = (kind, item, extra = {}) => { const s = score(item, userText, today); if (s > 0) out.push({ kind, who: item.who || '', text: item.text, told: item.told || '', score: s, ...extra }); };
+  const add = (kind, item, extra = {}) => {
+    if (chSet.size && words(item.text).some((w) => !BROAD_TOPICS.has(w) && chSet.has(w))) return;
+    const s = score(item, userText, today);
+    if (s > 0) out.push({ kind, who: item.who || '', text: item.text, told: item.told || '', score: s, ...extra });
+  };
   for (const p of m.people || []) {
     const named = words(p.name).some((w) => new Set(words(userText)).has(w));
     if (named) out.push({ kind: 'person', who: p.name, text: p.relationship ? `${p.name}, ${p.relationship}` : p.name, told: '', score: 5 });
@@ -229,37 +234,101 @@ function seniorToldItem(x, text = '') {
 const topicWords = (text, ownerWords) => words(text).filter((w) => !CALLBACK_FILLER.has(w) && !ownerWords.has(w));
 const relatedMatch = (w, uSet) => TOPIC_GROUPS.some((g) => g.includes(w) && g.some((x) => x !== w && uSet.has(x)));
 const BROAD_TOPICS = new Set(TOPIC_GROUPS.flat());
-const CHALLENGE_TEXT = /\b(?:i\s+(?:never|didn'?t|did\s+not|haven'?t|have\s+not)\s+(?:ever\s+)?(?:tell|told|say|said|mention\w*|share\w*)\b|(?:when|where|how)\s+(?:did|do|would|could)\s+you\s+(?:ever\s+)?(?:know|remember|hear|get|learn|find\s+out)\b|when\s+did\s+i\s+(?:ever\s+)?(?:tell|say|mention|share)\b|who\s+told\s+you\b|did\s+i\s+(?:ever\s+)?(?:tell|say|mention)\s+(?:to\s+you|you)\b|you\s+(?:just\s+)?(?:made\s+(?:that|it)\s+up|guessed\s+(?:that|it)|invented\s+(?:that|it)|added\s+that)\b|did\s+you\s+(?:just\s+)?(?:guess|make\s+(?:that|it)\s+up)\b)/i;
+const CHALLENGE_TEXT = /\b(?:i\s+(?:never|didn'?t|did\s+not|haven'?t|have\s+not)\s+(?:ever\s+)?(?:tell|told|say|said|mention\w*|share\w*)\b|(?:when|where|how)\s+(?:did|do|would|could)\s+you\s+(?:ever\s+)?(?:know|remember|hear|get|learn|find\s+out|think)\b|when\s+did\s+i\s+(?:ever\s+)?(?:tell|say|mention|share)\b|who\s+told\s+you\b|did\s+i\s+(?:ever\s+)?(?:tell|say|mention)\s+(?:to\s+you|you)\b|you\s+(?:just\s+)?(?:made\s+(?:that|it)\s+up|guessed\s+(?:that|it)|invented\s+(?:that|it)|added\s+that)\b|did\s+you\s+(?:just\s+)?(?:guess|make\s+(?:that|it)\s+up)\b)/i;
 const CHALLENGE_SKIP = /\b(?:remind\w*|alarms?|timers?|schedul\w*|daily\s+calls?|stop\s+calling|call\s+me|ring\s+me|phone\s+me|alert\w*|scam\w*|fraud)\b/i;
-const CHALLENGE_STOP = new Set('about added afternoon assume assumed before claim claimed come came could day days did didnt does dont drink drinking drinks earlier eat eating eats evening ever find found friend friends from get getting got guess guessed had has have having hear heard how invent invented just kind kinds know knowing knew learn learned like liked likes love loved loves made make making maybe mean meant memory mention mentioned morning myselves myself never night note notes now only out part prefer preferred prefers remember remembered right said say saying says share shared some something suppose supposed tell telling tells thing things think thinking thought time times today together told took true turn turns two used wait what when where which who why with would yesterday you your yourself'.split(' '));
+const CHALLENGE_STOP = new Set('about added afternoon assume assumed before claim claimed come came could day days did didn didnt does doesn dont don drink drinking drinks earlier eat eating eats evening ever find found friend friends from get getting got guess guessed had has have having hear heard how invent invented just kind kinds know knowing knew learn learned like liked likes love loved loves made make making maybe mean meant memory mention mentioned morning myselves myself never night note notes now only out part prefer preferred prefers remember remembered right said say saying says share shared some something suppose supposed tell telling tells thing things think thinking thought time times today together told took true turn turns two used wait what when where which who why with would yesterday you your yourself'.split(' '));
+const CHANGED_PREF_RE = /\b(?:i\s+(?:don'?t|do\s+not|no\s+longer)\s+(?:like|love|drink|eat|enjoy|want|care\s+for)\b|i\s+(?:stopped|quit|gave\s+up)\s+(?:drinking|eating|having|liking)\b|i(?:'m|\s+am)\s+(?:off|done\s+with|tired\s+of)\b|i\s+hate\b|not\s+a\s+fan\s+of\b)/i;
+const CHANGED_STOP = new Set('anymore longer stopped stop quit gave hate fan tired done off now'.split(' '));
+const QUOTED_OTHER_RE = /\b(?:he|she|they|my\s+(?:friend|sister|brother|son|daughter|neighbor|neighbour|wife|husband|coworker))\s+(?:said|told\s+me|says|asked|likes?|loves?|prefers?|had|drank|ate)\b/i;
+const SELF_ACTOR_RE = /\b(?:i|we)\s+(?:had|drank|ate|made|like|love|enjoy|prefer|want|am\s+having|are\s+having|am\s+drinking|are\s+drinking|am\s+making)\b/i;
+
+function isQuotingOtherOnly(userText) {
+  const raw = String(userText || '').replace(/[\u2018\u2019]/g, "'");
+  if (!raw) return false;
+  const unquoted = raw.replace(/["“][^"”]*["”]/g, ' ');
+  if (QUOTED_OTHER_RE.test(unquoted) && !SELF_ACTOR_RE.test(unquoted)) return true;
+  return false;
+}
+
+function changedSetFrom(changed) {
+  if (!changed) return new Set();
+  if (changed instanceof Set) return changed;
+  if (Array.isArray(changed)) return new Set(changed);
+  return new Set();
+}
+
+function changedPreference(memory, userText, opts = {}) {
+  const raw = String(userText || '').replace(/[\u2018\u2019]/g, "'");
+  if (!raw || !CHANGED_PREF_RE.test(raw) || CHALLENGE_TEXT.test(raw) || DAILY_CALL_TEXT.test(raw) || MEDICINE_TEXT.test(raw) || CHALLENGE_SKIP.test(raw)) return null;
+  if (isQuotingOtherOnly(raw)) return null;
+  const m = memory && typeof memory === 'object' && memory.memory && typeof memory.memory === 'object' ? memory.memory : (memory || {});
+  const owner = String(opts.ownerName || (memory && memory.name) || '').trim();
+  const ownerWords = new Set(words(owner));
+  const qWords = words(raw).filter((w) => !CHALLENGE_STOP.has(w) && !CALLBACK_FILLER.has(w) && !CHANGED_STOP.has(w) && !ownerWords.has(w));
+  if (!qWords.length) return null;
+  const specific = qWords.filter((w) => !BROAD_TOPICS.has(w));
+  const target = specific.length ? specific : qWords;
+  const items = [
+    ...(m.preferences || []),
+    ...(m.people || []).flatMap((p) => (p && seniorToldItem(p, `${p.name || ''} ${p.relationship || ''}`)) ? (p.stories || []) : []),
+    ...(m.events || []),
+    ...(m.current || []),
+    ...(m.topics || []),
+  ];
+  const hasStored = items.some((it) => {
+    if (!seniorToldItem(it, it && it.text)) return false;
+    const iSet = new Set(words(it && it.text));
+    return target.some((w) => iSet.has(w));
+  });
+  if (!hasStored) return null;
+  return { words: qWords, specific, topic: specific[0] || qWords[0] || '', text: clip(raw, 200) };
+}
 
 function challengeFact(memory, userText, today = '', opts = {}) {
   const raw = String(userText || '').replace(/[\u2018\u2019]/g, "'");
   if (!raw || !CHALLENGE_TEXT.test(raw) || DAILY_CALL_TEXT.test(raw) || MEDICINE_TEXT.test(raw) || CHALLENGE_SKIP.test(raw)) return null;
   const m = memory && typeof memory === 'object' && memory.memory && typeof memory.memory === 'object' ? memory.memory : (memory || {});
+  const profileId = String(opts.profileId || (memory && memory.id) || '').trim();
   const owner = String(opts.ownerName || (memory && memory.name) || '').trim();
   const ownerWords = new Set(words(owner));
   const qWords = words(raw).filter((w) => !CHALLENGE_STOP.has(w) && !CALLBACK_FILLER.has(w) && !ownerWords.has(w));
   if (!qWords.length) {
     const last = opts.lastCallback;
-    if (last && last.fact && last.text) return { status: 'recorded', topic: last.topic || '', who: last.who || '', text: last.text, told: last.told || '', fact: last.fact };
-    return null;
+    const sameProfile = !profileId || !last || !last.profileId || last.profileId === profileId;
+    if (last && last.delivered !== false && last.fresh !== false && sameProfile && last.fact && last.text && seniorToldItem(last, last.text)) {
+      return { status: 'recorded', challengeKind: 'preference', topic: last.topic || '', who: last.who || '', text: last.text, told: last.told || '', fact: last.fact, newWords: [], newToday: '' };
+    }
+    return { status: 'unrecorded', challengeKind: 'preference', topic: '', who: '', text: '', told: '', fact: '', newWords: [], newToday: '' };
   }
   const specificQ = qWords.filter((w) => !BROAD_TOPICS.has(w));
+  const broadQ = qWords.filter((w) => BROAD_TOPICS.has(w));
+  const eventFraming = /\b(?:i|we)\s+(?:had|drank|ate|made|ordered|got|were\s+having|was\s+having|were\s+drinking|was\s+drinking)\b|\b(?:today|just\s+now|this\s+(?:morning|afternoon|evening)|with\s+(?:my|a)\s+friend)\b/i.test(raw)
+    && !/\b(?:never|didn'?t|did\s+not)\s+(?:ever\s+)?(?:tell|told|say|said|mention\w*)\s+you\s+i\s+(?:like\w*|love\w*|enjoy\w*|prefer\w*)\b/i.test(raw);
   const matches = [];
   const checkItem = (kind, item, factText, coreText, personWords = []) => {
     if (!seniorToldItem(item, factText)) return;
     const fWords = topicWords(coreText, ownerWords);
     const pWords = personWords.filter((w) => !ownerWords.has(w));
     const iSet = new Set([...pWords, ...fWords, ...words(factText)]);
-    if (specificQ.length ? !specificQ.every((w) => iSet.has(w)) : !qWords.every((w) => iSet.has(w))) return;
-    const hitCount = qWords.filter((w) => iSet.has(w)).length;
+    let matchedSpecific = [];
+    let newWords = [];
+    if (specificQ.length) {
+      matchedSpecific = specificQ.filter((w) => iSet.has(w));
+      if (!matchedSpecific.length) return;
+      const itemBroad = [...iSet].filter((w) => BROAD_TOPICS.has(w));
+      if (broadQ.length && itemBroad.length && !broadQ.some((w) => iSet.has(w) || relatedMatch(w, iSet))) return;
+      newWords = specificQ.filter((w) => !iSet.has(w));
+    } else {
+      if (!qWords.every((w) => iSet.has(w))) return;
+    }
+    const hitCount = (matchedSpecific.length ? matchedSpecific.length * 2 : 0) + broadQ.filter((w) => iSet.has(w)).length;
     if (!hitCount) return;
     const who = clip(item.who || item.name || '', 40);
     const cleanText = clip(factText, 200);
     const told = ISO.test(String(item.told)) ? String(item.told) : '';
     const fact = `${who ? `${who}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`;
-    matches.push({ kind, who, text: cleanText, told, topic: (specificQ[0] || qWords[0] || ''), fact, rank: hitCount * 10 + (kind === 'likes' ? 4 : kind === 'story' ? 3 : 2) });
+    const challengeKind = newWords.length > 0 || eventFraming ? 'event' : 'preference';
+    matches.push({ kind, who, text: cleanText, told, topic: (matchedSpecific[0] || qWords[0] || ''), fact, challengeKind, newWords, newToday: newWords.join(' '), rank: hitCount * 10 + (kind === 'likes' ? 4 : kind === 'story' ? 3 : 2) });
   };
   for (const x of m.preferences || []) checkItem('likes', x, x.text, x.text);
   for (const p of m.people || []) {
@@ -278,20 +347,22 @@ function challengeFact(memory, userText, today = '', opts = {}) {
   if (matches.length) {
     matches.sort((a, b) => b.rank - a.rank);
     const best = matches[0];
-    return { status: 'recorded', topic: best.topic, who: best.who, text: best.text, told: best.told, fact: best.fact };
+    return { status: 'recorded', challengeKind: best.challengeKind, topic: best.topic, who: best.who, text: best.text, told: best.told, fact: best.fact, newWords: best.newWords, newToday: best.newToday };
   }
-  return { status: 'unrecorded', topic: (specificQ[0] || qWords[0] || ''), who: '', text: '', told: '', fact: '' };
+  return { status: 'unrecorded', challengeKind: eventFraming ? 'event' : 'preference', topic: (specificQ[0] || qWords[0] || ''), who: '', text: '', told: '', fact: '', newWords: [], newToday: '' };
 }
 
-function callbackFact(memory, userText, today = '', opts = {}) {
-  const session = opts && typeof opts.session === 'object' ? opts.session : null;
-  if (!userText || opts.heavy || opts.callbackUsed || opts.used || (session && session.callbackUsed)) return null;
-  if (heavyTalk(userText) || MEDICINE_TEXT.test(String(userText)) || CHALLENGE_TEXT.test(String(userText).replace(/[\u2018\u2019]/g, "'"))) return null;
-  const uSet = new Set(words(userText));
-  if (!uSet.size) return null;
+function unconfirmedFacts(memory, userText, today = '', opts = {}) {
+  const raw = String(userText || '').replace(/[\u2018\u2019]/g, "'");
+  if (!raw || heavyTalk(raw) || MEDICINE_TEXT.test(raw) || CHALLENGE_TEXT.test(raw) || CHANGED_PREF_RE.test(raw)) return [];
+  const selfText = raw.replace(/(?:he|she|they|my\s+(?:friend|sister|brother|son|daughter|neighbor|neighbour|wife|husband))\s+(?:said|told\s+me|says|had|drank|likes?|loves?)\s*[:,]?\s*["“][^"”]*["”]/gi, ' ');
+  const uSet = new Set(words(isQuotingOtherOnly(raw) ? '' : selfText));
+  const fullUSet = new Set(words(raw));
+  if (!fullUSet.size) return [];
   const m = memory && typeof memory === 'object' && memory.memory && typeof memory.memory === 'object' ? memory.memory : (memory || {});
   const owner = String(opts.ownerName || (memory && memory.name) || '').trim();
   const ownerWords = new Set(words(owner));
+  const changed = changedSetFrom(opts.changed);
   const candidates = [];
   const consider = (kind, item, factText, coreText, personWords = []) => {
     if (!seniorToldItem(item, factText)) return;
@@ -299,10 +370,12 @@ function callbackFact(memory, userText, today = '', opts = {}) {
     const pWords = personWords.filter((w) => !ownerWords.has(w));
     const allWords = [...new Set([...pWords, ...fWords])];
     if (!allWords.length) return;
+    if (changed.size && allWords.some((w) => !BROAD_TOPICS.has(w) && changed.has(w))) return;
     const directCore = fWords.filter((w) => uSet.has(w));
     const directPerson = pWords.filter((w) => uSet.has(w));
-    const related = allWords.filter((w) => !uSet.has(w) && relatedMatch(w, uSet));
-    const hits = [...new Set([...directPerson, ...directCore, ...related])];
+    const related = allWords.filter((w) => !uSet.has(w) && relatedMatch(w, fullUSet));
+    const broadHits = allWords.filter((w) => BROAD_TOPICS.has(w) && fullUSet.has(w));
+    const hits = [...new Set([...directPerson, ...directCore, ...related, ...broadHits])];
     if (!hits.length) return;
     const checkWords = pWords.length && fWords.length ? fWords : allWords;
     const checkDirect = pWords.length && fWords.length ? directCore : [...new Set([...directPerson, ...directCore])];
@@ -314,7 +387,7 @@ function callbackFact(memory, userText, today = '', opts = {}) {
     const cleanText = clip(factText, 200);
     const told = ISO.test(String(item.told)) ? String(item.told) : '';
     const fact = `${who ? `${who}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`;
-    candidates.push({ kind, who, text: cleanText, told, topic: hits[0], fact, unmentioned, rank });
+    candidates.push({ kind, who, text: cleanText, told, topic: hits[0], fact, confirmed: false, ask: true, unmentioned, rank });
   };
   for (const x of m.preferences || []) consider('likes', x, x.text, x.text);
   for (const p of m.people || []) {
@@ -333,11 +406,18 @@ function callbackFact(memory, userText, today = '', opts = {}) {
   }
   for (const e of m.events || []) consider('event', e, e.text, e.text);
   for (const c of m.current || []) consider('current', c, c.text, c.text);
-  if (!candidates.length) return null;
   candidates.sort((a, b) => b.rank - a.rank);
+  return candidates;
+}
+
+function callbackFact(memory, userText, today = '', opts = {}) {
+  const session = opts && typeof opts.session === 'object' ? opts.session : null;
+  if (!userText || opts.heavy || opts.callbackUsed || opts.used || (session && session.callbackUsed)) return null;
+  if (isQuotingOtherOnly(userText)) return null;
+  const candidates = unconfirmedFacts(memory, userText, today, opts);
+  if (!candidates.length) return null;
   const best = candidates[0];
-  if (session) session.callbackUsed = true;
   return { kind: best.kind, who: best.who, text: best.text, told: best.told, topic: best.topic, fact: best.fact, confirmed: false, ask: true, unmentioned: best.unmentioned };
 }
 
-module.exports = { callbackFact, challengeFact, parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };
+module.exports = { callbackFact, challengeFact, changedPreference, unconfirmedFacts, isQuotingOtherOnly, parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };
