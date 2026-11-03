@@ -418,7 +418,7 @@ async function fakeSpeech(text, signal, onChunk, { firstChunkMs = 150, chunkByte
   await sleep(firstChunkMs);
   for (let off = 0; off < buf.length; off += chunkBytes) {
     if (signal && signal.aborted) throw signal.reason || new Error('aborted');
-    onChunk(Buffer.from(buf.subarray(off, Math.min(chunkBytes, buf.length - off))));
+    onChunk(Buffer.from(buf.subarray(off, Math.min(off + chunkBytes, buf.length))));
     await sleep(everyMs);
   }
 }
@@ -933,7 +933,7 @@ class Call {
   }
 
   startWarm() {
-    if (process.env.MAYA_KEEPWARM !== '1' || this.noVoice || typeof warmSpeech !== 'function') return;
+    if (this.noVoice || typeof warmSpeech !== 'function' || streamSpeech !== require('./brain').streamSpeech) return;
     warmSpeech().catch(() => { /* warm-up failure will surface on synthesis if still broken */ });
   }
 
@@ -2113,10 +2113,11 @@ class Call {
         pieces += 1;
         const spoken = stripMarkup(text.replace(/^[,;:\s]+/, '')); // strip any unsupported speech-presentation markup after feel/name processing
         const tone = TONES[kind];
+        const tagged = tone && tone[0] ? `${tone[0]} ${spoken}` : spoken;
         const gain = tone ? tone[1] : 1;
         const onVoiceChunk = (c) => { if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = Date.now() - tEnqueue; job.chunks.push(gain === 1 ? c : scale(c, gain)); };
         if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no TTS request
-        else (this.noVoice ? fakeSpeech(spoken, signal, onVoiceChunk) : streamSpeech(spoken, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
+        else (this.noVoice ? fakeSpeech(tagged, signal, onVoiceChunk) : streamSpeech(tagged, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });
         said.push(text);
         this.sayingText = said.join(' ');
@@ -2153,7 +2154,8 @@ class Call {
       }
       if (head.buf && head.leadDone) {
         const mayFollow = !producerDone || jobs.length > 1;
-        const keepBack = head.done ? head.buf.length : (mayFollow ? TAIL_HOLD_BYTES : 0);
+        const holdBytes = !sentAny ? PAD_TAIL_BYTES : TAIL_HOLD_BYTES;
+        const keepBack = head.done ? head.buf.length : (mayFollow ? holdBytes : 0);
         let out = null;
         if (head.done) { out = head.buf.subarray(0, Math.min(head.buf.length, lastLoud(head.buf) + PAD_TAIL_BYTES)); head.buf = null; if (head.tone) out = fadeOut(out, head.kind); }
         else if (head.buf.length > keepBack) { const n = (head.buf.length - keepBack) & ~1; out = head.buf.subarray(0, n); head.buf = head.buf.subarray(n); }

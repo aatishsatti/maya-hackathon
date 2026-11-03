@@ -358,8 +358,9 @@ const server = http.createServer((req, res) => {
 if (MODE === 'real') {
   try { requireRealEnv(); } catch (e) { console.error(e.message); process.exit(1); }
   memory.recoverAll(); // file any words a crash left in a pending file
-  // The short lead-in clips are no longer rendered at server start: call.js renders
-  // them once, after the first voiced call's greeting.
+  // Pre-warm the local Meta MMS TTS worker at boot so the first call or voice note never waits for Python/model load.
+  const { warmSpeech } = require('./brain');
+  if (typeof warmSpeech === 'function') warmSpeech().catch((e) => console.error('MMS warm-up failed:', e.message));
 }
 care.start(); // reminder scheduler (also runs in mock mode; rings need the page open)
 server.on('upgrade', (req, socket) => {

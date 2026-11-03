@@ -53,6 +53,25 @@ test('MMS speak() and streamSpeech(): warm facebook/mms-tts-eng synthesizes non-
     /bargein|aborted/i,
   );
   assert.equal(chunks.length, 1, 'streaming stops immediately when aborted on first chunk');
+
+  // Sub-clause chunked streaming cuts time-to-first-chunk vs full-sentence synthesis
+  const longSentence = 'Hello Mathew, I am really glad you called today, and I would love to hear all about how your afternoon with your friend went.';
+  const clauses = brain.splitSpeechClauses(longSentence);
+  assert.ok(clauses.length >= 2, `long sentence splits into sub-clauses: ${JSON.stringify(clauses)}`);
+  const tFull0 = Date.now();
+  const fullPcm = await brain.speak(longSentence);
+  const fullMs = Date.now() - tFull0;
+  let firstChunkMs = null;
+  let streamedBytes = 0;
+  const tStream0 = Date.now();
+  await brain.streamSpeech(longSentence, new AbortController().signal, (c) => {
+    if (firstChunkMs === null) firstChunkMs = Date.now() - tStream0;
+    streamedBytes += c.length;
+  });
+  const totalStreamMs = Date.now() - tStream0;
+  console.log('MMS_FIRST_CHUNK_VS_FULL', JSON.stringify({ clauses, firstChunkMs, fullMs, totalStreamMs, fullBytes: fullPcm.length, streamedBytes }));
+  assert.ok(firstChunkMs !== null && firstChunkMs < fullMs, `first chunk (${firstChunkMs}ms) arrives significantly earlier than full-sentence synthesis (${fullMs}ms)`);
+  assert.ok(streamedBytes > 4800 && streamedBytes % 2 === 0, 'streamed PCM16 24kHz bytes are non-empty and sample-aligned');
 });
 
 test('ARGON Job 2: Tavily/web search stripped, medicine refusal preserved, honest no-online-lookup note, and wording-only scam note', async () => {

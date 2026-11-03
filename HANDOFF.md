@@ -11,7 +11,29 @@
 
 ---
 
-# GATED FIX 1.2 REVISED: MEMORY CALLBACK ASSERTION + CHALLENGE WITH NEW KIND ONLY (3 Nov 2026; working tree on top of `62688ed`, NOT committed, NOT pushed, NOT deployed; live authority = `62688ed`, auto deploy ON)
+# MMS VOICE DIAGNOSIS + FIRST-AUDIO LATENCY FIX (3 Nov 2026; working tree on top of `02ecbc9`, NOT committed, NOT pushed, NOT deployed; live authority = `02ecbc9` on Render `maya-singapore`)
+- **Step 1 — Code-Backed Diagnosis (Male/Robotic Voice & 3020 ms MMS First-Chunk Latency):**
+  1. **Male/robotic voice is the actual `facebook/mms-tts-eng` single-speaker checkpoint (NOT `ttsFailed` browser fallback and NOT a resampling/playback mismatch):**
+     - **Server synthesis (`brain.js:165-202`):** `MMS_WORKER_CODE` loads `VitsModel.from_pretrained("facebook/mms-tts-eng")`, which is a single-speaker English VITS checkpoint (`config.num_speakers = 1`) trained on a single male speaker with flat VITS duration prediction. It outputs 16 kHz mono float waveform, resampled in `brain.js:190-198` to 24 kHz 16-bit signed little-endian mono PCM (`target_sr = 24000`).
+     - **WebSocket call loop (`call.js:2118-2180`):** `onPiece` (`call.js:2127`) calls `streamSpeech(tagged, signal, onVoiceChunk, ...)`, sends `{ type: 'speak', text: shown }` immediately at `call.js:2132` (which is why the text caption appears on screen at `public/app.js:537` as soon as the first sentence is queued, before TTS finishes), and then streams binary PCM chunks at `call.js:2180` (`this.ws.send(out)`), recording `timing.ttsChunkMs`, `timing.ttsFirstMs`, and `timing.speechEndToFirstAudioMs` (`call.js:2125, 2171-2172`).
+     - **Why `ttsFailed` browser fallback did NOT fire (`call.js:2183-2196`, `public/app.js:293-296, 545-546`):** `ttsFailed` is only sent when `head.err` occurs with `!sentAny`; when `ttsFailed` fires, no `ttsChunkMs = 3020` or `speechEndToFirstAudioMs = 8014` is logged, and `public/app.js:294-295` overwrites the caption with `Maya (device browser voice fallback): ...` and displays `Voice playback failed: ...`. Instead, binary PCM chunks arrived and were decoded in `public/app.js:465-479` (`playChunk`) as `Int16Array` -> `Float32Array` into `c.ctx.createBuffer(1, f32.length, 24000)` at the matching 24,000 Hz sample rate.
+  2. **Why `MMS first chunk` was 3020 ms on live `02ecbc9`:**
+     - **Cold worker spawn on first spoken turn (`call.js:942-944`, `server.js:354`, `brain.js:229`):** `call.js:943` gated `startWarm()` behind `process.env.MAYA_KEEPWARM === '1'` and `server.js:354` did not call `warmSpeech()` at server boot. As a result, the first spoken piece had to cold-spawn `.venv-mms/bin/python`, import `torch` + `transformers`, load `facebook/mms-tts-eng`, and run the warmup pass inside `synthesizeMms` (~2.3–2.5 s cold overhead inside the 3,020 ms `ttsChunkMs`).
+     - **Full-sentence synthesis + 350 ms pre-first-audio holdback (`brain.js:355-363`, `call.js:2159-2163`):** `streamSpeech` synthesized the entire sentence before emitting the first 100 ms chunk, and `call.js:2160` held back `TAIL_HOLD_BYTES` (`350 * 48 = 16,800` bytes = 350 ms) even before `sentAny` was true.
+- **Step 2 — Latency Fix Implemented (without changing model checkpoint or compliance):**
+  - **Pre-warming at server boot and call start (`server.js:357-358`, `call.js:942-944`):** `server.js` pre-warms `warmSpeech()` at startup in real mode, and `Call.prototype.startWarm()` pre-warms `warmSpeech()` on every voiced call automatically (without requiring `MAYA_KEEPWARM=1`).
+  - **Sub-clause chunked MMS synthesis + `torch.inference_mode()` float32 resampling (`brain.js:150-202, 340-405`):**
+    - Removed `/tmp/mms-test-venv/bin/python3` from `MMS_PY_CANDIDATES`, using repo-relative `.venv-mms/bin/python`.
+    - Replaced `torch.no_grad()` + `float64` `np.interp` with `torch.inference_mode()` + `torch.nn.functional.interpolate` in float32.
+    - Added `splitSpeechClauses(text)` and pipelined sub-clause synthesis in `streamSpeech` so the opening 3–5 word phrase is synthesized and streamed to `onChunk` immediately (~180–210 ms) while the remaining clauses synthesize behind it.
+  - **Immediate first-audio flush in `Call.speakReply` (`call.js:2160-2161`):** before `sentAny` is true, `holdBytes` uses `PAD_TAIL_BYTES` (60 ms) instead of `TAIL_HOLD_BYTES` (350 ms) so the first synthesized sub-clause goes to the browser immediately (`ttsFirstMs` in `test/novoice.test.js` dropped from **700 ms -> 175 ms**).
+- **Step 3 — Local Proof & Targeted Test Results:**
+  - **Local first-chunk latency proof (`test/mms-voice.test.js`):** on `"Hello Mathew, I am really glad you called today, and I would love to hear all about how your afternoon with your friend went."`, `firstChunkMs` dropped from **1,208 ms** (full-sentence synthesis) to **210 ms** (sub-clause chunked streaming — a **5.75x / ~1,000 ms** reduction on warm synthesis, plus **~2,500 ms** saved on the first turn by pre-warming at server/call start).
+  - **Targeted test suites (`node --test test/mms-voice.test.js test/novoice.test.js test/recall.test.js test/smart.test.js`):** **64 tests, 64 pass, 0 fail, 0 skipped** (`test/mms-voice.test.js`: 3/3 pass; `test/novoice.test.js`: 8/8 pass; `test/recall.test.js`: 34/34 pass; `test/smart.test.js`: 19/19 pass).
+
+---
+
+# GATED FIX 1.2 REVISED: MEMORY CALLBACK ASSERTION + CHALLENGE WITH NEW KIND ONLY (3 Nov 2026; pushed as `9212793` with ARGON MMS + web strip; `02ecbc9` was the later Render venv fix)
 - **Live authority in force:** Live is `62688ed` (Fix 1.1, auto deploy ON, verified in `/api/config`); Mathew profile `fbde4db7`, daily call at 2:12 PM every day; duplicate reminder rule is `stage: 'exists'` + `pendingQuestion` keep/change; `CARDS`/`GUARD`/`DECISION` are live-proven; scheduling is NOT suspended.
 - **What changed:**
   - **Problem 1 — Later-turn assertion guard + non-leading question form:**

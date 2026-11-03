@@ -149,16 +149,13 @@ const MMS_PY_CANDIDATES = [
   process.env.MAYA_MMS_PYTHON,
   '.venv-mms/bin/python',
   './.venv-mms/bin/python',
-  '/tmp/mms-test-venv/bin/python3',
-  '/Users/aatishsatti/samantha-bench/venv/bin/python3',
-  '/opt/homebrew/bin/python3',
   'python3',
 ].filter(Boolean);
 
 const MMS_WORKER_CODE = [
   'import sys, json, time, base64, warnings',
   'warnings.filterwarnings("ignore")',
-  'import numpy as np, torch',
+  'import numpy as np, torch, torch.nn.functional as F',
   'from transformers import VitsModel, AutoTokenizer',
   'model_id = sys.argv[1] if len(sys.argv) > 1 else "facebook/mms-tts-eng"',
   'target_sr = int(sys.argv[2]) if len(sys.argv) > 2 else 24000',
@@ -166,8 +163,8 @@ const MMS_WORKER_CODE = [
   'tokenizer = AutoTokenizer.from_pretrained(model_id)',
   'model.eval()',
   'sr = int(getattr(model.config, "sampling_rate", 16000))',
-  'with torch.no_grad():',
-  '    _w = tokenizer("hello", return_tensors="pt")',
+  'with torch.inference_mode():',
+  '    _w = tokenizer("hello there", return_tensors="pt")',
   '    _ = model(**_w).waveform',
   'sys.stdout.write(json.dumps({"ready": True, "model": model_id, "native_sr": sr, "target_sr": target_sr}) + "\\n")',
   'sys.stdout.flush()',
@@ -188,14 +185,13 @@ const MMS_WORKER_CODE = [
   '            sys.stdout.write(json.dumps({"id": rid, "pcm_b64": "", "ms": 0.0}) + "\\n")',
   '            sys.stdout.flush()',
   '            continue',
-  '        with torch.no_grad():',
-  '            wav = model(**inputs).waveform[0].cpu().numpy().astype(np.float64)',
-  '        n_in = len(wav)',
-  '        if sr != target_sr and n_in > 1:',
-  '            n_out = max(2, int(round(n_in * target_sr / sr)))',
-  '            x_old = np.linspace(0.0, 1.0, n_in, endpoint=False)',
-  '            x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)',
-  '            wav = np.interp(x_new, x_old, wav)',
+  '        with torch.inference_mode():',
+  '            w_t = model(**inputs).waveform',
+  '            n_in = int(w_t.shape[-1])',
+  '            if sr != target_sr and n_in > 1:',
+  '                n_out = max(2, int(round(n_in * target_sr / sr)))',
+  '                w_t = F.interpolate(w_t.unsqueeze(0), size=n_out, mode="linear", align_corners=False).squeeze(0)',
+  '            wav = w_t[0].cpu().numpy()',
   '        peak = float(np.max(np.abs(wav))) if len(wav) else 0.0',
   '        if peak > 0.98:',
   '            wav = wav * (0.98 / peak)',
@@ -340,6 +336,35 @@ async function synthesizeMms(text, signal) {
   });
 }
 
+// Split a sentence into short natural sub-clauses so the first 3-5 words are synthesized and streamed
+// to the browser immediately (~80-130 ms on warm CPU) while the remainder of the sentence synthesizes behind it.
+function splitSpeechClauses(text) {
+  const clean = stripSpeechMarkup(text);
+  if (!clean) return [];
+  const rawParts = clean.split(/(?<=[,;:\u2014])\s+/);
+  const clauses = [];
+  let carry = '';
+  for (const part of rawParts) {
+    const merged = carry ? `${carry} ${part}` : part;
+    const words = merged.trim().split(/\s+/).filter(Boolean);
+    if (words.length < 3) {
+      carry = merged;
+      continue;
+    }
+    carry = '';
+    if (clauses.length === 0 && words.length >= 9) {
+      clauses.push(words.slice(0, 4).join(' '), words.slice(4).join(' '));
+    } else {
+      clauses.push(merged.trim());
+    }
+  }
+  if (carry) {
+    if (clauses.length) clauses[clauses.length - 1] = `${clauses[clauses.length - 1]} ${carry}`.trim();
+    else clauses.push(carry.trim());
+  }
+  return clauses.length ? clauses : [clean];
+}
+
 // One-shot synthesis returning PCM16 24 kHz mono Buffer (and recording timing in stats when requested).
 async function speak(text, signal) {
   const sig = signal || new AbortController().signal;
@@ -352,18 +377,28 @@ async function speak(text, signal) {
   }
 }
 
-// Streams PCM16 24 kHz mono chunks to onChunk(Buffer) from the warm local Meta MMS TTS worker.
+// Streams PCM16 24 kHz mono chunks to onChunk(Buffer) from the warm local Meta MMS TTS worker,
+// pipelining sub-clauses so the opening phrase's audio arrives first while remaining clauses synthesize.
 const MMS_CHUNK_BYTES = 4800; // 100 ms of 24 kHz 16-bit mono PCM (always even byte count)
 async function streamSpeech(text, signal, onChunk) {
   const sig = signal || new AbortController().signal;
+  const clauses = splitSpeechClauses(text);
+  if (!clauses.length) return;
   await acquireTtsSlot(sig);
   try {
-    const { pcm } = await synthesizeMms(text, sig);
-    const aligned = pcm.length % 2 ? pcm.subarray(0, pcm.length - 1) : pcm;
-    for (let off = 0; off < aligned.length; off += MMS_CHUNK_BYTES) {
+    await warmSpeech();
+    if (sig.aborted) throw sig.reason || new Error('aborted');
+    const pendingClauses = clauses.map((c) => synthesizeMms(c, sig));
+    for (const p of pendingClauses) p.catch(() => { /* handled in loop below */ });
+    for (const p of pendingClauses) {
       if (sig.aborted) throw sig.reason || new Error('aborted');
-      const slice = aligned.subarray(off, Math.min(off + MMS_CHUNK_BYTES, aligned.length));
-      if (slice.length) onChunk(Buffer.from(slice));
+      const { pcm } = await p;
+      const aligned = pcm.length % 2 ? pcm.subarray(0, pcm.length - 1) : pcm;
+      for (let off = 0; off < aligned.length; off += MMS_CHUNK_BYTES) {
+        if (sig.aborted) throw sig.reason || new Error('aborted');
+        const slice = aligned.subarray(off, Math.min(off + MMS_CHUNK_BYTES, aligned.length));
+        if (slice.length) onChunk(Buffer.from(slice));
+      }
     }
   } finally {
     releaseTtsSlot();
@@ -431,4 +466,4 @@ async function describeImageCore(note, buf, mime, signal) {
   return text.trim();
 }
 
-module.exports = { COMPACT_MARK, developerContent, SHORT_PERSONA, requireRealEnv, sparkStream, sparkComplete, streamSpeech, speak, stripSpeechMarkup, warmSpeech, closeSpeechWorker, MMS_MODEL, MMS_SAMPLE_RATE, describeImage, stats, META_URL, liveModel };
+module.exports = { COMPACT_MARK, developerContent, SHORT_PERSONA, requireRealEnv, sparkStream, sparkComplete, streamSpeech, speak, stripSpeechMarkup, splitSpeechClauses, warmSpeech, closeSpeechWorker, MMS_MODEL, MMS_SAMPLE_RATE, describeImage, stats, META_URL, liveModel };

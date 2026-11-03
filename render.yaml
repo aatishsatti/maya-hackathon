@@ -19,7 +19,7 @@ services:
       python3 -m venv .venv-mms &&
       .venv-mms/bin/pip install --quiet --upgrade pip &&
       .venv-mms/bin/pip install --quiet numpy==2.0.2 transformers==4.57.6 &&
-      .venv-mms/bin/pip install --quiet torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu &&
+      .venv-mms/bin/pip install --quiet torch==2.9.0+cpu --index-url https://download.pytorch.org/whl/cpu &&
       HF_HOME=.hf-cache .venv-mms/bin/python -c "from transformers import VitsModel, AutoTokenizer; VitsModel.from_pretrained('facebook/mms-tts-eng'); AutoTokenizer.from_pretrained('facebook/mms-tts-eng')" &&
       npm install
     startCommand: node server.js
