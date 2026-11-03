@@ -319,6 +319,10 @@ const SAFETY_TOPICS = {
 const IDENTITY_LINE = /\b(i['’]?m|i am|my name is) maya\b/i;
 const STOCK_OPENINGS = [IDENTITY_LINE, /\bi['’]?m (right )?here with you\b/i, /\bi['’]?m right (here )?beside you\b/i, /\bi['’]?m right here\b/i];
 // Stock counselling lines are never a reply, and "I care about you" is never the reason for an alert. A family claim must match what the app really did.
+// A voice reply must never CLAIM it searched, looked something up, checked current sources or verified something outside the call: voice has no lookup at all. Unconditional (NOT behind any smart.js flag).
+// A denial ("I can't look that up", "I haven't checked") does not match: the pattern needs the claim itself.
+const VOICE_SEARCH_CLAIM = /\b(?:i|i've|i have|i just|i'?ll just|let me just|i went and|i quickly)\s+(?:just\s+|quickly\s+|also\s+|already\s+)*(?:searched|googled|looked\s+(?:it|that|this|them|those)?\s*up|looked\s+online|checked\s+(?:online|the web|the internet|the news|the latest|current|up to date|my sources|reliable sources|trusted sources|the sources|with (?:the )?(?:nhs|cdc|who|fda|official|my sources))|verified|double[- ]?checked|confirmed\s+(?:this|that|it)\s+(?:online|with|from))\b|\b(?:my|a|the)\s+(?:quick\s+)?(?:search|lookup)\s+(?:shows|found|says|tells|confirms)\b|\baccording to (?:my search|what i found online|the latest (?:news|reports))\b|\bi (?:found|read|saw)\s+(?:online|on the (?:web|internet))\b|\b(?:current|latest|up[- ]to[- ]date)\s+(?:sources|information|reports|data)\s+(?:show|say|confirm|indicate)\b/i;
+const VOICE_SEARCH_WHY = 'you said you searched, looked something up, checked current sources or verified it: you cannot look anything up while talking, so never claim you did. Say what you know in your own words, say plainly that you cannot check it from here, and suggest their family, doctor or pharmacist';
 const COUNSEL_BAN = /\bnot sure what you(?:['\u2019]d| would) like me to do\b|\blet['\u2019]?s (just )?drop it\b|\bforget (about )?it\b|\bi['\u2019]?m (right )?here with you\b|\bwe['\u2019]?ll take this slow(ly)? together\b|\bi['\u2019]?m standing with you\b|\b(because|since) i care (about|for) you\b/i;
 const FAMILY_CLAIM = /\b(i|we)(['\u2019]ve| have|['\u2019]ll| will|['\u2019]m| am)? (just )?(let|letting|told|telling|alerted|alerting|notified|notifying|informed|informing|messaged|messaging|contacted|contacting)\b[^.?!]{0,40}\b(famil|daughter|son\b|kids|children)|\byour (famil\w*|daughter|son|kids|children) (has|have|was|were|is|are)( now| already| been)* (been )?(told|alerted|notified|informed|know|knows|aware)\b/i;
 const FAMILY_ASKED = /\b(famil\w*|daughters?|sons?|kids|children|wife|husband|sister|brother|grand(son|daughter)s?|alert\w*|notif\w*|told (anyone|anybody|someone|them)|tell (anyone|anybody|someone|them)|who did you (tell|call|contact)|did you (tell|say|send|contact|call|message|let)|let (them|him|her|\w+) know)\b/i;
@@ -1318,6 +1322,7 @@ class Call {
   // A piece that must never be spoken or shown: a stock counselling line, a family alert the app never made, or an invented self-harm reason.
   // Code reads the records (care.familyToldTopics); Spark only writes the words.
   breaksFacts(piece) {
+    this._voiceSearch = false;   // set again below only if THIS piece claims a search
     const t = String(piece || '').replace(/\u2019/g, "'");
     if (COUNSEL_BAN.test(t)) return true;
     if (FAMILY_TELL_TALK.test(t) && !this.familyRelevant()) return true;   // the family fact is internal: not volunteered on a turn that is not about it
@@ -1328,6 +1333,7 @@ class Call {
     if (!told.length && (SEEN_TALK.test(t) || (PAST_SEND_THEM.test(t) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|yet)\b/i.test(t) && this.familyRelevant()))) return true;   // no record: no past-tense send to "them", and nothing about what they have seen
     if (!told.length && t.split(/(?<=[.!?])\s+/).some((x) => SENT_CLAIM.test(x) && !/\b(no|not|nothing|never|nobody|haven't|hasn't|didn't|wasn't|yet)\b/i.test(x))) return true;   // a denial ("no note was sent") is not a claim return true;   // "I can" is an ability; a note that "went over" or an invented "you'd asked" needs a record on the dashboard
     if (SELF_HARM_REASON.test(t) && !told.some((x) => /safety|health/.test(x))) return true;
+    if (this.channel !== 'chat' && VOICE_SEARCH_CLAIM.test(t)) { this._why = VOICE_SEARCH_WHY; this._voiceSearch = true; return true; }   // voice: no lookup exists, so no claim of one (unconditional)
     if (require('./smart').breaks(t, this)) return true;   // smart.js GUARD (flag, OFF by default): "verified safe" / "100% scam", an invented link or number, "I checked / told" with no record
     return false;
   }
@@ -2049,7 +2055,7 @@ class Call {
           if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
         } // nothing spoken yet: write it again
         else if (lockedPlain) return;   // the rewrite broke the facts too: only the plain true line is spoken
-        else if (record && !jobs.length && this.repeatRetried && !this.safety && require('./smart').stateFlag('GUARD') && this.breaksFacts(text)) {   // the SECOND draft is checked too (it used to be spoken unchecked): a plain line that is true from the app's own record
+        else if (record && !jobs.length && this.repeatRetried && !this.safety && (require('./smart').stateFlag('GUARD') || (this.channel !== 'chat' && VOICE_SEARCH_CLAIM.test(text))) && this.breaksFacts(text)) {   // the SECOND draft is checked too (it used to be spoken unchecked): a plain line that is true from the app's own record
           lockedPlain = true; text = require('./smart').fallback(this); kind = null;
         }
         else if (jobs.length && this.breaksFacts(text)) return;   // already speaking: a later piece that claims what the app never did, or a stock counselling line, is simply dropped

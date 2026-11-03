@@ -58,7 +58,8 @@ test('extract: code only, what needs checking; no phone number, no long digits, 
   assert.deepEqual(k('I made soup today and it smelled lovely.'), []);
   assert.deepEqual(k('They sent a link free-gift-prize.example/claim and I should click it', { scam: true }), ['link']);
   assert.deepEqual(k('A man from Harbour Light Bank rang', { company: 'Harbour Light Bank', scam: true }), ['company']);
-  assert.deepEqual(k('My doctor said I am taking Metformin for my sugar'), ['medicine']);
+  assert.deepEqual(k('My doctor said I am taking Metformin for my sugar'), [], 'a statement about their own medicine asks the web nothing (Step 2: research needs a request for outside facts)');
+  assert.deepEqual(k('Is it safe to take Metformin with my breakfast?'), ['health']);
   assert.deepEqual(k('I heard that the pension is going up next month, is it true?'), ['claim']);
   const all = W.extract('Is it safe to take aspirin with my account 12345678 or call me on 0412 345 678 or mail a.b@mail.example?').map((t) => t.query).join(' ');
   assert.doesNotMatch(all, /\d{3}|@|a\.b/, all);
@@ -124,11 +125,12 @@ test('chat: a link not on the allow-list is searched IN THE BACKGROUND (backgrou
   assert.equal(mm.topics[0].address, 'mismatch'); assert.match(W.note(mm), /NOT one of the sites found; that alone does not prove anything/);
 });
 
+const NHS_METFORMIN = { metformin: [{ title: 'Metformin: how to take it', url: 'https://www.nhs.uk/medicines/metformin/', content: 'Metformin is safe to take with food, and taking it with meals can reduce side effects such as nausea. Ask a pharmacist before changing how you take it.' }, { title: 'bad http', url: 'http://plain.example/x', content: 'insecure' }] };   // a health-authority host: the trust rule (tierOf) is unchanged and does not whitelist the .example fixtures
 test('chat: a general question (medicine) is searched even without a scam', async () => {
-  const id = senior(); setup(PAGES);
+  const id = senior(); setup(NHS_METFORMIN);
   await chat.sendText(id, 'Is it safe to take Metformin with my breakfast?', null);
   const r = roster();
-  assert.doesNotMatch(r, /SCAM CHECK/); assert.match(r, /WEB CHECK/); assert.match(r, /site nhs\.example/); assert.match(r, /Ask a pharmacist/); assert.match(r, /not medical advice: suggest their doctor or pharmacist/);
+  assert.doesNotMatch(r, /SCAM CHECK/); assert.match(r, /WEB CHECK/); assert.match(r, /site nhs\.uk/); assert.match(r, /safe to take with food/); assert.match(r, /not medical advice: suggest their doctor or pharmacist/); assert.match(r, /NOT medical clearance for this person/);
   assert.doesNotMatch(r, /plain\.example|10\.0\.0\.5|evil\.example/);
 });
 

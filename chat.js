@@ -426,7 +426,7 @@ async function talkCheck(profileId, words, out = null) {
 // Official source (official.js), typed chat only: on a warn / pause the company they named is looked up on its official site; if none is clear, ONE
 // reconfirm question is asked first (type the link, or send a photo) and the family question waits for their answer. Returns facts for Spark.
 const familyState = (profileId, type) => ({ told: Boolean(care.scamTold(profileId)), declined: Boolean(type && care.scamDeclined(profileId, type)), pending: care.scamAsked(profileId) });
-const officialStep = (s, profileId, words, scam) => require('./official').step(s.rc, { words, scam, channel: 'text', run: (w, o) => deps.official(w, o), web: (w, o) => deps.web(w, o), background: (w) => require('./checks').start(profileId, w, { official: deps.official, web: deps.web }), family: familyState(profileId, (scam || s.rc.scam || {}).type) });
+const officialStep = (s, profileId, words, scam) => require('./official').step(s.rc, { words, scam, channel: 'text', run: (w, o) => deps.official(w, o), web: (w, o) => deps.web(w, { ...o, scope: profileId }), background: (w) => require('./checks').start(profileId, w, { official: deps.official, web: (x, o) => deps.web(x, { ...o, scope: profileId }) }), family: familyState(profileId, (scam || s.rc.scam || {}).type) });
 // After her reply: the one question is out, so the person's yes or no (in the chat or on a call) settles it (care.scamAnswer).
 const afterTalkReply = (profileId, scam, channel, off = null, text = '') => {
   const asked = care.asksFamilyQ(text);   // the family question is registered as ASKED only if her reply really put it; otherwise it is owed and asked next (care.scamAsk asked:false)
@@ -454,17 +454,23 @@ async function sendText(profileId, text, tz, opts = {}) {
   if (!off) { scam = await talkCheck(profileId, t, chk); if (scam && (scam.level === 'warn' || scam.level === 'pause')) off = await officialStep(s, profileId, t, scam); }
   // Anything else that needs checking (news, a claim, a medicine): the general web check; a failed search tells her she cannot verify it.
   const tt = talkTurn(scam, profileId, off);
-  let sources = [], webFailed = false;
+  let sources = [], webFailed = false, g = null;
+  // Research context: ONLY the resolved subject and relationship of the immediately preceding factual question (never its answer or its sources). Any turn that is not a follow-up of it clears it; it also lapses after 10 minutes and with a new session.
+  const rprev = s.rctx && Date.now() - s.rctx.at < 10 * 60000 ? s.rctx : null; s.rctx = null;
   if (!off && (!scam || scam.level === 'none') && !care.hasActiveSafety(profileId) && !s.health && !s.safety && !selfHarmText(t)) {
-    let g = null;
-    try { g = await deps.web(t, {}); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; webFailed = true; }
+    const prior = (s.thread || []).filter((m) => m.role === 'senior' && m.kind === 'text'), prevUser = prior.length >= 2 ? String(prior[prior.length - 2].text || '').slice(0, 300) : '';   // only to resolve a bare "is that true?"
+    try { g = await deps.web(t, { scope: profileId, ctx: { prevUser, prior: rprev && rprev.prior, pending: rprev && rprev.pending } }); } catch (e) { console.error('web check failed:', e.message); g = { topics: [{ kind: 'claim', label: 'what they told you', failed: 'error', results: [] }] }; webFailed = true; }
     const wn = require('./web').note(g); if (wn) { tt.note = [tt.note, wn].filter(Boolean).join(' '); tt.short = true; sources = require('./web').sources(g); }
+    const dec = g && g.decision, tp0 = g && g.topics && g.topics[0];
+    if (dec && dec.decision === 'research' && tp0 && tp0.kind === 'health' && tp0.meaning && tp0.meaning.ents && tp0.meaning.ents.length) s.rctx = { at: Date.now(), prior: { ents: tp0.meaning.ents.filter((e) => e !== 'food'), relation: tp0.meaning.relation } };
+    else if (dec && dec.decision === 'clarify') s.rctx = { at: Date.now(), prior: { ents: dec.clarify.prior, relation: dec.clarify.relation }, pending: { subject: dec.clarify.subject } };
   }
   const due = care.checkDueIds(profileId);
   // smart.js: what really ran this turn (the record card and the draft guard use it) and what the scam check said (the decision uses it). Read only there; a flag OFF ignores both.
   s._scam = { scam, failed: Boolean(chk.failed), needed: require('./scam').needsCheck(t) };
   s._exec = { scam: scam ? 'ran' : chk.failed ? 'failed' : null, web: sources.length ? 'ran' : webFailed ? 'failed' : null };
   const r = await s.turn({ heard: t, ...tt });
+  if (g) sources = require('./web').boundSources(g, r.text);   // what is attributed is what the FINAL answer actually uses (a rewrite or fallback that dropped the research keeps nothing)
   require('./smart').afterReply(s, r.text);   // MEMORY flag: the questions she just asked (content words only, kept on the profile 14 days)
   care.checkDelivered(profileId, due);   // a finished lookup was handed to her with this reply: told once
   afterTalkReply(profileId, scam, 'text', off, r.text);
@@ -588,7 +594,7 @@ async function sendImage(profileId, buf, caption, tz, opts = {}) {
   // A web address, e-mail or company on the screenshot that the allow-list did not settle: the web look-up runs in the BACKGROUND and she says she is looking into it.
   let started = '';
   if ((photoWarn || (off && off.resolved)) && !care.hasActiveSafety(profileId) && require('./web').extract(`${seen} ${said}`, { scam: true }).some((tp) => tp.kind === 'link' || tp.kind === 'company') && !(off && off.official && off.official.found)) {
-    if (require('./checks').start(profileId, `${seen} ${said}`, { official: deps.official, web: deps.web, skipOfficial: true })) started = require('./checks').startedNote();
+    if (require('./checks').start(profileId, `${seen} ${said}`, { official: deps.official, web: (x, o) => deps.web(x, { ...o, scope: profileId }), skipOfficial: true })) started = require('./checks').startedNote();
   }
   const note = [off && off.resolved ? '' : scamNote(scam, profileId), off ? off.note : '', started, require('./phone').fact(`${seen} ${said}`)].filter(Boolean).join(' ');
   const due = care.checkDueIds(profileId);

@@ -368,6 +368,7 @@ function breaks(text, s) {
 // The line a person sees when both drafts were blocked: plain, true, asks one thing. Never a faked answer, never the bad draft.
 function fallback(s) {
   const x = st(s);
+  if (s._voiceSearch) { s._voiceSearch = false; return "I'm not able to look things up while we're talking, so I haven't checked that. I can tell you what I know, or you could ask your family, your doctor or your pharmacist."; }   // voice has no lookup: a plain true line, never a claim of one
   if (/abilities/.test(s._why || '')) return ABILITY_FALLBACK;
   if (s.profile && s.profile.id && s._exec && (s._exec.socialFailed || s._exec.socialUnknown)) {   // from the app's own write result, whatever the blocked draft said; never "nothing changed" unless the record was read, never a new confirmation
     let rec = null, readable = true; try { rec = require('./care').socialOf(s.profile.id); } catch { readable = false; }

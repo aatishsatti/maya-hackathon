@@ -34,7 +34,7 @@ const verdict = (level, type = 'gift card scam') => async () => ({ level, type, 
 const roster = () => asked.at(-1).roster;
 const reset = (...q) => { queue.length = 0; queue.push(...q); asked.length = 0; };
 const LONG = `${FEEL} Turmeric is a common spice. Some people take it as capsules. Studies are mixed about arthritis. Check the dose with a pharmacist. It can interact with blood thinners. Ask your doctor first.`;
-const PAGES = { turmeric: [{ title: 'Turmeric: what the research says', url: 'https://www.nhs.example/turmeric', content: 'Evidence for turmeric capsules is limited. Ask a pharmacist.' }] };
+const PAGES = { turmeric: [{ title: 'Turmeric: what the research says', url: 'https://www.nhs.uk/turmeric', content: 'There is no good evidence that turmeric capsules cure arthritis. Ask a pharmacist.' }] };   // a tier-2 host whose passage states the claim: the evidence filter (web.js) judges support and suitability separately and whitelists nothing
 const tavily = (table) => async (url, opts) => { const q = JSON.parse(opts.body).query.toLowerCase(); const hit = Object.entries(table).find(([k]) => q.includes(k)); return { ok: true, status: 200, text: async () => JSON.stringify({ results: hit ? hit[1] : [] }) }; };
 const useWeb = () => { W.cache.clear(); W.spent.length = 0; chat.deps.web = (w, o) => W.lookup(w, { ...o, fetch: tavily(PAGES), key: 'k' }); };
 const made = [];
@@ -46,10 +46,10 @@ test('A: a turmeric question gets two sentences at most; the source is stored ap
   const out = await chat.sendText(id, 'I heard that turmeric capsules cure arthritis, is it true?', null);
   const m = out.messages[1];
   assert.ok(sentences(m.text) <= 2, m.text);
-  assert.doesNotMatch(m.text, /nhs\.example|research says|Evidence for turmeric/);
-  assert.equal(m.sources.length, 1); assert.equal(m.sources[0].site, 'nhs.example'); assert.match(m.sources[0].excerpt, /limited/);
+  assert.doesNotMatch(m.text, /nhs\.uk|research says|no good evidence/);
+  assert.equal(m.sources.length, 1); assert.equal(m.sources[0].site, 'nhs.uk'); assert.match(m.sources[0].excerpt, /no good evidence/);
   assert.match(roster(), /ONE OR TWO SHORT SENTENCES/); assert.doesNotMatch(roster(), /name the site it came from/);
-  const stored = chat.thread(id).at(-1); assert.equal(stored.sources[0].site, 'nhs.example');
+  const stored = chat.thread(id).at(-1); assert.equal(stored.sources[0].site, 'nhs.uk');
 });
 
 test('A: they can still ask for more (the cap lifts)', async () => {
