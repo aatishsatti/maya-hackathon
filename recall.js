@@ -228,11 +228,65 @@ function seniorToldItem(x, text = '') {
 
 const topicWords = (text, ownerWords) => words(text).filter((w) => !CALLBACK_FILLER.has(w) && !ownerWords.has(w));
 const relatedMatch = (w, uSet) => TOPIC_GROUPS.some((g) => g.includes(w) && g.some((x) => x !== w && uSet.has(x)));
+const BROAD_TOPICS = new Set(TOPIC_GROUPS.flat());
+const CHALLENGE_TEXT = /\b(?:i\s+(?:never|didn'?t|did\s+not|haven'?t|have\s+not)\s+(?:ever\s+)?(?:tell|told|say|said|mention\w*|share\w*)\b|(?:when|where|how)\s+(?:did|do|would|could)\s+you\s+(?:ever\s+)?(?:know|remember|hear|get|learn|find\s+out)\b|when\s+did\s+i\s+(?:ever\s+)?(?:tell|say|mention|share)\b|who\s+told\s+you\b|did\s+i\s+(?:ever\s+)?(?:tell|say|mention)\s+(?:to\s+you|you)\b|you\s+(?:just\s+)?(?:made\s+(?:that|it)\s+up|guessed\s+(?:that|it)|invented\s+(?:that|it)|added\s+that)\b|did\s+you\s+(?:just\s+)?(?:guess|make\s+(?:that|it)\s+up)\b)/i;
+const CHALLENGE_SKIP = /\b(?:remind\w*|alarms?|timers?|schedul\w*|daily\s+calls?|stop\s+calling|call\s+me|ring\s+me|phone\s+me|alert\w*|scam\w*|fraud)\b/i;
+const CHALLENGE_STOP = new Set('about added afternoon assume assumed before claim claimed come came could day days did didnt does dont drink drinking drinks earlier eat eating eats evening ever find found friend friends from get getting got guess guessed had has have having hear heard how invent invented just kind kinds know knowing knew learn learned like liked likes love loved loves made make making maybe mean meant memory mention mentioned morning myselves myself never night note notes now only out part prefer preferred prefers remember remembered right said say saying says share shared some something suppose supposed tell telling tells thing things think thinking thought time times today together told took true turn turns two used wait what when where which who why with would yesterday you your yourself'.split(' '));
+
+function challengeFact(memory, userText, today = '', opts = {}) {
+  const raw = String(userText || '').replace(/[\u2018\u2019]/g, "'");
+  if (!raw || !CHALLENGE_TEXT.test(raw) || DAILY_CALL_TEXT.test(raw) || MEDICINE_TEXT.test(raw) || CHALLENGE_SKIP.test(raw)) return null;
+  const m = memory && typeof memory === 'object' && memory.memory && typeof memory.memory === 'object' ? memory.memory : (memory || {});
+  const owner = String(opts.ownerName || (memory && memory.name) || '').trim();
+  const ownerWords = new Set(words(owner));
+  const qWords = words(raw).filter((w) => !CHALLENGE_STOP.has(w) && !CALLBACK_FILLER.has(w) && !ownerWords.has(w));
+  if (!qWords.length) {
+    const last = opts.lastCallback;
+    if (last && last.fact && last.text) return { status: 'recorded', topic: last.topic || '', who: last.who || '', text: last.text, told: last.told || '', fact: last.fact };
+    return null;
+  }
+  const specificQ = qWords.filter((w) => !BROAD_TOPICS.has(w));
+  const matches = [];
+  const checkItem = (kind, item, factText, coreText, personWords = []) => {
+    if (!seniorToldItem(item, factText)) return;
+    const fWords = topicWords(coreText, ownerWords);
+    const pWords = personWords.filter((w) => !ownerWords.has(w));
+    const iSet = new Set([...pWords, ...fWords, ...words(factText)]);
+    if (specificQ.length ? !specificQ.every((w) => iSet.has(w)) : !qWords.every((w) => iSet.has(w))) return;
+    const hitCount = qWords.filter((w) => iSet.has(w)).length;
+    if (!hitCount) return;
+    const who = clip(item.who || item.name || '', 40);
+    const cleanText = clip(factText, 200);
+    const told = ISO.test(String(item.told)) ? String(item.told) : '';
+    const fact = `${who ? `${who}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`;
+    matches.push({ kind, who, text: cleanText, told, topic: (specificQ[0] || qWords[0] || ''), fact, rank: hitCount * 10 + (kind === 'likes' ? 4 : kind === 'story' ? 3 : 2) });
+  };
+  for (const x of m.preferences || []) checkItem('likes', x, x.text, x.text);
+  for (const p of m.people || []) {
+    if (!seniorToldItem(p, `${p.name || ''} ${p.relationship || ''}`)) continue;
+    const pWords = topicWords(`${p.name || ''} ${p.relationship || ''}`, ownerWords);
+    const label = p.relationship ? `${p.name} (${p.relationship})` : String(p.name || '');
+    for (const s of p.stories || []) {
+      if (!seniorToldItem(s, s && s.text)) continue;
+      checkItem('story', { ...p, ...s, who: label }, s.text, s.text, pWords);
+    }
+    if (p.name && p.relationship) checkItem('person', { ...p, who: p.name, text: label }, label, label, pWords);
+  }
+  for (const e of m.events || []) checkItem('event', e, e.text, e.text);
+  for (const c of m.current || []) checkItem('current', c, c.text, c.text);
+  for (const t of m.topics || []) checkItem('topic', t, t.text, t.text);
+  if (matches.length) {
+    matches.sort((a, b) => b.rank - a.rank);
+    const best = matches[0];
+    return { status: 'recorded', topic: best.topic, who: best.who, text: best.text, told: best.told, fact: best.fact };
+  }
+  return { status: 'unrecorded', topic: (specificQ[0] || qWords[0] || ''), who: '', text: '', told: '', fact: '' };
+}
 
 function callbackFact(memory, userText, today = '', opts = {}) {
   const session = opts && typeof opts.session === 'object' ? opts.session : null;
   if (!userText || opts.heavy || opts.callbackUsed || opts.used || (session && session.callbackUsed)) return null;
-  if (heavyTalk(userText) || MEDICINE_TEXT.test(String(userText))) return null;
+  if (heavyTalk(userText) || MEDICINE_TEXT.test(String(userText)) || CHALLENGE_TEXT.test(String(userText).replace(/[\u2018\u2019]/g, "'"))) return null;
   const uSet = new Set(words(userText));
   if (!uSet.size) return null;
   const m = memory && typeof memory === 'object' && memory.memory && typeof memory.memory === 'object' ? memory.memory : (memory || {});
@@ -260,7 +314,7 @@ function callbackFact(memory, userText, today = '', opts = {}) {
     const cleanText = clip(factText, 200);
     const told = ISO.test(String(item.told)) ? String(item.told) : '';
     const fact = `${who ? `${who}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`;
-    candidates.push({ kind, who, text: cleanText, told, topic: hits[0], fact, rank });
+    candidates.push({ kind, who, text: cleanText, told, topic: hits[0], fact, unmentioned, rank });
   };
   for (const x of m.preferences || []) consider('likes', x, x.text, x.text);
   for (const p of m.people || []) {
@@ -283,7 +337,7 @@ function callbackFact(memory, userText, today = '', opts = {}) {
   candidates.sort((a, b) => b.rank - a.rank);
   const best = candidates[0];
   if (session) session.callbackUsed = true;
-  return { kind: best.kind, who: best.who, text: best.text, told: best.told, topic: best.topic, fact: best.fact };
+  return { kind: best.kind, who: best.who, text: best.text, told: best.told, topic: best.topic, fact: best.fact, confirmed: false, ask: true, unmentioned: best.unmentioned };
 }
 
-module.exports = { callbackFact, parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };
+module.exports = { callbackFact, challengeFact, parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };

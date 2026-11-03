@@ -223,9 +223,17 @@ function focusedMemory(m, focus, tz) {
     ? `Notes that relate to what they just said (only what they told you): ${sel.map((x) => `${kind[x.kind]}${x.told ? `, told ${x.told}` : ''}${x.date ? `, date ${x.date}` : ''}: ${x.who ? `${x.who}: ` : ''}${x.text}`).join(' | ')}`
     : 'None of your other notes relate to what they just said.');
   let out = `What you remember, for this reply (only what they told you; other notes exist but are not shown now, so if they ask about something not shown, say honestly that you cannot think of it right now): ${bits.join('. ')}.`;
-  if (focus.thread && focus.reminder) out += ` REMINDER THEY ASKED YOU FOR (a fact for you, not words to say; they wanted you to remind them on their next call, and this is that call): ${focus.thread}. Remind them of it once, simply, in your own words, task first, early in this reply. Add no advice, no health or dose words and nothing about it that they did not say.`;
+  if (focus.challenge) {
+    out += focus.challenge.status === 'recorded'
+      ? ` MEMORY CHALLENGE (true senior-told record; fact: ${focus.challenge.fact}): they are challenging how you know this or saying they never told you. Stand by the record calmly and kindly in your own words: say they did tell you earlier and state only the record fact (${focus.challenge.fact}), while clarifying you were asking rather than assuming about today. NEVER say you added it yourself, guessed, or made it up.`
+      : ' MEMORY CHALLENGE (no record in their profile): they are challenging something that is NOT in your notes of what they told you. Say honestly and plainly in your own words that you do not remember them telling you that; NEVER claim they told you earlier and NEVER claim you remembered it.';
+  } else if (focus.thread && focus.reminder) out += ` REMINDER THEY ASKED YOU FOR (a fact for you, not words to say; they wanted you to remind them on their next call, and this is that call): ${focus.thread}. Remind them of it once, simply, in your own words, task first, early in this reply. Add no advice, no health or dose words and nothing about it that they did not say.`;
   else if (focus.thread) out += ` Open follow-up from an earlier call (a fact for you, not words to say): ${focus.thread}. If it fits the moment, ask about it once, simply, in your own words, early in this reply; if what they are saying makes it awkward, leave it.`;
-  else if (focus.callback) out += ` RELEVANT MEMORY CALLBACK (a fact they told you earlier, not words to copy; topic match: ${focus.callback.topic}; fact: ${focus.callback.fact}): you may bring up this one fact naturally in your own words where it fits what they just said, once only; add nothing they did not tell you.`;
+  else if (focus.callback) {
+    out += focus.callback.confirmed
+      ? ` RELEVANT MEMORY CALLBACK (a fact they told you earlier, not words to copy; topic match: ${focus.callback.topic}; fact: ${focus.callback.fact}; confirmed this turn: yes): they confirmed this kind in this turn, so a warm acknowledgement in your own words is fine, no question needed; add nothing they did not tell you.`
+      : ` RELEVANT MEMORY CALLBACK (a fact they told you earlier, not words to copy; topic match: ${focus.callback.topic}; fact: ${focus.callback.fact}; question instruction: ask a question referencing this fact, do NOT assert it): they have NOT confirmed the specific kind or detail in this turn, so do NOT assert or assume they had or did that kind right now — ask ONE short question in your own words referencing the liked fact instead of asserting it, once only, and add nothing they did not tell you.`;
+  }
   return out;
 }
 

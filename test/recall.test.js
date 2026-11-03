@@ -299,3 +299,77 @@ test('callbackFact (6): daily call record and medicine-related facts -> never us
   assert.equal(R.callbackFact(mixed, 'Let us talk about our daily call at 2:12 PM.', TODAY, { ownerName: 'Mathew' }), null);
   assert.equal(R.callbackFact(mixed, 'I am having a cup of tea and coffee.', TODAY, { ownerName: 'Mathew' }), null);
 });
+
+test('Fix 1.1 (1): callback note instructs question form (not assertion) when kind is not confirmed this turn; confirmed fact needs no question', () => {
+  const memory = require('../memory');
+  const { Call } = require('../call');
+  const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+  const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+  clearInterval(call.endTimer);
+  call.profile = profile;
+  call.tz = 'America/New_York';
+
+  call.setFocus('We had some tea with a friend.');
+  assert.ok(call.focus.callback, 'callback selected when broad topic matches');
+  assert.equal(call.focus.callback.confirmed, false);
+  assert.equal(call.focus.callback.ask, true);
+  assert.ok(call.focus.callback.unmentioned.includes('ginger'));
+  const note = memory.profileNote(profile, call.tz, call.focus);
+  assert.match(note, /question instruction: ask a question referencing this fact, do NOT assert it/);
+  assert.match(note, /they have NOT confirmed the specific kind or detail in this turn, so do NOT assert or assume/);
+  assert.match(note, /ask ONE short question in your own words referencing the liked fact instead of asserting it/);
+
+  const confirmedFocus = { text: 'We had some ginger tea.', full: false, thread: '', callback: { ...call.focus.callback, confirmed: true, ask: false } };
+  const confirmedNote = memory.profileNote(profile, call.tz, confirmedFocus);
+  assert.match(confirmedNote, /confirmed this turn: yes.*warm acknowledgement in your own words is fine, no question needed/);
+});
+
+test('Fix 1.1 (2 & 3): challengeFact distinguishes true senior-told record vs no record (and excludes family-set facts)', () => {
+  const memory = require('../memory');
+  const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+
+  const rec = R.challengeFact(CB_MEM, 'i never told you i had ginger tea', TODAY, { ownerName: 'Mathew' });
+  assert.ok(rec);
+  assert.equal(rec.status, 'recorded');
+  assert.match(rec.fact, /Mathew: likes ginger and lemon tea since college; told 2026-10-18/);
+  assert.equal(R.callbackFact(CB_MEM, 'i never told you i had ginger tea', TODAY, { ownerName: 'Mathew' }), null, 'no spontaneous callback on a challenge turn');
+  const recNote = memory.profileNote(profile, 'America/New_York', { text: 'i never told you i had ginger tea', full: false, thread: '', callback: null, challenge: rec });
+  assert.match(recNote, /MEMORY CHALLENGE \(true senior-told record; fact: Mathew: likes ginger and lemon tea since college; told 2026-10-18\)/);
+  assert.match(recNote, /Stand by the record.*NEVER say you added it yourself, guessed, or made it up/);
+
+  const unrec = R.challengeFact(CB_MEM, 'i never told you i had chamomile tea', TODAY, { ownerName: 'Mathew' });
+  assert.ok(unrec);
+  assert.equal(unrec.status, 'unrecorded');
+  assert.equal(unrec.fact, '');
+  const unrecNote = memory.profileNote(profile, 'America/New_York', { text: 'i never told you i had chamomile tea', full: false, thread: '', callback: null, challenge: unrec });
+  assert.match(unrecNote, /MEMORY CHALLENGE \(no record in their profile\)/);
+  assert.match(unrecNote, /Say honestly and plainly in your own words that you do not remember them telling you that; NEVER claim they told you earlier/);
+
+  const famOnly = {
+    people: [], events: [], current: [], topics: [], threads: [],
+    preferences: [{ who: 'Mathew', text: 'likes peppermint tea', by: 'family', told: TODAY }],
+  };
+  const famCh = R.challengeFact(famOnly, 'how do you know i like peppermint tea', TODAY, { ownerName: 'Mathew' });
+  assert.ok(famCh);
+  assert.equal(famCh.status, 'unrecorded', 'family-set fact is never treated as senior-told record');
+});
+
+test('Fix 1.1 (4): direct tell turn (senior says fact herself) -> acknowledgement via passive notes, no spontaneous callback, no challenge', () => {
+  const memory = require('../memory');
+  const { Call } = require('../call');
+  const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+  const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+  clearInterval(call.endTimer);
+  call.profile = profile;
+  call.tz = 'America/New_York';
+
+  call.setFocus('I am drinking ginger and lemon tea right now.');
+  assert.equal(call.focus.callback, null, 'no spontaneous callback when senior states the fact herself');
+  assert.equal(call.focus.challenge, null, 'not a challenge turn');
+  assert.equal(call.callbackUsed, false);
+  const note = memory.profileNote(profile, call.tz, call.focus);
+  assert.match(note, /Notes that relate to what they just said.*likes ginger and lemon tea since college/);
+  assert.doesNotMatch(note, /RELEVANT MEMORY CALLBACK/);
+  assert.doesNotMatch(note, /MEMORY CHALLENGE/);
+});
+

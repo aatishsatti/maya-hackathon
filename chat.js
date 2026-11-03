@@ -111,7 +111,7 @@ class ChatSession {
     this.started = false;
     this.closed = false;
     // The same per-conversation state call.js keeps, with the same meaning.
-    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.callbackUsed = false; this.lastReplyAsked = false; this.askHistory = [];
+    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.callbackUsed = false; this._lastCallback = null; this._challenge = null; this.lastReplyAsked = false; this.askHistory = [];
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
@@ -247,7 +247,7 @@ class ChatSession {
         if (raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
         { const lu = ([...this.history].reverse().find((m) => m.role === 'user') || { content: '' }).content; const it = String((raw && raw.intent) || '').toLowerCase();
           if (simpleAffirmation(lu) && it !== 'story' && it !== 'recall' && !this.safety && !this.health && !this.pendingConcern && !this.scamReply && !(raw && (/^(1|yes|true)$/i.test(String(raw.pain || '')) || ['unsure', 'urgent'].includes(concern)))) d.maxSentences = 1; }   // a bare yes / okay gets one short line, as in a call
-        d.noQuestion = this.lastReplyAsked && concern !== 'unsure';
+        d.noQuestion = this.lastReplyAsked && concern !== 'unsure' && !(this.focus && this.focus.callback && !this.focus.callback.confirmed);
         if (concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // already said no to telling family: no second ask
         if (concern === 'urgent' && !this.health && !this.safety && !this.inScamTurn(lastUser)) this.enterHealth();
         else if (concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply && !this.inScamTurn(lastUser)) this.pendingConcern = { left: 2 }; // a scam question is its own question: never also the older "is something wrong?" one

@@ -527,6 +527,8 @@ class Call {
     this.focus = null;           // this reply's memory focus (see setFocus); null for greetings, call-backs and silence lines
     this.followUpOffered = false; // a due follow-up was already offered to Spark in this call
     this.callbackUsed = false;   // session-only: at most one relevant memory callback per conversation
+    this._lastCallback = null;   // session-only: the callback offered earlier in this conversation (for bare challenge turns)
+    this._challenge = null;      // this turn's memory challenge decision (recorded vs unrecorded)
     this.beatCount = 0;          // replies she has given on the current light-chat subject (see beat.js); committed after each spoken reply
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
@@ -1016,7 +1018,7 @@ class Call {
     if (!cand || !cand.rs || cand.rs.error || (cand.rs.done && !cand.rs.text.trim())) return false;   // a guess that already failed or came back empty is never spoken: the normal path writes a fresh reply
     if (/INCOMPLETE|APP STATE: UNKNOWN|\bUNKNOWN\b|: unknown\./.test(extra)) return false;   // a failed or incomplete state read is never reused, even when the guess's card failed the same way
     if (!g || g.notes !== extra || JSON.stringify(g.labels) !== JSON.stringify(this.factLabels || []) || g.turnSeq !== mySeq - 1 || Date.now() - g.startedAt > SPEC_MAX_AGE_MS || JSON.stringify(this.history) !== g.histJson) return false;
-    if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder || this.focus.callback) return false;
+    if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder || this.focus.callback || this.focus.challenge) return false;
     const keep = this.focus; this.focus = pureFocus(g.partial);
     try { return this.roster(`${this.replyNote()} ${extra}`.trim(), g.partial) === g.roster; } catch { return false; } finally { this.focus = keep; }
   }
@@ -1242,8 +1244,12 @@ class Call {
   setFocus(heard, extra = '') {
     const full = STORY_ASK.test(heard) || RECALL_ASK.test(heard);
     const heavy = Boolean(extra || this.safety || this.health || this.pendingConcern || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
-    this.focus = { text: String(heard || ''), full, thread: '', callback: null };
-    if (full || !this.profile) return;
+    this.focus = { text: String(heard || ''), full, thread: '', callback: null, challenge: null };
+    this._challenge = null;
+    if (!this.profile) return;
+    const ch = recall.challengeFact(this.profile.memory, heard, memory.today(this.tz), { ownerName: this.profile.name, lastCallback: this._lastCallback });
+    if (ch) { this.focus.challenge = ch; this._challenge = ch; return; }
+    if (full) return;
     const t = recall.dueThread(this.profile.memory.threads, memory.today(this.tz), { heavy, askedThisCall: this.followUpOffered, callId: this.callId });
     if (t) {
       if (t.kind === 'reminder') { this.reminderShown = t.id; this.focus.reminder = true; }   // marked delivered only once the reply is really spoken (commitReminder); a cut reply leaves it for next time
@@ -1254,7 +1260,7 @@ class Call {
     const ordinaryExtra = Boolean(extra) && Array.isArray(this.factLabels) && this.factLabels.length > 0 && this.factLabels.every((l) => ORDINARY_LABELS.has(l)) && extra.trim() === String(this._knownText || '').trim();
     const cbHeavy = Boolean((extra && !ordinaryExtra) || this.safety || this.health || this.pendingConcern || this._medical || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
     const cb = recall.callbackFact(this.profile.memory, heard, memory.today(this.tz), { heavy: cbHeavy, callbackUsed: this.callbackUsed, ownerName: this.profile.name });
-    if (cb) { this.callbackUsed = true; this.focus.callback = cb; }
+    if (cb) { this.callbackUsed = true; this.focus.callback = cb; this._lastCallback = cb; }
   }
 
   // Decides this reply's beat from Spark's tag (topic) and the care state, then enforces its limits on the delivery (see beat.js).
@@ -1272,7 +1278,8 @@ class Call {
     const lim = beat.limits(p.type);
     d.beat = p.type; d.beatN = p.n;
     d.tagPain = /^(1|yes|true)$/.test(low('pain')); d.tagConcern = low('concern');   // for the daily count only (trends.js)
-    if (lim.noQuestion) d.noQuestion = true;
+    const cbAsk = Boolean(this.focus && this.focus.callback && !this.focus.callback.confirmed);
+    if (lim.noQuestion && !cbAsk) d.noQuestion = true;
     if (lim.maxSentences < d.maxSentences) d.maxSentences = lim.maxSentences;
     // "What can you do?" needs room for the whole true list (and a fuller one the second time they ask); a question goes with it only if she offers to try one.
     const asked = abilitiesAsks(this.history, this.lastHeard());
@@ -1284,6 +1291,7 @@ class Call {
 
   // On a connect or close beat the reply may not open with a question: it is written again once, like a repeated opening.
   beatBlocks(piece, d) {
+    if (this.focus && this.focus.callback && !this.focus.callback.confirmed) return false;
     return Boolean(d && (d.beat === 'connect' || d.beat === 'close') && isQuestion(piece));
   }
 
@@ -2067,7 +2075,7 @@ class Call {
         if (greeting) { d.excitedOpening = false; d.openingTone = null; d.moments = bright ? 1 : 0; d.openingTone = bright ? 'bright' : null; d.maxSentences = maxSentences; }          // a greeting is a short warm line (plus one gentle question), never theatrical
         const concern = String((raw && raw.concern) || '').toLowerCase();
         if (!greeting && raw && /^(1|yes|true)$/i.test(String(raw.pain || ''))) care.painMention(this.profile.id); // counted AFTER the facts for this reply were built
-        d.noQuestion = !greeting && this.lastReplyAsked && concern !== 'unsure'; // asking because she genuinely does not know is the one exception
+        d.noQuestion = !greeting && this.lastReplyAsked && concern !== 'unsure' && !(this.focus && this.focus.callback && !this.focus.callback.confirmed); // asking because she genuinely does not know is the one exception
         if (!greeting && concern === 'unsure' && this.familyDeclined && !this.health && !this.safety) d.noQuestion = true; // they already said no to telling family: no second ask, however often the pain comes back
         if (!greeting && concern === 'urgent' && !this.health && !this.safety && !this.inScamTurn(lastUser)) this.enterHealth();
         else if (!greeting && concern === 'unsure' && !this.familyDeclined && !this.health && !this.safety && !this.scamReply && !this.inScamTurn(lastUser)) this.pendingConcern = { left: 2 }; // a friend listens more than she asks: no question straight after one
@@ -2086,7 +2094,7 @@ class Call {
           if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
         } // nothing spoken yet: write it again
         else if (lockedPlain) return;   // the rewrite broke the facts too: only the plain true line is spoken
-        else if (record && !jobs.length && this.repeatRetried && !this.safety && (require('./smart').stateFlag('GUARD') || (this.channel !== 'chat' && VOICE_SEARCH_CLAIM.test(text))) && this.breaksFacts(text)) {   // the SECOND draft is checked too (it used to be spoken unchecked): a plain line that is true from the app's own record
+        else if (record && !jobs.length && this.repeatRetried && !this.safety && (require('./smart').stateFlag('GUARD') || require('./smart').flag('GUARD') || (this.channel !== 'chat' && VOICE_SEARCH_CLAIM.test(text))) && this.breaksFacts(text)) {   // the SECOND draft is checked too (it used to be spoken unchecked): a plain line that is true from the app's own record
           lockedPlain = true; text = require('./smart').fallback(this); kind = null;
         }
         else if (jobs.length && this.breaksFacts(text)) return;   // already speaking: a later piece that claims what the app never did, or a stock counselling line, is simply dropped

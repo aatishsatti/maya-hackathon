@@ -207,3 +207,72 @@ test('COMPANION controls: a brushed-off topic is not raised by her for 30 days b
   d.careNotes('can you call me tomorrow'); assert.equal(Boolean(care.get(did).smart.noCalls), true, 'a request to call tomorrow is not a permission: the stop stands (social.reconsent asks one question)');
   assert.match(d.careNotes('you can call me again'), /CALLS RESTORED/); assert.equal(Boolean(care.get(did).smart.noCalls), false); setAll(false);
 });
+
+test('Fix 1.1 GUARD: (1) callback unconfirmed kind blocks assertion and allows question; (2) true-record challenge blocks "I added it myself" / "I guessed" and stands by record; (3) no-record challenge blocks false-memory claim and says honestly she does not remember; (4) direct tell turn allows acknowledgement', async () => {
+  setAll(false); process.env.MAYA_SMART_GUARD = 'on';
+  const chat = require('../chat'); const care = require('../care');
+  const FEEL = '[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0]]';
+  const id = memory.createProfile('Mathew', 'male').id;
+  care.setTimezone(id, 'America/New_York', 'manual');
+  const p = memory.load(id);
+  p.memory.preferences = [{ who: 'Mathew', text: 'likes ginger and lemon tea since college', told: '2026-10-18' }];
+  fs.writeFileSync(path.join(process.env.MAYA_DATA_DIR, `${id}.json`), JSON.stringify(p, null, 2));
+
+  // Greeting turn so firstEver is false
+  queue.length = 0; queue.push(`${FEEL} Hello Mathew, I'm Maya, your companion.`);
+  await chat.sendText(id, 'Hi', 'America/New_York');
+
+  // (1) Unconfirmed kind ("we had some tea"): assertion draft is blocked and rewritten to question referencing the liked fact
+  queue.length = 0;
+  queue.push(
+    `${FEEL} Ginger tea with a friend sounds real cozy.`,
+    `${FEEL} Tea with a friend sounds lovely. What kind of tea did you two have, like that ginger tea you like?`,
+  );
+  const r1 = await chat.sendText(id, 'We had some tea with a friend.', 'America/New_York');
+  const said1 = r1.messages[r1.messages.length - 1].text;
+  assert.match(said1, /What kind of tea did you two have, like that ginger tea you like\?/);
+  assert.doesNotMatch(said1, /Ginger tea with a friend sounds real cozy/);
+
+  // (2) Challenge turn with TRUE senior-told fact: denial drafts ("I added the ginger part myself", "I guessed that one") are blocked and rewritten to stand by record
+  queue.length = 0;
+  queue.push(
+    `${FEEL} You're right, you just said tea and I added the ginger part myself.`,
+    `${FEEL} You did tell me earlier that you like ginger and lemon tea since college — I was only asking if that was the kind you had today.`,
+  );
+  const r2 = await chat.sendText(id, 'i never told you i had ginger tea', 'America/New_York');
+  const said2 = r2.messages[r2.messages.length - 1].text;
+  assert.match(said2, /You did tell me earlier that you like ginger and lemon tea since college/);
+  assert.doesNotMatch(said2, /added the ginger part myself|I guessed/i);
+
+  // Also verify fallback when both drafts fail on true-record challenge ("I added it myself" then "I guessed that one")
+  queue.length = 0;
+  queue.push(
+    `${FEEL} You're right, I added the ginger part myself.`,
+    `${FEEL} Sorry, I guessed that one.`,
+  );
+  const r2b = await chat.sendText(id, 'i never told you i liked ginger tea', 'America/New_York');
+  const said2b = r2b.messages[r2b.messages.length - 1].text;
+  assert.match(said2b, /You did tell me earlier.*likes ginger and lemon tea since college/);
+  assert.doesNotMatch(said2b, /added|guessed/i);
+
+  // (3) Challenge turn with NO record: false-memory claim is blocked; Maya honestly says she does not remember that
+  queue.length = 0;
+  queue.push(
+    `${FEEL} You told me last week that you love chamomile tea.`,
+    `${FEEL} I don't remember you telling me that, and I don't have a note of it.`,
+  );
+  const r3 = await chat.sendText(id, 'i never told you i liked chamomile tea', 'America/New_York');
+  const said3 = r3.messages[r3.messages.length - 1].text;
+  assert.match(said3, /I don't remember you telling me that/);
+  assert.doesNotMatch(said3, /You told me last week/);
+
+  // (4) Direct tell turn (senior says fact herself): acknowledgement passes with no spontaneous callback and no denial
+  queue.length = 0;
+  queue.push(`${FEEL} Ginger and lemon tea is such a lovely choice for the afternoon.`);
+  const r4 = await chat.sendText(id, 'I am having my ginger and lemon tea right now.', 'America/New_York');
+  const said4 = r4.messages[r4.messages.length - 1].text;
+  assert.match(said4, /Ginger and lemon tea is such a lovely choice/);
+
+  setAll(false);
+});
+

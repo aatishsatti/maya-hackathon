@@ -254,6 +254,13 @@ function notes(s, heard) {
   if (flag('COMPANION') && s.profile) { const sf = require('./social').step(s, heard, { intent: it, callsOk: callsOk(s), safe: !s.safety && !s.health && it !== 'scam' }); if (sf) { out.push(sf); sched = /^social-(?!offer)/.test(sf[0]) && !s.safety && !s.health && it !== 'scam'; } }   // the daily-call offer and its consent (social.js)
   if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s, sched); if (c) out.push(['smart-app-state', c]); s._compact = Boolean(sched && c); }
   s._sched = Boolean(stateFlag('GUARD') && (sched || out.some(([l]) => /^social-/.test(l)) || (/\b(?:calls?|daily|ring)\b/i.test(heard) && (() => { try { return Boolean(care_().socialOf(s.profile.id)); } catch { return false; } })())));   // a SCHEDULING turn: the bounded-language check applies   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
+  if ((flag('GUARD') || stateFlag('GUARD')) && s.profile && s.profile.memory) {
+    const ch = require('./recall').challengeFact(s.profile.memory, heard, '', { ownerName: s.profile.name, lastCallback: s._lastCallback });
+    s._challenge = ch;
+    if (ch) out.push(['smart-challenge', ch.status === 'recorded'
+      ? `MEMORY CHALLENGE (true senior-told record; fact: ${ch.fact}): they are challenging how you know this or saying they never told you. Stand by the record calmly and kindly in your own words: say they did tell you earlier and state only the record fact (${ch.fact}), while clarifying you were asking rather than assuming about today. NEVER say you added it yourself, guessed, or made it up.`
+      : 'MEMORY CHALLENGE (no record in their profile): they are challenging something that is NOT in your notes of what they told you. Say honestly and plainly in your own words that you do not remember them telling you that; NEVER claim they told you earlier and NEVER claim you remembered it.']);
+  }
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
   if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', SHAPE_NOTE]);
   if (flag('GENERAL') && it !== 'scam' && !s.safety) {
@@ -330,9 +337,11 @@ const CLAIM = [
   [/\bI(?:'ve| have| just)?\s+(?:scheduled|booked|arranged)\b|\b(?:is|'s|has been|have been)\s+(?:all\s+)?(?:scheduled|booked)\b/i, (e) => !e.socialFailed && Boolean(e.reminder || e.social), true],
   [/\bI(?:'ve| have| just)?\s+(?:notified|alerted|told|informed|sent)\s+(?:your\s+)?(?:family|son|daughter|them|the bank|the police)\b/i, (e) => Boolean(e.family)],
 ];
+const CHALLENGE_DENIAL_RE = /\b(?:i|maya)\s+(?:just\s+|only\s+)?(?:added|guessed|invented|made\s+(?:that\s+|it\s+)?up|filled\s+in|assumed|imagined)\b|\badded\s+the\s+\w+\s+part\s+myself\b|\bmade\s+(?:that|it)\s+up\s+myself\b|\b(?:just|only)\s+a\s+guess\b|\byou(?:'re|\s+are)\s+right\b[^.?!]{0,50}\b(?:you\s+(?:just|only|never|didn'?t)|i\s+(?:added|guessed|made|assumed|don'?t))\b|\byou\s+(?:never|didn'?t|did\s+not)\s+(?:tell|say|mention)\b|\bi\s+(?:don'?t|do\s+not|have\s+no)\s+(?:have\s+(?:a|any)\s+)?(?:record|note|memory)\b|\bi\s+(?:don'?t|do\s+not)\s+remember\s+you\s+(?:telling|saying|mentioning)\b/i;
+const CHALLENGE_CLAIM_RE = /\byou\s+(?:did\s+)?(?:tell|told|mention\w*|said\s+to|shared\s+with)\s+me\b|\byou\s+mentioned\s+(?:it|that|this|earlier|before|last\s+time)\b|\bi\s+(?:do\s+)?remember\s+(?:you\s+)?(?:telling|saying|mentioning|that)\b|\b(?:in|from)\s+my\s+notes?\b|\bmy\s+notes?\s+(?:say|show|have)\b|\bfrom\s+what\s+you\s+(?:told|shared\s+with)\s+me\b/i;
 // Returns a reason string when the draft must be written again, else null. rec = s._exec (what really ran); known = the text the facts and the senior gave (a link or number must already be in it).
 function breaks(text, s) {
-  const t = String(text || '').replace(/’/g, "'"); s._guardWhy = null;
+  const t = String(text || '').replace(/’/g, "'"); s._guardWhy = null; s._challengeWhy = null;
   if (flag('SHORT') || flag('COMPANION')) {
     s._q = (s._q || 0) + (t.match(/\?/g) || []).length;
     if (s._q > 1) { s._why = 'you asked more than one question: ask only ONE'; return 'twoq'; }
@@ -349,6 +358,35 @@ function breaks(text, s) {
     if (flag('COMPANION') && ls && (ls.brush || []).some((b) => Date.now() - b.at < 30 * 86400000 && overlap(w, b.w) >= 0.5 && !(b.w.some((x) => String(s.lastHeard ? s.lastHeard() : '').toLowerCase().includes(x))))) { s._why = 'they asked you to drop that topic: do not raise it'; return 'brushed'; }
   }
   if (flag('COMPANION') && require('./social').claimBlocked(t, s)) { s._why = 'nothing is saved: do not say the call is scheduled, arranged, noted or booked. Say what is still needed, or that it was not saved'; return 'claim'; }
+  if (flag('GUARD') || stateFlag('GUARD')) {
+    const cb = s && s.focus && s.focus.callback && !s.focus.callback.confirmed ? s.focus.callback : null;
+    if (cb && Array.isArray(cb.unmentioned) && cb.unmentioned.length) {
+      const wSet = new Set(require('./recall').words(t));
+      if (cb.unmentioned.some((w) => wSet.has(w)) && !/\?/.test(t)) {
+        s._why = `they have not confirmed the kind in this turn: ask ONE short question referencing the liked fact (${cb.fact}) instead of asserting it`;
+        return 'callback-assert';
+      }
+    }
+    const ch = (s && (s._challenge || (s.focus && s.focus.challenge))) || (s && s.profile && s.profile.memory && s.lastHeard ? require('./recall').challengeFact(s.profile.memory, s.lastHeard(), '', { ownerName: s.profile.name, lastCallback: s._lastCallback }) : null);
+    if (ch) {
+      const sents = t.split(/(?<=[.!?])\s+/);
+      if (ch.status === 'recorded') {
+        const denied = sents.some((x) => CHALLENGE_DENIAL_RE.test(x) && !/\b(?:didn'?t|did\s+not|never|not)\s+(?:just\s+)?(?:add|added|guess|guessed|make|made|invent|invented|assume|assumed)\b/i.test(x));
+        if (denied) {
+          s._why = `that fact is in their record (${ch.fact}): stand by the record and say they did tell you earlier with the record fact; never say you added it yourself, guessed, or made it up`;
+          s._challengeWhy = 'recorded'; s._challenge = ch;
+          return 'challenge-denial';
+        }
+      } else if (ch.status === 'unrecorded') {
+        const claimed = sents.some((x) => CHALLENGE_CLAIM_RE.test(x) && !/\b(?:no|not|never|don'?t|do\s+not|didn'?t|did\s+not|haven'?t|have\s+not|cannot|can'?t|nothing)\b/i.test(x));
+        if (claimed) {
+          s._why = 'that fact is NOT in their record: say honestly that you do not remember them telling you that, and never claim they told you earlier or that you remembered it';
+          s._challengeWhy = 'unrecorded'; s._challenge = ch;
+          return 'challenge-unrecorded';
+        }
+      }
+    }
+  }
   if (stateFlag('GUARD') && s.profile && s.profile.id) {   // factual claims about calls and records, judged against a card built NOW for the authenticated senior (never against a phrase list alone)
     const st_ = require('./state'); let card = null;
     try { card = st_.build(s.profile.id, { channel: s.channel === 'chat' ? 'chat' : 'call' }); } catch { card = null; }
@@ -370,6 +408,11 @@ function breaks(text, s) {
 function fallback(s) {
   const x = st(s);
   if (s._voiceSearch) { s._voiceSearch = false; return "I'm not able to look things up while we're talking, so I haven't checked that. I can tell you what I know, or you could ask your family, your doctor or your pharmacist."; }   // voice has no lookup: a plain true line, never a claim of one
+  if (s._challengeWhy) {
+    const why = s._challengeWhy, ch = s._challenge; s._challengeWhy = null;
+    if (why === 'recorded' && ch && ch.text) return `You did tell me earlier — my note from what you shared with me says: ${ch.text}. I was only asking from what you told me before.`;
+    return "I don't remember you telling me that, and I don't have a note of it.";
+  }
   if (/abilities/.test(s._why || '')) return ABILITY_FALLBACK;
   if (s.profile && s.profile.id && s._exec && (s._exec.socialFailed || s._exec.socialUnknown)) {   // from the app's own write result, whatever the blocked draft said; never "nothing changed" unless the record was read, never a new confirmation
     let rec = null, readable = true; try { rec = require('./care').socialOf(s.profile.id); } catch { readable = false; }
