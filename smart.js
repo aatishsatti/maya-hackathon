@@ -341,6 +341,7 @@ function fallback(s) {
     const c = (() => { try { return require('./state').build(s.profile.id, { channel: 'chat' }); } catch { return null; } })();
     const live = c && Array.isArray(c.records) && c.records.find((r) => r.type === 'daily-call' && /^(active|today)/.test(r.status));
     const tx = c && c.transaction;
+    if (tx && tx.pending && tx.proposed && tx.proposed.time && /change/.test(tx.op) && /confirm/.test(tx.stage)) return `Just to check: shall I move your daily call to ${tx.proposed.time}? It stays at its current time until you say yes.`;
     if (tx && tx.pending && tx.proposed && tx.proposed.time && tx.proposed.start && /confirm/.test(tx.stage)) return `Just to check: shall I call you every day at ${tx.proposed.time}, starting ${tx.proposed.start}? Nothing is saved until you say yes.`;   // a real read-back of the proposal, so a yes can bind to what was actually said
     if (!c || !Array.isArray(c.records)) return "I can't see your saved calls right now, so I don't want to say anything wrong. Could you ask me again in a moment?";
     if (s._exec && s._exec.socialFailed) return 'That did not save, so nothing is set up yet. Would you like to try once more?';

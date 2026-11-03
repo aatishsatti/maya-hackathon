@@ -184,6 +184,13 @@ class ChatSession {
     this.scamReply = scam;   // 'warn' | 'caution' | null: the shape of THIS reply (see reply())
     try {
       const said = await this.reply(`${this.replyNote()} ${channelNote} ${this.companionNote(heard)} ${extra} ${note}`.trim());
+      if (require('./smart').flag('COMPANION') && said && said.text) {   // what was REALLY said marks the confirm question as asked; a read-back owed by the daily-call flow is added in code
+        try {
+          const social = require('./social'); social.noteSpoken(this, said.text);
+          const owed = social.owedReadback(this);
+          if (owed) { said.text = `${said.text} ${owed}`; if (Array.isArray(said.pieces)) said.pieces.push(owed); const last = this.history[this.history.length - 1]; if (last && last.role === 'assistant') last.content = `${last.content} ${owed}`; social.markAsked(this.profile.id, owed); }
+        } catch (e) { console.error('daily-call read-back failed:', e.message); }
+      }
       this.commitReminder();   // the reply is out: a next-call reminder it carried now counts as delivered
       return said;
     } catch (e) {
@@ -343,7 +350,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'unresolvedTalk', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'familyRelevant', 'limitsFacts', 'lastHeard', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
+for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'compactRoster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'unresolvedTalk', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'familyRelevant', 'limitsFacts', 'lastHeard', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 

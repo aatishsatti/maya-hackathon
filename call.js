@@ -1076,7 +1076,7 @@ class Call {
   }
 
   roster(note = '', heard = '') {
-    if (this._compact && !this.safety && !this.health) return this.compactRoster(note);
+    if (this._compact && !this.safety && !this.health && typeof this.compactRoster === 'function') { try { return this.compactRoster(note); } catch (e) { console.error('compact roster failed, using the full roster:', e.message); } }   // never a crash on send: the full roster is the fallback
     const known = [...this.names].map(([l, n]) => `${l}=${n}`);
     const unknown = [...this.seen].filter((l) => !this.names.has(l));
     return `${memory.profileNote(this.profile, this.tz, this.focus)}${callWords(this.said, heard || (this.focus && this.focus.text))} WHAT YOU KNOW ABOUT WHAT IS HAPPENING (facts for you, never read out as written; say it in plain companion words and never claim an action these facts do not say happened): ${care.appFacts(this.profile.id, Date.now(), { family: this.familyRelevant(heard) })}${this.limitsFacts(heard)}${this.safetyContext()}\nPeople heard on this call. Known names: ${known.join(', ') || 'none'}. Names not known yet: ${unknown.join(', ') || 'none'}.${note ? ` ${note}` : ''}`;
@@ -1671,6 +1671,7 @@ class Call {
     const turns = this.pending;
     this.pending = [];
     if (!turns.length || this.closed) return;
+    const mySeq = this.turnSeq = (this.turnSeq || 0) + 1;   // a rewrite of a blocked draft changes gen but not this: only a NEW turn does
     dbg('RESPOND to', JSON.stringify(turns.map((t) => t.text)));
     let extra = this.careNotes(turns.map((t) => t.text).join(' '));
     this.checkIds = care.checkDueIds(this.profile.id);   // lookups due for this reply (care.checkFacts puts them in the facts)
@@ -1753,7 +1754,13 @@ class Call {
       rs = startReply(this.history, this.roster(`${this.replyNote()} ${extra}${leadNote} ${scamTurn.note}${this.ws.outbound ? OUTBOUND_NOTE : ''}`.trim(), turns.map((t) => t.text).join(' ')), this.abort.signal);
     }
     this.scamOwed = scamTurn && scamTurn.scam && scamTurn.scam.level !== 'none' ? scamTurn.scam : null;
-    try { await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent, bye: Boolean(this.endAfterReply), onDone: this.askQuestion ? () => { this.askQuestion = false; this.askAnyQuestions(); } : null }); }
+    try {
+      await this.speakReply(rs, timing, myGen, { record: true, stripGreeting: true, holdBack, lead: leadSent, bye: Boolean(this.endAfterReply), onDone: this.askQuestion ? () => { this.askQuestion = false; this.askAnyQuestions(); } : null });
+      if (!this.closed && mySeq === this.turnSeq && !this.pending.length && require('./smart').flag('COMPANION')) {   // the exact confirm question, in code, when Spark's words did not put it (one confirm, one yes)
+        const social = require('./social'), owed = social.owedReadback(this);
+        if (owed) { await this.sayFixed(owed); if (!this.closed) social.markAsked(this.profile.id, owed); }
+      }
+    }
     finally {
       this.focus = null; this.reminderShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null; this.officialNow = null;
       if (this.scamOwed) { this.scamLater = { scam: this.scamOwed, at: Date.now() }; this.scamOwed = null; }   // cut off before it was heard: the next reply carries the warning again

@@ -90,7 +90,7 @@ function decision(s, id, p, arr, offer, heard, now) {
     return ['social-decide-days', `WEEKDAY PATTERN NOT AVAILABLE (a limit of Maya's scheduler, NOT a permission, not a family rule, not a lack of phone): the daily call can only be EVERY day at ONE time. Days such as Mon/Wed/Fri, weekdays, weekends or every other day are not available for it. ${live ? `Their existing daily call at ${at} is UNCHANGED and still active.` : 'Nothing is saved.'} Say that specific limit plainly in one or two short sentences. Do NOT say you cannot schedule calls, that the family is needed, or that only the app works. ${live ? 'Ask ONE question: keep it as it is?' : 'Ask ONE question: would an every-day call suit them instead?'} (A call on one single weekday, like every Tuesday, is an ordinary reminder they can ask for.)`];
   if (live && ask && DAILYW.test(heard) && SECOND.test(heard) && !CHANGE_CUE.test(heard))
     return ['social-decide-second', `SECOND DAILY CALL NOT AVAILABLE (a limit of Maya's scheduler: ONE daily call at a time; not a permission, not a family rule). Their existing daily call at ${at} is UNCHANGED and stays. Nothing new is saved. Say that specific limit plainly in one or two short sentences, and offer ONE thing: changing the time of the existing call, or keeping it. Do NOT say you cannot schedule calls or that the family is needed.`];
-  if (live && (SELF_ASK.test(heard) || (CALL_ASK.test(heard) && DAILYW.test(heard)))) {
+  if (live && !CHANGE_CUE.test(heard) && (SELF_ASK.test(heard) || (CALL_ASK.test(heard) && DAILYW.test(heard)))) {   // an explicit change ("change my daily call to 6:05") is the change flow's, never "already saved"
     const sl = slots(heard, live.tz, now), ls = zget(id).lastSave, why = !ls || ls.ok === true ? '' : ' (An earlier save looked unfinished, but the app checked: the call IS saved.)';
     if (!sl.time || (sl.time.h === live.h && sl.time.mi === live.mi)) return existingFact(live, p, why);
     if (!CHANGE_CUE.test(heard) && !offer) {   // a different time for a call they already have: change or add? Add does not exist, so ONE question that binds to exactly the change
@@ -153,9 +153,12 @@ function onCallsBack(id, now = Date.now()) {
 // ---- spoken times (DECISION): a voice transcript says "5.10 am", "five ten", "ten past five", "a.m.". setrem.readTime reads "5.10 am" as 10 am, so spoken forms are turned into "5:10 am" first.
 const HW = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const MW = { 'oh five': 5, 'zero five': 5, ten: 10, fifteen: 15, twenty: 20, 'twenty five': 25, 'twenty-five': 25, thirty: 30, 'thirty five': 35, 'thirty-five': 35, forty: 40, 'forty five': 45, 'forty-five': 45, fifty: 50, 'fifty five': 55, 'fifty-five': 55 };
+for (const [w, d] of Object.entries({ one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9 })) for (const z of ['oh', 'zero', 'o']) MW[`${z} ${w}`] = d;   // "six oh six", "six zero six", "six o six" are 6:06
 const HWRE = Object.keys(HW).join('|'), MWRE = Object.keys(MW).sort((a, b) => b.length - a.length).join('|');
 function normSpeech(text) {
   let t = String(text || '').replace(/\b([ap])\.\s?m\b\.?/gi, '$1m').replace(/\b(\d{1,2})\.(\d{2})\b(?!\s?(?:%|dollars?|pounds?|rupees?))/g, '$1:$2');
+  t = t.replace(/\b(1[0-2]|[1-9])\s*(?:oh|o|zero)\s*([1-9])\b/gi, (_, h, d) => `${h}:0${d}`);   // "6 oh 6"
+  if (t.trim().split(/\s+/).length <= 6) t = t.replace(/(?<![\d:.])\b(1[0-2]|[1-9])([0-5]\d)\b(?![\d:.])/g, (_, h, m) => `${h}:${m}`);   // "606", "1005" said as a clock time (only inside the daily-call flow)
   t = t.replace(new RegExp(`\\b(half|quarter) past (${HWRE})\\b`, 'gi'), (_, q, h) => `${HW[h.toLowerCase()]}:${q.toLowerCase() === 'half' ? '30' : '15'}`);
   t = t.replace(new RegExp(`\\bquarter to (${HWRE})\\b`, 'gi'), (_, h) => `${((HW[h.toLowerCase()] + 10) % 12) + 1}:45`);
   t = t.replace(new RegExp(`\\b(${MWRE}|twenty|ten|five) (past|to) (${HWRE})\\b`, 'gi'), (_, m, w, h) => { const mm = MW[m.toLowerCase()] || (m.toLowerCase() === 'five' ? 5 : 0); const hh = HW[h.toLowerCase()]; return w.toLowerCase() === 'past' ? `${hh}:${pad2(mm)}` : `${((hh + 10) % 12) + 1}:${pad2(60 - mm)}`; });
@@ -188,7 +191,7 @@ function askFact(offer, extra = '') {
   return `SOCIAL CALL (not arranged yet, nothing is saved): they are open to a daily call from you. Still needed: ${missing.join('; and ')}. Ask for it in ONE plain question (a clarifying question is fine, an interview is not). Do not say it is scheduled, arranged or booked.${extra ? ` ${extra}` : ''}`;
 }
 const confirmFact = (offer, tz, extra = '') => `SOCIAL CALL, CONFIRM (nothing is saved yet): ask ONE yes/no question that says all of it: a call from you EVERY DAY, starting ${dateWords(offer.start)}, at ${clockWords(offer.time.h, offer.time.mi)}, in their own local time (${tz}). Do not say it is scheduled, arranged or booked: it is only saved if they answer yes to this question.${extra ? ` ${extra}` : ''}`;
-const confirmChangeFact = (offer, tz, extra = '') => `SOCIAL CALL, CHANGE OF TIME (nothing is changed yet): ask ONE yes/no question: should the daily call move to ${clockWords(offer.time.h, offer.time.mi)}, their local time (${tz})? It only changes if they answer yes to that question.${extra ? ` ${extra}` : ''}`;
+const confirmChangeFact = (offer, tz, extra = '') => `SOCIAL CALL, CHANGE OF TIME (nothing is changed yet, the call stays at its OLD time until they say yes): say the COMPLETE new time aloud, with am or pm, and ask ONE yes/no question: should the daily call move to ${clockWords(offer.time.h, offer.time.mi)}, their local time (${tz})? ${offer.inferred ? 'You assumed am or pm to match their current call, so say it clearly so they can correct it. ' : ''}It only changes if they answer yes to that question. If they give another time, that new time REPLACES this one and you ask again.${extra ? ` ${extra}` : ''}`;
 
 // One turn of the daily-call flow. Returns [label, text] or null. s = the Call/Chat object, ctx = { intent, callsOk, safe }.
 function step(s, heard, ctx = {}, now = Date.now()) {
@@ -260,7 +263,7 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
   // Split speech ("at five ten" / "every morning starting" / "today" / "am"): ONE pending proposal keeps what each fragment gave. A bare am/pm (or a daypart) settles the clock time that was waiting for it; a bare am/pm that comes first waits for the time.
   if (D()) {
     const apm = AP_ONLY.exec(String(heard || ''));
-    if (sl.ambiguous && sl.amb) { const ap = offer.ap || (sl.daypart ? apOf(sl.daypart) : null); if (ap) { sl.time = with24(sl.amb.h, sl.amb.mi, ap); sl.ambiguous = false; offer.ap = null; offer.amb = null; } else offer.amb = sl.amb; }
+    if (sl.ambiguous && sl.amb) { const cur = offer.mode === 'change' ? care.socialOf(id) : null; let ap = offer.ap || (sl.daypart ? apOf(sl.daypart) : null); if (!ap && cur) { ap = cur.h < 12 ? 'am' : 'pm'; offer.inferred = true; }  /* a change keeps the half of the day of the call they have; the read-back says it aloud so they can correct it */ if (ap) { sl.time = with24(sl.amb.h, sl.amb.mi, ap); sl.ambiguous = false; offer.ap = null; offer.amb = null; } else offer.amb = sl.amb; }
     else if (apm || (sl.daypart && offer.amb && !sl.time)) { const ap = apOf(apm ? apm[1] : sl.daypart); if (offer.amb) { sl.time = with24(offer.amb.h, offer.amb.mi, ap); offer.amb = null; sl.vague = false; } else if (apm) { offer.ap = ap; sl.apOnly = true; } }
     else if (sl.daypart && !sl.time && !sl.ambiguous && !offer.amb) offer.ap = apOf(sl.daypart);   // "every morning" said first: the clock time that follows is a morning one
     if (sl.time) offer.amb = null;
@@ -318,7 +321,7 @@ function save(s, id, offer, now = Date.now()) {
     const r = offer.mode === 'change' ? care.socialChangeTime(id, offer.time, now) : care.socialSave(id, { offerId: offer.id, h: offer.time.h, mi: offer.time.mi, start: offer.start, tz: offer.tz }, now);
     zput(id, { offer: null, lastSave: { at: now, ok: true, op: offer.mode, offerId: offer.id, rid: (r && r.id) || null } }); s._exec.social = true;
     const rec = care.socialOf(id) || r;   // the words come from the PERSISTED record, not from what was proposed
-    if (D() && offer.mode !== 'change' && !(rec && rec.h === offer.time.h && rec.mi === offer.time.mi && rec.tz === offer.tz && !rec.revoked)) throw new Error('The saved call could not be read back, so it is not confirmed.');   // verified BEFORE any success language
+    if (D() && !(rec && rec.h === offer.time.h && rec.mi === offer.time.mi && rec.tz === offer.tz && !rec.revoked)) throw new Error('The saved call could not be read back, so it is not confirmed.');   // verified BEFORE any success language
     const when = `${clockWords(rec.h, rec.mi)} ${rec.tz}`;
     return ['social-saved', offer.mode === 'change'
       ? `CHANGED (read from the saved record): the daily call is now at ${when}. Tell them in your own words, in ONE short sentence, this content: "Your daily call is now at ${when}; you can tell me here anytime to skip one call, change the time, or cancel these daily calls." Promise nothing else.`
@@ -337,7 +340,8 @@ const DENIAL = /\b(?:not|no|nothing|isn'?t|hasn'?t|haven'?t|didn'?t|can'?t|canno
 // GUARD (state): promises of an arrangement that are not worded "scheduled": "I'll get that 5:13 call ready for you", "I'll pass that along", "I'll get that set", "on it".
 const COMMIT = /\bI(?:'ll| will|'m going to| am going to)\s+(?:\w+\s+){0,2}(?:get|set|put|sort|line up|have|make|arrange|pass|send|book|note|jot)\b[^.?!]{0,30}\b(?:ready|set|up|along|down|in place|sorted|booked|for you|that|it|this)\b|\bready for you\b|\bpass(?:ing)?\s+(?:that|it|this)\s+along\b|\bgot (?:it|that) down\b|\bon it\b|\bI(?:'ve| have) (?:got|made|put|set|noted|written)\b[^.?!]{0,20}\b(?:that|it|this|down|up)\b/i;
 const G = () => require('./smart').stateFlag('GUARD');
-const promises = (t, s) => ARRANGED.test(t) || (G() && COMMIT.test(t) && (CALL_CONTEXT.test(t) || CALL_CONTEXT.test(String(s && s.lastHeard ? s.lastHeard() : ''))));
+const CHANGED_CLAIM = /\b(?:done|all set|(?:it'?s|that'?s|it is|that is|is|now)\s+(?:changed|moved|updated|switched|rescheduled)|(?:changed|moved|updated|switched|rescheduled)\s+(?:it|that|your|the))\b/i;
+const promises = (t, s) => ARRANGED.test(t) || (G() && CHANGED_CLAIM.test(t) && !/\?\s*$/.test(t)) || (G() && COMMIT.test(t) && (CALL_CONTEXT.test(t) || CALL_CONTEXT.test(String(s && s.lastHeard ? s.lastHeard() : ''))));
 function claimsScheduled(text) { const t = String(text || ''); return ARRANGED.test(t) && CALL_CONTEXT.test(t) && !DENIAL.test(t); }
 // May a sentence claiming a call is arranged be said on this turn? Only when the record says so: saved this turn, read back from the record, or an ordinary reminder was saved.
 const OK_LABELS = /^(?:social-(?:saved|readback|active|restored|skip|tz)|setrem-saved)/;
@@ -360,6 +364,18 @@ function markAsked(id, text, now = Date.now()) {
   const ok = timesIn(String(text)).some((t) => t.h % 12 === o.time.h % 12 && t.mi === o.time.mi && (!t.ap || (t.ap === 'am') === (o.time.h < 12)));
   if (ok) zput(id, { offer: { ...o, asked: { at: now } } });
 }
+// The confirm question is OWED when this turn's fact asked for one, the proposal is complete and Spark's words did not put it (a vague "Got that, 6:05", or a wrong draft replaced by a plain line that named nothing):
+// code then says the exact read-back itself, once, with the complete time. A yes binds to THIS, never to a proposal nobody heard.
+function owedReadback(s) {
+  if (!D()) return null;
+  const id = s.profile && s.profile.id; if (!id) return null;
+  const o = zget(id).offer;
+  if (!o || o.stage !== 'confirm' || o.asked || !o.time) return null;
+  if (!(s.factLabels || []).some((l) => /^social-(?:confirm|decide-ambiguous)/.test(l))) return null;
+  if (o.mode === 'change') return `Just to check: shall I move your daily call to ${clockWords(o.time.h, o.time.mi)}? It stays as it is until you say yes.`;
+  if (o.mode === 'new' && o.start) return `Just to check: shall I call you every day at ${clockWords(o.time.h, o.time.mi)}, starting ${dateWords(o.start)}? Nothing is saved until you say yes.`;
+  return null;
+}
 function noteSpoken(s, text) {
   const id = s.profile && s.profile.id; if (!id) return;
   if (D()) markAsked(id, text);
@@ -367,4 +383,4 @@ function noteSpoken(s, text) {
   zput(id, { misled: Date.now() });
 }
 
-module.exports = { markAsked, normSpeech, isDecline, confirmsProposal, step, claims, onNoCalls, onCallsBack, claimsScheduled, claimBlocked, noteSpoken, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };
+module.exports = { owedReadback, markAsked, normSpeech, isDecline, confirmsProposal, step, claims, onNoCalls, onCallsBack, claimsScheduled, claimBlocked, noteSpoken, slots, YES_ALONE, isYes, SELF_ASK, clockWords, dateWords, WARM_MIN, DECLINE_MS, OFFER_TTL_MS };

@@ -195,10 +195,11 @@ const NO_PHONE = /\b(?:without|no)\b[^.?!]{0,16}\b(?:registered )?phone(?: numbe
 const CANT_SCHEDULE = /\bI(?:\s+(?:can(?:'|no)t|cannot|don'?t|do not|won'?t)|\s+am (?:not able|unable) to|'m (?:not able|unable) to)\s+(?:\w+\s+)?(?:schedule|arrange|set up|set|book|make)\b[^.?!]{0,30}\b(?:calls?|daily|ring)/i;
 const DENY_CALLS = /\bno\s+(?:daily\s+)?calls?\b[^.?!]{0,30}\b(?:set|scheduled|saved|arranged|booked|on)\b|\bnothing\b[^.?!]{0,20}\b(?:set|scheduled|saved|arranged|booked)\b|\byou\s+(?:don'?t|do not)\s+have\s+(?:a|any)\s+(?:daily\s+)?calls?\b|\bthere(?:'s| is| are)\s+no\s+(?:daily\s+)?calls?\b|\bI\s+(?:don'?t|do not)\s+see\s+(?:a|any)\s+(?:daily\s+)?calls?\b|\bhaven'?t\s+(?:set|arranged|saved)\s+(?:a|any)\b/i;
 const NEVER_HAD = /\bnever\s+(?:agreed|asked|set|arranged|scheduled|saved|had|said yes|wanted)\b|\byou\s+(?:never|didn'?t|did not)\s+(?:ask|agree|set|arrange|say yes)\b|\bno record of (?:you|an?)\b[^.?!]{0,30}\b(?:agree|ask|call)/i;
-const ARRANGED_ = /\b(?:is|'s|are|been|now|all)\s+(?:all\s+)?(?:set|scheduled|saved|arranged|booked|on|active|confirmed)\b|\b(?:noted|locked in|all set)\b|\bI(?:'ll| will)\s+(?:call|ring|phone)\s+you\b|\bstill\s+(?:on|set|active|scheduled|there)\b|\bwill\s+(?:ring|call)\s+you\s+(?:tomorrow|at|every|each|daily)\b/i;
+const ARRANGED_ = /\b(?:done|(?:it'?s|that'?s|now)\s+(?:changed|moved|updated|switched)|(?:changed|moved|updated|switched|rescheduled)\s+(?:it|that|your|the)|is|'s|are|been|now|all)\s+(?:all\s+)?(?:set|scheduled|saved|arranged|booked|on|active|confirmed)\b|\b(?:noted|locked in|all set)\b|\bI(?:'ll| will)\s+(?:call|ring|phone)\s+you\b|\bstill\s+(?:on|set|active|scheduled|there)\b|\bwill\s+(?:ring|call)\s+you\s+(?:tomorrow|at|every|each|daily)\b/i;
 const SAYS_CANCELLED = /\b(?:cancel(?:l)?ed|stopped|removed|turned off|deleted)\b/i;
 const NEGATION = /\b(?:not|no|nothing|never|isn'?t|hasn'?t|haven'?t|didn'?t|can'?t|cannot|yet|unless|if|would|could|once|until|before)\b/i;
 function minutesIn(text) {
+  try { text = require('./social').normSpeech(text); } catch { /* digits only */ }   // "six oh six" is 6:06
   const out = [], re = /\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)\b/gi; let m;
   while ((m = re.exec(text))) { let h = Number(m[1]) % 12; if (/pm/i.test(m[3])) h += 12; out.push(h * 60 + Number(m[2] || 0)); }
   return out;
@@ -222,7 +223,7 @@ function checkDraft(text, card, ctx = {}) {
     if (callTurn && DENY_CALLS.test(x) && (live || unreadable || hist.length || lastOk) && !/\b(?:cancel|stopp|remov)/i.test(x)) return { why: 'denies', note: unreadable ? 'the saved calls could not be read: say you cannot see them, not that none exist' : 'a daily call IS on record (or was and was cancelled): say what the record says' };
     if (callTurn && NEVER_HAD.test(x) && (live || hist.length || lastOk)) return { why: 'denies', note: 'it WAS set up (the record or its history says so): never say it was never agreed or set up' };
     if (CALLISH.test(x) && SAYS_CANCELLED.test(x) && live && !NEGATION.test(x) && !(ctx.labels || []).some((l) => /^social-cancel/.test(l))) return { why: 'cancelled', note: 'the daily call is still ACTIVE: it is not cancelled' };
-    if (CALLISH.test(x) && ARRANGED_.test(x) && !NEGATION.test(x)) {
+    if ((CALLISH.test(x) || (callTurn && (ctx.labels || []).some((l) => /^social-/.test(l)))) && ARRANGED_.test(x) && !NEGATION.test(x) && !/\?\s*$/.test(x)) {
       if (unreadable) return { why: 'claims', note: 'the saved calls could not be read: claim nothing is set' };
       const set = card.records.filter((r) => /^(active|today|scheduled|going out|held)/.test(r.status));
       if (!set.length && !(ctx.exec && ctx.exec.reminder)) return { why: 'claims', note: 'nothing is saved and active (nothing saved, or it was stopped or cancelled): do not say a call is set or still on' };
