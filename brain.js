@@ -147,6 +147,8 @@ function stripSpeechMarkup(text) {
 
 const MMS_PY_CANDIDATES = [
   process.env.MAYA_MMS_PYTHON,
+  '.venv-mms/bin/python',
+  './.venv-mms/bin/python',
   '/tmp/mms-test-venv/bin/python3',
   '/Users/aatishsatti/samantha-bench/venv/bin/python3',
   '/opt/homebrew/bin/python3',

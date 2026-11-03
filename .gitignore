@@ -7,3 +7,4 @@ data/
 eval-results/
 app/android/app/google-services.json
 .venv-mms/
+.hf-cache/

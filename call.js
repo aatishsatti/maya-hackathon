@@ -2180,7 +2180,9 @@ class Call {
           this.abort.abort();
           keep();
           this.responding = false;
-          this.playUntil = Date.now() + said.join(' ').length * 70; // browser voice: rough length
+          this.lastSaidAt = Date.now(); // browser fallback voice is still Maya speaking: keep the echo guard alive for it
+          this.playUntil = Date.now() + said.join(' ').length * (bye ? 150 : 70); // browser voice: rough length, longer for a goodbye so it finishes before hangup
+          if (bye) { this.send({ type: 'ttsFailed', text: said.join(' '), error: head.err.message }); this.hangUp({ quiet: false }); return; }
           this.armSilence();
           return this.send({ type: 'ttsFailed', text: said.join(' '), error: head.err.message });
         }
