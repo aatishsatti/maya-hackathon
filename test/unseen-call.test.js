@@ -11,7 +11,7 @@ process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles'); process.env.MAYA_CARE_DI
 const memory = require('../memory'); const care = require('../care');
 const U = care.cfg.unseenCallMs, wait = (ms) => new Promise((r) => setTimeout(r, ms));
 let n = 0; const letters = (k) => String.fromCharCode(97 + (k % 26)) + String.fromCharCode(97 + Math.floor(k / 26));
-const person = () => memory.createProfile(`Una${letters(n++)}`, 'female').id;
+const person = () => { const id = memory.createProfile(`Una${letters(n++)}`, 'female').id; care.get(id).quietHours = true; return id; };   // quiet hours ON is now an explicit setting
 const openApp = (id) => { const ev = []; const res = { write: (s) => { const m = /event: (\w+)\ndata: (.*)\n/.exec(s); if (m) ev.push([m[1], JSON.parse(m[2])]); return true; } }; const detach = care.attachSenior(id, res, null); return { ev, detach }; };
 const rings = (app) => app.ev.filter(([k]) => k === 'incoming');
 const setup = (extra = {}) => { const id = person(); const app = openApp(id); const t0 = Date.now(); const r = care.addSeniorReminder(id, { task: 'take my medicine', dueAt: t0 + 3000, repeat: 'none', deliver: 'text', channel: 'app', origin: 'app', ...extra }); return { id, app, fire: t0 + 5000, rid: r.id }; };

@@ -168,12 +168,16 @@ function normSpeech(text) {
 const AP_ONLY = /^\s*(?:(?:yes|yeah|ok|okay|sure|and)[\s,]+)?(?:in the )?(am|pm|morning|afternoon|evening|night)\s*[.!]?\s*$/i;
 const apOf = (w) => (/^(?:am|morning)$/i.test(w) ? 'am' : 'pm');
 const with24 = (h, mi, ap) => ({ h: ap === 'am' ? (h === 12 ? 0 : h) : (h < 12 ? h + 12 : h), mi });
+// "not 6:57", "instead of 6:56", "6:56 isn't right": a NEGATED time is never selected. Negation plus an alternative is a correction to the alternative; negation alone selects nothing.
+const NEG_BEFORE = /\b(?:not|no|isn'?t|aren'?t|never|don'?t want|do not want|rather than|instead of|anything but)\s+(?:at\s+|to\s+|for\s+)?(\d{1,2}(?::\d{2})?\s?(?:am|pm)?)/gi;
+const NEG_AFTER = /(\d{1,2}(?::\d{2})?\s?(?:am|pm)?)\s+(?:is not|isn'?t|is wrong|was wrong|is not right|isn'?t right)\b/gi;
 function slots(heard, tz, now) {
-  if (D()) heard = normSpeech(heard);
+  let negated = false; const negTimes = [];
+  if (D()) { heard = normSpeech(heard); const cut = (m, t) => { negated = true; const q = /(\d{1,2})(?::(\d{2}))?\s?(am|pm)?/i.exec(t); if (q) negTimes.push({ h12: Number(q[1]) % 12 || 12, mi: Number(q[2] || 0), ap: q[3] ? q[3].toLowerCase() : null }); return ' '; }; heard = heard.replace(NEG_BEFORE, cut).replace(NEG_AFTER, cut); }
   const { found } = setrem.readTime(heard, { bare: true }), out = { time: null, start: null, daily: false, notDaily: false, ambiguous: false, vague: false };
   if (found.clock) { const c = setrem.resolveClock(found.clock, found.daypart); if (c.ok) out.time = { h: c.h, mi: c.mi }; else if (c.ambiguous) { out.ambiguous = true; out.amb = { h: c.h, mi: c.mi }; } }
   else if (found.daypart || VAGUE.test(heard)) out.vague = true;
-  out.daypart = found.daypart || null;
+  out.daypart = found.daypart || null; out.negated = negated && !out.time && !out.ambiguous; out.negTimes = negTimes;
   const today = nowParts(tz, now), todayStr = `${today.y}-${pad2(today.m)}-${pad2(today.d)}`;
   if (found.day === 'today') out.start = todayStr; else if (found.day === 'tomorrow') out.start = addDays(todayStr, 1);
   else if (found.weekday != null) out.start = addDays(todayStr, ((found.weekday - today.wd + 7) % 7) || 7);
@@ -190,20 +194,46 @@ function askFact(offer, extra = '') {
   const missing = [!offer.time && NEED.time, !offer.start && NEED.start].filter(Boolean);
   return `SOCIAL CALL (not arranged yet, nothing is saved): they are open to a daily call from you. Still needed: ${missing.join('; and ')}. Ask for it in ONE plain question (a clarifying question is fine, an interview is not). Do not say it is scheduled, arranged or booked.${extra ? ` ${extra}` : ''}`;
 }
+const restoreAskFact = (offer, tz) => `SOCIAL CALL, RESTART (nothing is restarted yet): their daily call was STOPPED. Say that, and ask ONE yes/no question that covers the restart and the exact time: should the stopped daily call START AGAIN at ${clockWords(offer.time.h, offer.time.mi)}, their local time (${tz})? It only restarts if they answer yes to that question.`;
 const confirmFact = (offer, tz, extra = '') => `SOCIAL CALL, CONFIRM (nothing is saved yet): ask ONE yes/no question that says all of it: a call from you EVERY DAY, starting ${dateWords(offer.start)}, at ${clockWords(offer.time.h, offer.time.mi)}, in their own local time (${tz}). Do not say it is scheduled, arranged or booked: it is only saved if they answer yes to this question.${extra ? ` ${extra}` : ''}`;
 const confirmChangeFact = (offer, tz, extra = '') => `SOCIAL CALL, CHANGE OF TIME (nothing is changed yet, the call stays at its OLD time until they say yes): say the COMPLETE new time aloud, with am or pm, and ask ONE yes/no question: should the daily call move to ${clockWords(offer.time.h, offer.time.mi)}, their local time (${tz})? ${offer.inferred ? 'You assumed am or pm to match their current call, so say it clearly so they can correct it. ' : ''}It only changes if they answer yes to that question. If they give another time, that new time REPLACES this one and you ask again.${extra ? ` ${extra}` : ''}`;
 
 // One turn of the daily-call flow. Returns [label, text] or null. s = the Call/Chat object, ctx = { intent, callsOk, safe }.
+// Daily-call CONTEXT (code, not Spark): the previous one or two turns were about the daily call and it was within 10 minutes. "make it" / "do it at" / a bare time after a topic switch is NOT a change request.
+const ctxValid = (x, now) => Boolean(x && x.lastSocial != null && x.turn - x.lastSocial <= 2 && now - (x.lastSocialAt || 0) < 10 * 60000);
 function step(s, heard, ctx = {}, now = Date.now()) {
+  const x = s._social || (s._social = { warm: 0 }); x.turn = (x.turn || 0) + 1;
+  const r = stepCore(s, heard, ctx, now);
+  if (r) { x.lastSocial = x.turn; x.lastSocialAt = now; }
+  return r;
+}
+const CALLLESS_CUE = /\b(?:make it|do it|set it|put it|move it|change it|switch it|how about|what about|let'?s (?:do|make|say)|instead|actually|wait|rather|can we|no)\b/i;
+const QUESTIONISH = (t) => /\?\s*$/.test(t) || /^\s*(?:is|are|does|do|did|will|what|which|when)\b/i.test(t);
+const ASKS_FOR_CHANGE = /\b(?:can|could|would|will) you\b|\bplease\b|\b(?:change|move|switch|make|set|put)\b/i;
+// "Is it at 6:57?" is a question about the record, answered from storage, never a change request (and it consumes nothing).
+function questionReadback(p, arr, offer, heard, now, x) {
+  if (!QUESTIONISH(heard) || CHANGE.test(heard) || CHANGE_CUE.test(heard) || SELF_ASK.test(heard) || /\b(?:can|could|would|will) you\b/i.test(heard)) return null;
+  const sl = slots(heard, (arr && arr.tz) || p.tz, now); if (!sl.time && !sl.ambiguous) return null;
+  if (!(/\b(?:call|calls|daily|ring)\b/i.test(heard) || ctxValid(x, now) || offer)) return null;
+  const want = sl.time || sl.amb, same = arr && !arr.revoked && (sl.time ? (arr.h === sl.time.h && arr.mi === sl.time.mi) : (arr.h % 12 === sl.amb.h % 12 && arr.mi === sl.amb.mi));
+  const asked = sl.time ? clockWords(want.h, want.mi) : `${want.h}:${pad2(want.mi)}`;
+  const rec = arr ? `${clockWords(arr.h, arr.mi)} (${arr.tz})${arr.revoked ? ', status: STOPPED' : ''}` : null;
+  return ['social-readback', `SAVED RECORD: ${rec ? `a daily call at ${rec}` : 'no daily call is saved'}. They ASKED whether it is at ${asked}: ${same ? 'YES, that is the saved time' : rec ? `NO, the saved time is ${rec}` : 'there is none'}. This is a QUESTION, not a request: nothing is changed and nothing was saved; answer it from the record in one short sentence.`];
+}
+const questionOnly = (t) => QUESTIONISH(t) && !ASKS_FOR_CHANGE.test(t);
+function stepCore(s, heard, ctx = {}, now = Date.now()) {
   const id = s.profile && s.profile.id, p = id && care.get(id); if (!p) return null;
   heard = String(heard || '').replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim();
   const x = s._social || (s._social = { warm: 0 }), z = zget(id), arr = care.socialOf(id), noCalls = Boolean(p.smart && p.smart.noCalls);
   if ((ctx.intent === 'smalltalk' || ctx.intent === 'followup') && ctx.safe !== false) x.warm += 1;
   let offer = z.offer && now - z.offer.at < OFFER_TTL_MS ? { ...z.offer } : null;
+  // a stale or impossible offer is rejected HERE, in code: a new-call offer while a call exists, a change offer with nothing to change, or one older than its time
+  if (D() && offer && ((offer.mode === 'new' && arr && !arr.revoked) || (offer.mode === 'change' && (!arr || arr.revoked)))) offer = null;
   if (z.offer && !offer) zput(id, { offer: null });
   if (noCalls) { if (offer) zput(id, { offer: null }); return D() ? reconsent(s, id, p, z, heard, now) : null; }
   if (D() && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard)) && !CANCEL.test(heard) && !SKIP.test(heard) && !READBACK.test(heard)) { const f = decision(s, id, p, arr, offer, heard, now); if (f) return f; }
 
+  if (D() && !READBACK.test(heard)) { const q = questionReadback(p, arr, offer, heard, now, x); if (q) return q; }
   // ---- what the record says (never from memory of the conversation): "What daily calls do I have?"
   if (READBACK.test(heard)) {
     if (arr) { const v = care.socialView(p, p.reminders.find((r) => r.social)); return ['social-readback', `SAVED RECORD: a daily call at ${clockWords(arr.h, arr.mi)} (${arr.tz}), status: ${v.status}${v.next ? `, next call ${dateWords(care.localDate(v.next, arr.tz))} at ${clockWords(arr.h, arr.mi)}` : ', no next call'}. Tell them this from the record only. They can skip one call, change the time or cancel these daily calls by telling you here.`]; }
@@ -220,6 +250,18 @@ function step(s, heard, ctx = {}, now = Date.now()) {
       return ['social-skip', `NOTHING TO SKIP: there is no call left today; the next one is ${r && r.nextAt ? `tomorrow at ${clockWords(arr.h, arr.mi)}` : 'not set'}. Say that in one short sentence and that they can say "skip" on the day.`];
     }
     if (CHANGE.test(heard) && !offer) { offer = { id: uid(), stage: 'collect', mode: 'change', at: now, tz: p.tz || arr.tz, time: null, start: arr.start }; zput(id, { offer }); return advance(s, id, p, offer, heard, now, true); }
+  }
+  if (D() && !offer && arr && !questionOnly(heard)) {
+    const sl0 = slots(heard, p.tz || arr.tz, now), timeGiven = Boolean(sl0.time || sl0.ambiguous);
+    const cue = CHANGE.test(heard) || (ctxValid(x, now) && timeGiven && (CALLLESS_CUE.test(heard) || /^\s*(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*[.!]?\s*$/i.test(normSpeech(heard))));
+    if (cue && !sl0.negated && (timeGiven || CHANGE.test(heard))) {
+      if (!arr.revoked) { offer = { id: uid(), stage: 'collect', mode: 'change', at: now, tz: p.tz || arr.tz, time: null, start: arr.start }; zput(id, { offer }); return advance(s, id, p, offer, heard, now, true); }
+      if (timeGiven) {   // a STOPPED call: a new time must not silently restart it; the question covers the restart and the time
+        let t = sl0.time; if (!t && sl0.amb) t = with24(sl0.amb.h, sl0.amb.mi, arr.h < 12 ? 'am' : 'pm');
+        offer = { id: uid(), stage: 'restore', needAsk: true, mode: 'restore', at: now, tz: p.tz || arr.tz, time: t, start: arr.start }; zput(id, { offer });
+        return ['social-restore-ask', restoreAskFact(offer, offer.tz)];
+      }
+    }
   }
   if (arr && arr.paused === 'timezone' && !offer && p.tz) {
     offer = { id: uid(), stage: 'confirm', mode: 'change', at: now, tz: p.tz, time: { h: arr.h, mi: arr.mi }, start: arr.start, tzChanged: true };
@@ -250,9 +292,21 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
   if (!p.tz || p.tz !== tz) { zput(id, { offer: null }); return null; }   // the zone changed mid-conversation: the offer lapses
   const yes = YES_ALONE.test(heard);
   if (offer.stage === 'restore') {
+    if (D() && offer.needAsk) {   // a restart with a time: the confirmation must cover the restart AND that exact time, and a correction replaces the time and asks again
+      const s2 = slots(heard, tz, now), cur = care.socialOf(id);
+      if (s2.ambiguous && s2.amb && cur) { s2.time = with24(s2.amb.h, s2.amb.mi, cur.h < 12 ? 'am' : 'pm'); s2.ambiguous = false; }
+      if (s2.time && (!offer.time || s2.time.h !== offer.time.h || s2.time.mi !== offer.time.mi)) { offer.time = s2.time; offer.asked = null; offer.at = now; zput(id, { offer }); return ['social-restore-ask', restoreAskFact(offer, tz)]; }
+      if (s2.negated) { offer.asked = null; offer.at = now; zput(id, { offer }); return ['social-restore-ask', `${restoreAskFact(offer, tz)} They said that is NOT the time: ask what time they want instead, and change nothing.`]; }
+      if (yes && !offer.asked) { offer.at = now; zput(id, { offer }); return ['social-restore-ask', `${restoreAskFact(offer, tz)} (They said yes, but this exact question has not been put to them yet, so nothing is restarted: ask it now.)`]; }
+    }
     if (yes) {
-      try { const r = care.socialRestore(id, now); zput(id, { offer: null }); return ['social-restored', `RESTORED: the daily call is back on at ${clockWords(r.h, r.mi)} each day. Say so in one short sentence, and that they can skip a day, change the time or cancel whenever they like.`]; }
-      catch (e) { zput(id, { offer: null }); return ['social-failed', `NOT RESTORED: ${e.message} Tell them plainly that it is not back on. Do not say scheduled or arranged.`]; }
+      try {
+        const r = care.socialRestore(id, now);
+        if (D() && offer.time && r && (offer.time.h !== r.h || offer.time.mi !== r.mi)) care.socialChangeTime(id, offer.time, now);
+        const rec = D() ? care.socialOf(id) : r;
+        if (D() && !(rec && !rec.revoked && (!offer.time || (rec.h === offer.time.h && rec.mi === offer.time.mi)))) throw new Error('The restarted call could not be read back, so it is not confirmed.');
+        s._exec = s._exec || {}; s._exec.social = true; zput(id, { offer: null, lastSave: { at: now, ok: true, op: 'restore', offerId: offer.id, rid: rec && rec.id || null } }); return ['social-restored', `RESTORED: the daily call is back on at ${clockWords(rec.h, rec.mi)} each day. Say so in one short sentence, and that they can skip a day, change the time or cancel whenever they like.`]; }
+      catch (e) { zput(id, { offer: null, lastSave: { at: now, ok: false, op: 'restore', offerId: offer.id, error: String(e.message || '').slice(0, 100) } }); s._exec = s._exec || {}; s._exec.socialFailed = true; return ['social-failed', `NOT RESTORED: ${e.message} Tell them plainly that it is not back on. Do not say scheduled or arranged.`]; }
     }
     if (isDecline(heard)) { zput(id, { offer: null }); return ['social-declined', 'They do not want the daily call back. Accept it in one short, friendly sentence.']; }
     return null;
@@ -267,6 +321,12 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
     else if (apm || (sl.daypart && offer.amb && !sl.time)) { const ap = apOf(apm ? apm[1] : sl.daypart); if (offer.amb) { sl.time = with24(offer.amb.h, offer.amb.mi, ap); offer.amb = null; sl.vague = false; } else if (apm) { offer.ap = ap; sl.apOnly = true; } }
     else if (sl.daypart && !sl.time && !sl.ambiguous && !offer.amb) offer.ap = apOf(sl.daypart);   // "every morning" said first: the clock time that follows is a morning one
     if (sl.time) offer.amb = null;
+  }
+  if (D() && sl.negated && !yes) {   // "not 6:57" alone: that time is NOT selected. If it was the pending time the proposal is withdrawn; otherwise the pending proposal stands and is asked again
+    const same = offer.time && sl.negTimes.some((n) => n.mi === offer.time.mi && n.h12 === (offer.time.h % 12 || 12) && (!n.ap || (offer.time.h < 12) === (n.ap === 'am')));
+    if (offer.time && !same) { offer.asked = null; offer.at = now; zput(id, { offer }); return [offer.mode === 'change' ? 'social-confirm' : 'social-confirm', `${offer.mode === 'change' ? confirmChangeFact(offer, tz) : confirmFact(offer, tz)} They said a DIFFERENT time is not what they want: nothing changes; the pending proposal is still the one above.`]; }
+    offer.time = null; offer.amb = null; offer.asked = null; offer.stage = 'collect'; offer.at = now; zput(id, { offer });
+    return ['social-ask', `${offer.mode === 'change' ? 'SOCIAL CALL, CHANGE OF TIME (nothing is changed yet)' : askFact(offer).split(':')[0]}: they said that time is NOT what they want. Withdraw it, change nothing, and ask ONE question: what time would they like instead? (${NEED.time}).`];
   }
   const restated = !yes && confirmsProposal(heard, offer, tz, now);
   // a plain yes to the confirm question (or a yes that only restates it) is the only thing that saves, and only a confirm question that was really SPOKEN counts (noteSpoken): a proposal Maya never said aloud cannot be agreed to
@@ -316,20 +376,30 @@ function advance(s, id, p, offer, heard, now, fresh = false) {
 
 function save(s, id, offer, now = Date.now()) {
   s._exec = s._exec || {};
-  zput(id, { lastSave: { at: now, ok: null, op: offer.mode, offerId: offer.id } });   // started, not yet confirmed: if the write never reports back the card says UNKNOWN, not "never tried"
-  try {
-    const r = offer.mode === 'change' ? care.socialChangeTime(id, offer.time, now) : care.socialSave(id, { offerId: offer.id, h: offer.time.h, mi: offer.time.mi, start: offer.start, tz: offer.tz }, now);
-    zput(id, { offer: null, lastSave: { at: now, ok: true, op: offer.mode, offerId: offer.id, rid: (r && r.id) || null } }); s._exec.social = true;
-    const rec = care.socialOf(id) || r;   // the words come from the PERSISTED record, not from what was proposed
-    if (D() && !(rec && rec.h === offer.time.h && rec.mi === offer.time.mi && rec.tz === offer.tz && !rec.revoked)) throw new Error('The saved call could not be read back, so it is not confirmed.');   // verified BEFORE any success language
-    const when = `${clockWords(rec.h, rec.mi)} ${rec.tz}`;
+  const at = { h: offer.time.h, mi: offer.time.mi };
+  zput(id, { lastSave: { at: now, ok: null, op: offer.mode, offerId: offer.id, ...at } });   // started, not yet confirmed: if the write never reports back the card says UNKNOWN, not "never tried"
+  let err = null, r = null;
+  try { r = offer.mode === 'change' ? care.socialChangeTime(id, offer.time, now) : care.socialSave(id, { offerId: offer.id, h: offer.time.h, mi: offer.time.mi, start: offer.start, tz: offer.tz }, now); } catch (e) { err = e; }
+  // The RESULT is what storage says afterwards, never what the write call returned: match = committed, nomatch = not committed, unreadable = nobody can say (an uncertain write is never reported as done, and never as "nothing changed").
+  let v, rec = null;
+  if (!D()) v = err ? 'nomatch' : 'match';
+  else { try { rec = care.socialOf(id); v = rec && !rec.revoked && rec.h === offer.time.h && rec.mi === offer.time.mi && rec.tz === offer.tz ? 'match' : 'nomatch'; } catch { v = 'unreadable'; } }
+  if (v === 'match') {
+    rec = rec || care.socialOf(id) || r;
+    zput(id, { offer: null, lastSave: { at: now, ok: true, op: offer.mode, offerId: offer.id, rid: (r && r.id) || (rec && rec.id) || null, ...at } }); s._exec.social = true;
+    const when = `${clockWords(rec.h, rec.mi)} ${rec.tz}`;   // the words come from the PERSISTED record, not from what was proposed
     return ['social-saved', offer.mode === 'change'
       ? `CHANGED (read from the saved record): the daily call is now at ${when}. Tell them in your own words, in ONE short sentence, this content: "Your daily call is now at ${when}; you can tell me here anytime to skip one call, change the time, or cancel these daily calls." Promise nothing else.`
       : `SAVED (read from the saved record): a call from you every day at ${when}, starting ${dateWords(rec.start)}. Tell them in your own words, in ONE short sentence, this content: "Your daily call is saved for ${when}, starting ${dateWords(rec.start)}; you can tell me here anytime to skip one call, change the time, or cancel these daily calls." Promise nothing else.`];
-  } catch (e) {
-    zput(id, { offer: null, lastSave: { at: now, ok: false, op: offer.mode, offerId: offer.id, error: String(e.message || 'it did not work').slice(0, 100) } }); s._exec.socialFailed = true;
-    return ['social-failed', `NOT SAVED: ${String(e.message || 'it did not work').slice(0, 140)} Tell them plainly, in one short sentence, that it did not work and nothing is set up. Do NOT say scheduled, arranged or booked, and do not say you will try again by yourself.`];
   }
+  if (v === 'unreadable') {
+    zput(id, { offer: null, lastSave: { at: now, ok: null, unverified: true, op: offer.mode, offerId: offer.id, ...at } }); s._exec.socialUnknown = true;
+    return ['social-uncertain', `RESULT NOT VERIFIED (nothing is confirmed either way): the app asked to ${offer.mode === 'change' ? `move the daily call to ${clockWords(offer.time.h, offer.time.mi)}` : `save the daily call at ${clockWords(offer.time.h, offer.time.mi)}`} but could not read the saved record afterwards. Tell them plainly, in one short sentence, that you could not confirm whether it went through, so they should not count on it yet and can ask you to read back what is saved in a moment. Do NOT say it is done, saved, changed or scheduled, do NOT say nothing changed, and do NOT ask them to confirm again.`];
+  }
+  const why = String((err && err.message) || 'the saved call did not match what was agreed').slice(0, 140);
+  zput(id, { offer: null, lastSave: { at: now, ok: false, op: offer.mode, offerId: offer.id, error: why.slice(0, 100), ...at } }); s._exec.socialFailed = true;
+  const old = rec && !rec.revoked ? `Their existing daily call is UNCHANGED at ${clockWords(rec.h, rec.mi)}.` : '';
+  return ['social-failed', `NOT SAVED: ${why} Tell them plainly, in one short sentence, that it did not work${old ? ' and the call stays as it was' : ' and nothing is set up'}. ${old} Do NOT say scheduled, arranged, changed, moved or done, do not say you will try again by yourself, and do NOT ask them to confirm it again.`];
 }
 
 // A sentence that says a call is arranged / noted / saved while nothing is saved must never be spoken or shown (smart.breaks checks every piece BEFORE it is spoken): "Got it, 3:40 noted",
@@ -345,7 +415,7 @@ const promises = (t, s) => ARRANGED.test(t) || (G() && CHANGED_CLAIM.test(t) && 
 function claimsScheduled(text) { const t = String(text || ''); return ARRANGED.test(t) && CALL_CONTEXT.test(t) && !DENIAL.test(t); }
 // May a sentence claiming a call is arranged be said on this turn? Only when the record says so: saved this turn, read back from the record, or an ordinary reminder was saved.
 const OK_LABELS = /^(?:social-(?:saved|readback|active|restored|skip|tz)|setrem-saved)/;
-const PENDING_LABELS = /^social-(?:offer|ask|confirm|failed|declined|quiet|past|condition|cancel|correct|decide-(?:days|second|ambiguous|which|revoked))/;
+const PENDING_LABELS = /^social-(?:offer|ask|confirm|restore-ask|uncertain|failed|declined|quiet|past|condition|cancel|correct|decide-(?:days|second|ambiguous|which|revoked))/;
 function claimBlocked(text, s) {
   const labels = s.factLabels || [], id = s.profile && s.profile.id;
   if (s._exec && s._exec.social) return false;
@@ -360,7 +430,7 @@ function claimBlocked(text, s) {
 // What Maya REALLY said aloud: a confirm question that was spoken (a question naming the proposed time) is the one a later yes binds to. Nothing else binds it.
 function timesIn(text) { const out = [], re = /\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)?\b/gi; let m; while ((m = re.exec(text))) { const h = Number(m[1]), mi = Number(m[2] || 0); if (h >= 0 && h <= 24 && (m[2] || m[3])) out.push({ h, mi, ap: m[3] ? m[3].toLowerCase() : null }); } return out; }
 function markAsked(id, text, now = Date.now()) {
-  const z = zget(id), o = z.offer; if (!o || o.stage !== 'confirm' || o.asked || !o.time || !/\?/.test(text)) return;
+  const z = zget(id), o = z.offer; if (!o || !(o.stage === 'confirm' || (o.stage === 'restore' && o.needAsk)) || o.asked || !o.time || !/\?/.test(text)) return;
   const ok = timesIn(String(text)).some((t) => t.h % 12 === o.time.h % 12 && t.mi === o.time.mi && (!t.ap || (t.ap === 'am') === (o.time.h < 12)));
   if (ok) zput(id, { offer: { ...o, asked: { at: now } } });
 }
@@ -370,8 +440,9 @@ function owedReadback(s) {
   if (!D()) return null;
   const id = s.profile && s.profile.id; if (!id) return null;
   const o = zget(id).offer;
-  if (!o || o.stage !== 'confirm' || o.asked || !o.time) return null;
-  if (!(s.factLabels || []).some((l) => /^social-(?:confirm|decide-ambiguous)/.test(l))) return null;
+  if (!o || !(o.stage === 'confirm' || (o.stage === 'restore' && o.needAsk)) || o.asked || !o.time) return null;
+  if (!(s.factLabels || []).some((l) => /^social-(?:confirm|decide-ambiguous|restore-ask)/.test(l))) return null;
+  if (o.mode === 'restore') return `Just to check: your daily call is stopped. Shall I start it again at ${clockWords(o.time.h, o.time.mi)}? It stays stopped until you say yes.`;
   if (o.mode === 'change') return `Just to check: shall I move your daily call to ${clockWords(o.time.h, o.time.mi)}? It stays as it is until you say yes.`;
   if (o.mode === 'new' && o.start) return `Just to check: shall I call you every day at ${clockWords(o.time.h, o.time.mi)}, starting ${dateWords(o.start)}? Nothing is saved until you say yes.`;
   return null;

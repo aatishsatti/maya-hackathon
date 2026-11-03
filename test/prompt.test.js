@@ -31,7 +31,7 @@ const { stripTags } = require('../reply');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let n = 0;
 const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 + (k % 26)) + o; k = Math.floor(k / 26) - 1; } while (k >= 0); return o; };
-const newSenior = (mode = 'standard') => { const p = memory.createProfile(`Mike${letters(n++)}`, 'male'); care.setMode(p.id, mode); return p.id; };
+const newSenior = (mode = 'standard') => { const p = memory.createProfile(`Mike${letters(n++)}`, 'male'); care.setMode(p.id, mode); care.get(p.id).quietHours = true; return p.id; };   // quiet hours ON is now an explicit setting
 const base = { ...care.cfg };
 const fast = () => Object.assign(care.cfg, { callbackDelayMs: 20, ringMs: 60, retryMinMs: 30, retryMaxMs: 60, greenMs: 5 * 60000, longInactiveMs: 3 * 3600000, quietStart: 0, quietEnd: 0 });
 const slow = () => Object.assign(care.cfg, base);

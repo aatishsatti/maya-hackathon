@@ -109,11 +109,13 @@ function build(id, ctx = {}) {
   });
   card.attempts = guard(card, 'attempts', () => (sm.attempts || []).map((a) => ({ at: when(a.at, tz), actor: a.actor, op: a.op, type: a.type, result: a.result })), []);
   card.transaction = guard(card, 'transaction', () => {
-    const o = z.offer && now - z.offer.at < 20 * 60000 ? z.offer : null, ls = z.lastSave || null;
-    const lastSave = ls ? { op: ls.op, result: ls.ok === true ? 'saved' : ls.ok === false ? 'failed' : 'unknown (the write was started and not confirmed)', at: when(ls.at, tz), error: ls.ok === false ? String(ls.error || '').slice(0, 100) : null, ref: ls.rid ? ref('rec', id, ls.rid) : null } : null;
+    const hasCall = (p.reminders || []).some((r) => r.social), callRevoked = (p.reminders || []).some((r) => r.social && r.social.revoked);
+    const o0 = z.offer && now - z.offer.at < 20 * 60000 ? z.offer : null, ls = z.lastSave || null;
+    const o = o0 && !((o0.mode === 'new' && hasCall && !callRevoked) || (o0.mode === 'change' && (!hasCall || callRevoked))) ? o0 : null;   // a stale or impossible offer is not a pending request
+    const lastSave = ls ? { h: ls.h == null ? null : ls.h, mi: ls.mi == null ? null : ls.mi, op: ls.op, result: ls.ok === true ? 'saved' : ls.ok === false ? 'failed' : 'unknown (the write was started and not confirmed)', at: when(ls.at, tz), error: ls.ok === false ? String(ls.error || '').slice(0, 100) : null, ref: ls.rid ? ref('rec', id, ls.rid) : null } : null;
     if (!o) return { pending: false, lastSave };
     return { pending: true, op: o.mode === 'new' ? 'save a new daily call' : o.mode === 'change' ? 'change the time of the existing daily call' : o.mode === 'restore' ? 'restore the stopped daily call' : o.mode, stage: o.stage === 'confirm' ? 'waiting for their yes to one confirm question' : o.stage === 'offered' ? 'offered, no answer yet' : 'collecting details',
-      proposed: { time: o.time ? clock(o.time.h, o.time.mi) : null, start: o.start ? dateOnly(setrem.zonedEpoch(...o.start.split('-').map(Number), 12, 0, tz || 'UTC'), tz) : null, tz: o.tz || null, every: 'day' },
+      proposed: { h: o.time ? o.time.h : null, mi: o.time ? o.time.mi : null, time: o.time ? clock(o.time.h, o.time.mi) : null, start: o.start ? dateOnly(setrem.zonedEpoch(...o.start.split('-').map(Number), 12, 0, tz || 'UTC'), tz) : null, tz: o.tz || null, every: 'day' },
       confirmed: { time: Boolean(o.time), start: Boolean(o.start) || o.mode === 'change', tz: Boolean(o.tz), yesToConfirmQuestion: false }, saveResult: lastSave && lastSave.at && ls.offerId === o.id ? lastSave.result : 'not attempted', lastSave };
   }, { pending: false, lastSave: null, status: 'unknown' });
   card.activity = guard(card, 'activity', () => {
@@ -153,6 +155,52 @@ function render(card) {
   const a = card.activity;
   if (a.status !== 'unknown' && (a.lastSeen || a.dailyCall)) L.push(`ACTIVITY: last seen ${a.lastSeen ? `${a.lastSeen.at} on ${a.lastSeen.where}` : 'unknown'}${a.dailyCall ? `; daily call last: ${a.dailyCall.lastOccurrence ? `${a.dailyCall.lastOccurrence.result} ${a.dailyCall.lastOccurrence.at}` : 'no delivery evidence yet (UNKNOWN, not "never rang")'}` : ''}.`);
   return L.join(' ');
+}
+
+// ---- BOUNDED SCHEDULING LANGUAGE (B1-B3). Code, not a phrase list, decides what a scheduling reply may MEAN, from the verified state:
+//   a QUESTION may only name a time that is the pending proposal, the saved time, the attempted time or one the senior said;
+//   a READBACK of the existing record ("still 6:35", "your next call will be at 6:35") is checked against STORAGE and needs no new write;
+//   a COMPLETION or PROMISE of a change ("done", "I'll move it", "sorted", "from here on", "will be at 6:57") needs a verified write this turn, with that very time;
+//   after a failed or uncertain write only a truthful outcome sentence passes; a warm affirmation ("Sounds good") after a yes is blocked unless the write is verified.
+// Anything else in a scheduling reply is not spoken: a rewrite, then a plain line built from the state (smart.fallback).
+const IMPLIES = /\b(?:done|all set|all sorted|sorted|set up|saved|noted|scheduled|moved|changed|updated|switched|booked|arranged|ready|taken care of|take care of|covered|leave it with me|consider it|you(?:'ve| have)? got it|from here on|from now on|going forward|I(?:'ll| will)\s+(?:\w+\s+){0,2}(?:move|change|set|update|get|make|put|sort|do|switch|book|arrange|have|take)|will be at|will (?:ring|call))\b/i;
+const AFFIRM_OPEN = /^\W*(?:perfect|great|sounds good|that works|lovely|wonderful|absolutely|of course|no problem|sure thing|will do|got it|okay|ok|sure|alright|right)\b/i;
+const FAIL_WORDS = /\b(?:couldn'?t|could not|can'?t|cannot|didn'?t|did not|unable|wasn'?t|not (?:saved|changed|confirmed|set|moved|sure)|failed|unverified|still)\b/i;
+const CHANGE_VERBS = /\b(?:move|moved|change|changed|update|updated|switch|switched|set it|put it|make it|I'll|I will|I'm going to|going to)\b/i;
+function timesOf(text) {
+  try { text = require('./social').normSpeech(text); } catch { /* digits only */ }
+  const out = [], re = /\b(\d{1,2})(?::(\d{2}))?\s?(am|pm)?\b/gi; let m;
+  while ((m = re.exec(text))) if (m[2] || m[3]) { const h = Number(m[1]); if (h >= 0 && h <= 24) out.push({ h12: h % 12 || 12, mi: Number(m[2] || 0), ap: m[3] ? m[3].toLowerCase() : null }); }
+  return out;
+}
+const timeIn = (t, list) => list.some((a) => a.mi === t.mi && (a.h % 12 || 12) === t.h12 && (!t.ap || (a.h < 12) === (t.ap === 'am')));
+function checkScheduling(text, card, ctx = {}) {
+  const t = String(text || '').replace(/’/g, "'"); if (!t) return null;
+  const recs = card && Array.isArray(card.records) ? card.records.filter((r) => r.type === 'daily-call') : [];
+  const recList = recs.map((r) => ({ h: Math.floor(r.mins / 60), mi: r.mins % 60 }));
+  const tx = card && card.transaction && card.transaction.status !== 'unknown' ? card.transaction : null;
+  const pend = tx && tx.pending && tx.proposed && tx.proposed.h != null ? [{ h: tx.proposed.h, mi: tx.proposed.mi }] : [];
+  const last = tx && tx.lastSave && tx.lastSave.h != null ? [{ h: tx.lastSave.h, mi: tx.lastSave.mi }] : [];
+  const said = timesOf(ctx.heard || '').map((x) => ({ h: x.ap === 'pm' && x.h12 < 12 ? x.h12 + 12 : x.ap === 'am' && x.h12 === 12 ? 0 : x.h12 % 12, mi: x.mi, any: !x.ap }));
+  const allowed = [...recList, ...pend, ...last, ...said, ...(ctx.heardLoose || [])];
+  const ex = ctx.exec || {}, V = ex.social ? 'saved' : ex.socialFailed ? 'failed' : ex.socialUnknown ? 'unknown' : 'none';
+  const labels = ctx.labels || [], rbTurn = labels.some((l) => /^social-(?:readback|active)/.test(l));
+  const yesTurn = /^\s*(?:yes|yeah|yep|yup|sure|ok|okay|absolutely|please|go ahead)\b/i.test(ctx.heard || '');
+  const readable = Array.isArray(card && card.records);
+  for (const x of t.split(/(?<=[.!?])\s+/)) {
+    if (!x.trim()) continue;
+    const times = timesOf(x), q = /\?\s*$/.test(x);
+    const bad = times.find((m) => !timeIn(m, allowed) && !(said.some((a) => a.any && a.mi === m.mi && (a.h % 12 || 12) === m.h12)));
+    if (bad) return { why: 'time', note: `the time ${bad.h12}:${String(bad.mi).padStart(2, '0')}${bad.ap ? ` ${bad.ap}` : ''} is not the saved time, the pending proposal, an attempted time or one they said: say only those` };
+    if (q) continue;
+    const implies = IMPLIES.test(x), affirm = AFFIRM_OPEN.test(x) && (yesTurn || V === 'failed' || V === 'unknown');
+    if (!implies && !affirm) continue;
+    if (V === 'saved') { if (times.every((m) => timeIn(m, recList))) continue; return { why: 'completion', note: `the saved time is ${recs.map((r) => r.time).join(' / ')}: say only that` }; }
+    if (V === 'failed' || V === 'unknown') { if (FAIL_WORDS.test(x) && !/\b(?:done|all set|sorted|saved it|moved it|changed it|is now|are now)\b/i.test(x)) continue; return { why: 'result', note: V === 'failed' ? 'the write FAILED: say plainly that it did not save and the call stays as it was; no success wording, no warm closing' : 'the result could NOT be verified: say plainly that you could not confirm it; no success wording, never "nothing changed"' }; }
+    if (readable && times.length && times.every((m) => timeIn(m, recList)) && !CHANGE_VERBS.test(x) && (!AFFIRM_OPEN.test(x) || rbTurn)) continue;   // a readback of the EXISTING record
+    return { why: 'unverified', note: 'nothing was changed or saved by a verified write this turn: do not say or promise that it is done, moved, set or sorted (no warm closing that implies it); ask the one question you owe, or read back what is saved' };
+  }
+  return null;
 }
 
 // The compact, authoritative block for a scheduling turn (voice or chat): ownership, web-call eligibility, the current and pending call, and the latest verified action result. Near the END of a short prompt.
@@ -209,6 +257,7 @@ function checkDraft(text, card, ctx = {}) {
   const t = String(text || '').replace(/’/g, "'");
   if (!t) return null;
   const sents = t.split(/(?<=[.!?])\s+/);
+  if (ctx.sched) { const sc = checkScheduling(t, card, ctx); if (sc) return sc; }
   const callTurn = CALLISH.test(t) || CALLISH.test(String(ctx.heard || '')) || (ctx.labels || []).some((l) => /^(?:social-|smart-calls)/.test(l));   // is this turn about calls?
   const unreadable = !card || card.unknown || !Array.isArray(card.records);
   const recs = unreadable ? [] : card.records.filter((r) => r.type === 'daily-call'), live = recs.find((r) => /^(active|today)/.test(r.status)) || null;
@@ -234,4 +283,4 @@ function checkDraft(text, card, ctx = {}) {
 }
 function clockMinutes(s) { const m = /^(\d{1,2}):(\d{2}) ([ap]m)/.exec(s); if (!m) return -1; let h = Number(m[1]) % 12; if (m[3] === 'pm') h += 12; return h * 60 + Number(m[2]); }
 
-module.exports = { build, render, compact, resolveRef, ref, checkDraft, SCHEDULER };
+module.exports = { checkScheduling, build, render, compact, resolveRef, ref, checkDraft, SCHEDULER };

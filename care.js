@@ -126,8 +126,8 @@ function localHour(ts, tz) {
   catch { return new Date(ts).getHours(); }
 }
 // Is it quiet hours where this person is (22:00 to 07:00 in their time zone)? Unknown time zone: no (nothing is held).
-// Per-senior switch (family dashboard "Quiet hours"): p.quietHours === false means OFF (no hold for that senior). Anything else, including every existing senior, is ON.
-const quietOn = (p) => Boolean(p) && p.quietHours !== false;
+// Per-senior switch (family dashboard "Quiet hours"): ON only when p.quietHours === true was set on purpose. Anything else, including undefined (every new senior), is OFF (no hold for that senior).
+const quietOn = (p) => Boolean(p) && p.quietHours === true;
 // Held now for this senior: switch ON, time zone known, and it is night there. Tier A safety alerts never ask this.
 const quietNow = (p, ts = Date.now()) => Boolean(p && p.tz && quietOn(p) && inQuietHours(ts, p.tz));
 const inQuiet = (id, now = Date.now()) => quietNow(get(id), now);

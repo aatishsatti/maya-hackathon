@@ -47,7 +47,7 @@ const settleT = async () => { await settle(); await new Promise((r) => setTimeou
 const LF = () => path.join(process.env.MAYA_WA_DIR, 'links.json');
 const setInbound = (id, ago) => { const all = JSON.parse(fs.readFileSync(LF(), 'utf8')); all[id].lastInboundAt = ago === null ? null : Date.now() - ago; fs.writeFileSync(LF(), JSON.stringify(all)); };
 let ph = 0;
-const person = () => memory.createProfile(`Wch${letters(n++)}`, 'female').id;
+const person = () => { const id = memory.createProfile(`Wch${letters(n++)}`, 'female').id; care.get(id).quietHours = true; return id; };   // quiet hours ON is now an explicit setting
 const linked = (open = true, prefix = '3500') => { const id = person(), phone = `${prefix}${String(100000 + ph++)}`; wa.link(id, phone, true); if (open) setInbound(id, 2 * 3600000); return { id, phone }; };
 const quiet = () => { wa.deps.testCooldownMs = 0; failMessages = false; for (const m of memory.listProfiles()) { care.welfareScheduleStop(m.id); const q = care.get(m.id); if (q) { q.reminders = []; for (const o of [...care.outreaches.values()]) { clearTimeout(o.timer); care.outreaches.delete(o.id); } care.activeByProfile.clear(); } } graphCalls.length = 0; wa.deps.testCooldownMs = 0; setrem.reset(); tz.reset(); };
 const openApp = (id) => { const ev = []; const res = { write: (s) => { const m = /event: (\w+)\ndata: (.*)\n/.exec(s); if (m) ev.push([m[1], JSON.parse(m[2])]); return true; } }; const detach = care.attachSenior(id, res, null); return { ev, detach }; };

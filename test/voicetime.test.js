@@ -70,7 +70,7 @@ test('6 the write is verified before any success language: a save the record doe
   const id = senior(), s = sess(id); say(s, 'call me every morning'); say(s, 'at 5.10 am starting today'); speak(id, 'Shall I call you every day at 5:10 am?');
   const real = care.socialOf; let first = true; care.socialOf = (i) => { const o = real(i); return first && o ? ((first = false), { ...o, h: 9 }) : o; };
   let r; try { r = say(s, 'yes please'); } finally { care.socialOf = real; }
-  assert.equal(r[0], 'social-failed'); assert.match(r[1], /NOT SAVED/); assert.match(care.get(id).smart.social.lastSave.error || '', /could not be read back/);
+  assert.equal(r[0], 'social-failed'); assert.match(r[1], /NOT SAVED/); assert.match(care.get(id).smart.social.lastSave.error || '', /did not match what was agreed/);
 });
 
 test('7 the compact APP TRUTH block: ownership, web eligibility, pending detail, latest verified action; unknown when unreadable', () => {

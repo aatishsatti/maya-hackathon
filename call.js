@@ -2012,7 +2012,7 @@ class Call {
           if (why) { repeated = text; retryWhy = why; splitter.halted = true; return; }
         } // nothing spoken yet: write it again
         else if (lockedPlain) return;   // the rewrite broke the facts too: only the plain true line is spoken
-        else if (record && !jobs.length && this.repeatRetried && !this.safety && this.breaksFacts(text)) {   // the SECOND draft is checked too (it used to be spoken unchecked): a plain line that is true from the app's own record
+        else if (record && !jobs.length && this.repeatRetried && !this.safety && require('./smart').stateFlag('GUARD') && this.breaksFacts(text)) {   // the SECOND draft is checked too (it used to be spoken unchecked): a plain line that is true from the app's own record
           lockedPlain = true; text = require('./smart').fallback(this); kind = null;
         }
         else if (jobs.length && this.breaksFacts(text)) return;   // already speaking: a later piece that claims what the app never did, or a stock counselling line, is simply dropped

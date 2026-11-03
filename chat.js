@@ -289,7 +289,7 @@ class ChatSession {
       const Q = { 'scam-family-owed': 'Would you like me to let your family know about this?', 'scam-resume': 'Would you like me to let your family know about that?', 'scam-lost': 'I lost that set-up while you were away, so nothing was sent. What happened, and would you like me to let your family know?' };
       if (lab) pieces.push({ text: Q[lab], kind: null });
     }
-    if (!pieces.length && again && require('./smart').flag('GUARD') && this.guardBlocked) { pieces.push({ text: require('./smart').fallback(this), kind: null }); this.guardBlocked = false; }   // both drafts broke the guard: a plain true line, never the bad draft
+    if (!pieces.length && again && (require('./smart').flag('GUARD') || require('./smart').stateFlag('GUARD')) && this.guardBlocked) { pieces.push({ text: require('./smart').fallback(this), kind: null }); this.guardBlocked = false; }   // both drafts broke the guard: a plain true line, never the bad draft
     if (!pieces.length) throw new ChatError('Maya could not answer right now: no reply came back.'); // never a faked reply
     let all = pieces.map((p) => p.text).join(' ').replace(/\s+([,.;:!?])/g, '$1');
     // Her own power: she does set reminders (and short ones) herself. A draft that refuses, invents a limit or sends them to their family is written again once; and while a set-up is still open (nothing saved yet) a draft that says it is

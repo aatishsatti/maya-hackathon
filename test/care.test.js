@@ -25,7 +25,7 @@ const { Call, parseTimer, isAck, firstSilenceWait, SILENCE_WAIT_MS } = require('
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let n = 0;
 const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 + (k % 26)) + o; k = Math.floor(k / 26) - 1; } while (k >= 0); return o; };
-const newSenior = (mode = 'standard') => { const p = memory.createProfile(`Mike${letters(n++)}`, 'male'); care.setMode(p.id, mode); return p.id; };
+const newSenior = (mode = 'standard') => { const p = memory.createProfile(`Mike${letters(n++)}`, 'male'); care.setMode(p.id, mode); care.get(p.id).quietHours = true; return p.id; };   // these tests were written for quiet hours ON: it is now an explicit setting, not the default
 // Fast cfg for ring tests; restored by fast().
 const base = { ...care.cfg };
 const fast = () => Object.assign(care.cfg, { callbackDelayMs: 20, ringMs: 60, retryMinMs: 30, retryMaxMs: 60, greenMs: 5 * 60000, longInactiveMs: 3 * 3600000, quietStart: 0, quietEnd: 0 }); // no quiet hours unless a test sets them

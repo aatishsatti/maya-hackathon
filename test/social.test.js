@@ -28,7 +28,7 @@ const TZ = 'America/New_York';
 // Wed 5 Nov 2026 10:00 in New York is the "now" of the conversation tests (a fixed clock, passed in).
 const NOW = setrem.zonedEpoch(2026, 11, 5, 10, 0, TZ);
 const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 + (k % 26)) + o; k = Math.floor(k / 26) - 1; } while (k >= 0); return o; };
-const senior = (tz = TZ) => { const p = memory.createProfile(`Social${letters(n++)}`, 'female'); if (tz) care.get(p.id).tz = tz; return p.id; };
+const senior = (tz = TZ) => { const p = memory.createProfile(`Social${letters(n++)}`, 'female'); if (tz) care.get(p.id).tz = tz; care.get(p.id).quietHours = true; return p.id; };   // quiet hours ON is now an explicit setting
 const open = (id) => { const evs = []; care.attachSenior(id, { write(s) { const m = /event: (\w+)\ndata: (.*)\n/.exec(s); if (m) evs.push({ ev: m[1], data: JSON.parse(m[2]) }); return true; } }, TZ); return evs; };
 const sess = (id) => ({ profile: memory.load(id), factLabels: [], outreach: null, _exec: {}, lastHeard: () => '' });
 const ctx = (o = {}) => ({ intent: 'smalltalk', callsOk: true, safe: true, ...o });

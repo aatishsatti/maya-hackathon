@@ -12,7 +12,7 @@ const care = require('../care');
 const H = 3600000;
 let n = 0; const person = (consent = true, mode = 'standard', tz = 'Europe/London') => {
   const id = memory.createProfile(`Esca${String.fromCharCode(97 + n++)}`, 'female').id;
-  care.setTimezone(id, tz, 'manual'); care.setMode(id, mode); care.setFamilyConsent(id, consent); return id;
+  care.setTimezone(id, tz, 'manual'); care.setMode(id, mode); care.setFamilyConsent(id, consent); care.get(id).quietHours = true; return id;   // quiet hours ON is now an explicit setting
 };
 const family = () => { const ev = []; const res = { write: (s) => { const m = /event: (\w+)\ndata: (.*)\n/.exec(s); if (m) ev.push([m[1], JSON.parse(m[2])]); return true; } }; const off = care.attachFamily(res, null); return { ev, off }; };
 const esc = (id) => care.view(id).escalations;

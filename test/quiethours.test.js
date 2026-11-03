@@ -1,4 +1,4 @@
-// Per-senior Quiet hours switch (default ON). No network: Spark is stubbed. ON = a night check/reminder is held until 07:00 there; OFF = nothing is held; Tier A never asks.
+// Per-senior Quiet hours switch (default OFF: ON only when explicitly set true). No network: Spark is stubbed. ON = a night check/reminder is held until 07:00 there; OFF = nothing is held; Tier A never asks.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,24 +25,25 @@ const NIGHT = (() => { const d = new Date(); d.setUTCHours(23, 30, 0, 0); if (d.
 const night = () => NIGHT;
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 
-test('1 default ON for every senior, existing or new; the switch flips, persists, and shows in the family view', () => {
+test('1 default OFF for every senior (undefined = OFF); ON only when set true on purpose; the switch flips, persists, and shows in the family view', () => {
   const id = senior();
-  assert.equal(care.quietOn(care.get(id)), true);
-  assert.notEqual(care.view(id).quiet.on, false);
-  assert.equal(care.setQuietHours(id, false), false);
-  assert.equal(care.view(id).quiet.on, false, 'OFF is explicit');
+  assert.equal(care.quietOn(care.get(id)), false, 'a new senior: OFF'); assert.equal(care.view(id).quiet.on, false, 'the dashboard shows OFF');
+  assert.equal(care.setQuietHours(id, true), true); assert.equal(care.quietOn(care.get(id)), true); assert.notEqual(care.view(id).quiet.on, false, 'ON: the view carries no "off" marker');
   care.flush();
   const saved = JSON.parse(fs.readFileSync(path.join(process.env.MAYA_CARE_DIR, `${id}.json`), 'utf8'));
-  assert.equal(saved.quietHours, false, 'persisted on disk');
-  assert.equal(care.setQuietHours(id, true), true); assert.notEqual(care.view(id).quiet.on, false);
+  assert.equal(saved.quietHours, true, 'persisted on disk');
+  assert.equal(care.setQuietHours(id, false), false); assert.equal(care.view(id).quiet.on, false, 'OFF is explicit');
   assert.throws(() => care.setQuietHours(id, 'off'), /on or off/);
   assert.throws(() => care.setQuietHours('deadbeef', true), /Unknown/);
-  // an existing profile saved before this build has no field: still ON
-  const old = senior(); delete care.get(old).quietHours; assert.notEqual(care.view(old).quiet.on, false);
+  // an existing profile saved before the field existed (undefined) is OFF; one explicitly true stays ON; one explicitly false stays OFF
+  const old = senior(); delete care.get(old).quietHours; assert.equal(care.quietOn(care.get(old)), false); assert.equal(care.view(old).quiet.on, false);
+  const yes = senior(); care.get(yes).quietHours = true; assert.equal(care.quietOn(care.get(yes)), true);
+  const no = senior(); care.get(no).quietHours = false; assert.equal(care.quietOn(care.get(no)), false);
+  assert.equal(care.inQuiet(old, night()), false, 'no hold when OFF by default'); assert.equal(care.inQuiet(yes, night()), true);
 });
 
 test('2 + 3 a night welfare check is held when ON (flag + log) and goes when OFF', async () => {
-  const id = senior(); let sent = 0;
+  const id = senior(); let sent = 0; care.setQuietHours(id, true);
   care.setWelfareSender({ blocked: () => null, fire: async () => { sent++; return { ok: true, state: 'sent' }; } });
   const start = () => { care.welfareScheduleStop(id); care.welfareScheduleStart(id, { everyMin: 60, via: 'text' }); care.get(id).welfareSchedule.next = night() - 1000; };
   start(); care.tick(night()); await new Promise((r) => setTimeout(r, 30));
@@ -67,13 +68,13 @@ test('2 + 3 a night reminder is held until 07:00 there when ON and not held when
 });
 
 test('3 OFF: quietNow / inQuiet / waiting text / what Maya promises all follow the switch; no timezone: nothing held either way', () => {
-  const id = senior(); const p = care.get(id);
+  const id = senior(); const p = care.get(id); care.setQuietHours(id, true);
   assert.equal(care.inQuiet(id, night()), true);
   assert.equal(setrem.quietHold({ task: 'x', dueAt: night() }, { tz: 'UTC', now: night() - 60000 }) !== null, true);
   care.setQuietHours(id, false);
   assert.equal(care.inQuiet(id, night()), false);
   assert.equal(setrem.quietHold({ task: 'x', dueAt: night() }, { tz: 'UTC', now: night() - 60000, quietOn: false }), null, 'Maya promises no hold when OFF');
-  const none = senior(null); assert.equal(care.inQuiet(none, night()), false); assert.notEqual(care.view(none).quiet.on, false, 'toggle still shows, default ON');
+  const none = senior(null); assert.equal(care.inQuiet(none, night()), false); assert.equal(care.view(none).quiet.on, false, 'toggle still shows, default OFF');
   void p;
 });
 

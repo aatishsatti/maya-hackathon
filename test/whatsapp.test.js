@@ -36,7 +36,7 @@ const PLAIN = `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern
 const WARN = `${tag({ emotion: 'neutral', intensity: 2, intent: 'share', concern: 'none', pain: 0 })} That sounds like a scam. Please do not read out any code. Would you like me to let your family know?`;
 const CALLS = `${tag({ emotion: 'neutral', intensity: 1, intent: 'chat', concern: 'none', pain: 0 })} I will call you now and we can talk about it.`;
 let n = 0; const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 + (k % 26)) + o; k = Math.floor(k / 26) - 1; } while (k >= 0); return o; };
-const senior = () => memory.createProfile(`Wanda${letters(n++)}`, 'female').id;
+const senior = () => { const id = memory.createProfile(`Wanda${letters(n++)}`, 'female').id; care.get(id).quietHours = true; return id; };   // quiet hours ON is now an explicit setting
 let phoneN = 0;
 const newPhone = () => `4477009${String(10000 + phoneN++)}`;
 const reset = (...q) => { queue.length = 0; queue.push(...q); asked.length = 0; };

@@ -38,7 +38,7 @@ wa.deps.fetch = async (url, opts = {}) => {
 const sent = () => graphCalls.filter((c) => /\/messages$/.test(c.url)).map((c) => c.body);
 const calls = () => graphCalls.filter((c) => /\/calls$/.test(c.url)).map((c) => c.body);
 let n = 0; const letters = (k) => { let o = ''; do { o = String.fromCharCode(97 + (k % 26)) + o; k = Math.floor(k / 26) - 1; } while (k >= 0); return o; };
-const senior = (name) => memory.createProfile(name || `Wanda${letters(n++)}`, 'female').id;
+const senior = (name) => { const id = memory.createProfile(name || `Wanda${letters(n++)}`, 'female').id; care.get(id).quietHours = true; return id; };   // quiet hours ON is now an explicit setting
 const settle = async () => { for (let i = 0; i < 40; i++) await new Promise((r) => setImmediate(r)); };
 const settleT = async () => { await settle(); await new Promise((r) => setTimeout(r, 60)); await settle(); };   // a ring starts on a 0 ms timer
 const LF = () => path.join(process.env.MAYA_WA_DIR, 'links.json');

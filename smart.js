@@ -219,7 +219,8 @@ function notes(s, heard) {
   let sched = false;
   try { const pz = s.profile && care_().get(s.profile.id), o = pz && pz.smart && pz.smart.social && pz.smart.social.offer; if (o && Date.now() - o.at < 20 * 60000) sched = !s.safety && !s.health; } catch { /* no state */ }   // a proposal is pending: this is a scheduling turn even when the words were only a fragment
   if (flag('COMPANION') && s.profile) { const sf = require('./social').step(s, heard, { intent: it, callsOk: callsOk(s), safe: !s.safety && !s.health && it !== 'scam' }); if (sf) { out.push(sf); sched = /^social-(?!offer)/.test(sf[0]) && !s.safety && !s.health && it !== 'scam'; } }   // the daily-call offer and its consent (social.js)
-  if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s, sched); if (c) out.push(['smart-app-state', c]); s._compact = Boolean(sched && c); }   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
+  if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s, sched); if (c) out.push(['smart-app-state', c]); s._compact = Boolean(sched && c); }
+  s._sched = Boolean(stateFlag('GUARD') && (sched || out.some(([l]) => /^social-/.test(l)) || (/\b(?:calls?|daily|ring)\b/i.test(heard) && (() => { try { return Boolean(care_().socialOf(s.profile.id)); } catch { return false; } })())));   // a SCHEDULING turn: the bounded-language check applies   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
   if (flag('MEMORY')) { const tl = threadLine(s, heard); if (tl) out.push(['smart-thread', tl]); }
   if (flag('CONTRACT') && it !== 'scam' && !s.safety) out.push(['smart-shape', 'REPLY SHAPE: at most two short sentences and at most ONE question, only when it helps (often none); say what you see, what you are unsure of, and one next step if there is one; keep who said what and every "not / never / didn\'t" exactly as said; past stays past.']);
   if (flag('GENERAL') && it !== 'scam' && !s.safety) {
@@ -318,7 +319,7 @@ function breaks(text, s) {
   if (stateFlag('GUARD') && s.profile && s.profile.id) {   // factual claims about calls and records, judged against a card built NOW for the authenticated senior (never against a phrase list alone)
     const st_ = require('./state'); let card = null;
     try { card = st_.build(s.profile.id, { channel: s.channel === 'chat' ? 'chat' : 'call' }); } catch { card = null; }
-    const bad = st_.checkDraft(t, card, { labels: s.factLabels || [], heard: s.lastHeard ? s.lastHeard() : '', exec: s._exec || {} });
+    const bad = st_.checkDraft(t, card, { labels: s.factLabels || [], heard: s.lastHeard ? s.lastHeard() : '', exec: s._exec || {}, sched: Boolean(s._sched) });
     if (bad) { s._why = bad.note; s._guardWhy = bad.why; return `state-${bad.why}`; }
   }
   if (!flag('GUARD')) return null;
@@ -336,7 +337,12 @@ function breaks(text, s) {
 function fallback(s) {
   const x = st(s);
   if (/abilities/.test(s._why || '')) return ABILITY_FALLBACK;
-  if (s._exec && s._exec.socialFailed) return 'That did not save, so nothing is set up yet. Would you like to try once more?';   // from the app's own save result, whatever the blocked draft said
+  if (s.profile && s.profile.id && s._exec && (s._exec.socialFailed || s._exec.socialUnknown)) {   // from the app's own write result, whatever the blocked draft said; never "nothing changed" unless the record was read, never a new confirmation
+    let rec = null, readable = true; try { rec = require('./care').socialOf(s.profile.id); } catch { readable = false; }
+    const cl = (r) => `${r.h % 12 || 12}:${String(r.mi).padStart(2, '0')} ${r.h < 12 ? 'am' : 'pm'}`;
+    if (s._exec.socialUnknown || !readable) return "I couldn't confirm whether that change went through, so please don't count on it yet. Ask me in a moment and I'll read back what is saved.";
+    return rec && !rec.revoked ? `That did not save. Your daily call is still at ${cl(rec)}.` : 'That did not save, so nothing is set up yet. You can ask me again whenever you like.';
+  }
   if (s._guardWhy) {   // a plain line that is true from the app's own records (checked again here, never from the bad draft)
     const c = (() => { try { return require('./state').build(s.profile.id, { channel: 'chat' }); } catch { return null; } })();
     const live = c && Array.isArray(c.records) && c.records.find((r) => r.type === 'daily-call' && /^(active|today)/.test(r.status));
