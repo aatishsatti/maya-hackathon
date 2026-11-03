@@ -7,9 +7,13 @@
 //   reasoning_effort minimal|low|medium|high|xhigh ("none" is HTTP 400); temperature
 //   default 1.0; stop/logprobs/verbosity are HTTP 400.
 //   Reply text: choices[0].message.content.
-// Voice: Meta MMS TTS (facebook/mms-tts-eng, VitsModel + AutoTokenizer), run locally in a warm
-// persistent worker process. Outputs signed 16-bit little-endian mono PCM at 24 kHz (resampled
-// from the model's native 16 kHz output) and streams chunks to the same piece pipeline as before.
+// Voice by channel (honest labelling):
+//   - Web call (public/app.js): uses the female device/browser speechSynthesis voice (an OS/browser feature,
+//     not a TTS API or AI model call) as its primary voice so text and voice start together with zero server
+//     TTS wait; falls back to server Meta MMS TTS (facebook/mms-tts-eng) if no female English device voice exists.
+//   - App call, written-chat voice notes, and WhatsApp voice/calls (call.js, chat.js, whatsapp.js, wacall.js):
+//     use Meta MMS TTS (facebook/mms-tts-eng, VitsModel + AutoTokenizer) run on our own server in a warm
+//     persistent worker process, outputting signed 16-bit little-endian mono PCM at 24 kHz.
 // Unsupported speech-presentation markup ([[bright]], [[soft]], [[warm]], [[whisper:...]], [excited], etc.)
 // is stripped before synthesis (only after safety/feel/name tag processing) so markup is never spoken aloud.
 const { spawn } = require('node:child_process');

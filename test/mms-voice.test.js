@@ -104,3 +104,71 @@ test('ARGON Job 2: Tavily/web search stripped, medicine refusal preserved, hones
   assert.match(warnNote, /Never claim web verification of a company or prize, and never claim you catch every scam/);
 });
 
+test('Web call primary device/browser voice (deviceVoice: true): skips server MMS wait so text and voice start together (latency = Spark + device voice start), while App/WhatsApp stay on MMS', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { Call } = require('../call');
+  const { fixedReply } = require('../reply');
+
+  const events = [];
+  const binaryFrames = [];
+  const ws = {
+    readyState: 1,
+    send(d) {
+      if (Buffer.isBuffer(d) || d instanceof Uint8Array) binaryFrames.push(d);
+      else events.push(JSON.parse(d));
+    },
+    close() {},
+  };
+  const call = new Call(ws, 'test-key');
+  clearInterval(call.endTimer);
+  call.abort = new AbortController();
+  call.profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: { people: [], events: [], preferences: [], current: [], topics: [], threads: [] } };
+  call.callId = 'web-device-test';
+  call.deviceVoice = true;
+
+  const sparkSimulatedMs = 25;
+  const t0 = Date.now();
+  await new Promise((r) => setTimeout(r, sparkSimulatedMs));
+  const timing = { endedAt: t0, decidedAt: Date.now() };
+  let deviceVoiceStartMs = null;
+  const origSend = ws.send;
+  ws.send = (d) => {
+    origSend(d);
+    if (typeof d === 'string') {
+      const ev = JSON.parse(d);
+      if (ev.type === 'speak' && ev.deviceVoice && deviceVoiceStartMs === null) {
+        // Browser speechSynthesis.speak(u) is invoked synchronously inside case 'speak' in public/app.js
+        deviceVoiceStartMs = Date.now() - t0;
+      }
+    }
+  };
+  await call.speakReply(
+    fixedReply('[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0]] Hello Mathew, how are you doing today? It is great to hear from you.'),
+    timing,
+    call.gen,
+    { record: false },
+  );
+  call.cancelSilence();
+  console.log('WEB_DEVICE_VOICE_LATENCY', JSON.stringify({
+    sparkSimulatedMs,
+    ttsChunkMs: timing.ttsChunkMs,
+    ttsFirstMs: timing.ttsFirstMs,
+    speechEndToFirstAudioMs: timing.speechEndToFirstAudioMs,
+    deviceVoiceStartMs,
+  }));
+  assert.equal(binaryFrames.length, 0, 'web call with deviceVoice: true sends zero server MMS PCM frames');
+  assert.equal(timing.deviceVoice, true);
+  assert.equal(timing.ttsChunkMs, 0, 'zero server MMS synthesis wait on web deviceVoice path');
+  assert.ok(timing.ttsFirstMs <= 5, `server text-to-voice handoff is immediate (${timing.ttsFirstMs}ms)`);
+  const speakEv = events.find((e) => e.type === 'speak');
+  const capEv = events.find((e) => e.type === 'caption');
+  assert.ok(speakEv && speakEv.deviceVoice === true && speakEv.piece === 'Hello Mathew, how are you doing today?');
+  assert.ok(capEv && capEv.deviceVoice === true && capEv.piece === 'It is great to hear from you.');
+
+  const appSrc = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  assert.match(appSrc, /Maya \(device browser voice\):/, 'web primary device voice is honestly labelled in public/app.js');
+  assert.match(appSrc, /Maya \(Meta MMS server voice fallback\):/, 'MMS fallback when device voice is unavailable is clearly labelled in public/app.js');
+});
+
+

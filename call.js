@@ -1,4 +1,10 @@
-// One live call: browser socket <-> Meta Transcribe (ears) -> Spark (brain) -> Meta MMS TTS (voice).
+// One live call: browser/app socket <-> Meta Transcribe (ears) -> Spark (brain) -> Voice:
+//   - Web call (when browser reports deviceVoice: true): primary voice is the female device/browser speechSynthesis
+//     (OS/browser feature, no TTS API call); server sends each sentence immediately in speak/caption events without
+//     waiting for MMS synthesis, so text and voice start together. If device voice is unavailable on that browser,
+//     deviceVoice is false and the call falls back to server Meta MMS TTS (facebook/mms-tts-eng) PCM16 24 kHz.
+//   - App and WhatsApp calls (deviceVoice: false): server synthesizes PCM16 24 kHz mono via Meta MMS TTS
+//     (facebook/mms-tts-eng, pre-warmed, sub-clause streaming).
 // Speaker labels are session-scoped, so the label->name map and the short history die with the call.
 // What carries across calls is the picked profile's memory file (memory.js): it is loaded at the start
 // and updated from this call's words after it ends. The words themselves are never stored.
@@ -485,6 +491,7 @@ class Call {
     this.warmTimer = null;       // keep-warm pings to the voice service while the call is live
     this.noVoice = false;        // TEMPORARY test switch: no TTS request in this call (see the start handler)
     this.fakeAudio = false;      // TEMPORARY: with noVoice, use fakeSpeech() instead of silence (synthetic audio down the call)
+    this.deviceVoice = false;    // Web call primary voice: browser plays female device/browser speechSynthesis (OS feature); no server MMS wait
     this.sayingText = '';        // what Maya has said so far in the current reply
     this.lastSaidAt = 0;
     this.bargeSince = 0;
@@ -685,7 +692,9 @@ class Call {
       // Meta Transcribe and Spark are the real ones. Used to tell whether a hosting failure is the mic path or the voice. Remove before the final version.
       this.noVoice = m.noVoice === true;
       this.fakeAudio = this.noVoice && m.fakeAudio === true;   // only ever together with noVoice
+      this.deviceVoice = !this.noVoice && m.deviceVoice === true; // web primary voice = female device/browser speechSynthesis (OS feature)
       if (this.noVoice) console.log(this.fakeAudio ? 'call noVoice+fakeAudio: TTS is skipped; a synthetic voice is used' : 'call noVoice: TTS is skipped for this call');
+      else if (this.deviceVoice) console.log('call deviceVoice: web primary voice is device/browser speechSynthesis (OS feature); server MMS skipped');
       this.starting = true; this.startAt = Date.now();   // the start message arrived (greeting timing log)
       care.callStarting(this.profile.id);   // from now on this person is on a call: a daily chat due in the next moments is skipped, not rung
       // Maya rang them and they pressed Accept: the id must match a live ring for THIS profile, else it is an ordinary call.
@@ -933,7 +942,7 @@ class Call {
   }
 
   startWarm() {
-    if (this.noVoice || typeof warmSpeech !== 'function' || streamSpeech !== require('./brain').streamSpeech) return;
+    if (this.noVoice || this.deviceVoice || typeof warmSpeech !== 'function' || streamSpeech !== require('./brain').streamSpeech) return;
     warmSpeech().catch(() => { /* warm-up failure will surface on synthesis if still broken */ });
   }
 
@@ -2116,14 +2125,27 @@ class Call {
         const tagged = tone && tone[0] ? `${tone[0]} ${spoken}` : spoken;
         const gain = tone ? tone[1] : 1;
         const onVoiceChunk = (c) => { if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = Date.now() - tEnqueue; job.chunks.push(gain === 1 ? c : scale(c, gain)); };
-        if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no TTS request
+        if (this.deviceVoice) {
+          job.done = true; job.sent = true;
+          if (timing && timing.ttsChunkMs === undefined && jobs[0] === job) timing.ttsChunkMs = 0;
+          if (!sentAny && timing) {
+            const now = Date.now();
+            timing.ttsFirstMs = now - tEnqueue;
+            timing.speechEndToFirstAudioMs = now - timing.endedAt;
+            timing.deviceVoice = true;
+            if (timing.decidedAt) { timing.replyReadyMs = now - timing.decidedAt; if (timing.guess !== 'prethink') this.readyEma = Math.round(0.6 * this.readyEma + 0.4 * timing.replyReadyMs); }
+          }
+          sentAny = true;
+          this.lastSaidAt = Date.now();
+          this.playUntil = Math.max(this.playUntil, this.lastSaidAt) + spoken.length * (bye ? 150 : 70);
+        } else if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no TTS request
         else (this.noVoice ? fakeSpeech(tagged, signal, onVoiceChunk) : streamSpeech(tagged, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });
         said.push(text);
         this.sayingText = said.join(' ');
         const shown = said.join(' ').replace(/\s+([,.;:!?])/g, '$1');
-        if (!started) { started = true; this.send({ type: 'speak', text: shown, hold: leadIn ? 0 : holdBack ? HOLD_BACK_MS : 0, ...(leadIn ? { cont: true } : {}) }); }
-        else this.send({ type: 'caption', text: shown });
+        if (!started) { started = true; this.send({ type: 'speak', text: shown, ...(this.deviceVoice ? { piece: spoken, deviceVoice: true } : {}), hold: leadIn ? 0 : holdBack ? HOLD_BACK_MS : 0, ...(leadIn ? { cont: true } : {}) }); }
+        else this.send({ type: 'caption', text: shown, ...(this.deviceVoice ? { piece: spoken, deviceVoice: true } : {}) });
       },
     });
     const producer = (async () => {

@@ -11,7 +11,24 @@
 
 ---
 
-# MMS VOICE DIAGNOSIS + FIRST-AUDIO LATENCY FIX (3 Nov 2026; working tree on top of `02ecbc9`, NOT committed, NOT pushed, NOT deployed; live authority = `02ecbc9` on Render `maya-singapore`)
+# WEB PRIMARY DEVICE VOICE + APP/WHATSAPP MMS VOICE (3 Nov 2026; working tree on top of `0afb473`, NOT committed, NOT pushed, NOT deployed; live authority = `0afb473` on Render `maya-singapore`)
+- **Voice by Channel (Honest Labelling for README / Video / Judges):**
+  - **Web call (`public/app.js` + `call.js`):** Primary voice is the **female device/browser `speechSynthesis` voice** (an OS/browser feature, **NOT** an AI model or external TTS API call), labelled on screen as `Maya (device browser voice): ...`. If no female English device voice is available on the browser (`c.deviceVoice === false`), the web call falls back to server-side Meta MMS TTS (`facebook/mms-tts-eng`) and labels the caption `Maya (Meta MMS server voice fallback): ...` (never silent).
+  - **App call, written-chat voice notes, and WhatsApp voice/calls (`call.js`, `chat.js`, `whatsapp.js`, `wacall.js`):** Use **Meta MMS TTS (`facebook/mms-tts-eng`, `VitsModel` + `AutoTokenizer`)** run on our own server (`.venv-mms/bin/python`), pre-warmed at server boot and call start, with sub-clause chunked PCM16 24 kHz mono streaming and the `02ecbc9` `ttsFailed` `bye` hangup guard intact.
+- **What Changed (`public/app.js`, `call.js`, `brain.js`, `test/mms-voice.test.js`):**
+  1. **Web primary female device/browser voice (`public/app.js`, `call.js`):**
+     - `public/app.js` (`startReal`, `openSocket`, `onServerEvent`, `feedDevicePiece`, `playDevicePiece`, `stopPlayback`): resolves `voiceReady()` and `pickVoice()` (female `en-US` voice order: `Samantha`, `Google US English`, `Ava`, `Allison`, etc.) before sending `start` over `/ws`, sets `deviceVoice: Boolean(c.deviceVoice)` in the `start` message, labels the caption `Maya (device browser voice): ...`, and speaks each sentence piece via `window.speechSynthesis` immediately on `speak` / `caption` events (with 300 ms `holdBack` gate and `stopped` barge-in cancellation). If `c.deviceVoice` is `false`, falls back to server Meta MMS PCM16 24 kHz and labels the caption `Maya (Meta MMS server voice fallback): ...`.
+     - `call.js` (`onBrowser`, `startWarm`, `speakReply`): records `this.deviceVoice = !this.noVoice && m.deviceVoice === true`; when `this.deviceVoice` is true, skips server MMS synthesis (`job.done = true; job.sent = true; timing.ttsChunkMs = 0; timing.deviceVoice = true`), sends `{ type: 'speak', text, piece, deviceVoice: true }` and `{ type: 'caption', text, piece, deviceVoice: true }` as soon as Spark finishes each sentence, and maintains the echo guard / goodbye `playUntil` window.
+  2. **App and WhatsApp preserved (`call.js`, `brain.js`, `server.js`):**
+     - App and WhatsApp do not set `deviceVoice: true`, so they remain on server Meta MMS (`facebook/mms-tts-eng`) PCM16 24 kHz with the `02ecbc9` `ttsFailed` `bye` hangup guard (`call.js:2208`) and the `0afb473` pre-warm + sub-clause first-audio streaming intact.
+  3. **Web first-audio latency measurement (`test/mms-voice.test.js`):**
+     - Because web `deviceVoice: true` does not wait for server MMS synthesis (`ttsChunkMs = 0 ms`, `ttsFirstMs = 0 ms`), text and voice start together as soon as Spark emits the first sentence (`speechEndToFirstAudioMs = Spark first-sentence time + ~0–3 ms server/socket handoff`; in the local test with a 25 ms simulated Spark stream, `ttsChunkMs = 0 ms`, `ttsFirstMs = 0 ms`, `speechEndToFirstAudioMs = 28 ms`, `deviceVoiceStartMs = 28 ms`; on live where Spark first token is ~4,680 ms, web first audio is back to Spark-only ~4.7 s instead of ~8.0 s).
+- **Targeted Test Results (Exact Counts):**
+  - `node --test test/mms-voice.test.js test/novoice.test.js test/recall.test.js test/smart.test.js`: **65 tests, 65 pass, 0 fail, 0 skipped** (`test/mms-voice.test.js`: 4/4 pass; `test/novoice.test.js`: 8/8 pass; `test/recall.test.js`: 34/34 pass; `test/smart.test.js`: 19/19 pass).
+
+---
+
+# MMS VOICE DIAGNOSIS + FIRST-AUDIO LATENCY FIX (3 Nov 2026; pushed as `0afb473` on top of `02ecbc9`, live on Render `maya-singapore`)
 - **Step 1 — Code-Backed Diagnosis (Male/Robotic Voice & 3020 ms MMS First-Chunk Latency):**
   1. **Male/robotic voice is the actual `facebook/mms-tts-eng` single-speaker checkpoint (NOT `ttsFailed` browser fallback and NOT a resampling/playback mismatch):**
      - **Server synthesis (`brain.js:165-202`):** `MMS_WORKER_CODE` loads `VitsModel.from_pretrained("facebook/mms-tts-eng")`, which is a single-speaker English VITS checkpoint (`config.num_speakers = 1`) trained on a single male speaker with flat VITS duration prediction. It outputs 16 kHz mono float waveform, resampled in `brain.js:190-198` to 24 kHz 16-bit signed little-endian mono PCM (`target_sr = 24000`).

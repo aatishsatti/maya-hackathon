@@ -242,10 +242,10 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     });
   }
 
-  // Device system/browser speechSynthesis fallback ONLY (never primary call voice, no TTS API call).
-  // Only a clear female en-US voice is used; never the system default,
-  // which can be a male or novelty voice. Order: Samantha (Mac), Google US English
-  // (Chrome), then the first en voice with a known female name.
+  // Primary voice for web calls: device system/browser speechSynthesis (an OS/browser feature, NOT a TTS API or AI model call).
+  // Only a clear female en-US voice is used; never the system default, which can be a male or novelty voice.
+  // Order: Samantha (Mac), Google US English (Chrome), then the first en voice with a known female name.
+  // If no female English device voice is available on this browser, the web call falls back to server Meta MMS TTS (labelled clearly).
   const VOICE_VOLUME = 1.0;
   const VOICE_RATE = 1.0;
   const VOICE_PITCH = 1.0;
@@ -253,6 +253,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     'Victoria', 'Zira', 'Aria', 'Jenny', 'Joanna', 'Moira', 'Tessa', 'Serena', 'Female'];
 
   function pickVoice() {
+    if (!window.speechSynthesis) return null;
     const en = speechSynthesis.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang));
     for (const name of FEMALE_NAMES) {
       const us = en.find((v) => /^en[-_]US$/i.test(v.lang) && v.name.startsWith(name));
@@ -268,7 +269,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   // Voices load asynchronously in Chrome; wait briefly for them.
   function voiceReady() {
     return new Promise((resolve) => {
-      if (speechSynthesis.getVoices().length) return resolve();
+      if (!window.speechSynthesis || speechSynthesis.getVoices().length) return resolve();
       const t = setTimeout(resolve, 1500);
       speechSynthesis.addEventListener('voiceschanged', () => { clearTimeout(t); resolve(); }, { once: true });
     });
@@ -277,7 +278,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   async function speak(data, myGen) {
     const text = data.reply;
     setState('speaking');
-    captionEl.textContent = `Maya: ${text}`;
+    captionEl.textContent = `Maya (device browser voice): ${text}`;
     const done = () => {
       if (myGen === gen && call && orb.dataset.state === 'speaking') {
         setState('listening');
@@ -288,9 +289,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       data = { ...data, ttsError: 'Audio could not be played' };
     }
     if (data.ttsError) {
-      // Device system/browser voice fallback only (no TTS API call), clearly labelled. Never silent, never fake.
-      captionEl.textContent = `Maya (device browser voice fallback): ${text}`;
-      showError(`Voice playback failed: ${data.ttsError}`);
+      // Device system/browser voice (OS feature, no TTS API call), clearly labelled. Never silent, never fake.
+      captionEl.textContent = `Maya (device browser voice): ${text}`;
     }
     if (!window.speechSynthesis) { setTimeout(done, 2500); return; }
     await voiceReady();
@@ -390,11 +390,14 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (now - c.lastVoice > SILENCE_MS || now - c.utterance.startedAt > MAX_UTTERANCE_MS) finishUtterance();
   }
 
-  // ---- Real mode: live socket to the server (Transcribe ears, Spark brain, Meta MMS voice) ----
-  // Mic goes up as Float32 mono at the browser's own rate; Maya's voice comes back as
-  // PCM16 mono 24 kHz and is scheduled on the audio clock so the first chunk plays at once.
+  // ---- Real mode: live socket to the server (Transcribe ears, Spark brain, female device/browser primary voice on web; Meta MMS fallback if device voice unavailable) ----
+  // Mic goes up as Float32 mono at the browser's own rate. On web, when a female English device/browser voice is available
+  // (c.deviceVoice = true, OS speechSynthesis feature, not a model call), each sentence plays immediately via speechSynthesis
+  // as soon as 'speak' / 'caption' arrives so text and voice start together (latency = Spark only). If no female device voice
+  // is available on this browser (c.deviceVoice = false), the server sends Meta MMS TTS PCM16 mono 24 kHz as fallback.
   const HEARING_STUCK_MS = 15000; // noise (TV, fan) that never turns into words must not hold the mic
   const voiceSources = new Set();
+  const deviceUtterances = new Set();
   let nextPlayTime = 0;
 
   // Full-duplex feel. Loud sound over Maya's voice (the person starting to talk, or a system ding) makes
@@ -446,6 +449,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     g.open = true;
     for (const b of g.held) playChunk(c, b);
     g.held = [];
+    for (const t of g.heldText || []) playDevicePiece(c, t);
+    g.heldText = [];
   }
 
   function feedChunk(c, buf) {
@@ -455,9 +460,35 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (!g.timer && !g.paused) g.timer = setTimeout(() => openGate(c), g.holdMs);
   }
 
+  function playDevicePiece(c, text) {
+    const clean = String(text || '').trim();
+    if (!clean || !window.speechSynthesis || !c.pickedVoice) return;
+    const u = new SpeechSynthesisUtterance(clean);
+    u.voice = c.pickedVoice;
+    u.lang = c.pickedVoice.lang;
+    u.volume = speakerOn ? VOICE_VOLUME : SPEAKER_OFF_GAIN;
+    u.rate = VOICE_RATE;
+    u.pitch = VOICE_PITCH;
+    deviceUtterances.add(u);
+    u.onend = () => { deviceUtterances.delete(u); finishIfDone(c); };
+    u.onerror = () => { deviceUtterances.delete(u); finishIfDone(c); };
+    speechSynthesis.speak(u);
+  }
+
+  function feedDevicePiece(c, text) {
+    const g = c.gate;
+    if (!g || g.open) { playDevicePiece(c, text); return; }
+    g.heldText = g.heldText || [];
+    g.heldText.push(text);
+    if (!g.timer && !g.paused) g.timer = setTimeout(() => openGate(c), g.holdMs);
+  }
+
   function stopPlayback() {
     for (const src of voiceSources) { src.onended = null; try { src.stop(); } catch { /* already ended */ } }
     voiceSources.clear();
+    for (const u of deviceUtterances) { u.onend = null; u.onerror = null; }
+    deviceUtterances.clear();
+    if (window.speechSynthesis) speechSynthesis.cancel();
     nextPlayTime = 0;
     if (call && call.gate) { clearTimeout(call.gate.timer); call.gate = null; }
   }
@@ -479,7 +510,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   }
 
   function finishIfDone(c) {
-    if (call === c && c.voiceDone && voiceSources.size === 0 && orb.dataset.state === 'speaking') {
+    if (call === c && c.voiceDone && voiceSources.size === 0 && deviceUtterances.size === 0 && orb.dataset.state === 'speaking') {
       c.voiceDone = false;
       setState('listening');
     }
@@ -523,7 +554,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       case 'resumed': // the server gave this call back after the line dropped: carry on
         c.ready = true; c.lostAt = 0; c.attempt = 0; clearTimeout(c.attemptTimer); clearTimeout(c.slowTimer); c.slowTimer = null; c.slowShown = false;
         if (callState.muted && c.ws.readyState === WebSocket.OPEN) { c.ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; }
-        setState(voiceSources.size ? 'speaking' : 'listening');
+        setState(voiceSources.size || deviceUtterances.size ? 'speaking' : 'listening');
         break;
       case 'resumeFailed': endCall(LINE_LOST_MSG); break;
       case 'pong': break; // an instant soft cue while the greeting is being written; it says nothing and claims nothing
@@ -532,21 +563,33 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
         if (!ev.cont) {
           stopPlayback(); c.voiceDone = false;
           c.ducked = false; clearTimeout(c.duckFailsafe); setMaster(c, 1, 0.01);
-          c.gate = ev.hold ? { holdMs: ev.hold, open: false, paused: false, held: [], timer: null } : null;
+          c.gate = ev.hold ? { holdMs: ev.hold, open: false, paused: false, held: [], heldText: [], timer: null } : null;
         }
         // lead: a short acknowledgement while Maya is still writing the real reply. The orb stays in its thinking colours.
         c.leadActive = Boolean(ev.lead);
         if (ev.lead) { setState('thinking'); break; }
-        setState('speaking'); captionEl.textContent = `Maya: ${ev.text}`; break;
+        setState('speaking');
+        captionEl.textContent = c.deviceVoice
+          ? `Maya (device browser voice): ${ev.text}`
+          : `Maya (Meta MMS server voice fallback): ${ev.text}`;
+        if (c.deviceVoice) feedDevicePiece(c, ev.piece || ev.text);
+        break;
       case 'unduck': unduck(c); break;
-      case 'caption': if (orb.dataset.state === 'speaking') captionEl.textContent = `Maya: ${ev.text}`; break;
+      case 'caption':
+        if (orb.dataset.state === 'speaking') {
+          captionEl.textContent = c.deviceVoice
+            ? `Maya (device browser voice): ${ev.text}`
+            : `Maya (Meta MMS server voice fallback): ${ev.text}`;
+          if (c.deviceVoice && ev.piece) feedDevicePiece(c, ev.piece);
+        }
+        break;
       case 'audioEnd':
         c.leadActive = false;
         c.voiceDone = true; finishIfDone(c);
         if (ev.timing) console.log('latency', ev.timing);
         break;
       case 'ttsFailed':
-        speak({ reply: ev.text, ttsError: ev.error }, c.gen); break; // browser voice, labelled MOCK
+        speak({ reply: ev.text, ttsError: ev.error }, c.gen); break; // device browser voice fallback when server MMS fails
       case 'speechStart':
         if (orb.dataset.state !== 'speaking') { setState('listening', 'hearing'); armStuckWatchdog(c); }
         break;
@@ -582,6 +625,10 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (myGen !== gen) return;
     if (c.micCtx) { try { await c.micCtx.audioWorklet.addModule('/mic-worklet.js'); } catch { try { c.micCtx.close(); } catch { /* ignore */ } c.micCtx = null; } }   // decided BEFORE the socket opens: the start message carries the mic's rate
     if (myGen !== gen) return;
+    await voiceReady();
+    if (myGen !== gen) return;
+    c.pickedVoice = pickVoice();
+    c.deviceVoice = Boolean(window.speechSynthesis && c.pickedVoice);
     c.attempt = 0; c.lostAt = 0; c.lastRx = Date.now();
     openSocket(c, myGen, false);
     c.master = c.ctx.createGain(); // Maya's voice goes through this so her volume can dip instantly
@@ -627,7 +674,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     ws.onopen = () => {
       if (myGen !== gen || c.ws !== ws) return;
       if (resume) { ws.send(JSON.stringify({ type: 'resume', token: c.token })); return; }
-      ws.send(JSON.stringify({ type: 'start', sampleRate: (c.micCtx || c.ctx).sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId }));
+      ws.send(JSON.stringify({ type: 'start', sampleRate: (c.micCtx || c.ctx).sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId, deviceVoice: Boolean(c.deviceVoice) }));
       if (callState.muted) { ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; } // muted while the line was still connecting
     };
     ws.onmessage = (m) => {
