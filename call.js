@@ -526,6 +526,7 @@ class Call {
     this.scamAskFor = null;      // the verdict whose one question to the family she is about to ask
     this.focus = null;           // this reply's memory focus (see setFocus); null for greetings, call-backs and silence lines
     this.followUpOffered = false; // a due follow-up was already offered to Spark in this call
+    this.callbackUsed = false;   // session-only: at most one relevant memory callback per conversation
     this.beatCount = 0;          // replies she has given on the current light-chat subject (see beat.js); committed after each spoken reply
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
@@ -1015,7 +1016,7 @@ class Call {
     if (!cand || !cand.rs || cand.rs.error || (cand.rs.done && !cand.rs.text.trim())) return false;   // a guess that already failed or came back empty is never spoken: the normal path writes a fresh reply
     if (/INCOMPLETE|APP STATE: UNKNOWN|\bUNKNOWN\b|: unknown\./.test(extra)) return false;   // a failed or incomplete state read is never reused, even when the guess's card failed the same way
     if (!g || g.notes !== extra || JSON.stringify(g.labels) !== JSON.stringify(this.factLabels || []) || g.turnSeq !== mySeq - 1 || Date.now() - g.startedAt > SPEC_MAX_AGE_MS || JSON.stringify(this.history) !== g.histJson) return false;
-    if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder) return false;
+    if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder || this.focus.callback) return false;
     const keep = this.focus; this.focus = pureFocus(g.partial);
     try { return this.roster(`${this.replyNote()} ${extra}`.trim(), g.partial) === g.roster; } catch { return false; } finally { this.focus = keep; }
   }
@@ -1241,13 +1242,19 @@ class Call {
   setFocus(heard, extra = '') {
     const full = STORY_ASK.test(heard) || RECALL_ASK.test(heard);
     const heavy = Boolean(extra || this.safety || this.health || this.pendingConcern || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
-    this.focus = { text: String(heard || ''), full, thread: '' };
+    this.focus = { text: String(heard || ''), full, thread: '', callback: null };
     if (full || !this.profile) return;
     const t = recall.dueThread(this.profile.memory.threads, memory.today(this.tz), { heavy, askedThisCall: this.followUpOffered, callId: this.callId });
-    if (!t) return;
-    if (t.kind === 'reminder') { this.reminderShown = t.id; this.focus.reminder = true; }   // marked delivered only once the reply is really spoken (commitReminder); a cut reply leaves it for next time
-    else { this.followUpOffered = true; memory.markAsked(this.profile.id, t.id); }
-    this.focus.thread = recall.threadFact(t, memory.today(this.tz));
+    if (t) {
+      if (t.kind === 'reminder') { this.reminderShown = t.id; this.focus.reminder = true; }   // marked delivered only once the reply is really spoken (commitReminder); a cut reply leaves it for next time
+      else { this.followUpOffered = true; memory.markAsked(this.profile.id, t.id); }
+      this.focus.thread = recall.threadFact(t, memory.today(this.tz));
+      return;
+    }
+    const ordinaryExtra = Boolean(extra) && Array.isArray(this.factLabels) && this.factLabels.length > 0 && this.factLabels.every((l) => ORDINARY_LABELS.has(l)) && extra.trim() === String(this._knownText || '').trim();
+    const cbHeavy = Boolean((extra && !ordinaryExtra) || this.safety || this.health || this.pendingConcern || this._medical || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
+    const cb = recall.callbackFact(this.profile.memory, heard, memory.today(this.tz), { heavy: cbHeavy, callbackUsed: this.callbackUsed, ownerName: this.profile.name });
+    if (cb) { this.callbackUsed = true; this.focus.callback = cb; }
   }
 
   // Decides this reply's beat from Spark's tag (topic) and the care state, then enforces its limits on the delivery (see beat.js).

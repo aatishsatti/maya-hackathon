@@ -225,6 +225,7 @@ function focusedMemory(m, focus, tz) {
   let out = `What you remember, for this reply (only what they told you; other notes exist but are not shown now, so if they ask about something not shown, say honestly that you cannot think of it right now): ${bits.join('. ')}.`;
   if (focus.thread && focus.reminder) out += ` REMINDER THEY ASKED YOU FOR (a fact for you, not words to say; they wanted you to remind them on their next call, and this is that call): ${focus.thread}. Remind them of it once, simply, in your own words, task first, early in this reply. Add no advice, no health or dose words and nothing about it that they did not say.`;
   else if (focus.thread) out += ` Open follow-up from an earlier call (a fact for you, not words to say): ${focus.thread}. If it fits the moment, ask about it once, simply, in your own words, early in this reply; if what they are saying makes it awkward, leave it.`;
+  else if (focus.callback) out += ` RELEVANT MEMORY CALLBACK (a fact they told you earlier, not words to copy; topic match: ${focus.callback.topic}; fact: ${focus.callback.fact}): you may bring up this one fact naturally in your own words where it fits what they just said, once only; add nothing they did not tell you.`;
   return out;
 }
 
@@ -282,7 +283,7 @@ function profileNote(p, tz, focus = null) {
   m.preferences.forEach((x) => mem.push(`Likes, told ${x.told}: ${who(x)}${x.text}`));
   m.current.forEach((x) => mem.push(`Happening around them, told ${x.told}: ${who(x)}${x.text}`));
   m.topics.slice(-5).forEach((x) => mem.push(`Recent topic, ${x.told}: ${x.text}`));
-  if (focus && !focus.full && (mem.length || focus.thread)) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
+  if (focus && !focus.full && (mem.length || focus.thread || focus.callback)) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
   else lines.push(mem.length ? `What you remember (only what they told you; nothing else is known): ${mem.join(' | ')}` : 'You have no memories of this person yet.');
   return lines.join(' ');
 }

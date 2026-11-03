@@ -111,7 +111,7 @@ class ChatSession {
     this.started = false;
     this.closed = false;
     // The same per-conversation state call.js keeps, with the same meaning.
-    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.lastReplyAsked = false; this.askHistory = [];
+    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.callbackUsed = false; this.lastReplyAsked = false; this.askHistory = [];
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;

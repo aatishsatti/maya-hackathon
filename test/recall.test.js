@@ -173,3 +173,129 @@ test('heavyTalk: a wide net that only blocks a follow-up; every way of saying th
   for (const t of ['I do not want to live anymore', "I don't want to live", 'I dont want to be here', 'I no longer want to go on', 'I wish I was dead', 'there is no point', 'I give up', 'I feel so alone', 'I am scared', 'My head hurts', 'I fell in the kitchen', 'I got a call about my bank', 'I miss him so much', 'I am worried about it']) assert.equal(R.heavyTalk(t), true, t);
   for (const t of ['I am doing fine today, thank you.', 'The roses are finished I think.', 'I made some soup.', 'Priya came by on Saturday.', 'The tea is getting cold', '']) assert.equal(R.heavyTalk(t), false, t);
 });
+
+const CB_MEM = {
+  people: [{ name: 'Leo', relationship: 'grandson', birthday: '', stories: [{ text: 'plays chess at school', told: '2026-10-20' }] }],
+  events: [],
+  preferences: [
+    { who: 'Mathew', text: 'likes ginger and lemon tea since college', told: '2026-10-18' },
+    { who: 'Mathew', text: 'likes iced coffee', told: '2026-10-19' },
+    { who: 'Mathew', text: 'loves dark chocolate', told: '2026-10-21' },
+  ],
+  current: [],
+  topics: [],
+  threads: [],
+};
+
+test('callbackFact (1): topic matches senior-told fact -> callback eligible once with fact + topic match only', () => {
+  const cb = R.callbackFact(CB_MEM, 'I am making a warm cup of tea right now.', TODAY, { ownerName: 'Mathew' });
+  assert.ok(cb, 'topic match on tea returns a callback');
+  assert.equal(cb.topic, 'tea');
+  assert.match(cb.fact, /ginger and lemon tea since college/);
+  assert.doesNotMatch(cb.fact, /["“”?]/, 'code supplies fact only, never a quoted sentence or question');
+
+  const coffee = R.callbackFact(CB_MEM, 'I might brew some coffee this afternoon.', TODAY, { ownerName: 'Mathew' });
+  assert.ok(coffee);
+  assert.equal(coffee.topic, 'coffee');
+  assert.match(coffee.fact, /iced coffee/);
+
+  const grandson = R.callbackFact(CB_MEM, 'My grandson called me earlier today.', TODAY, { ownerName: 'Mathew' });
+  assert.ok(grandson);
+  assert.equal(grandson.topic, 'grandson');
+  assert.match(grandson.fact, /Leo \(grandson\): plays chess at school/);
+});
+
+test('callbackFact (2): topic does not match -> no callback', () => {
+  assert.equal(R.callbackFact(CB_MEM, 'The weather is sunny and the roses are blooming.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(CB_MEM, 'I watched a documentary about old airplanes.', TODAY, { ownerName: 'Mathew' }), null);
+});
+
+test('callbackFact (3): same fact already mentioned this turn -> no callback', () => {
+  assert.equal(R.callbackFact(CB_MEM, 'I am drinking ginger and lemon tea like I have since college.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(CB_MEM, 'I just made myself some ginger tea.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(CB_MEM, 'I am having an iced coffee right now.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(CB_MEM, 'I had some dark chocolate after lunch.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(CB_MEM, 'My grandson Leo plays chess at school.', TODAY, { ownerName: 'Mathew' }), null);
+});
+
+test('callbackFact (4): second callback in same conversation -> blocked; reset on new conversation (session-only)', () => {
+  const memory = require('../memory');
+  const { Call } = require('../call');
+  const { ChatSession } = require('../chat');
+  const profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+
+  const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+  clearInterval(call.endTimer);
+  call.profile = profile;
+  call.tz = 'America/New_York';
+
+  call.setFocus('I am making a cup of tea right now.');
+  assert.ok(call.focus.callback, 'first matching turn in conversation gets callback');
+  assert.equal(call.callbackUsed, true);
+  const note1 = memory.profileNote(profile, call.tz, call.focus);
+  assert.match(note1, /RELEVANT MEMORY CALLBACK.*topic match: tea.*ginger and lemon tea since college/);
+
+  call.setFocus('I might also have some coffee or chocolate later.');
+  assert.equal(call.focus.callback, null, 'second callback in same call conversation is blocked');
+  const note2 = memory.profileNote(profile, call.tz, call.focus);
+  assert.doesNotMatch(note2, /RELEVANT MEMORY CALLBACK/);
+
+  const chat1 = new ChatSession(profile, 'America/New_York');
+  assert.equal(chat1.callbackUsed, false, 'new conversation starts with callbackUsed = false');
+  chat1.setFocus('I am thinking about having some coffee.');
+  assert.ok(chat1.focus.callback, 'eligible once in new chat conversation');
+  assert.equal(chat1.callbackUsed, true);
+  chat1.setFocus('And maybe some tea after.');
+  assert.equal(chat1.focus.callback, null, 'second callback in same chat conversation is blocked');
+});
+
+test('callbackFact (5): family-set, dashboard, and inferred facts -> never used', () => {
+  const famMem = {
+    people: [{ name: 'Leo', relationship: 'grandson', by: 'family', stories: [{ text: 'plays chess at school', by: 'family', told: TODAY }] }],
+    events: [{ who: 'Mathew', text: 'family lunch on Sunday', source: 'family dashboard', told: TODAY }],
+    preferences: [
+      { who: 'Mathew', text: 'likes ginger and lemon tea since college', by: 'family', told: TODAY },
+      { who: 'Mathew', text: 'likes iced coffee', owner: 'family', told: TODAY },
+      { who: 'Mathew', text: 'loves dark chocolate', source: 'dashboard', told: TODAY },
+      { who: 'Mathew', text: 'enjoys green tea in the afternoon', inferred: true, told: TODAY },
+      { who: 'Mathew', text: 'family-set note about chamomile tea', told: TODAY },
+    ],
+    current: [],
+    topics: [],
+    threads: [],
+  };
+  assert.equal(R.callbackFact(famMem, 'I am making a cup of tea.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(famMem, 'I could go for some coffee.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(famMem, 'I want some chocolate.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(famMem, 'My grandson called me.', TODAY, { ownerName: 'Mathew' }), null);
+});
+
+test('callbackFact (6): daily call record and medicine-related facts -> never used as callback fact', () => {
+  const mixed = {
+    id: 'fbde4db7',
+    name: 'Mathew',
+    reminders: [
+      { id: 'r1', task: 'Friendly daily call from Maya at 2:12 PM every day', by: 'senior', social: { h: 14, mi: 12 }, type: 'daily-call' },
+    ],
+    memory: {
+      people: [],
+      events: [
+        { who: 'Mathew', text: 'daily call from Maya at 2:12 PM every day', told: TODAY },
+        { who: 'Mathew', text: 'doctor appointment for blood pressure', told: TODAY },
+      ],
+      preferences: [
+        { who: 'Mathew', text: 'Friendly daily call at 2:12 PM every day', social: true, told: TODAY },
+        { who: 'Mathew', text: 'takes vitamin D supplement and blood pressure pills with tea', told: TODAY },
+        { who: 'Mathew', text: 'takes 500mg metformin tablet after coffee', told: TODAY },
+      ],
+      current: [
+        { who: 'Mathew', text: 'ibuprofen medication for knee', told: TODAY },
+      ],
+      topics: [],
+      threads: [],
+    },
+  };
+  assert.equal(R.callbackFact(mixed, 'Will you give me a call today?', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(mixed, 'Let us talk about our daily call at 2:12 PM.', TODAY, { ownerName: 'Mathew' }), null);
+  assert.equal(R.callbackFact(mixed, 'I am having a cup of tea and coffee.', TODAY, { ownerName: 'Mathew' }), null);
+});

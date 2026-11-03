@@ -199,4 +199,91 @@ function addReminderTo(threads, task, callId, today, makeId = newId) {
 // They said the thing they asked to be reminded of is not done yet / still to do.
 const STILL_TO_DO = /\b(?:not (?:done|finished)(?: yet)?|haven'?t (?:done|called|managed|got(?:ten)? to)(?: it| that)?(?: yet)?|still (?:need|have|got) to|still to do|didn'?t (?:get|manage) to|not yet|remind me again)\b/i;
 
-module.exports = { parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };
+// Relevant memory callback: when the senior talks about a topic, code may surface at most ONE matching senior-told fact per conversation,
+// never if the senior already mentioned that fact in this turn, never from family/dashboard/inferred/daily-call records, and never for medicine.
+const CALLBACK_FILLER = new Set('always also back been before being both call called calling came come comes coming day days does doing done down drink drinking drinks eat eating eats enjoy enjoyed enjoys even ever every favorite favourite feel feeling feels felt find first fond from gave get gets getting give given gives going gone good great had has have having hear heard here high just keep kept kind kinds know known knows last late like liked likes little live lived lives long look looked looking love loved loves made make makes making many might more most much must name named names need needed needs never nice often only other over part past prefer preferred prefers quite rather really said same saw say saying says seem seemed seems seen since small some something sometimes still take taken takes taking talk talked talking tell telling tells thing things think thinking thinks thought time times today told took true turn turned turns used usually very want wanted wants well went were year years'.split(' '));
+const TOPIC_GROUPS = [
+  ['tea', 'cuppa', 'chai', 'teapot', 'kettle'],
+  ['coffee', 'espresso', 'latte', 'cappuccino', 'caffeine', 'decaf'],
+  ['chocolate', 'cocoa', 'sweet', 'dessert', 'treat', 'candy', 'fudge'],
+  ['grandson', 'granddaughter', 'grandchild', 'grandchildren', 'grandkid'],
+];
+const NON_SENIOR_META = /\b(?:family|dashboard|inferred|guess\w*|system|caregiver|carer|daily[-_ ]?call|social|welfare|check[-_ ]?in|reminder)\b/i;
+const NON_SENIOR_TEXT = /\b(?:family[- ]set|set by (?:the |their )?(?:family|son|daughter|dashboard)|from (?:the )?(?:family|dashboard)|family dashboard|inferred|reminder from (?:the )?family|check-in set by|unnamed speaker)\b/i;
+const DAILY_CALL_TEXT = /\b(?:daily[- ]?calls?|friendly daily call|call from maya|maya['’]?s (?:daily )?call|every day at \d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2}\s*(?:am|pm)\s+every\s+day)\b/i;
+const MEDICINE_TEXT = /\b(?:medicin\w*|medicat\w*|meds|pills?|tablets?|capsules?|doses?|dosag\w*|mg|mcg|ml|prescript\w*|rx|pharmac\w*|drug\w*|vitamins?|supplements?|inhaler\w*|insulin|antibiotic\w*|painkiller\w*|ibuprofen|paracetamol|acetaminophen|tylenol|aspirin|naproxen|advil|motrin|warfarin|eliquis|apixaban|metformin|lisinopril|statin\w*|atorvastatin|amlodipine|omeprazole|gabapentin|prednison\w*|levothyroxin\w*|losartan|hydrochlorothiazide|albuterol|furosemide|pantoprazole|sertraline|zolpidem|tramadol|oxycodon\w*|morphin\w*|codein\w*|ointment\w*|eyedrop\w*|ear\s*drop\w*|syrup\w*|inject\w*|vaccin\w*|booster\w*|refill\w*|side[- ]effect\w*|symptom\w*|diagnos\w*|treatment\w*|therap\w*|doctor\w*|dr\.?\b|gp\b|physician\w*|surgeon\w*|nurse\w*|clinic\w*|hospital\w*|surger\w*|operation\w*|appointment\w*|blood\s*(?:pressure|sugar|test|work|thinner\w*)|cholesterol|diabetes|arthritis|chemo\w*|dialysis)\b/i;
+
+function seniorToldItem(x, text = '') {
+  if (!x || typeof x !== 'object') return false;
+  if (x.inferred || x.family || x.dashboard || x.social) return false;
+  if (x.by && String(x.by).toLowerCase() !== 'senior') return false;
+  if (x.owner && String(x.owner).toLowerCase() !== 'senior') return false;
+  if (x.creator && String(x.creator).toLowerCase() !== 'senior') return false;
+  const meta = [x.source, x.origin, x.type, x.kind, x.channel].filter(Boolean).join(' ');
+  if (NON_SENIOR_META.test(meta)) return false;
+  const body = `${x.who || ''} ${x.name || ''} ${x.relationship || ''} ${text || x.text || ''}`;
+  if (NON_SENIOR_TEXT.test(body) || DAILY_CALL_TEXT.test(body) || MEDICINE_TEXT.test(body)) return false;
+  return true;
+}
+
+const topicWords = (text, ownerWords) => words(text).filter((w) => !CALLBACK_FILLER.has(w) && !ownerWords.has(w));
+const relatedMatch = (w, uSet) => TOPIC_GROUPS.some((g) => g.includes(w) && g.some((x) => x !== w && uSet.has(x)));
+
+function callbackFact(memory, userText, today = '', opts = {}) {
+  const session = opts && typeof opts.session === 'object' ? opts.session : null;
+  if (!userText || opts.heavy || opts.callbackUsed || opts.used || (session && session.callbackUsed)) return null;
+  if (heavyTalk(userText) || MEDICINE_TEXT.test(String(userText))) return null;
+  const uSet = new Set(words(userText));
+  if (!uSet.size) return null;
+  const m = memory && typeof memory === 'object' && memory.memory && typeof memory.memory === 'object' ? memory.memory : (memory || {});
+  const owner = String(opts.ownerName || (memory && memory.name) || '').trim();
+  const ownerWords = new Set(words(owner));
+  const candidates = [];
+  const consider = (kind, item, factText, coreText, personWords = []) => {
+    if (!seniorToldItem(item, factText)) return;
+    const fWords = topicWords(coreText, ownerWords);
+    const pWords = personWords.filter((w) => !ownerWords.has(w));
+    const allWords = [...new Set([...pWords, ...fWords])];
+    if (!allWords.length) return;
+    const directCore = fWords.filter((w) => uSet.has(w));
+    const directPerson = pWords.filter((w) => uSet.has(w));
+    const related = allWords.filter((w) => !uSet.has(w) && relatedMatch(w, uSet));
+    const hits = [...new Set([...directPerson, ...directCore, ...related])];
+    if (!hits.length) return;
+    const checkWords = pWords.length && fWords.length ? fWords : allWords;
+    const checkDirect = pWords.length && fWords.length ? directCore : [...new Set([...directPerson, ...directCore])];
+    const unmentioned = checkWords.filter((w) => !uSet.has(w));
+    if (!unmentioned.length || checkDirect.length > 1) return;
+    const age = ISO.test(String(item.told)) && ISO.test(String(today)) ? daysBetween(item.told, today) : 99;
+    const rank = (kind === 'likes' ? 4 : kind === 'story' ? 3 : kind === 'person' ? 2 : 1) * 10 + hits.length * 2 + (age >= 0 && age <= 30 ? 1 : 0);
+    const who = clip(item.who || item.name || '', 40);
+    const cleanText = clip(factText, 200);
+    const told = ISO.test(String(item.told)) ? String(item.told) : '';
+    const fact = `${who ? `${who}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`;
+    candidates.push({ kind, who, text: cleanText, told, topic: hits[0], fact, rank });
+  };
+  for (const x of m.preferences || []) consider('likes', x, x.text, x.text);
+  for (const p of m.people || []) {
+    if (!seniorToldItem(p, `${p.name || ''} ${p.relationship || ''}`)) continue;
+    const pWords = topicWords(`${p.name || ''} ${p.relationship || ''}`, ownerWords);
+    const label = p.relationship ? `${p.name} (${p.relationship})` : String(p.name || '');
+    for (const s of p.stories || []) {
+      if (!seniorToldItem(s, s && s.text)) continue;
+      consider('story', { ...p, ...s, who: label }, s.text, s.text, pWords);
+    }
+    const storyMentioned = (p.stories || []).some((s) => {
+      const sw = topicWords(s && s.text, ownerWords);
+      return sw.length > 0 && sw.filter((w) => uSet.has(w)).length >= Math.min(2, sw.length);
+    });
+    if (p.name && p.relationship && !storyMentioned) consider('person', { ...p, who: p.name, text: label }, label, label);
+  }
+  for (const e of m.events || []) consider('event', e, e.text, e.text);
+  for (const c of m.current || []) consider('current', c, c.text, c.text);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.rank - a.rank);
+  const best = candidates[0];
+  if (session) session.callbackUsed = true;
+  return { kind: best.kind, who: best.who, text: best.text, told: best.told, topic: best.topic, fact: best.fact };
+}
+
+module.exports = { callbackFact, parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };
