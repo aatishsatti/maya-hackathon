@@ -245,7 +245,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   // Primary voice for web calls: device system/browser speechSynthesis (an OS/browser feature, NOT a TTS API or AI model call).
   // Only a clear female en-US voice is used; never the system default, which can be a male or novelty voice.
   // Order: Samantha (Mac), Google US English (Chrome), then the first en voice with a known female name.
-  // If no female English device voice is available on this browser, the web call falls back to server Meta MMS TTS (labelled clearly).
+  // If no female English device voice works on this browser, the reply is shown as text (and tried again next reply). The server voice (Meta MMS eng) is male and is never used.
   const VOICE_VOLUME = 1.0;
   const VOICE_RATE = 1.0;
   const VOICE_PITCH = 1.0;
@@ -401,11 +401,11 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (now - c.lastVoice > SILENCE_MS || now - c.utterance.startedAt > MAX_UTTERANCE_MS) finishUtterance();
   }
 
-  // ---- Real mode: live socket to the server (Transcribe ears, Spark brain, female device/browser primary voice on web; Meta MMS fallback if device voice unavailable) ----
+  // ---- Real mode: live socket to the server (Transcribe ears, Spark brain, female device/browser primary voice on web; text only (never the male MMS voice) if no female device voice works) ----
   // Mic goes up as Float32 mono at the browser's own rate. On web, when a female English device/browser voice is available
   // (c.deviceVoice = true, OS speechSynthesis feature, not a model call), each sentence plays immediately via speechSynthesis
   // as soon as 'speak' / 'caption' arrives so text and voice start together (latency = Spark only). If no female device voice
-  // is available on this browser (c.deviceVoice = false), the server sends Meta MMS TTS PCM16 mono 24 kHz as fallback.
+  // works, the reply stays on screen as text. The server never speaks here (its only voice is male).
   const HEARING_STUCK_MS = 15000; // noise (TV, fan) that never turns into words must not hold the mic
   const voiceSources = new Set();
   const deviceUtterances = new Set();
@@ -493,26 +493,18 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (c && (!u || c.activeUtterance === u)) c.activeUtterance = null;
   }
 
-  function requestMmsFallback(c, text) {
+  // Voice guarantee (Fix #4). Order: device female voice -> alternate device female voice (up to 3 tries, each given 1000 ms to start) -> text, retried on the next reply.
+  // The server NEVER speaks on a web call: the only server voice (Meta MMS eng) is male, and Maya's voice is never male. So there is no server-voice step here.
+  function voiceUnavailable(c, text) {
     const clean = String(c.lastTurnText || text || '').trim();
-    c.deviceVoice = false;
-    c.sentDeviceVoice = false;
-    c.mmsFallbackPending = Boolean(clean);
-    c.voiceDone = false;
-    if (c.ctx && c.ctx.state === 'suspended') c.ctx.resume().catch(() => {});
-    if (orb.dataset.state !== 'speaking') setState('speaking');
-    captionEl.textContent = captionEl.textContent.replace(/^Maya \(device browser voice\):/, 'Maya (Meta MMS server voice fallback):');
-    if (!clean) return;
-    c.pendingRespeak = clean;
-    clearTimeout(c.respeakTimer);
-    c.respeakTimer = setTimeout(() => {
-      c.respeakTimer = null;
-      const toSend = c.pendingRespeak;
-      c.pendingRespeak = '';
-      if (toSend && c.ws && c.ws.readyState === WebSocket.OPEN) {
-        c.ws.send(JSON.stringify({ type: 'deviceVoice', on: false, respeak: toSend }));
-      }
-    }, 15);
+    c.deviceVoice = true;            // the server must not synthesize anything
+    c.voiceTextOnly = true;          // the next reply tries the device voices again
+    c.mmsFallbackPending = false;
+    clearTimeout(c.respeakTimer); c.respeakTimer = null; c.pendingRespeak = '';
+    c.ttsQueue = [];
+    if (clean) captionEl.textContent = `Maya (text only, her voice is unavailable): ${clean}`;
+    c.voiceDone = true;
+    finishIfDone(c);
   }
 
   function pumpDeviceVoice(c) {
@@ -531,7 +523,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     }
     if (!window.speechSynthesis || !c.pickedVoice) {
       const rest = c.ttsQueue.splice(0, c.ttsQueue.length).join(' ').trim();
-      requestMmsFallback(c, rest);
+      voiceUnavailable(c, rest);
       return;
     }
     // Only cancel before speaking if a previous utterance watchdog explicitly requested a flush (c.forceCancelOnce),
@@ -575,17 +567,18 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       if (!deviceUtterances.has(u) && c.activeUtterance !== u) return;
       if (c.pickedVoice && c.pickedVoice.name) failedVoices.add(c.pickedVoice.name);
       clearActiveUtterance(c, u);
-      c.pickedVoice = pickVoice();
-      if (c.pickedVoice && !c._retriedVoice) {
-        c._retriedVoice = true;
+      c._failStreak = (c._failStreak || 0) + 1;
+      c.pickedVoice = pickVoice();   // the next female voice that has not failed (always a female name, never the system default)
+      if (c.pickedVoice && c._failStreak <= 3) {
         c.ttsQueue.unshift(clean);
         c.forceCancelOnce = true;
         if (call === c) c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 0);
         return;
       }
+      c._failStreak = 0;
       const rest = [clean, ...(c.ttsQueue || [])].join(' ').trim();
       c.ttsQueue = [];
-      requestMmsFallback(c, rest);
+      voiceUnavailable(c, rest);
     };
     const advance = (timedOut = false) => {
       if (!deviceUtterances.has(u) && c.activeUtterance !== u) return;
@@ -603,14 +596,15 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     };
     u.onstart = () => {
       startedAt = Date.now();
+      c._failStreak = 0;
       clearTimeout(u._startGuard);
     };
     u.onend = () => advance(false);
     u.onerror = () => handleFailure();
-    // If Chrome's speechSynthesis is wedged and never fires onstart or onend within 900 ms, fall back to server Meta MMS audio for this turn.
+    // If the device voice has not started within 1000 ms, the next female device voice is tried; when none is left the reply is shown as text (never a server voice).
     u._startGuard = setTimeout(() => {
       if (!startedAt && c.activeUtterance === u) handleFailure();
-    }, 900);
+    }, 1000);
     const guardMs = Math.max(4000, Math.min(18000, clean.length * 120 + 2500));
     u._watchdog = setTimeout(() => advance(true), guardMs);
     u._keepalive = setInterval(() => {
@@ -628,6 +622,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   function playDevicePiece(c, text) {
     const clean = String(text || '').trim();
     if (!clean) return;
+    if (c.voiceTextOnly) { finishIfDone(c); return; }   // her voice failed on this reply: the text is on screen, the next reply tries the voice again
     c.ttsQueue = c.ttsQueue || [];
     c.ttsQueue.push(clean);
     pumpDeviceVoice(c);
@@ -764,13 +759,14 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
         if (ev.lead) { setState('thinking'); break; }
         if (c.ctx && c.ctx.state === 'suspended') c.ctx.resume().catch(() => {});
         if (c.clientStages && c.clientStages.firstSpeakEventMs === null) c.clientStages.firstSpeakEventMs = Date.now() - c.callStartAt;
+        if (c.voiceTextOnly) { c.voiceTextOnly = false; c._failStreak = 0; failedVoices.clear(); c.pickedVoice = pickVoice(); }   // text + retry: a new reply tries her voice again
         c.lastTurnText = ev.text || ev.piece || '';
         setState('speaking');
         captionEl.textContent = c.deviceVoice
           ? `Maya (device browser voice): ${ev.text}`
           : `Maya (Meta MMS server voice fallback): ${ev.text}`;
         if (c.deviceVoice) feedDevicePiece(c, ev.piece || ev.text);
-        else if (ev.deviceVoice) requestMmsFallback(c, ev.text || ev.piece);
+        else if (ev.deviceVoice) voiceUnavailable(c, ev.text || ev.piece);
         break;
       case 'unduck': unduck(c); break;
       case 'caption':
@@ -780,7 +776,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
           ? `Maya (device browser voice): ${ev.text}`
           : `Maya (Meta MMS server voice fallback): ${ev.text}`;
         if (c.deviceVoice && ev.piece) feedDevicePiece(c, ev.piece);
-        else if (!c.deviceVoice && ev.deviceVoice) requestMmsFallback(c, ev.text || ev.piece);
+        else if (!c.deviceVoice && ev.deviceVoice) voiceUnavailable(c, ev.text || ev.piece);
         break;
       case 'audioEnd':
         c.leadActive = false;
@@ -824,14 +820,14 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     c.clientStages = { socketConnectMs: null, voiceReadyMs: null, beepMs: null, firstSpeakEventMs: null, firstDeviceVoiceStartMs: null, serverStages: null };
     c.pickedVoice = pickVoice();
     c.voiceReadyDone = Boolean(!window.speechSynthesis || c.pickedVoice || speechSynthesis.getVoices().length > 0);
-    c.deviceVoice = Boolean(window.speechSynthesis && (c.pickedVoice || speechSynthesis.getVoices().length === 0));
+    c.deviceVoice = true;   // the server never speaks on a web call (its only voice is male); no female device voice means text, shown on screen
     const tVoice0 = Date.now();
     c.voiceReadyPromise = voiceReady().then(() => {
       if (myGen !== gen || call !== c) return;
       c.voiceReadyDone = true;
       c.clientStages.voiceReadyMs = Date.now() - tVoice0;
       c.pickedVoice = pickVoice();
-      const resolved = Boolean(window.speechSynthesis && c.pickedVoice);
+      const resolved = true;
       c.deviceVoice = resolved;
       if (c.sentDeviceVoice !== undefined && c.sentDeviceVoice !== resolved && c.ws && c.ws.readyState === WebSocket.OPEN) {
         c.ws.send(JSON.stringify({ type: 'deviceVoice', on: resolved }));

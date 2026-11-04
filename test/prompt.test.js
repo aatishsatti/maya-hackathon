@@ -2,6 +2,7 @@
 // Spark, alert algorithm, greeting guards. MAYA_REAL_SPARK=1 runs the wording spot-checks against real Spark instead
 // (needs META_API_KEY in .env); the stubbed tests skip in that mode. Run: node --test test/ ; MAYA_REAL_SPARK=1 node --test test/prompt.test.js
 const test = require('node:test');
+process.env.MAYA_SERVER_VOICE = 'female-proven';   // these tests stub the voice: they exercise the server-voice path, which is OFF in production (no female server voice exists)
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');

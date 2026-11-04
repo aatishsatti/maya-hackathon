@@ -1,6 +1,7 @@
 // Scam shield on a live call, end to end through Call.respond() (no network: Spark and the scam check are stubbed; no voice at all, noVoice).
 // The sentences below exist only in this test file. Maya's wording is Spark's; these tests check the facts, limits, timing rules and family flow.
 const test = require('node:test');
+process.env.MAYA_SERVER_VOICE = 'female-proven';   // these tests stub the voice: they exercise the server-voice path, which is OFF in production (no female server voice exists)
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');

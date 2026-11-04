@@ -1,6 +1,7 @@
 // TEMPORARY no-voice test switch (render-test): a call with `noVoice: true` makes NO ElevenLabs request. The greeting and replies go out as text
 // events; the mic path, Transcribe and Spark are unchanged. The ElevenLabs lead-in clips are rendered after the first VOICED greeting, never at boot.
 const test = require('node:test');
+process.env.MAYA_SERVER_VOICE = 'female-proven';   // these tests stub the voice: they exercise the server-voice path, which is OFF in production (no female server voice exists)
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');

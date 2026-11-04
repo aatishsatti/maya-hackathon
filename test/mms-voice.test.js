@@ -590,11 +590,8 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
   assert.equal(env1.els.orb.dataset.state, 'listening', 'orb flips back to listening only after the last utterance completes');
   env1.sandbox.mayaEndCall();
 
-  // Case 4: When pickVoice() returns null (or when u.onerror fires on a broken browser voice), fallback to Meta MMS
-  // coalesces speak+caption into one respeak request, keeps orb in 'speaking' across the initial empty 'audioEnd',
-  // server Call synthesizes MMS audio and streams binary PCM, client plays it via AudioBufferSourceNode, and orb flips to 'listening' only when audio finishes.
-  const { Call } = require('../call');
-  const care = require('../care');
+  // Case 4 (Fix #4): no female device voice works -> NEVER the server's male MMS voice. The reply stays on screen as text, no respeak is requested,
+  // the orb returns to listening, and the NEXT reply tries the device voice again (text + retry).
   const env2 = makeEnv({
     voices: [{ name: 'Alex', lang: 'en-US', localService: true }], // male voice only -> pickVoice() returns null
     stuckSpeakingOnCancel: false,
@@ -604,53 +601,26 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
   await new Promise((r) => setTimeout(r, 25));
   const ws2 = env2.getWs();
   ws2.onmessage({ data: JSON.stringify({ type: 'ready', resume: 'tok2' }) });
-  // Simulate server sending 2-sentence greeting with deviceVoice: true followed immediately by empty audioEnd
+  const startMsg = env2.wsSent.find((m) => m.type === 'start');
+  assert.equal(startMsg.deviceVoice, true, '(4) the client always tells the server not to synthesize: there is no female server voice');
   ws2.onmessage({ data: JSON.stringify({ type: 'speak', text: 'Hello Henry!', piece: 'Hello Henry!', deviceVoice: true, hold: 0 }) });
   ws2.onmessage({ data: JSON.stringify({ type: 'caption', text: 'Hello Henry! How are you today?', piece: 'How are you today?', deviceVoice: true }) });
   ws2.onmessage({ data: JSON.stringify({ type: 'audioEnd' }) });
-  assert.equal(env2.els.orb.dataset.state, 'speaking', 'orb stays in speaking state while MMS fallback respeak is pending (does not snap to listening on initial empty audioEnd)');
-
-  await new Promise((r) => setTimeout(r, 35));
-  const fallbackMsgs = env2.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false && m.respeak);
-  assert.equal(fallbackMsgs.length, 1, '(4) coalesced into exactly 1 fallback respeak message');
-  assert.equal(fallbackMsgs[0].respeak, 'Hello Henry! How are you today?', '(4) full turn text is requested for MMS respeak');
-
-  // Feed that exact fallback message into server Call (with fakeAudio enabled so no network call is needed) and pipe server frames to client ws2
-  const srvCall = new Call({
-    readyState: 1,
-    send(frame) {
-      if (typeof frame === 'string') ws2.onmessage({ data: frame });
-      else ws2.onmessage({ data: frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength) });
-    },
-    close() {},
-  }, 'test-key');
-  clearInterval(srvCall.endTimer);
-  srvCall.profile = require('../memory').load('197abefc');
-  srvCall.noVoice = true;
-  srvCall.fakeAudio = true;
-  srvCall.deviceVoice = true;
-  srvCall.abort = null; // even if abort is null or aborted, deviceVoice fallback creates a fresh AbortController
-  srvCall.onBrowserMessage(fallbackMsgs[0]);
-
-  for (let i = 0; i < 40 && env2.playedSources.length === 0; i++) {
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  assert.ok(env2.playedSources.length >= 1, '(4) MMS fallback audio chunks reached client and started playing via AudioContext buffer source');
-  assert.equal(env2.els.orb.dataset.state, 'speaking', 'orb remains speaking while MMS audio buffer is playing');
-  // Wait for server speakReply to finish sending audioEnd, then finish playing all buffered sources
-  await new Promise((r) => setTimeout(r, 450));
-  for (const src of [...env2.playedSources]) {
-    if (src.onended) src.onended();
-  }
-  assert.equal(env2.els.orb.dataset.state, 'listening', 'orb flips to listening after MMS fallback audio finishes playing');
-  srvCall.end();
-  care.stop();
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(env2.spokenUtterances.length, 0, '(4) a male-only device never speaks');
+  assert.equal(env2.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false).length, 0, '(4) no server (male MMS) voice is ever requested');
+  assert.match(env2.els.caption ? env2.els.caption.textContent : '', /text only|Hello Henry/, '(4) the words are on screen');
+  assert.equal(env2.els.orb.dataset.state, 'listening', '(4) the orb is not stuck: back to listening');
+  // next reply retries the voice (still none here, so text again) and the orb still comes back
+  ws2.onmessage({ data: JSON.stringify({ type: 'speak', text: 'And you?', piece: 'And you?', deviceVoice: true, hold: 0 }) });
+  ws2.onmessage({ data: JSON.stringify({ type: 'audioEnd' }) });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(env2.els.orb.dataset.state, 'listening', '(4) second reply: still text, still not stuck');
   env2.sandbox.mayaEndCall();
 
-  // Case 5: When a picked browser voice fires u.onerror at runtime (e.g. broken remote voice in Chrome),
-  // it does NOT silently snap orb to listening — it triggers MMS respeak fallback and plays server MMS audio.
+  // Case 5: the picked female voice fires u.onerror -> the ALTERNATE female voice speaks (never silence, never a server voice).
   const env3 = makeEnv({
-    voices: [{ name: 'Google US English', lang: 'en-US', localService: false }],
+    voices: [{ name: 'Google US English', lang: 'en-US', localService: false }, { name: 'Samantha', lang: 'en-US', localService: true }],
     stuckSpeakingOnCancel: false,
   });
   await new Promise((r) => setTimeout(r, 15));
@@ -661,15 +631,38 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
   ws3.onmessage({ data: JSON.stringify({ type: 'speak', text: 'Good afternoon Henry.', piece: 'Good afternoon Henry.', deviceVoice: true, hold: 0 }) });
   ws3.onmessage({ data: JSON.stringify({ type: 'audioEnd' }) });
   assert.equal(env3.spokenUtterances.length, 1);
-  // Simulate Chrome firing u.onerror 2 ms after speak(u)
+  assert.equal(env3.spokenUtterances[0].voice.name, 'Samantha', 'local female voice first');
   env3.spokenUtterances[0].onerror({ error: 'synthesis-failed' });
-  assert.equal(env3.els.orb.dataset.state, 'speaking', 'orb stays speaking when u.onerror triggers MMS fallback');
-  await new Promise((r) => setTimeout(r, 35));
-  const fb3 = env3.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false && m.respeak === 'Good afternoon Henry.');
-  assert.equal(fb3.length, 1, 'u.onerror triggers MMS respeak fallback');
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(env3.spokenUtterances.length, 2, '(5) the alternate female voice speaks the same piece');
+  assert.equal(env3.spokenUtterances[1].voice.name, 'Google US English');
+  assert.equal(env3.spokenUtterances[1].text, 'Good afternoon Henry.');
+  assert.equal(env3.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false).length, 0, '(5) no server voice requested');
+  // the alternate fails too -> text only, orb returns to listening
+  env3.spokenUtterances[1].onerror({ error: 'synthesis-failed' });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(env3.els.orb.dataset.state, 'listening', '(5) every female voice failed: text only, orb not stuck');
+  assert.equal(env3.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false).length, 0, '(5) still no server voice');
   env3.sandbox.mayaEndCall();
 });
 
-
-
-
+test('Fix #4 server: an AbortError never ends a call; the server never synthesizes a (male) MMS voice unless a female one is proven', async () => {
+  const { Call } = require('../call'); const care = require('../care');
+  const sent = [];
+  const mk = () => new Call({ readyState: 1, send(f) { if (typeof f === 'string') sent.push(JSON.parse(f)); }, close() { sent.push({ closed: true }); } }, 'test-key');
+  const c = mk(); clearInterval(c.endTimer);
+  for (const msg of ['This operation was aborted', 'AbortError: The operation was aborted', 'aborted']) c.fatal(msg);
+  assert.ok(!c.closed, 'abort messages never close the call');
+  assert.ok(!sent.some((m) => m.type === 'error' || m.closed), 'no error event, no close');
+  c.fatal('Meta is unreachable');
+  assert.ok(c.closed && sent.some((m) => m.type === 'error'), 'a real failure still ends the call and says so');
+  // no female server voice: a non-device-voice, voiced call speaks nothing from the server
+  delete process.env.MAYA_SERVER_VOICE;
+  const frames = []; const c2 = new Call({ readyState: 1, send(f) { frames.push(f); }, close() {} }, 'test-key'); clearInterval(c2.endTimer);
+  c2.profile = require('../memory').load('197abefc'); c2.deviceVoice = false; c2.noVoice = false;
+  c2.abort = new AbortController();
+  await c2.speakReply(require('../reply').fixedReply('Hello there.'), null, c2.gen, { record: false, greeting: true, maxSentences: 2 });
+  assert.ok(!frames.some((f) => Buffer.isBuffer(f) || f instanceof Uint8Array), 'no audio frame was sent by the server');
+  assert.ok(frames.some((f) => typeof f === 'string' && /ttsFailed/.test(f)), 'the text is delivered (ttsFailed carries it for a device voice)');
+  c2.end(); c.end(); care.stop();
+});

@@ -53,9 +53,19 @@ function confirmsProposal(heard, offer, tz, now) {
 }   // kept for callers that used the old pattern
 const DECLINE = /^\s*(?:no|nope|nah)\b|\bnot (?:now|today|really|interested)\b|\bno,? thanks?\b|\bno,? thank you\b|\bmaybe later\b|\bi(?:'d| would) rather not\b|\bi don'?t (?:want|need)\b|\bleave it\b/i;
 const VAGUE = /\b(?:after (?:lunch|dinner|breakfast|tea|supper|my (?:nap|walk))|before (?:lunch|dinner|bed)|sometime|some time|later|whenever|any ?time|in the (?:morning|afternoon|evening)|afternoon|morning|evening|around then)\b/i;
-const READBACK = /\b(?:what|which|any)\b[^.?!]{0,30}\b(?:calls?|chats?)\b[^.?!]{0,25}\b(?:do i have|have i (?:got|set)|(?:are|is) (?:set|arranged|scheduled|saved)|set up)\b|\bwhat time (?:do|will|are) you (?:call|ring|phone)\b|\bis my (?:daily )?(?:call|chat) (?:still )?(?:on|set|arranged|saved)\b|\b(?:do i have|have i got) (?:a |any )?(?:daily )?(?:call|calls)\b/i;
+const READBACK = /\b(?:what|which|any)\b[^.?!]{0,30}\b(?:calls?|chats?)\b[^.?!]{0,25}\b(?:do i have|have i (?:got|set)|(?:are|is) (?:set|arranged|scheduled|saved)|set up)\b|\bwhat time (?:do|will|are) you (?:call|ring|phone)\b|\bis my (?:daily )?(?:call|chat) (?:still )?(?:on|set|arranged|saved)\b|\b(?:do i have|have i got) (?:a |any )?(?:daily )?(?:call|calls)\b|\b(?:any|what|which|are there|is there|do i have|have i got)\b[^.?!]{0,30}\b(?:calls?|chats?|rings?)\b[^.?!]{0,25}\b(?:lined up|lining up|coming up|scheduled|arranged|planned|booked|upcoming|saved)\b|\b(?:lined up|coming up|upcoming|scheduled)\b[^.?!]{0,20}\b(?:daily )?(?:calls?|chats?)\b|\bwhen(?:'s| is| will)?(?: the| my)? next (?:daily )?(?:call|chat)\b/i;
 const SKIP = /\b(?:skip|miss|pass on)\b[^.?!]{0,25}\b(?:today|this one|the call)\b|\bdon'?t call me today\b|\bno call today\b|\bnot today\b/i;
 const CANCEL = /\b(?:cancel|end|delete|remove|turn off|stop)\b[^.?!]{0,20}\b(?:daily|every ?day|regular|these|the|my)\b[^.?!]{0,12}\bcalls?\b|\bno more daily calls\b/i;
+// Bare and "don't want" cancel phrasings ("cancel it", "cancel that", "I don't want the daily call anymore"). The bare forms count ONLY while a daily call exists AND the recent talk is about calls, so "cancel it" about a reminder or a memory is never taken as a call cancel.
+const CANCEL_BARE = /^\s*(?:(?:yes|yeah|ok|okay|please|just|can you|could you|will you)\s+)*(?:cancel|delete|remove|turn off|end)\s+(?:it|that|this|them|those)\b(?:\s+(?:please|now|then|for me))?\W*$/i;
+const CANCEL_DONT_WANT = /\bi\s*(?:do not|don'?t|dont|no longer)\s+(?:want|need|like)\b[^.?!]{0,25}\b(?:daily|every ?day|regular)\s+(?:calls?|chats?)\b/i;
+function cancelAsk(s, heard) {
+  if (CANCEL.test(heard) || CANCEL_DONT_WANT.test(heard)) return true;
+  if (!CANCEL_BARE.test(heard)) return false;
+  const id = s && s.profile && s.profile.id; if (!id || !care.socialOf(id)) return false;
+  const hist = Array.isArray(s.history) ? s.history.slice(-4) : [];
+  return /\b(?:daily|calls?|ring(?:ing)?)\b/i.test(hist.map((m) => String(m.content || '').replace(/\[\[[^\]]*\]\]/g, ' ')).join(' '));
+}
 const CHANGE = /\b(?:change|move|switch|reschedule|make)\b[^.?!]{0,25}\b(?:call|time|chat)\b|\bcall me (?:at|around)\b[^.?!]{0,15}\binstead\b/i;
 // The senior asking for a daily call themselves (so a recent "no" does not apply): "call me every day", "can you ring me daily".
 const SELF_ASK = /\b(?:can|could|would|will) you (?:please )?(?:call|ring|phone) me\b[^.?!]{0,40}\b(?:every ?day|daily|each day|every (?:morning|afternoon|evening))\b|\b(?:call|ring|phone) me (?:every ?day|daily|each day|every (?:morning|afternoon|evening))\b|\bi(?:'d| would) (?:like|love) (?:you to |a )?(?:call|ring|chat)[^.?!]{0,30}\b(?:every ?day|daily)\b/i;
@@ -179,7 +189,7 @@ const THIRD_FRAME = /\b(?:i|we)\s+(?:said|told|say|tell|shouted|yelled|would say
 const recentText = (s) => (Array.isArray(s.history) ? s.history.slice(-6) : []).map((m) => String(m.content || '').replace(/\[\[[^\]]*\]\]/g, ' ')).join(' ');
 const aMeridiem = (h, mi) => `${h % 12 === 0 ? 12 : h % 12}:${pad2(mi)} ${h < 12 ? 'a.m.' : 'p.m.'}`;
 function stopClass(s, heard) {
-  const phrase = STOP_PHRASE.test(heard), cancel = CANCEL.test(heard);
+  const phrase = STOP_PHRASE.test(heard), cancel = cancelAsk(s, heard);
   if (!phrase && !cancel) return null;
   const recent = recentText(s), named = MAYA_NAMED.test(heard) || (cancel && MY_CALLS.test(heard)) ;
   const play = PLAY.test(heard) || PLAY.test(recent), frame = THIRD_FRAME.test(heard), scamCtx = SCAMTALK.test(heard) || SCAMTALK.test(recent) || Boolean(s._smart && s._smart.topic === 'scam');
@@ -197,6 +207,8 @@ function recordStopEvent(s, id, ev) {
   care.persistSmart(id, { stopEvents: [...(((p.smart || {}).stopEvents) || []), full].slice(-5) });
   return full.id;
 }
+// What is still saved, read from the same record after a failed cancel: never a bare "cancelled", never a guess.
+function stillLinedUp(id) { const r = care.socialOf(id); return `CANCEL NOT CONFIRMED: the app could not confirm the daily call was cancelled. Say plainly that you could not confirm it went through${r ? `, and that the daily call at ${clockWords(r.h, r.mi)} is still lined up` : ''}. Do NOT say it is cancelled. Offer to try again.`; }
 function applyStop(s, id, st, how, heard, now) {
   const p = care.get(id), arr = care.socialOf(id), before = { noCalls: Boolean(p.smart && p.smart.noCalls), call: arr ? { status: arr.revoked ? 'stopped' : 'active', time: clockWords(arr.h, arr.mi), tz: arr.tz } : null };
   const ctx = (Array.isArray(s.history) ? s.history.slice(-2) : []).map((m) => ({ role: m.role, transcription: clip(String(m.content || '').replace(/\[\[[^\]]*\]\]/g, ' '), 120) }));
@@ -210,7 +222,7 @@ function applyStop(s, id, st, how, heard, now) {
     scope: { affectedCall: arr ? { id: arr.id || null, time: clockWords(arr.h, arr.mi), tz: arr.tz } : null }, transcription: { text: clip(st.heard || heard, 200), context: ctx },
     confirmation: how === 'confirmed' ? { question: st.question, askedAt: st.asked && st.asked.at, answer: { transcription: clip(heard, 160) }, answeredAt: now } : null, before, after: { noCalls: afterNo, call: call2 }, writeVerified: ok });
   s._exec = s._exec || {}; if (!ok) s._exec.socialFailed = true;
-  if (!ok) return ['social-stop-failed', 'STOP NOT CONFIRMED: the app could not confirm that the calls were stopped. Say plainly that you could not confirm it went through and that you will check again if they ask. Do not say it is stopped.'];
+  if (!ok) return ['social-stop-failed', st.action === 'cancel' ? stillLinedUp(id) : 'STOP NOT CONFIRMED: the app could not confirm that the calls were stopped. Say plainly that you could not confirm it went through and that you will check again if they ask. Do not say it is stopped.'];
   return ['social-stopped', st.action === 'cancel' ? 'CANCELLED (verified in the app): the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.' : 'CALLS STOPPED (verified in the app): you will not call them unless they ask you to again. Say so kindly in one short sentence. Never offer, arrange or promise a call after this, until THEY ask for calls again. Do not change any reminder they set themselves.'];
 }
 function stopTurn(s, id, heard, now = Date.now()) {
@@ -226,7 +238,9 @@ function stopTurn(s, id, heard, now = Date.now()) {
     else { zput(id, { stopAsk: null }); if (DECLINE.test(heard) || isDecline(heard)) return ['social-stop-kept', 'They do NOT want the calls stopped. Nothing was changed. Say in one short, warm sentence that you will keep the call as it is.']; }
   }
   const st = stopClass(s, heard); if (!st || st.kind === 'none') return null;
-  if (st.action === 'cancel' && !care.socialOf(id)) return null;   // nothing to cancel: the ordinary path answers
+  if (st.action === 'cancel' && !care.socialOf(id)) {   // nothing to cancel: say so from the record, never "cancelled" and never nothing
+    if (st.kind !== 'direct') return null;
+    const zz = zget(id); return ['social-cancel-none', `NO ACTIVE DAILY CALL: nothing is saved to cancel${zz.cancelledAt ? ' (the earlier one was already cancelled)' : ''}. Say that plainly in one short sentence and that they can ask for a daily call again. Do NOT say you just cancelled anything. The conversation simply goes on.`]; }
   if (st.kind === 'direct') return applyStop(s, id, st, 'direct', heard, now);
   const arr = care.socialOf(id), question = arr && !arr.revoked ? `Do you mean you want me, Maya, to stop your daily ${aMeridiem(arr.h, arr.mi)} call?` : 'Do you mean you want me, Maya, to stop calling you?';
   zput(id, { stopAsk: { id: uid(), at: now, asked: null, action: st.action, question, heard: clip(heard, 200), h: arr && !arr.revoked ? arr.h : null, mi: arr && !arr.revoked ? arr.mi : null, tz: arr ? arr.tz : (care.get(id).tz || null) } });
@@ -322,7 +336,7 @@ function stepCore(s, heard, ctx = {}, now = Date.now()) {
     if (offer) zput(id, { offer: null });
     return D() ? reconsent(s, id, p, z, heard, now) : null;
   }
-  if (D() && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard)) && !CANCEL.test(heard) && !SKIP.test(heard) && !READBACK.test(heard)) { const f = decision(s, id, p, arr, offer, heard, now); if (f) return f; }
+  if (D() && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard)) && !cancelAsk(s, heard) && !SKIP.test(heard) && !READBACK.test(heard)) { const f = decision(s, id, p, arr, offer, heard, now); if (f) return f; }
 
   if (D() && !READBACK.test(heard)) { const q = questionReadback(p, arr, offer, heard, now, x); if (q) return q; }
   // ---- what the record says (never from memory of the conversation): "What daily calls do I have?"
@@ -334,7 +348,11 @@ function stepCore(s, heard, ctx = {}, now = Date.now()) {
 
   // ---- the controls on a saved daily call: skip today, change the time, cancel the daily calls
   if (arr && !arr.revoked && !(offer && offer.stage === 'confirm' && YES_ALONE.test(heard))) {
-    if (CANCEL.test(heard) && !s._stopTurnRan) { care.socialCancel(id, { actor: 'senior', source: 'chat', reason: 'the senior asked to cancel the daily calls' }); zput(id, { offer: null }); return ['social-cancel', 'CANCELLED: the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.']; }
+    if (cancelAsk(s, heard) && !s._stopTurnRan) {
+      let ok = false; try { care.socialCancel(id, { actor: 'senior', source: 'chat', reason: 'the senior asked to cancel the daily calls' }); zput(id, { offer: null }); ok = !care.socialOf(id); } catch { ok = false; }
+      if (!ok) return ['social-stop-failed', stillLinedUp(id)];
+      return ['social-cancel', 'CANCELLED (verified in the app): the daily calls are cancelled and no more will come. Say so in one short sentence. They can ask for them again whenever they like. Do not ask them to reconsider.'];
+    }
     if (SKIP.test(heard)) {
       const r = care.socialSkipToday(id, now);
       if (r && r.skipped) return ['social-skip', `SKIPPED: today's call is skipped. Tomorrow's daily call is still on at ${clockWords(arr.h, arr.mi)}. Say so in one short sentence.`];

@@ -489,6 +489,12 @@ const liveCalls = new Map();
 const RESUME_GRACE_MS = 20000;   // how long a call waits for its browser to come back after the line was lost
 const SILENCE_FEED_MS = 100;     // whenever the browser's audio stops arriving, Transcribe is fed 100 ms of silence per 100 ms so it does not drop the session ("Ingress audio slower than real-time")
 
+// Fix #4. An AbortError ("This operation was aborted") is a cancelled request, never a reason to end a call: an interrupt, a correction or a newer reply cancels the one before it.
+const isAbortErr = (e) => Boolean(e) && (e.name === 'AbortError' || e.code === 'ABORT_ERR' || e.code === 20 || /operation was aborted|^aborted$|AbortError/i.test(String(e.message || e)));
+// Locked: Maya's voice is NEVER male. Meta MMS (facebook/mms-tts-eng) is one voice and it is male, and Meta ships no female server voice, so the server does not speak on a web/app call.
+// The female voice is the device/browser one (client). Only a server voice proven female may be switched on: MAYA_SERVER_VOICE=female-proven. Default OFF.
+const serverVoiceAllowed = () => process.env.MAYA_SERVER_VOICE === 'female-proven';
+
 class Call {
   constructor(ws, apiKey) {
     this.ws = ws;
@@ -649,6 +655,12 @@ class Call {
 
   fatal(message) {
     if (this.closed) return;
+    if (isAbortErr({ message })) {   // a cancelled request never ends the call: log it, let the person speak, carry on
+      console.warn('Call: abort ignored (call continues):', message);
+      this.responding = false;
+      try { this.armSilence(); } catch { /* ignore */ }
+      return;
+    }
     console.error('Call error:', message);
     try { this.send({ type: 'error', message }); } catch { /* socket gone */ }
     this.end();
@@ -824,7 +836,7 @@ class Call {
       if (!this.deviceVoice) {
         this.startWarm();
         const toSpeak = (typeof m.respeak === 'string' && m.respeak.trim()) ? m.respeak.trim() : '';
-        if (toSpeak && (!this.noVoice || this.fakeAudio)) {
+        if (toSpeak && (!this.noVoice || this.fakeAudio) && (this.noVoice || serverVoiceAllowed())) {   // no female server voice: nothing is synthesized, the text is already on screen
           if (!this.abort || this.abort.signal.aborted) this.abort = new AbortController();
           this.responding = true;
           this.speakReply(fixedReply(toSpeak), null, this.gen, { record: false, greeting: true, maxSentences: 3 }).catch(() => {});
@@ -2417,7 +2429,8 @@ class Call {
           this.lastSaidAt = Date.now();
           const holdExtra = !started && !leadIn && holdBack ? HOLD_BACK_MS : 0;
           this.playUntil = Math.max(this.playUntil, this.lastSaidAt) + holdExtra + spoken.length * (bye ? 150 : 75);
-        } else if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no TTS request
+        } else if (!this.noVoice && !serverVoiceAllowed()) { job.err = new Error('No female server voice is available'); job.done = true; }   // never the male MMS voice
+        else if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no TTS request
         else (this.noVoice ? fakeSpeech(tagged, signal, onVoiceChunk) : streamSpeech(tagged, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });
         said.push(text);
@@ -2476,6 +2489,7 @@ class Call {
       }
       if (head.done) {
         if (head.err) {
+          if (sentAny && isAbortErr(head.err)) { console.warn('Call: reply audio cancelled (call continues)'); keep(true); this.responding = false; if (!this.closed) this.armSilence(); return; }   // cut off by an interrupt or a newer reply: not an error
           if (sentAny) { this.abort.abort(); return this.fatal(head.err.message); }
           // Voice failed before any sound: show the whole reply; the browser labels its own voice MOCK.
           console.error('TTS error:', head.err.message);
@@ -2523,7 +2537,18 @@ class Call {
       const rs2 = startReply(this.history, this.roster(`${this.replyNote()} ${this.safetyNote()}`), this.abort.signal);
       return this.speakReply(rs2, timing, gen2, { record: true, stripGreeting: true });
     }
-    if (producerErr && !(producerErr.empty && !said.length)) return this.fatal(producerErr.message);
+    if (producerErr && isAbortErr(producerErr)) {   // the reply request was cancelled while this turn was still current: keep what was said, retry once if nothing was, never end the call
+      console.warn('Call: reply request aborted (call continues)', JSON.stringify({ said: said.length, retried: Boolean(this._abortRetried) }));
+      if (!said.length && !this._abortRetried && !this.closed && myGen === this.gen && !this._medical && !this.scamReply && !this.safety) {   // never retry a medicine, scam or safety turn without its notes: that turn is simply asked again by the person
+        this._abortRetried = true;
+        const gen3 = ++this.gen;
+        this.abort = new AbortController();
+        this.responding = true;
+        try { return await this.speakReply(startReply(this.history, this.roster(`${this.replyNote()} ${this.turnFacts || ''}`.trim()), this.abort.signal), timing, gen3, { record, stripGreeting, holdBack, greeting, maxSentences }); }
+        finally { this._abortRetried = false; }
+      }
+      if (!said.length) { this.responding = false; if (!this.closed) this.armSilence(); return; }
+    } else if (producerErr && !(producerErr.empty && !said.length)) return this.fatal(producerErr.message);
     if (!said.length) {
       // Spark said nothing even after one retry. Never fake a reply: say so honestly, drop the
       // turn from history so it cannot poison the next one, and leave the call ready to listen.
