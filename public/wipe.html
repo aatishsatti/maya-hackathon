@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wipe test profiles (demo only, not linked)</title>
+<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px}button{padding:12px 18px;font-size:16px}pre{white-space:pre-wrap;background:#f2f2f2;padding:12px}</style>
+</head>
+<body>
+<h1>Wipe test profiles</h1>
+<p>Demo only. This page is not linked from the dashboard. It deletes <strong>every</strong> profile except the pinned demo senior, across all accounts. This cannot be undone.</p>
+<p id="status">Loading…</p>
+<ul id="list"></ul>
+<button id="wipe" type="button" disabled>Wipe all test profiles, keep demo senior</button>
+<pre id="out"></pre>
+<script>
+async function load() {
+  const demo = await fetch('/api/senior/demo').then(r => r.json()).catch(() => ({}));
+  const prof = await fetch('/api/profiles').then(r => r.json()).catch(() => ({}));
+  const list = prof.profiles || [];
+  const keep = demo.profile || null;
+  document.getElementById('status').textContent = demo.demo ? ('Demo senior: ' + (keep ? keep.name + ' (' + keep.id + ')' : 'not set up yet')) : 'Demo mode is OFF — wipe is disabled.';
+  document.getElementById('list').innerHTML = list.map(p => '<li>' + p.name + ' (' + p.id + ')' + (keep && p.id === keep.id ? ' — KEEP' : '') + '</li>').join('');
+  const btn = document.getElementById('wipe');
+  btn.disabled = !(demo.demo && keep && list.length > 1);
+}
+document.getElementById('wipe').addEventListener('click', async () => {
+  const out = document.getElementById('out');
+  if (!confirm('Delete every profile except the demo senior? This cannot be undone.')) return;
+  if (!confirm('Are you really sure? All other profiles will be gone.')) return;
+  out.textContent = 'Wiping…';
+  const res = await fetch('/api/family/wipe-except-demo', { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  out.textContent = 'Status ' + res.status + '\n' + JSON.stringify(data, null, 2);
+  await load();
+});
+load();
+</script>
+</body>
+</html>

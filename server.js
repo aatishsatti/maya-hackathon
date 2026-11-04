@@ -276,6 +276,20 @@ async function handleFamily(req, res, url) {
     const list = df ? accounts.seniorsOf(df).map((id) => memory.load(id)).filter(Boolean) : memory.listProfiles();
     return sendJson(res, 200, { username: df || 'demo', seniors: list.map((p) => ({ id: p.id, name: p.name, mode: care.view(p.id).mode })) });
   }
+  if (req.method === 'POST' && what === 'wipe-except-demo') {
+    if (!demoModeOn()) return sendJson(res, 403, { error: 'Demo mode is off.' });
+    const resolved = demoResolved();
+    if (!resolved.senior) return sendJson(res, 400, { error: 'Demo profile is not set up yet.' });
+    const keepId = resolved.senior.id;
+    const all = memory.listProfiles();
+    const deleted = [];
+    for (const prof of all) {
+      if (prof.id === keepId) continue;
+      accounts.removeSenior(prof.id); care.remove(prof.id); chat.forget(prof.id); whatsapp.unlink(prof.id);
+      if (memory.deleteProfile(prof.id)) deleted.push({ id: prof.id, name: prof.name });
+    }
+    return sendJson(res, 200, { ok: true, kept: resolved.senior, deleted });
+  }
   const u = familyOf(req);
   if (!u) return sendJson(res, 401, { error: 'Please log in as family.' });
   if (req.method === 'POST' && what === 'device') { const body = await readJson(req, 4096); if (!body) return sendJson(res, 400, { error: 'Bad request' }); try { accounts.addDevice(u, body.platform, body.token); console.log('push', JSON.stringify({ event: 'family device registered', platform: body.platform, ready: push.configured(body.platform) })); return sendJson(res, 200, { ok: true, ready: push.configured(body.platform) }); } catch (e) { return fail(e); } }   // the family's phone, so a ring reaches it while the app is closed
