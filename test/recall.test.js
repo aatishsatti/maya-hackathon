@@ -626,6 +626,303 @@ test('Fix 1.2 (7): delivery-counted once-only: selected but discarded callback d
   assert.equal(call.focus.callback, null, 'spontaneous callback remains used after user-prompted recall');
 });
 
+test('Correct & Forget (1): exact item correction and deletion verify disk readback, update dependent recall copies, preserve callbackUsed counter, and prevent pending extraction from restoring old fact', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-memedit-'));
+  const prevData = process.env.MAYA_DATA_DIR;
+  const prevCare = process.env.MAYA_CARE_DIR;
+  process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles');
+  process.env.MAYA_CARE_DIR = path.join(tmp, 'care');
+
+  const brainPath = require.resolve('../brain');
+  const savedBrain = require.cache[brainPath];
+  const memPath = require.resolve('../memory');
+  const savedMem = require.cache[memPath];
+  const callPath = require.resolve('../call');
+  const savedCall = require.cache[callPath];
+
+  try {
+    // Stub brain.sparkComplete to simulate a stale pending extraction trying to restore ginger tea and chess
+    require.cache[brainPath] = {
+      id: brainPath,
+      filename: brainPath,
+      loaded: true,
+      exports: {
+        ...(savedBrain ? savedBrain.exports : {}),
+        requireRealEnv() {},
+        streamSpeech: async () => {},
+        sparkStream: async () => '[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0]] Okay.',
+        sparkComplete: async () => JSON.stringify({
+          people: [{ name: 'Leo', relationship: 'grandson', birthday: '', stories: ['plays chess at school'] }],
+          events: [],
+          preferences: ['likes ginger and lemon tea since college', 'likes iced coffee', 'loves dark chocolate'],
+          current: [],
+          topics: ['ginger and lemon tea', 'chess with Leo'],
+          threads: [],
+          removed: [],
+        }),
+      },
+    };
+    delete require.cache[memPath];
+    delete require.cache[callPath];
+    const memory = require('../memory');
+    const { Call } = require('../call');
+
+    const suffix = Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('');
+    const p = memory.createProfile(`EditSenior${suffix}`, 'male');
+    const loaded = memory.load(p.id);
+    loaded.memory = JSON.parse(JSON.stringify(CB_MEM));
+    loaded.memory.topics = [
+      { text: 'ginger and lemon tea', told: '2026-10-18' },
+      { text: 'plays chess at school', told: '2026-10-20' },
+    ];
+    loaded.memory.threads = [
+      { id: 't1', kind: 'plan', who: loaded.name, text: 'making ginger and lemon tea', date: '', told: '2026-10-18', status: 'open', asked: 0 },
+      { id: 'r1', kind: 'reminder', who: loaded.name, text: 'call dentist', date: TODAY, told: TODAY, status: 'open', asked: 0 },
+    ];
+    fs.writeFileSync(path.join(process.env.MAYA_DATA_DIR, `${p.id}.json`), JSON.stringify(loaded, null, 2));
+
+    const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+    clearInterval(call.endTimer);
+    call.profile = loaded;
+    call.tz = 'America/New_York';
+    call.callbackUsed = true;
+    call._lastCallback = { fact: 'Mathew: likes ginger and lemon tea since college; told 2026-10-18', text: 'likes ginger and lemon tea since college', topic: 'tea', delivered: true, fresh: true, profileId: p.id };
+
+    // 1. Correct exact item: replace chess with basketball on grandson Leo's story
+    call.setFocus('Please correct your note: my grandson Leo plays basketball at school, not chess.');
+    assert.ok(call.focus.memEdit);
+    assert.equal(call.focus.memEdit.status, 'verified');
+    assert.equal(call.focus.memEdit.op, 'correct');
+    assert.match(call.focus.memEdit.newFact, /basketball/);
+    assert.equal(call.callbackUsed, true, 'callbackUsed once-only counter is preserved');
+    const diskAfterCorrect = JSON.parse(fs.readFileSync(path.join(process.env.MAYA_DATA_DIR, `${p.id}.json`), 'utf8'));
+    assert.equal(diskAfterCorrect.memory.people[0].stories[0].text, 'plays basketball at school');
+    assert.ok(!diskAfterCorrect.memory.topics.some((t) => /chess/i.test(t.text)), 'dependent topic copy referencing chess was removed');
+
+    // 2. Forget exact item: remove ginger and lemon tea preference and dependent topic/plan copies (while keeping reminder thread r1)
+    call.setFocus('Please forget what I told you about liking ginger and lemon tea.');
+    assert.ok(call.focus.memEdit);
+    assert.equal(call.focus.memEdit.status, 'verified');
+    assert.equal(call.focus.memEdit.op, 'forget');
+    assert.equal(call._lastCallback, null, 'dependent _lastCallback for forgotten fact is cleared');
+    assert.equal(call.callbackUsed, true, 'callbackUsed once-only counter remains true');
+    const diskAfterForget = JSON.parse(fs.readFileSync(path.join(process.env.MAYA_DATA_DIR, `${p.id}.json`), 'utf8'));
+    assert.ok(!diskAfterForget.memory.preferences.some((x) => /ginger/i.test(x.text)), 'ginger tea removed from disk preferences');
+    assert.ok(!diskAfterForget.memory.topics.some((t) => /ginger/i.test(t.text)), 'dependent ginger topic removed');
+    assert.ok(!diskAfterForget.memory.threads.some((t) => /ginger/i.test(t.text)), 'dependent non-reminder thread removed');
+    assert.ok(diskAfterForget.memory.threads.some((t) => t.id === 'r1'), 'reminder thread is preserved');
+
+    // 3. Pending extraction does NOT restore forgotten ginger tea or overwritten chess story
+    memory.startCall(p.id, 'pending-call-1', 'America/New_York');
+    memory.appendTurn(p.id, 'pending-call-1', { label: 'A', who: loaded.name, text: 'We talked about iced coffee.', userSaid: true });
+    await memory.flushPending(p.id);
+    const diskAfterExtract = JSON.parse(fs.readFileSync(path.join(process.env.MAYA_DATA_DIR, `${p.id}.json`), 'utf8'));
+    assert.ok(!diskAfterExtract.memory.preferences.some((x) => /ginger/i.test(x.text)), 'pending extraction did NOT restore forgotten ginger tea');
+    assert.ok(!diskAfterExtract.memory.people[0].stories.some((s) => /chess/i.test(s.text)), 'pending extraction did NOT restore overwritten chess story');
+    assert.ok(diskAfterExtract.memory.people[0].stories.some((s) => /basketball/i.test(s.text)), 'corrected basketball story is preserved after extraction');
+  } finally {
+    if (savedBrain) require.cache[brainPath] = savedBrain;
+    if (savedMem) require.cache[memPath] = savedMem;
+    if (savedCall) require.cache[callPath] = savedCall;
+    if (prevData === undefined) delete process.env.MAYA_DATA_DIR; else process.env.MAYA_DATA_DIR = prevData;
+    if (prevCare === undefined) delete process.env.MAYA_CARE_DIR; else process.env.MAYA_CARE_DIR = prevCare;
+  }
+});
+
+test('Correct & Forget (2): unclear target, ambiguous target, no-match, failed write verification, and protected categories (safety/medicine/daily-call/reminder/scam/family)', () => {
+  const fs = require('node:fs');
+  const memory = require('../memory');
+  const smart = require('../smart');
+  const { Call } = require('../call');
+  const prevGuard = process.env.MAYA_SMART_GUARD;
+  process.env.MAYA_SMART_GUARD = 'on';
+
+  try {
+    // 1. Unclear target (vague request -> no broad deletion)
+    const vague = R.memoryEditIntent(CB_MEM, 'Please forget what I told you.', TODAY, { ownerName: 'Mathew' });
+    assert.ok(vague);
+    assert.equal(vague.status, 'unclear');
+    assert.equal(vague.reason, 'missing-target');
+
+    // 2. Ambiguous target (two distinct tea notes -> asks which one)
+    const twoTeas = {
+      ...CB_MEM,
+      preferences: [
+        { who: 'Mathew', text: 'likes ginger tea in the morning', told: '2026-10-18' },
+        { who: 'Mathew', text: 'likes peppermint tea after dinner', told: '2026-10-19' },
+      ],
+    };
+    const amb = R.memoryEditIntent(twoTeas, 'Please delete your note about tea.', TODAY, { ownerName: 'Mathew' });
+    assert.ok(amb);
+    assert.equal(amb.status, 'unclear');
+    assert.equal(amb.reason, 'ambiguous-target');
+    assert.equal(amb.candidates.length, 2);
+
+    // 3. Unclear replacement ("correct your note about ginger tea" without saying what to change it to)
+    const noRep = R.memoryEditIntent(CB_MEM, 'Please correct your note about ginger tea.', TODAY, { ownerName: 'Mathew' });
+    assert.ok(noRep);
+    assert.equal(noRep.status, 'unclear');
+    assert.equal(noRep.reason, 'missing-replacement');
+
+    // 4. No-match -> status: 'not-found', blocks "you never told me" and blocks claiming deletion
+    const noMatch = R.memoryEditIntent(CB_MEM, 'Please forget what I told you about skydiving.', TODAY, { ownerName: 'Mathew' });
+    assert.ok(noMatch);
+    assert.equal(noMatch.status, 'not-found');
+    const call = new Call({ send() {}, readyState: 1 }, 'test-key');
+    clearInterval(call.endTimer);
+    call.profile = { id: 'fbde4db7', name: 'Mathew', gender: 'male', memory: JSON.parse(JSON.stringify(CB_MEM)) };
+    call._memEdit = noMatch;
+    call.focus = { text: 'Please forget what I told you about skydiving.', full: false, memEdit: noMatch };
+    assert.equal(smart.breaks('You never told me about skydiving.', call), 'memedit-hard-denial');
+    assert.equal(smart.breaks("I've deleted that from my notes.", call), 'memedit-unverified');
+    assert.equal(smart.breaks("I can't find a matching note about skydiving in what I have saved.", call), null);
+
+    // 5. Failed write / unverified disk readback -> status: 'failed', blocks success claim and blocks backup/log overclaims
+    const readyPlan = R.memoryEditIntent(CB_MEM, 'Please forget that I like iced coffee.', TODAY, { ownerName: 'Mathew' });
+    assert.equal(readyPlan.status, 'ready');
+    const origRead = fs.readFileSync;
+    fs.readFileSync = () => { throw new Error('simulated disk readback failure'); };
+    let failedRes;
+    try {
+      failedRes = memory.applyMemoryEdit('nonexistent-id', readyPlan, { tz: 'America/New_York' });
+    } finally {
+      fs.readFileSync = origRead;
+    }
+    assert.equal(failedRes.status, 'failed');
+    call._memEdit = failedRes;
+    call.focus = { text: 'Please forget that I like iced coffee.', full: false, memEdit: failedRes };
+    assert.equal(smart.breaks("I've deleted iced coffee from my notes.", call), 'memedit-unverified');
+    assert.equal(smart.breaks("I couldn't confirm that change went through right now.", call), null);
+    call._memEdit = { op: 'forget', status: 'verified', oldFact: 'Mathew: likes iced coffee; told 2026-10-19' };
+    assert.equal(smart.breaks("I removed that from my saved notes and wiped it from every backup and server log.", call), 'memedit-overclaim');
+
+    // 6. Protected categories: safety, medicine, daily-call, reminder, scam, family-owned
+    assert.equal(R.memoryEditIntent(CB_MEM, 'Forget my safety incident record.', TODAY).status, 'protected');
+    assert.equal(R.memoryEditIntent(CB_MEM, 'Delete my medicine note about blood pressure pills.', TODAY).status, 'protected');
+    assert.equal(R.memoryEditIntent(CB_MEM, 'Forget my daily call at 2:12 PM.', TODAY).status, 'protected');
+    assert.equal(R.memoryEditIntent(CB_MEM, 'Delete my reminder for tomorrow.', TODAY).status, 'protected');
+    assert.equal(R.memoryEditIntent(CB_MEM, 'Forget the scam alert.', TODAY).status, 'protected');
+    const famMem = {
+      people: [], events: [], current: [], topics: [], threads: [],
+      preferences: [{ who: 'Mathew', text: 'likes chamomile tea', by: 'family', told: TODAY }],
+    };
+    const famEdit = R.memoryEditIntent(famMem, 'Forget the note about chamomile tea.', TODAY, { ownerName: 'Mathew' });
+    assert.equal(famEdit.status, 'protected');
+    assert.equal(famEdit.category, 'family');
+  } finally {
+    if (prevGuard === undefined) delete process.env.MAYA_SMART_GUARD;
+    else process.env.MAYA_SMART_GUARD = prevGuard;
+  }
+});
+
+test('Bounded In-Conversation Initiative: appropriate invitation once per conversation, deliberate silence, interruption/scam/safety guards, decline suppression, and quiet-hours ON/OFF', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-nudge-'));
+  const prevData = process.env.MAYA_DATA_DIR;
+  const prevCare = process.env.MAYA_CARE_DIR;
+  process.env.MAYA_DATA_DIR = path.join(tmp, 'profiles');
+  process.env.MAYA_CARE_DIR = path.join(tmp, 'care');
+
+  const care = require('../care');
+  const memory = require('../memory');
+  const smart = require('../smart');
+  const { Call } = require('../call');
+
+  try {
+    const suffix = Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('');
+    const p = memory.createProfile(`NudgeSenior${suffix}`, 'male');
+    care.setTimezone(p.id, 'America/New_York', 'manual');
+    const loaded = memory.load(p.id);
+    loaded.memory = JSON.parse(JSON.stringify(CB_MEM));
+
+    const makeCall = () => {
+      const c = new Call({ send() {}, readyState: 1 }, 'test-key');
+      clearInterval(c.endTimer);
+      c.profile = memory.load(p.id);
+      c.tz = 'America/New_York';
+      c.userTurns = 1;
+      c.history = [{ role: 'user', content: `${loaded.name}: The weather is nice.` }];
+      c.dynamicLine = async ({ what }) => ({ full: '[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0]] Still here with you.', said: 'Still here with you.', tries: 1, what });
+      return c;
+    };
+
+    // 1. Before any user turn (userTurns === 0): no proactive nudge on initial silent pickup
+    const c0 = makeCall();
+    c0.userTurns = 0;
+    assert.equal(c0.proactiveNudge(), null, 'no proactive nudge before senior has spoken in the conversation');
+
+    // 2. Deliberate silence / unfinished request ("Hold on a second", "Let me think...") -> no proactive nudge
+    const cDelib = makeCall();
+    cDelib.history = [{ role: 'user', content: `${loaded.name}: Hold on a second, let me think...` }];
+    assert.equal(cDelib.proactiveNudge(), null, 'deliberate pause / unfinished request suppresses nudge');
+
+    // 3. Interruption / active speech / partial turn / safety / unresolved scam -> no proactive nudge
+    const cBusy = makeCall();
+    cBusy.curTurn = { partial: 'I was going to say' };
+    assert.equal(cBusy.proactiveNudge(), null, 'unfinished partial speech suppresses nudge');
+    cBusy.curTurn = null;
+    cBusy.safety = true;
+    assert.equal(cBusy.proactiveNudge(), null, 'safety handling suppresses nudge');
+    cBusy.safety = false;
+    cBusy.scamReply = 'warn';
+    assert.equal(cBusy.proactiveNudge(), null, 'scam exchange suppresses nudge');
+
+    // 4. Quiet hours OFF by default -> allows ONE proactive nudge; second nudge in same conversation -> blocked; stage >= 1 stops nudging
+    assert.equal(care.get(p.id).quietHours, undefined, 'quiet hours OFF by default');
+    const c1 = makeCall();
+    const q0 = await c1.quietLine(0, new AbortController().signal);
+    assert.ok(q0.nudge, 'appropriate proactive nudge permitted at stage 0 when quiet hours OFF');
+    assert.equal(q0.nudge.kind, 'topic');
+    assert.equal(c1.nudgeUsed, true, 'nudgeUsed set to true after one nudge');
+    assert.equal(c1.proactiveNudge(), null, 'second nudge in same conversation is blocked (one per conversation total, not per category)');
+    const q1 = await c1.quietLine(1, new AbortController().signal);
+    assert.equal(q1.nudge, null, 'silence or non-answer at stage 1 stops nudging');
+
+    // 5. Quiet hours explicitly ON -> suppresses ordinary proactive invitations; turning back OFF allows in a new conversation
+    care.setQuietHours(p.id, true);
+    const cQuietOn = makeCall();
+    assert.equal(cQuietOn.proactiveNudge(), null, 'quiet hours explicitly ON suppresses proactive nudge');
+    care.setQuietHours(p.id, false);
+    const cQuietOff = makeCall();
+    assert.ok(cQuietOff.proactiveNudge(), 'quiet hours explicitly OFF allows proactive nudge in a new conversation');
+
+    // 6. Decline suppression & persistent opt-out ("Don't suggest topics again")
+    const prevComp = process.env.MAYA_SMART_COMPANION;
+    process.env.MAYA_SMART_COMPANION = 'on';
+    try {
+      const cDec = makeCall();
+      const offered = cDec.proactiveNudge();
+      assert.ok(offered);
+      const decNote = smart.ledger(cDec, 'No thanks, not now.');
+      assert.match(decNote, /INVITATION DECLINED/);
+      assert.equal(cDec.nudgeDeclined, true);
+
+      const cOptOut = makeCall();
+      const optNote = smart.ledger(cOptOut, 'Please do not suggest topics or offer calls again.');
+      assert.match(optNote, /DO NOT OFFER AGAIN/);
+      assert.ok(care.get(p.id).smart.noNudge, 'explicit opt-out persisted on senior record');
+      const cNextCall = makeCall();
+      assert.equal(cNextCall.proactiveNudge(), null, 'persistent opt-out suppresses nudges in future conversations until senior changes choice');
+
+      const reAllow = smart.ledger(cNextCall, 'You can suggest topics again.');
+      assert.match(reAllow, /INITIATIVE ALLOWED AGAIN/);
+      assert.equal(care.get(p.id).smart.noNudge, null, 'senior explicit permission clears opt-out');
+    } finally {
+      if (prevComp === undefined) delete process.env.MAYA_SMART_COMPANION;
+      else process.env.MAYA_SMART_COMPANION = prevComp;
+    }
+  } finally {
+    care.stop();
+    if (prevData === undefined) delete process.env.MAYA_DATA_DIR; else process.env.MAYA_DATA_DIR = prevData;
+    if (prevCare === undefined) delete process.env.MAYA_CARE_DIR; else process.env.MAYA_CARE_DIR = prevCare;
+  }
+});
+
 
 
 

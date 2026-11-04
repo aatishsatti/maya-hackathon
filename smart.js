@@ -188,6 +188,8 @@ function decideGeneral(heard, exec = {}) {
 
 // ---------------------------------------------------------------- the controls they can say out loud (COMPANION): a brushed-off topic (30 days, only her own raising of it), "stop calling me" (kept until THEY ask again, no expiry)
 const BRUSH = /\b(?:i (?:don'?t|do not) (?:want|wish) to (?:talk|discuss|speak) about|(?:let'?s|can we) (?:not talk about|drop|stop talking about)|drop it|not now|i'?d rather not|i would rather not|leave it)\b/i;
+const NO_NUDGE_RE = /\b(?:don'?t|do\s+not|stop|never)\s+(?:ever\s+)?(?:offer\w*|suggest\w*|nudge\w*|bring\s+up\s+new\s+topics?|ask\s+if\s+i\s+want\s+to\s+talk\s+about)\b/i;
+const ALLOW_NUDGE_RE = /\b(?:you\s+can|it'?s\s+(?:ok|okay|fine)\s+to|feel\s+free\s+to|go\s+ahead\s+and|start)\s+(?:offer\w*|suggest\w*|bring\s+up\s+topics?)\b[^.?!]*\bagain\b/i;
 const NOCALLS = /\b(?:stop calling me|don'?t (?:ever )?call me|do not call me|no more calls|never call me)\b/i;
 // Only an explicit permission lifts the stop at once (and it then ASKS about the restart). "Can you call me", "please call me", "call me at 1:26" are requests: they go to social.reconsent, which asks ONE question and needs a fresh yes.
 const CALLS_PERMISSION = /\b(?:you can|it'?s (?:ok|okay|fine) (?:to|for you to)|go ahead and|start) call(?:ing)? me\b|\bcall me again\b/i;
@@ -197,6 +199,26 @@ function ledger(s, heard) {
   const sm = p.smart || {}; const x = st(s); const prev = x.prevHeard; x.prevHeard = heard;
   // "stop calling me" is NOT handled here any more: who it is aimed at is decided in social.stopTurn (roleplay / third person change nothing, ambiguity gets one scoped question).
   if (sm.noCalls && CALLS_PERMISSION.test(heard)) { care.persistSmart(id, { noCalls: null, callsRestored: { at: Date.now(), source: 'chat: the senior asked for calls again' } }); const q = require('./social').onCallsBack(id); return q ? `CALLS RESTORED: they have asked for calls again. ${q}` : 'CALLS RESTORED: they have asked for calls again. You may offer to arrange one.'; }
+  if (sm.noNudge && ALLOW_NUDGE_RE.test(heard)) {
+    care.persistSmart(id, { noNudge: null });
+    s.nudgeDeclined = false;
+    return 'INITIATIVE ALLOWED AGAIN: they said you may suggest topics or invitations again. Acknowledge briefly and warmly.';
+  }
+  if (NO_NUDGE_RE.test(heard)) {
+    care.persistSmart(id, { noNudge: { at: Date.now(), actor: 'senior', text: String(heard || '').slice(0, 120) } });
+    s.nudgeDeclined = true; s.nudgeOffered = null;
+    return 'DO NOT OFFER AGAIN: they asked you not to make proactive suggestions or offers again. Accept that warmly in one short sentence; do not offer again unless they ask.';
+  }
+  if (s.nudgeOffered && (BRUSH.test(heard) || require('./social').isDecline(heard))) {
+    const offered = s.nudgeOffered;
+    s.nudgeDeclined = true; s.nudgeOffered = null;
+    if (offered.kind === 'call-offer') {
+      const z = (sm.social || {});
+      care.persistSmart(id, { social: { ...z, offer: null, declinedAt: Date.now() } });
+    }
+    return 'INVITATION DECLINED: they declined your gentle opening or offer. Accept it lightly in one short sentence and do not offer again.';
+  }
+  if (s.nudgeOffered) s.nudgeOffered = null;
   if (BRUSH.test(heard) && (x.lastQ || prev)) { const w = contentWords(x.lastQ ? x.lastQ.t : prev); if (w.length >= 2) { care.persistSmart(id, { brush: [...(sm.brush || []).filter((b) => Date.now() - b.at < 30 * 86400000), { w, at: Date.now() }].slice(-6) }); return 'DROP IT: they do not want to talk about that. Say okay, lightly, and move on. Do not raise that topic yourself again; if THEY bring it up, talk about it normally.'; }
   }
   return null;
@@ -254,11 +276,25 @@ function notes(s, heard) {
   if (flag('COMPANION') && s.profile) { const sf = require('./social').step(s, heard, { intent: it, callsOk: callsOk(s), safe: !s.safety && !s.health && it !== 'scam' }); if (sf) { out.push(sf); sched = /^social-(?!offer)/.test(sf[0]) && !s.safety && !s.health && it !== 'scam'; } }   // the daily-call offer and its consent (social.js)
   if (stateFlag('CARDS') && s.profile && s.profile.id) { const c = appState(s, sched); if (c) out.push(['smart-app-state', c]); s._compact = Boolean(sched && c); }
   s._sched = Boolean(stateFlag('GUARD') && (sched || out.some(([l]) => /^social-/.test(l)) || (/\b(?:calls?|daily|ring)\b/i.test(heard) && (() => { try { return Boolean(care_().socialOf(s.profile.id)); } catch { return false; } })())));   // a SCHEDULING turn: the bounded-language check applies   // state.js: built AFTER the daily-call step so a save made this turn is already in it; id from the session, never from the chat
-  if ((flag('GUARD') || stateFlag('GUARD')) && s.profile && s.profile.memory) {
+  if ((flag('GUARD') || stateFlag('GUARD') || flag('COMPANION')) && s.profile && s.profile.memory) {
     const R = require('./recall');
-    const ch = R.challengeFact(s.profile.memory, heard, '', { ownerName: s.profile.name, profileId: s.profile.id, lastCallback: s._lastCallback });
+    const me = typeof s.runMemoryEdit === 'function' ? s.runMemoryEdit(heard) : null;
+    if (me) {
+      if (me.status === 'verified') {
+        out.push(['smart-mem-edit', `MEMORY EDIT VERIFIED (operation: ${me.op}; old fact: ${me.oldFact}${me.newFact ? `; new saved fact: ${me.newFact}` : '; result: removed from saved notes'}): acknowledge calmly without arguing and describe ONLY this verified outcome in your own words. Do NOT claim deletion from every backup, log, server, or external service.`]);
+      } else if (me.status === 'unclear') {
+        out.push(['smart-mem-edit', `MEMORY EDIT UNCLEAR (operation: ${me.op}; reason: ${me.reason}${me.candidates && me.candidates.length ? `; matching notes: ${me.candidates.join(' | ')}` : ''}${me.target ? `; matched note: ${me.target.fact}` : ''}): nothing was changed or deleted yet. Ask ONE short, focused clarification question in your own words (${me.reason === 'missing-replacement' ? `what they would like the note "${me.target.text}" changed to` : me.candidates && me.candidates.length ? 'which of those notes they mean' : 'which specific note they want to change or remove'}). Do NOT guess and do NOT say anything was updated or deleted.`]);
+      } else if (me.status === 'not-found') {
+        out.push(['smart-mem-edit', `MEMORY EDIT NOT FOUND (operation: ${me.op}; searched for: ${me.targetTopic}): no matching senior-told note was found in what is saved, so nothing was changed. Say honestly in your own words that you cannot find a matching note in what you have saved; NEVER say "you never told me" or deny their history, and do NOT claim anything was deleted or updated.`]);
+      } else if (me.status === 'failed') {
+        out.push(['smart-mem-edit', `MEMORY EDIT NOT VERIFIED (operation: ${me.op}; target: ${me.oldFact}): the app could not verify the change on disk, so do NOT claim it was updated, corrected, forgotten, or deleted. Say plainly in one short sentence that you could not confirm the change went through right now.`]);
+      } else if (me.status === 'protected') {
+        out.push(['smart-mem-edit', `MEMORY EDIT PROTECTED (category: ${me.category}): ${me.category} records cannot be deleted or altered through conversational memory editing${me.category === 'daily-call' ? ' (to cancel a daily call, they can ask to cancel their daily calls directly)' : ''}. Do NOT claim anything was deleted, forgotten, or changed.`]);
+      }
+    }
+    const ch = !me ? R.challengeFact(s.profile.memory, heard, '', { ownerName: s.profile.name, profileId: s.profile.id, lastCallback: s._lastCallback }) : null;
     s._challenge = ch;
-    const cp = !ch ? R.changedPreference(s.profile.memory, heard, { ownerName: s.profile.name }) : null;
+    const cp = !me && !ch ? R.changedPreference(s.profile.memory, heard, { ownerName: s.profile.name }) : null;
     s._changedPref = cp;
     if (cp) {
       s._changedPrefs = s._changedPrefs || new Set();
@@ -355,6 +391,7 @@ const CHALLENGE_DENIAL_RE = /\b(?:i|maya)\s+(?:just\s+|only\s+)?(?:added|guessed
 const CHALLENGE_CLAIM_RE = /\byou\s+(?:did\s+)?(?:tell|told|mention\w*|said\s+to|shared\s+with)\s+me\b|\byou\s+mentioned\s+(?:it|that|this|earlier|before|last\s+time)\b|\bi\s+(?:do\s+)?remember\s+(?:you\s+)?(?:telling|saying|mentioning|that)\b|\b(?:in|from)\s+my\s+notes?\b|\bmy\s+notes?\s+(?:say|show|have)\b|\bfrom\s+what\s+you\s+(?:told|shared\s+with)\s+me\b/i;
 const CHALLENGE_HARD_DENIAL_RE = /\byou\s+(?:never|didn'?t|did\s+not)\s+(?:ever\s+)?(?:tell|told|say|said|mention\w*|share\w*)\s+(?:me|that)\b|\byou\s+never\s+(?:said|told|mentioned)\b/i;
 const FORGET_PROMISE_RE = /\b(?:i(?:'ll|\s+will|\s+have|'ve|\s+can)?\s+(?:update|updated|change|changed|delete|deleted|remove|removed|erase|erased|forget|forgotten|clear|cleared|cross\s+out)\s+(?:that|it|my\s+note\w*|your\s+note\w*|my\s+memory|your\s+profile|that\s+from\s+my\s+notes?)|i\s+won'?t\s+remember\s+that\s+anymore|updated\s+my\s+notes?)\b/i;
+const MEMEDIT_CLAIM_RE = /\b(?:i(?:'ve|\s+have|\s+just|\s+will|'ll)?|maya\s+has)\s+(?:deleted|removed|erased|forgotten|cleared|updated|corrected|changed|replaced|wiped)\b|\b(?:has|have)\s+been\s+(?:deleted|removed|erased|forgotten|cleared|updated|corrected|changed|replaced)\b|\b(?:deleted|removed|erased|updated|corrected)\s+(?:that|it|[^.?!]{1,40})\s+from\s+(?:my|your|the)\s+(?:notes?|memor\w*|profile|what\s+i\s+have\s+saved)\b/i;
 
 function challengeRetryNote(s) {
   const ch = s && (s._challenge || (s.focus && s.focus.challenge));
@@ -388,8 +425,23 @@ function breaks(text, s) {
   if (flag('GUARD') || stateFlag('GUARD')) {
     const R = require('./recall');
     const heardNow = s && s.lastHeard ? s.lastHeard() : '';
-    const ch = (s && (s._challenge || (s.focus && s.focus.challenge))) || (s && s.profile && s.profile.memory && heardNow ? R.challengeFact(s.profile.memory, heardNow, '', { ownerName: s.profile.name, profileId: s.profile.id, lastCallback: s._lastCallback }) : null);
-    const cp = !ch ? ((s && (s._changedPref || (s.focus && s.focus.changedPref))) || (s && s.profile && s.profile.memory && heardNow ? R.changedPreference(s.profile.memory, heardNow, { ownerName: s.profile.name }) : null)) : null;
+    const me = s && (s._memEdit || (s.focus && s.focus.memEdit));
+    if (/\b(?:every|all)\s+(?:backup|log|server|service|database)s?\b|\b(?:backups?\s+(?:and|or)\s+logs?|logs?\s+(?:and|or)\s+backups?|wiped\s+from\s+everywhere)\b/i.test(t)) {
+      s._why = 'do NOT claim deletion from every backup, log, server, or external service: describe only the verified change to your saved profile notes';
+      return 'memedit-overclaim';
+    }
+    if (me) {
+      if (me.status !== 'verified' && (MEMEDIT_CLAIM_RE.test(t) || FORGET_PROMISE_RE.test(t)) && !/\b(?:not|cannot|can'?t|couldn'?t|could\s+not|haven'?t|have\s+not|didn'?t|did\s+not|yet|which|what)\b/i.test(t)) {
+        s._why = `the memory edit was not verified (${me.status}): do NOT claim the note was updated, corrected, deleted, or forgotten`;
+        return 'memedit-unverified';
+      }
+      if (me.status === 'not-found' && CHALLENGE_HARD_DENIAL_RE.test(t)) {
+        s._why = 'say honestly that you cannot find a matching note in what is saved; NEVER say "you never told me"';
+        return 'memedit-hard-denial';
+      }
+    }
+    const ch = !me ? ((s && (s._challenge || (s.focus && s.focus.challenge))) || (s && s.profile && s.profile.memory && heardNow ? R.challengeFact(s.profile.memory, heardNow, '', { ownerName: s.profile.name, profileId: s.profile.id, lastCallback: s._lastCallback }) : null)) : null;
+    const cp = !me && !ch ? ((s && (s._changedPref || (s.focus && s.focus.changedPref))) || (s && s.profile && s.profile.memory && heardNow ? R.changedPreference(s.profile.memory, heardNow, { ownerName: s.profile.name }) : null)) : null;
     if (cp) {
       if (FORGET_PROMISE_RE.test(t)) {
         s._why = 'do NOT promise or claim to forget, delete, or update your saved notes or memory: simply accept their current preference in this conversation';

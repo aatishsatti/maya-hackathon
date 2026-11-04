@@ -113,7 +113,7 @@ class ChatSession {
     this.started = false;
     this.closed = false;
     // The same per-conversation state call.js keeps, with the same meaning.
-    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.callbackUsed = false; this.callbackShown = null; this._lastCallback = null; this._challenge = null; this._changedPref = null; this._changedPrefs = new Set(); this.lastReplyAsked = false; this.askHistory = [];
+    this.escalations = 0; this.userTurns = 0; this.replyCount = 0; this.beatCount = 0; this.focus = null; this.followUpOffered = false; this.callbackUsed = false; this.callbackShown = null; this._lastCallback = null; this._mentionedCallbacks = new Set(); this._challenge = null; this._changedPref = null; this._changedPrefs = new Set(); this._memEdit = null; this._memEditPending = null; this._memEditTurn = null; this.nudgeUsed = false; this.nudgeDeclined = false; this.nudgeOffered = null; this.lastReplyAsked = false; this.askHistory = [];
     this.identitySaid = false; this.repeatRetried = false; this.openedWithInterjection = false; this.lastNameUse = -10;
     this.askedName = false; this.willAskName = false; this.lastExclaimed = false;
     this.health = false; this.safety = false; this.pendingConcern = null; this.familyAsked = false; this.ticketInCall = false;
@@ -365,7 +365,7 @@ class ChatSession {
   }
 }
 // Care and prompt rules live in call.js; the chat borrows those methods so each rule has one copy.
-for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'compactRoster', 'replyNote', 'recentOpenings', 'recentReplies', 'setFocus', 'applyBeat', 'unresolvedTalk', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'familyRelevant', 'limitsFacts', 'lastHeard', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
+for (const m of ['commitReminder', 'noteSafetyAsked', 'careNotes', 'enterSafety', 'enterHealth', 'healthNote', 'safetyNote', 'safetyContext', 'roster', 'compactRoster', 'replyNote', 'recentOpenings', 'recentReplies', 'runMemoryEdit', 'proactiveNudge', 'setFocus', 'applyBeat', 'unresolvedTalk', 'beatBlocks', 'repeatsOpening', 'breaksFacts', 'familyRelevant', 'limitsFacts', 'lastHeard', 'recordName', 'who', 'dynamicLine', 'inScamTurn']) {
   ChatSession.prototype[m] = Call.prototype[m];
 }
 

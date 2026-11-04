@@ -420,4 +420,212 @@ function callbackFact(memory, userText, today = '', opts = {}) {
   return { kind: best.kind, who: best.who, text: best.text, told: best.told, topic: best.topic, fact: best.fact, confirmed: false, ask: true, unmentioned: best.unmentioned };
 }
 
-module.exports = { callbackFact, challengeFact, changedPreference, unconfirmedFacts, isQuotingOtherOnly, parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };
+// ---- Feature 1: Correct and Forget (senior's own non-medical conversational memories only) ----
+const FORGET_VERB_RE = /\b(?:please\s+)?(?:forget|delete|erase|remove|drop|wipe|clear)\b[^.?!]{0,40}\b(?:what\s+i\s+(?:told|said|mentioned|shared)|(?:your|my|the|that)\s+(?:note|memory|notes|memories|fact)|that\s+i\s+(?:like|love|enjoy|prefer|drink|eat|had|have|went|play)|about\s+\w+)/i;
+const FORGET_DIRECT_RE = /^\s*(?:please\s+)?(?:forget|delete|erase|remove)\s+(?:that|what\s+i\s+said|everything|all\s+my\s+notes|my\s+notes|(?:my|the|your)\s+\w+|about\b.*|that\s+i\b.*)/i;
+const CORRECT_NOTE_RE = /\b(?:please\s+)?(?:correct|update|change|replace|fix|amend)\s+(?:your|my|the|that)?\s*(?:note|notes|memory|memories|what\s+i\s+(?:told|said|mentioned))\b/i;
+const REPLACE_WITH_RE = /\b(?:replace|change|swap|switch)\s+(.+?)\s+(?:with|to|for)\s+(.+?)(?:[.?!]|$)/i;
+const NOT_X_ITS_Y_RE = /\b(?:correct|update|fix|change|amend|in\s+your\s+notes?)[^.?!]*?\b(?:i\s+(?:like|love|enjoy|prefer|drink|eat)|it(?:'s|\s+is)|(?:he|she|they|my\s+\w+(?:\s+\w+)?)\s+plays?)\s+([^,.?!]+?)\s*,\s*not\s+([^,.?!]+?)(?:[.?!]|$)/i;
+const PROTECTED_EDIT_RE = /\b(?:safety\s+(?:alert|incident|ticket|record)s?|scam\s+(?:alert|flag|incident|record)s?|consent\s+record|provenance|medical\s+record|medicine\s+(?:note|record|refusal)|prescription|dosage|daily\s+calls?|family(?:'s|\s+dashboard|\s+note)s?|other\s+(?:senior|person|profile)'?s?)\b/i;
+const SCHED_REM_CANCEL_RE = /\b(?:cancel|stop|skip|change|move|reschedule)\s+(?:my\s+|the\s+|our\s+|today'?s\s+)?(?:daily\s+call|calls?|reminders?|alarms?|timers?)\b/i;
+const EDIT_STOP = new Set('about actually all amend change changed clear correct corrected delete deleted dont drop dropped erase erased everything fact facts fix fixed for forget forgotten from into memory memories mine note notesimah notes please record records remove removed replace replaced said say shared something take tell that the their them thing things told update updated what with wipe wiped wrote your'.split(' '));
+
+function collectEditableItems(m, ownerWords) {
+  const list = [];
+  (m.preferences || []).forEach((x, idx) => {
+    if (!seniorToldItem(x, x && x.text)) return;
+    const who = clip(x.who || '', 40);
+    const cleanText = clip(x.text, 200);
+    const told = ISO.test(String(x.told)) ? String(x.told) : '';
+    const fWords = topicWords(cleanText, ownerWords);
+    list.push({ section: 'preferences', index: idx, kind: 'likes', who, text: cleanText, told, fact: `${who ? `${who}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`, coreWords: fWords, allWords: new Set([...fWords, ...words(cleanText)]) });
+  });
+  (m.people || []).forEach((p, pIdx) => {
+    if (!seniorToldItem(p, `${p.name || ''} ${p.relationship || ''}`)) return;
+    const pWords = topicWords(`${p.name || ''} ${p.relationship || ''}`, ownerWords);
+    const label = p.relationship ? `${p.name} (${p.relationship})` : String(p.name || '');
+    (p.stories || []).forEach((s, sIdx) => {
+      if (!seniorToldItem(s, s && s.text)) return;
+      const cleanText = clip(s.text, 200);
+      const told = ISO.test(String(s.told)) ? String(s.told) : '';
+      const fWords = topicWords(cleanText, ownerWords);
+      list.push({ section: 'stories', personIndex: pIdx, storyIndex: sIdx, kind: 'story', who: label, text: cleanText, told, fact: `${label ? `${label}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`, coreWords: [...new Set([...pWords, ...fWords])], allWords: new Set([...pWords, ...fWords, ...words(cleanText)]) });
+    });
+  });
+  (m.events || []).forEach((e, idx) => {
+    if (!seniorToldItem(e, e && e.text)) return;
+    const who = clip(e.who || '', 40);
+    const cleanText = clip(e.text, 200);
+    const told = ISO.test(String(e.told)) ? String(e.told) : '';
+    const fWords = topicWords(cleanText, ownerWords);
+    list.push({ section: 'events', index: idx, kind: 'event', who, text: cleanText, told, fact: `${who ? `${who}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`, coreWords: fWords, allWords: new Set([...fWords, ...words(cleanText)]) });
+  });
+  (m.current || []).forEach((c, idx) => {
+    if (!seniorToldItem(c, c && c.text)) return;
+    const who = clip(c.who || '', 40);
+    const cleanText = clip(c.text, 200);
+    const told = ISO.test(String(c.told)) ? String(c.told) : '';
+    const fWords = topicWords(cleanText, ownerWords);
+    list.push({ section: 'current', index: idx, kind: 'current', who, text: cleanText, told, fact: `${who ? `${who}: ` : ''}${cleanText}${told ? `; told ${told}` : ''}`, coreWords: fWords, allWords: new Set([...fWords, ...words(cleanText)]) });
+  });
+  return list;
+}
+
+function hasProtectedMatchOnly(m, qWords) {
+  if (!qWords.length) return null;
+  const allItems = [
+    ...(m.preferences || []),
+    ...(m.events || []),
+    ...(m.current || []),
+    ...(m.people || []).flatMap((p) => [p, ...(p && p.stories ? p.stories : [])]),
+  ].filter(Boolean);
+  for (const it of allItems) {
+    const txt = `${it.name || ''} ${it.relationship || ''} ${it.text || ''}`;
+    const wSet = new Set(words(txt));
+    if (!qWords.some((w) => wSet.has(w))) continue;
+    if (MEDICINE_TEXT.test(txt)) return 'medicine';
+    if (it.social || DAILY_CALL_TEXT.test(txt)) return 'daily-call';
+    if (!seniorToldItem(it, txt)) return 'family';
+  }
+  return null;
+}
+
+function memoryEditIntent(memory, userText, today = '', opts = {}) {
+  const raw = String(userText || '').replace(/[\u2018\u2019]/g, "'").trim();
+  if (!raw || isQuotingOtherOnly(raw)) return null;
+  if (SCHED_REM_CANCEL_RE.test(raw) && !/\b(?:note|notes|memory|memories|what\s+i\s+told\s+you)\b/i.test(raw)) return null;
+
+  const m = memory && typeof memory === 'object' && memory.memory && typeof memory.memory === 'object' ? memory.memory : (memory || {});
+  const owner = String(opts.ownerName || (memory && memory.name) || '').trim();
+  const ownerWords = new Set(words(owner));
+  const pending = opts.pendingEdit || null;
+
+  const isForget = FORGET_VERB_RE.test(raw) || FORGET_DIRECT_RE.test(raw);
+  const isCorrect = !isForget && (CORRECT_NOTE_RE.test(raw) || NOT_X_ITS_Y_RE.test(raw) || (/\b(?:note|notes|memory|memories|told\s+you)\b/i.test(raw) && REPLACE_WITH_RE.test(raw)));
+  if (!isForget && !isCorrect && !pending) return null;
+
+  const op = isForget ? 'forget' : isCorrect ? 'correct' : pending.op;
+
+  // Protected categories must never be deleted or altered via conversational memory edit
+  if (PROTECTED_EDIT_RE.test(raw) || DAILY_CALL_TEXT.test(raw) || MEDICINE_TEXT.test(raw)) {
+    const cat = /safety/i.test(raw) ? 'safety'
+      : /scam/i.test(raw) ? 'scam'
+      : /consent|provenance/i.test(raw) ? 'consent'
+      : /daily\s+call/i.test(raw) || DAILY_CALL_TEXT.test(raw) ? 'daily-call'
+      : /family|dashboard/i.test(raw) ? 'family'
+      : /other\s+(?:senior|person|profile)/i.test(raw) ? 'other-senior'
+      : 'medicine';
+    return { op, status: 'protected', category: cat };
+  }
+  if (/\b(?:remind\w*|alarms?|timers?)\b/i.test(raw)) {
+    return { op, status: 'protected', category: 'reminder' };
+  }
+
+  // If resolving a pending missing-replacement clarification
+  if (pending && pending.reason === 'missing-replacement' && pending.target && !isForget) {
+    const rep = clip(raw.replace(/^(?:it\s+should\s+(?:be|say)|change\s+it\s+to|make\s+it|to|that)\s+/i, ''), 160);
+    if (!rep || words(rep).length === 0) return { op: 'correct', status: 'unclear', reason: 'missing-replacement', target: pending.target };
+    return { op: 'correct', status: 'ready', target: pending.target, replacementText: rep };
+  }
+
+  let targetPart = raw;
+  let replacementText = '';
+  if (op === 'correct') {
+    const notMatch = NOT_X_ITS_Y_RE.exec(raw);
+    const repMatch = REPLACE_WITH_RE.exec(raw);
+    const colonMatch = /\b(?:correct|update|change|fix|amend)\s+(?:your|my|the|that)?\s*(?:note|notes|memory|memories|what\s+i\s+(?:told|said|mentioned))[^:]*:\s*(.+)$/i.exec(raw);
+    if (notMatch) {
+      replacementText = clip(notMatch[1], 160);
+      targetPart = notMatch[2];
+    } else if (repMatch) {
+      targetPart = repMatch[1];
+      replacementText = clip(repMatch[2], 160);
+    } else if (colonMatch) {
+      const clause = colonMatch[1];
+      const m2 = /\b(?:i\s+(?:like|love|enjoy|prefer)|it(?:'s|\s+is)|plays?)\s+([^,.?!]+?)\s+(?:instead\s+of|not|rather\s+than)\s+([^,.?!]+)/i.exec(clause);
+      if (m2) {
+        replacementText = clip(m2[1], 160);
+        targetPart = m2[2];
+      } else {
+        const mTo = /\bfrom\s+(.+?)\s+to\s+(.+?)(?:[.?!]|$)/i.exec(clause);
+        if (mTo) { targetPart = mTo[1]; replacementText = clip(mTo[2], 160); }
+        else targetPart = clause;
+      }
+    } else {
+      const mInstead = /\b(?:to|as)\s+([^,.?!]+?)\s+(?:instead\s+of|not)\s+([^,.?!]+)/i.exec(raw);
+      if (mInstead) { replacementText = clip(mInstead[1], 160); targetPart = mInstead[2]; }
+    }
+  }
+
+  const qWords = words(targetPart).filter((w) => !EDIT_STOP.has(w) && !CHALLENGE_STOP.has(w) && !CALLBACK_FILLER.has(w) && !ownerWords.has(w));
+  if (!qWords.length || /\b(?:everything|all\s+of\s+it|all\s+my\s+notes|anything\s+i\s+said)\b/i.test(raw)) {
+    return { op, status: 'unclear', reason: 'missing-target', candidates: [] };
+  }
+
+  const items = collectEditableItems(m, ownerWords);
+  const specificQ = qWords.filter((w) => !BROAD_TOPICS.has(w));
+  const matched = items.map((it) => {
+    const specHits = specificQ.filter((w) => it.allWords.has(w));
+    const allHits = qWords.filter((w) => it.allWords.has(w));
+    if (specificQ.length > 0 && specHits.length === 0) return null;
+    if (allHits.length === 0) return null;
+    return { ...it, matchedWords: specHits.length ? specHits : allHits, score: specHits.length * 10 + allHits.length };
+  }).filter(Boolean);
+
+  if (!matched.length) {
+    const prot = hasProtectedMatchOnly(m, qWords);
+    if (prot) return { op, status: 'protected', category: prot };
+    return { op, status: 'not-found', targetTopic: qWords.join(' ') };
+  }
+
+  matched.sort((a, b) => b.score - a.score);
+  const topScore = matched[0].score;
+  const topMatches = matched.filter((x) => x.score === topScore);
+  // Check if topMatches refer to distinct facts
+  const uniqueTexts = [...new Set(topMatches.map((x) => x.text.toLowerCase()))];
+  if (uniqueTexts.length > 1) {
+    return { op, status: 'unclear', reason: 'ambiguous-target', candidates: topMatches.map((x) => x.fact) };
+  }
+
+  const best = topMatches[0];
+  if (op === 'correct') {
+    if (!replacementText) return { op: 'correct', status: 'unclear', reason: 'missing-replacement', target: best };
+    // Build full replacement text preserving verb/structure when target is a preference/story
+    let fullNewText = replacementText;
+    if (specificQ.length === 1 && new RegExp(`\\b${specificQ[0]}\\b`, 'i').test(best.text) && words(replacementText).length <= 4 && !/^(?:plays?|likes?|loves?|enjoys?|prefers?)\b/i.test(replacementText)) {
+      const repCore = replacementText.replace(/\s+at\s+school$/i, '').trim();
+      fullNewText = best.text.replace(new RegExp(`\\b${specificQ[0]}\\b`, 'i'), repCore);
+    } else if (best.kind === 'story' && !/^(?:plays?|likes?|loves?|enjoys?|prefers?|went|has|is)\b/i.test(fullNewText) && /^plays\b/i.test(best.text)) {
+      fullNewText = `plays ${fullNewText}`;
+    } else if (best.kind === 'likes' && !/^(?:likes?|loves?|enjoys?|prefers?)\b/i.test(fullNewText)) {
+      fullNewText = `likes ${fullNewText}`;
+    }
+    return { op: 'correct', status: 'ready', target: best, replacementText: clip(fullNewText, 200) };
+  }
+  return { op: 'forget', status: 'ready', target: best, replacementText: '' };
+}
+
+// ---- Feature 2: Bounded In-Conversation Initiative (permitted senior-told topic selector) ----
+function nudgeTopicFact(memory, opts = {}) {
+  const m = memory && typeof memory === 'object' && memory.memory && typeof memory.memory === 'object' ? memory.memory : (memory || {});
+  const owner = String(opts.ownerName || (memory && memory.name) || '').trim();
+  const ownerWords = new Set(words(owner));
+  const changed = changedSetFrom(opts.changed);
+  const mentioned = opts.mentioned instanceof Set ? opts.mentioned : new Set(Array.isArray(opts.mentioned) ? opts.mentioned : []);
+  const histText = Array.isArray(opts.history) ? opts.history.map((h) => h && h.content || '').join(' ') : '';
+  const histWords = new Set(words(histText));
+  const brushList = Array.isArray(opts.brush) ? opts.brush : [];
+
+  const items = collectEditableItems(m, ownerWords);
+  for (const it of items) {
+    if (mentioned.has(it.fact)) continue;
+    const spec = it.coreWords.filter((w) => !BROAD_TOPICS.has(w));
+    if (changed.size && (spec.length ? spec : it.coreWords).some((w) => changed.has(w))) continue;
+    if ((spec.length ? spec : it.coreWords).some((w) => histWords.has(w))) continue;
+    if (brushList.some((b) => Array.isArray(b.w) && b.w.some((bw) => it.allWords.has(bw)))) continue;
+    return { kind: it.kind, who: it.who, text: it.text, told: it.told, fact: it.fact, topic: (spec[0] || it.coreWords[0] || '') };
+  }
+  return null;
+}
+
+module.exports = { callbackFact, challengeFact, changedPreference, unconfirmedFacts, isQuotingOtherOnly, memoryEditIntent, nudgeTopicFact, parseNextCallReminder, addReminderTo, STILL_TO_DO, REMINDER_DAYS, MAX_OPEN_REMINDERS, heavyTalk, OPEN_WORRY_DAYS, DATED_GRACE_DAYS, daysBetween, rel, dateFact, words, score, select, upcoming, dueThread, threadFact, expire, mergeThreads, MAX_THREADS };

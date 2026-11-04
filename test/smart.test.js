@@ -306,6 +306,32 @@ test('Fix 1.1 GUARD: (1) callback unconfirmed kind blocks assertion and allows q
   assert.match(said7, /Tastes change over time/);
   assert.doesNotMatch(said7, /updated my notes|removed ginger tea/i);
 
+  // (7) Feature 1 (Correct and Forget): exact correction + unclear target clarification + exact forget verified on disk
+  const p7 = memory.load(id);
+  p7.memory.preferences.push({ who: 'Mathew', text: 'likes iced coffee', told: '2026-10-19' });
+  fs.writeFileSync(path.join(process.env.MAYA_DATA_DIR, `${id}.json`), JSON.stringify(p7, null, 2));
+  if (chat.sessions.get(id)) chat.sessions.get(id).profile.memory = p7.memory;
+
+  queue.length = 0;
+  queue.push(`${FEEL} Which note would you like me to remove?`);
+  const rUnclear = await chat.sendText(id, 'Please forget what I told you.', 'America/New_York');
+  assert.match(rUnclear.messages[rUnclear.messages.length - 1].text, /Which note would you like me to remove\?/);
+
+  queue.length = 0;
+  queue.push(`${FEEL} I've updated your saved note to say you like hot coffee instead of iced coffee.`);
+  const rCorrect = await chat.sendText(id, 'Please correct your note: I like hot coffee, not iced coffee.', 'America/New_York');
+  assert.match(rCorrect.messages[rCorrect.messages.length - 1].text, /updated your saved note to say you like hot coffee/);
+  const diskCorrected = JSON.parse(fs.readFileSync(path.join(process.env.MAYA_DATA_DIR, `${id}.json`), 'utf8'));
+  assert.ok(diskCorrected.memory.preferences.some((x) => /hot coffee/i.test(x.text)));
+  assert.ok(!diskCorrected.memory.preferences.some((x) => /iced coffee/i.test(x.text)));
+
+  queue.length = 0;
+  queue.push(`${FEEL} I've removed that note about hot coffee from what I have saved.`);
+  const rForget = await chat.sendText(id, 'Please forget that I like hot coffee.', 'America/New_York');
+  assert.match(rForget.messages[rForget.messages.length - 1].text, /removed that note about hot coffee/);
+  const diskForgotten = JSON.parse(fs.readFileSync(path.join(process.env.MAYA_DATA_DIR, `${id}.json`), 'utf8'));
+  assert.ok(!diskForgotten.memory.preferences.some((x) => /hot coffee/i.test(x.text)));
+
   setAll(false);
 });
 

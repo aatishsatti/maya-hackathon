@@ -528,9 +528,16 @@ class Call {
     this.callbackUsed = false;   // session-only: at most one relevant memory callback delivered per conversation
     this.callbackShown = null;   // callback selected for this turn, committed to callbackUsed only once delivered
     this._lastCallback = null;   // session-only: the callback delivered earlier in this conversation (for bare challenge turns)
+    this._mentionedCallbacks = new Set(); // facts already brought up in this conversation (for user-prompted recall)
     this._challenge = null;      // this turn's memory challenge decision (recorded vs unrecorded)
     this._changedPref = null;    // this turn's preference change in conversation
     this._changedPrefs = new Set(); // session-only disavowed preference words in this conversation
+    this._memEdit = null;        // this turn's senior-requested memory correction or deletion outcome
+    this._memEditPending = null; // pending clarification for an unclear memory edit request
+    this._memEditTurn = null;    // last heard text processed by runMemoryEdit so careNotes + setFocus run it once
+    this.nudgeUsed = false;      // session-only: at most ONE proactive in-conversation initiative nudge per conversation
+    this.nudgeDeclined = false;  // senior declined or opted out of proactive nudges in this conversation
+    this.nudgeOffered = null;    // active nudge offered on the last silence check
     this.beatCount = 0;          // replies she has given on the current light-chat subject (see beat.js); committed after each spoken reply
     this.askHistory = [];        // whether each of her last replies asked one
     this.health = false;         // an emergency ticket was opened in this call (concern=urgent)
@@ -1049,7 +1056,7 @@ class Call {
     if (!cand || !cand.rs || cand.rs.error || (cand.rs.done && !cand.rs.text.trim())) return false;   // a guess that already failed or came back empty is never spoken: the normal path writes a fresh reply
     if (/INCOMPLETE|APP STATE: UNKNOWN|\bUNKNOWN\b|: unknown\./.test(extra)) return false;   // a failed or incomplete state read is never reused, even when the guess's card failed the same way
     if (!g || g.notes !== extra || JSON.stringify(g.labels) !== JSON.stringify(this.factLabels || []) || g.turnSeq !== mySeq - 1 || Date.now() - g.startedAt > SPEC_MAX_AGE_MS || JSON.stringify(this.history) !== g.histJson) return false;
-    if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder || this.focus.callback || this.focus.challenge || this.focus.changedPref) return false;
+    if (!this.focus || this.focus.full || this.focus.thread || this.focus.reminder || this.focus.callback || this.focus.challenge || this.focus.changedPref || this.focus.memEdit) return false;
     const keep = this.focus; this.focus = pureFocus(g.partial);
     try { return this.roster(`${this.replyNote()} ${extra}`.trim(), g.partial) === g.roster; } catch { return false; } finally { this.focus = keep; }
   }
@@ -1280,6 +1287,41 @@ class Call {
     this.followUpOffered = true;
   }
 
+  runMemoryEdit(heard) {
+    const raw = String(heard || '');
+    if (this._memEditTurn === raw && this._memEdit !== undefined) return this._memEdit;
+    this._memEditTurn = raw;
+    if (!this.profile || !raw.trim() || this.safety || this.health || this._medical) {
+      this._memEdit = null;
+      return null;
+    }
+    const plan = recall.memoryEditIntent(this.profile.memory, raw, memory.today(this.tz), {
+      ownerName: this.profile.name,
+      pendingEdit: this._memEditPending,
+    });
+    if (!plan) {
+      this._memEdit = null;
+      this._memEditPending = null;
+      return null;
+    }
+    if (plan.status === 'ready') {
+      const res = memory.applyMemoryEdit(this.profile.id, plan, { tz: this.tz, session: this });
+      this._memEdit = res;
+      this._memEditPending = null;
+      this._exec = this._exec || {};
+      this._exec.memEdit = res.status;
+      return res;
+    }
+    if (plan.status === 'unclear') {
+      this._memEdit = plan;
+      this._memEditPending = plan;
+      return plan;
+    }
+    this._memEdit = plan;
+    this._memEditPending = null;
+    return plan;
+  }
+
   // Memory focus for ONE normal reply (conversation brain #3): the words just heard pick the few memory items worth showing, and code may
   // offer Spark at most one due follow-up (recall.js) as a fact with its date already worked out. Never in a heavy or careful moment, never
   // twice in a call, never after two offers in total. A request for a story or a recalled account keeps the whole memory. Spark phrases it.
@@ -1287,9 +1329,11 @@ class Call {
     const full = STORY_ASK.test(heard) || RECALL_ASK.test(heard);
     const heavy = Boolean(extra || this.safety || this.health || this.pendingConcern || !lead.isRoutine(heard) || recall.heavyTalk(heard) || (this.prevDelivery && beat.HEAVY.has(this.prevDelivery.emotion)));
     this._changedPrefs = this._changedPrefs || new Set();
-    this.focus = { text: String(heard || ''), full, thread: '', callback: null, challenge: null, changedPref: null, changed: this._changedPrefs, callbackUsed: this.callbackUsed, alreadyMentioned: this._lastCallback && this._lastCallback.delivered ? this._lastCallback.fact : '' };
+    this.focus = { text: String(heard || ''), full, thread: '', callback: null, challenge: null, changedPref: null, memEdit: null, changed: this._changedPrefs, callbackUsed: this.callbackUsed, alreadyMentioned: this._lastCallback && this._lastCallback.delivered ? this._lastCallback.fact : '' };
     this._challenge = null; this._changedPref = null; this.callbackShown = null;
     if (!this.profile) return;
+    const me = this.runMemoryEdit(heard);
+    if (me) { this.focus.memEdit = me; return; }
     const ch = recall.challengeFact(this.profile.memory, heard, memory.today(this.tz), { ownerName: this.profile.name, profileId: this.profile.id, lastCallback: this._lastCallback });
     if (ch) { this.focus.challenge = ch; this._challenge = ch; return; }
     const cp = recall.changedPreference(this.profile.memory, heard, { ownerName: this.profile.name });
@@ -1585,12 +1629,70 @@ class Call {
     return { full, said, tries, sparkFirstMs };
   }
 
+  // Bounded in-conversation initiative: at most ONE gentle topic-opening or daily-call setup invitation per conversation
+  // after a genuine lull (stage 0 of the existing silence timer), only after the senior has spoken in this conversation,
+  // never interrupting speech, an unfinished request, a confirmation, medical/safety handling, an unresolved scam exchange,
+  // a deliberate pause ("hold on" / "let me think"), a previous decline/opt-out, or explicit quiet hours.
+  proactiveNudge() {
+    if (this.nudgeUsed || this.nudgeDeclined) return null;
+    if (!this.profile || !this.profile.id || this.userTurns < 1) return null;
+    if (this.responding && this.curTurn && this.curTurn.partial) return null;
+    if (this.isSpeaking() || this.pending.length || (this.curTurn && this.curTurn.partial)) return null;
+    if (this.awaitAck || this.safety || this.health || this.pendingConcern || this._medical || this.isWorried() || this.scamReply || this._memEditPending) return null;
+    const id = this.profile.id;
+    const p = care.get(id);
+    if (!p) return null;
+    if (care.hasActiveSafety(id) || care.scamPending(id)) return null;
+    // Quiet hours OFF by default (p.quietHours === true is ON); when explicitly ON, suppress ordinary proactive invitations.
+    if (care.quietOn(p) || care.inQuiet(id)) return null;
+    const sm = p.smart || {};
+    if (sm.noNudge) return null;
+    const z = sm.social || {};
+    if ((z.offer && Date.now() - z.offer.at < 20 * 60000) || z.stopAsk || (z.reconsent && Date.now() - z.reconsent.at < 20 * 60000)) return null;
+    if (this.focus && (this.focus.challenge || this.focus.changedPref || this.focus.memEdit)) return null;
+    const lastU = this.lastHeard();
+    // Deliberate silence / pause or unfinished request: do not nudge
+    if (/\b(?:hold\s+on|wait\s+a\s+(?:second|minute|moment)|give\s+me\s+a\s+(?:second|minute|moment)|one\s+(?:second|moment)|let\s+me\s+(?:think|check|see|find|look)|hang\s+on|just\s+a\s+(?:second|minute|moment)|be\s+right\s+back|i\s+need\s+a\s+(?:moment|minute|second)|thinking)\b|(?:,\s*|\.\.\.|\b(?:and|or|but|because|so|uh|um))\s*$/i.test(lastU)) {
+      return null;
+    }
+    const topicPick = recall.nudgeTopicFact(this.profile.memory, {
+      ownerName: this.profile.name,
+      changed: this._changedPrefs,
+      mentioned: this._mentionedCallbacks,
+      brush: sm.brush,
+      history: this.history,
+    });
+    if (topicPick) {
+      this.nudgeUsed = true;
+      const nudge = { kind: 'topic', fact: topicPick.fact, topic: topicPick.topic };
+      this.nudgeOffered = nudge;
+      return nudge;
+    }
+    const smart = require('./smart');
+    if (smart.callsOk(this) && p.tz && !care.socialOf(id) && !sm.noCalls && !(z.declinedAt && Date.now() - z.declinedAt < 30 * 86400000) && !this.outreach) {
+      this.nudgeUsed = true;
+      const nudge = { kind: 'call-offer', fact: `no daily call is currently arranged; their time zone is ${p.tz}` };
+      this.nudgeOffered = nudge;
+      return nudge;
+    }
+    return null;
+  }
+
   async quietLine(stage, signal) {
     const kind = stage === 0 ? 'check' : stage === 1 ? 'wait' : 'hangup';
     const worried = this.isWorried();
     const waitingAck = Boolean(this.awaitAck);
+    if (stage >= 1) this.nudgeOffered = null; // silence or non-answer after stage 0 means stop nudging
+    const nudge = stage === 0 && !waitingAck && !worried ? this.proactiveNudge() : null;
+    const nudgeText = nudge
+      ? (nudge.kind === 'topic'
+        ? ` The person has been quiet for a little while during a calm chat. In one or two short, warm sentences in your own fresh words, gently check if they are still there and open ONE light topic from this senior-told fact only (${nudge.fact}), without assuming anything happened today, without inventing interests or inferring feelings, and without requiring an answer.`
+        : ` The person has been quiet for a little while during a calm chat (${nudge.fact}). In one or two short, warm sentences in your own fresh words, gently check if they are still there and mention once that you could ring them for a friendly daily chat at a time that suits them if they ever want to set one up (an offer only, NOT calling permission: do not pick a time and do not say anything is scheduled).`)
+      : '';
     const what = {
-      check: waitingAck ? `You just gave them a reminder (about "${this.awaitTask}") and have not heard back. In one short, warm sentence ask in your own words whether they heard it or got it. Do not repeat the reminder word for word.` : 'The person has been silent for a little while. In one short, warm sentence gently check whether they are still there (the idea of "are you there?", but choose your own words).',
+      check: waitingAck
+        ? `You just gave them a reminder (about "${this.awaitTask}") and have not heard back. In one short, warm sentence ask in your own words whether they heard it or got it. Do not repeat the reminder word for word.`
+        : (nudgeText || 'The person has been silent for a little while. In one short, warm sentence gently check whether they are still there (the idea of "are you there?", but choose your own words).'),
       wait: waitingAck ? `You gave them a reminder (about "${this.awaitTask}") and are still waiting to hear they got it. In one short, warm sentence say you are still here and will wait a moment for them. Your own words.` : worried
         ? 'The person is still silent, and they told you something heavy a moment ago. In one short, warm sentence say you are staying right here with them and will not go anywhere. Choose your own words.'
         : 'The person is still silent. In one short, warm sentence say you are still here and will wait quietly for them to speak. Choose your own words.',
@@ -1602,10 +1704,10 @@ class Call {
         ? 'The person has gone quiet and has not answered. In one short, kind sentence say you are going to hang up for now and will call right back in a moment to check they are alright, with a gentle goodbye-for-now. Choose your own words.'
         : 'The person has said nothing at all. In one short, kind sentence say it seems the call was a mistake or a pocket dial, so you are hanging up for now and will call right back in a moment to check, with a gentle goodbye-for-now. Choose your own words.',
     }[kind];
-    const noCall = this.ws.noRingback ? (said) => (CALL_PROMISE.test(said) ? 'You do not call people back and cannot ring them: do not say you will call, ring or call them back, or talk again in a moment. They can call you.' : null) : null;
-    let line = await this.dynamicLine({ pool: 'quiet', signal, what: `${what} Do not ask their name. This is not a greeting: do not start with Hello, Hi or Good morning/evening.`, check: noCall });
+    const noCall = this.ws.noRingback && !(nudge && nudge.kind === 'call-offer') ? (said) => (CALL_PROMISE.test(said) ? 'You do not call people back and cannot ring them: do not say you will call, ring or call them back, or talk again in a moment. They can call you.' : null) : null;
+    let line = await this.dynamicLine({ pool: 'quiet', signal, what: `${what} Do not ask their name. This is not a greeting: do not start with Hello, Hi or Good morning/evening.`, check: noCall, sentences: nudge ? 2 : 1 });
     if (noCall && noCall(line.said)) line = { full: WHATSAPP_GOODBYE_FULL, said: WHATSAPP_GOODBYE_LINE, fixed: true }; // every attempt still promised a call-back: the fixed line, never the promise
-    return { ...line, kind };
+    return { ...line, kind, nudge };
   }
 
   async fireSilence() {

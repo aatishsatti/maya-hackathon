@@ -1,38 +1,52 @@
-# READ THIS FIRST: GREETING TIMER REGRESSION FIX + APPROVED SCOPE DECISIONS (4 Nov 2026; working tree on top of `99df56c`, uncommitted, NOT pushed, NOT deployed; live authority = `99df56c`)
+# READ THIS FIRST: CORRECT & FORGET + BOUNDED IN-CONVERSATION INITIATIVE (4 Nov 2026; working tree on top of `0ef685b`, uncommitted, NOT pushed, NOT deployed; live authority = `0ef685b`)
 
 This section supersedes EVERY older live/deployment/status line below. The older sections are history, not permission to deploy or restore a removed service.
 
 ## Current authority and boundaries
-- Aatish's live authority: `99df56c` (50 ms pre-connect memory-flush bound, parallel greeting, prethink default OFF, `deviceVoice` correction). Locally verified checkout: `render-test` on top of `99df56c`. Local `main` is `15f64f0`; neither branch was moved and no remote was contacted in this job.
-- Auto-deploy is ON: push = deploy. This job makes NO commit, push, deploy, branch change, or Render change. Muse must verify before any push is considered.
-- Voice routing is LOCKED: web female device/browser primary with the existing MMS fallback; app/WhatsApp Meta MMS `facebook/mms-tts-eng`. ElevenLabs and Tavily are BANNED at runtime. Do not use older research or voice sections as permission to reintroduce either.
-- Preserve medicine refusal (natural, healthcare-provider/doctor referral, no researched clinical findings), quiet hours available and OFF unless explicitly true, duplicate reminder semantics, Fix 1.2 memory, scheduling/confirmation/safety, senior menu and family dashboard. Code supplies principles/facts, Spark writes, code checks and alone saves/acts; no new supplied sentences outside already-approved fixed strings.
-- Mathew `fbde4db7` is the TEST senior, not the demo senior. His daily call remains 2:12 PM. No existing profile or schedule was read from data or changed, and no test senior was deleted. No app folder changes.
+- Aatish's live authority: `0ef685b` (greeting timer regression fix + approved scope decisions on top of `99df56c`). Locally verified checkout: `render-test` on top of `0ef685b`. Auto-deploy is ON: push = deploy. This job makes NO commit, push, deploy, branch change, or Render change. Muse must verify before any push is considered.
+- Voice routing is LOCKED: web female device/browser primary with the existing MMS fallback; app/WhatsApp Meta MMS `facebook/mms-tts-eng`. ElevenLabs and Tavily are BANNED at runtime.
+- Preserve medicine refusal, quiet hours available and OFF unless explicitly true, duplicate reminder semantics, Fix 1.2 memory, scheduling/confirmation/safety, senior menu and family dashboard.
 
 ## Scope decisions — APPROVED BY AATISH (do NOT build beyond them)
 1. **Scam:** Keep existing flow — assess facts already given, ask only missing facts after (`scam.js:89-93`, `official.js:210-232`, `test/smart.test.js:66-80`). Do **NOT** build a mandatory interview before every assessment.
 2. **Delivery-channel:** Normal reminders ask no channel question (`setrem.js:348-377`). **Exception kept:** an explicit WhatsApp request when WhatsApp is unlinked asks if the app is fine (`setrem.js:375-376,544`); `test/setrem.test.js` (`setrem-ask-channel`) expects it.
 3. **Fixed opening fallback:** The daily-call social opening fallback list (`call.js:1726`) is approved as a fixed-string exception, like the bye line. Do **NOT** remove it.
 
-## Greeting timer regression from `99df56c` — FIXED (`call.js`, `test/mms-voice.test.js`)
-- **Regression in `99df56c`:** `greet(hour, readyGate)` suppressed its initial `thinking` event until after `dynamicLine` finished (`call.js:1665-1690`), so on a live call where `ready` cleared the browser's wait timer (`public/app.js:562-573`), the browser's 30-second `THINK_TIMEOUT_MS` watchdog never started while Spark was generating the greeting, allowing a stalled greeting to run up to Spark's 120 s stream timeout.
-- **Fix (`call.js:1665-1690`):** In `greet(hour, readyGate = null)`, when `readyGate` is provided, register `readyGate.then(() => { if (myGen === this.gen && !this.closed && !greetReadyToSpeak) this.send({ type: 'thinking' }); })` at the start of `greet` and set `greetReadyToSpeak = true` right before `speakReply`. When `openTranscribe.onReady` fires in `openMeta` (`call.js:733-740`), it sends `ready` first and immediately resolves `readyGate`, which emits `thinking` right after `ready` **while Spark greeting generation is still in flight**, starting the browser's 30-second greeting watchdog immediately without emitting a second `thinking` event after Spark finishes. Keeps Transcribe handshake and Spark greeting generation in parallel, keeps the 50 ms `flushPending` bound, keeps voice routing (web female device primary, app/WhatsApp MMS), and keeps cancellation and reminder-pickup semantics intact.
-- **Production-path event-order test (`test/mms-voice.test.js`):** Added `Production-path greeting event order: openMeta + greet emits ready -> thinking while Spark greeting is still in flight, then speak -> audioEnd when Spark finishes`, exercising the real `call.onBrowser` -> `call.openMeta` -> `call.greet` -> `call.dynamicLine` path with `sparkStream` held open on a gate when `openTranscribe.onReady` fires, asserting `['ready', 'thinking']` while Spark is still pending and `['ready', 'thinking', 'speak', 'audioEnd']` once Spark completes.
+## What was built in this job (`recall.js`, `memory.js`, `call.js`, `chat.js`, `smart.js`, `test/recall.test.js`, `test/smart.test.js`)
+1. **Feature 1 — Correct and Forget (`recall.memoryEditIntent`, `memory.applyMemoryEdit`, `call.runMemoryEdit`, `smart.notes`, `smart.breaks`):**
+   - Scope limited strictly to the senior's own, non-medical conversational memories (`seniorToldItem` in `preferences`, `people`+`stories`, `events`, `current`). Protected categories (safety incidents, consent/provenance, medicine records/refusal, daily calls, reminders, scam alerts, family-owned information, other seniors' data) return `status: 'protected'` and are never altered or deleted.
+   - Unclear target or replacement (`missing-target`, `ambiguous-target`, `missing-replacement`) returns `status: 'unclear'` and instructs Spark to ask one focused clarification without guessing or broad deletion; no-match returns `status: 'not-found'` (say it cannot be found in saved notes, never `"you never told me"`).
+   - `memory.applyMemoryEdit` updates or removes the matched item plus dependent copies in `topics` and non-reminder `threads`, updates session recall state (`_lastCallback`, `callbackShown`, `_mentionedCallbacks`, `_changedPrefs`) while preserving `callbackUsed`, records suppression tombstones in `suppressedByProfile` (filtering `extract()` output so pending extraction never restores a forgotten/replaced old fact), and verifies the saved result by reading back directly from disk before confirming (`status: 'verified'` vs `'failed'`).
+   - `smart.breaks` blocks unverified edit claims (`'memedit-unverified'`), hard denials on `not-found` (`'memedit-hard-denial'`), and claims of deleting from every backup/log/server (`'memedit-overclaim'`).
+   - End-to-end chat tests in `test/smart.test.js` (unclear target clarification, exact correction verified on disk, exact forget verified on disk) pass **19/19**.
+2. **Feature 2 — Bounded In-Conversation Initiative (`recall.nudgeTopicFact`, `Call.prototype.proactiveNudge`, `Call.prototype.quietLine`, `smart.ledger`):**
+   - Reuses existing silence handling (`quietLine` stage 0, no competing timer) inside an existing conversation only (`this.userTurns >= 1`).
+   - Permits at most ONE proactive nudge per conversation total (`this.nudgeUsed = true`, not per category); silence or non-answer at `stage >= 1` stops nudging.
+   - Suppresses nudges during active/partial speech, deliberate pauses/unfinished requests (`"hold on"`, `"let me think..."`), reminder acks, safety/health/medical handling, unresolved scam exchanges, open confirmations, declines (`this.nudgeDeclined`), persistent senior opt-outs (`p.smart.noNudge`), and when quiet hours are explicitly ON (`care.quietOn(p)`, OFF by default).
+   - Daily-call setup invitation is offered only when eligible (`callsOk`, `tz` known, no active daily call, no `noCalls` or recent decline) and explicitly instructs Spark that an offer is NOT calling permission (saving still requires exact readback and confirmation).
+   - Bounded In-Conversation Initiative test in `test/recall.test.js` passes **1/1**.
 
 ## Exact targeted results per suite
 | Suite | Tests | Pass | Fail | Skipped | Cancelled |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `test/mms-voice.test.js` | 6 | 6 | 0 | 0 | 0 |
-| `test/novoice.test.js` | 8 | 8 | 0 | 0 | 0 |
-| `test/thinktimer.test.js` | 3 | 3 | 0 | 0 | 0 |
-| `test/recall.test.js` | 34 | 34 | 0 | 0 | 0 |
+| `test/recall.test.js` | 37 | 37 | 0 | 0 | 0 |
 | `test/smart.test.js` | 19 | 19 | 0 | 0 | 0 |
+| `test/mms-voice.test.js` | 6 | 6 | 0 | 0 | 0 |
 | `test/specreuse.test.js` | 18 | 18 | 0 | 0 | 0 |
-| **Total** | **88** | **88** | **0** | **0** | **0** |
+| **Total** | **80** | **80** | **0** | **0** | **0** |
+
+- **Narrow fix outcome:**
+  1. `Correct & Forget (1)` (`test/recall.test.js:629`): **PASS** (`recall.memoryEditIntent` attaches `matchedWords` and `memory.applyMemoryEdit` removes dependent topic copies and non-reminder threads while preserving reminder threads and suppressing pending extraction restoration).
+  2. `Correct & Forget (2)` (`test/recall.test.js:735`): **PASS** (`MEMEDIT_CLAIM_RE` in `smart.js` returns `'memedit-unverified'` on both `not-found` and `failed` memory edits while honest `"can't find"` and `"couldn't confirm"` lines return `null`; `FORGET_DIRECT_RE` in `recall.js` matches `forget/delete + (my|the|your) + <noun>` so protected categories return `status: 'protected'` while `SCHED_REM_CANCEL_RE` keeps daily-call cancellation separate).
+  3. `Bounded In-Conversation Initiative` (`test/recall.test.js:818`): **PASS**.
 
 ## Working tree left for Muse
-- Tracked files modified in working tree: `call.js`, `test/mms-voice.test.js`, `HANDOFF.md`.
+- Tracked files modified in working tree: `recall.js`, `memory.js`, `call.js`, `chat.js`, `smart.js`, `test/recall.test.js`, `test/smart.test.js`, `HANDOFF.md`.
 - Uncommitted, unpushed, and undeployed for Muse verification.
+
+---
+
+# GREETING TIMER REGRESSION FIX + APPROVED SCOPE DECISIONS (4 Nov 2026; pushed as `0ef685b` on top of `99df56c`, live on Render)
 
 ---
 

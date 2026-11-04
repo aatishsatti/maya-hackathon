@@ -19,6 +19,7 @@ const MAX_TOPICS = 12;
 const MAX_ITEMS = 80;
 const cache = new Map(); // id -> profile (loaded from disk on first use)
 const writeQueue = new Map(); // id -> promise chain, so two extractions never overlap
+const suppressedByProfile = new Map(); // id -> [{ oldText, coreWords, replacement, section, who, told }] so pending extraction never restores a forgotten/corrected fact
 
 fs.mkdirSync(DIR, { recursive: true });
 
@@ -201,6 +202,38 @@ async function extract(id, said, { heavy = false, tz } = {}) {
   catch (e) { console.error('Memory update unreadable:', e.message); return false; }
   // A corrected fact leaves no label behind: topics naming anything Spark says was removed are dropped here too.
   m.topics = m.topics.filter((t) => !removed.some((r) => t.text.toLowerCase().includes(r)));
+  const supList = suppressedByProfile.get(id) || [];
+  if (supList.length) {
+    const matchesSup = (txt, sup) => {
+      const low = String(txt || '').toLowerCase();
+      if (sup.oldText && low === sup.oldText.toLowerCase()) return true;
+      const wSet = new Set(recall.words(low));
+      return sup.coreWords.length > 0 && sup.coreWords.every((w) => wSet.has(w));
+    };
+    for (const sup of supList) {
+      for (const k of ['preferences', 'events', 'current', 'topics']) {
+        m[k] = (m[k] || []).filter((it) => !matchesSup(it && it.text, sup));
+      }
+      for (const person of m.people || []) {
+        person.stories = (person.stories || []).filter((s) => !matchesSup(s && s.text, sup));
+      }
+      m.threads = (m.threads || []).filter((t) => t.kind === 'reminder' || !matchesSup(t && t.text, sup));
+      if (sup.op === 'correct' && sup.replacement) {
+        if (sup.section === 'preferences' && !m.preferences.some((x) => String(x.text || '').toLowerCase() === sup.replacement.toLowerCase())) {
+          m.preferences.push({ who: sup.who || p.name, text: sup.replacement, told: sup.told || date });
+        } else if (sup.section === 'events' && !m.events.some((x) => String(x.text || '').toLowerCase() === sup.replacement.toLowerCase())) {
+          m.events.push({ who: sup.who || p.name, text: sup.replacement, date: '', told: sup.told || date });
+        } else if (sup.section === 'current' && !m.current.some((x) => String(x.text || '').toLowerCase() === sup.replacement.toLowerCase())) {
+          m.current.push({ who: sup.who || p.name, text: sup.replacement, told: sup.told || date });
+        } else if (sup.section === 'stories' && sup.personName) {
+          const per = m.people.find((pe) => String(pe.name || '').toLowerCase() === sup.personName.toLowerCase());
+          if (per && !per.stories.some((s) => String(s.text || '').toLowerCase() === sup.replacement.toLowerCase())) {
+            per.stories.push({ text: sup.replacement, told: sup.told || date });
+          }
+        }
+      }
+    }
+  }
   if (fs.existsSync(file(id))) fs.copyFileSync(file(id), `${file(id)}.bak`);
   p.memory = m;
   p.lastCallHeavy = Boolean(heavy);
@@ -223,7 +256,20 @@ function focusedMemory(m, focus, tz) {
     ? `Notes that relate to what they just said (only what they told you): ${sel.map((x) => `${kind[x.kind]}${x.told ? `, told ${x.told}` : ''}${x.date ? `, date ${x.date}` : ''}: ${x.who ? `${x.who}: ` : ''}${x.text}`).join(' | ')}`
     : 'None of your other notes relate to what they just said.');
   let out = `What you remember, for this reply (only what they told you; other notes exist but are not shown now, so if they ask about something not shown, say honestly that you cannot think of it right now): ${bits.join('. ')}.`;
-  if (focus.challenge) {
+  if (focus.memEdit) {
+    const ed = focus.memEdit;
+    if (ed.status === 'verified') {
+      out += ` MEMORY EDIT VERIFIED (operation: ${ed.op}; old fact: ${ed.oldFact}${ed.newFact ? `; new saved fact: ${ed.newFact}` : '; result: removed from saved notes'}): acknowledge calmly without arguing and describe ONLY this verified outcome in your own words. Do NOT claim deletion from every backup, log, server, or external service.`;
+    } else if (ed.status === 'unclear') {
+      out += ` MEMORY EDIT UNCLEAR (operation: ${ed.op}; reason: ${ed.reason}${ed.candidates && ed.candidates.length ? `; matching notes: ${ed.candidates.join(' | ')}` : ''}${ed.target ? `; matched note: ${ed.target.fact}` : ''}): nothing was changed or deleted yet. Ask ONE short, focused clarification question in your own words (${ed.reason === 'missing-replacement' ? `what they would like the note "${ed.target.text}" changed to` : ed.candidates && ed.candidates.length ? 'which of those notes they mean' : 'which specific note they want to change or remove'}). Do NOT guess and do NOT say anything was updated or deleted.`;
+    } else if (ed.status === 'not-found') {
+      out += ` MEMORY EDIT NOT FOUND (operation: ${ed.op}; searched for: ${ed.targetTopic}): no matching senior-told note was found in what is saved, so nothing was changed. Say honestly in your own words that you cannot find a matching note in what you have saved; NEVER say "you never told me" or deny their history, and do NOT claim anything was deleted or updated.`;
+    } else if (ed.status === 'failed') {
+      out += ` MEMORY EDIT NOT VERIFIED (operation: ${ed.op}; target: ${ed.oldFact}): the app could not verify the change on disk, so do NOT claim it was updated, corrected, forgotten, or deleted. Say plainly in one short sentence that you could not confirm the change went through right now.`;
+    } else if (ed.status === 'protected') {
+      out += ` MEMORY EDIT PROTECTED (category: ${ed.category}): ${ed.category} records cannot be deleted or altered through conversational memory editing${ed.category === 'daily-call' ? ' (to cancel a daily call, they can ask to cancel their daily calls directly)' : ''}. Do NOT claim anything was deleted, forgotten, or changed.`;
+    }
+  } else if (focus.challenge) {
     if (focus.challenge.status === 'recorded') {
       out += focus.challenge.challengeKind === 'event'
         ? ` MEMORY CHALLENGE (true senior-told record; challenge kind: event; remembered preference fact: ${focus.challenge.fact}; unsupported inference today: ${focus.challenge.topic}${focus.challenge.newToday ? `; current kind today: ${focus.challenge.newToday}` : ''}): give a SCOPED correction in your own words, never total denial and never arguing. Acknowledge the inference error about today (you did not know today's was ${focus.challenge.topic}), stand by the genuine preference record they told you earlier (${focus.challenge.fact})${focus.challenge.newToday ? `, and warmly accept ${focus.challenge.newToday} for today` : ''}. NEVER say you do not remember them telling you about ${focus.challenge.topic}, NEVER say you added it yourself, guessed, or made it up, and do NOT argue with them.`
@@ -299,7 +345,7 @@ function profileNote(p, tz, focus = null) {
   m.preferences.forEach((x) => mem.push(`Likes, told ${x.told}: ${who(x)}${x.text}`));
   m.current.forEach((x) => mem.push(`Happening around them, told ${x.told}: ${who(x)}${x.text}`));
   m.topics.slice(-5).forEach((x) => mem.push(`Recent topic, ${x.told}: ${x.text}`));
-  if (focus && !focus.full && (mem.length || focus.thread || focus.callback || focus.challenge || focus.changedPref)) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
+  if (focus && !focus.full && (mem.length || focus.thread || focus.callback || focus.challenge || focus.changedPref || focus.memEdit)) lines.push(focusedMemory(m, focus, tz));   // one reply's worth: only what relates to what was just said
   else {
     lines.push(mem.length ? `What you remember (only what they told you; nothing else is known): ${mem.join(' | ')}` : 'You have no memories of this person yet.');
     if (focus && focus.full) lines.push(`USER-PROMPTED RECALL: answer ONLY what they asked using only their own senior-told notes above; do NOT introduce extra unrelated facts${focus.alreadyMentioned ? `, and do NOT redundantly repeat a fact already mentioned earlier in this conversation (${focus.alreadyMentioned}) unless they specifically asked about it` : ''}.`);
@@ -307,4 +353,124 @@ function profileNote(p, tz, focus = null) {
   return lines.join(' ');
 }
 
-module.exports = { listProfiles, createProfile, deleteProfile, load, startCall, appendTurn, noteNames, endCall, flushPending, recoverAll, profileNote, markAsked, addReminder, deliverReminder, reopenReminders, today, GENDERS };
+// Applies a senior-requested correction or deletion to their own non-medical conversational memory, updates dependent recall copies,
+// suppresses pending extraction from restoring the old fact, and verifies the saved result by reading back from disk before confirming.
+function applyMemoryEdit(id, plan, opts = {}) {
+  if (!plan || plan.status !== 'ready' || !plan.target) return plan || null;
+  const p = load(id);
+  if (!p || p.id !== id) return { op: plan.op, status: 'failed', oldFact: plan.target.fact, error: 'profile not found' };
+  const target = plan.target;
+  const date = today(opts.tz);
+  const beforeSnap = JSON.stringify(p.memory);
+  const specWords = (target.coreWords || []).filter((w) => w.length >= 3);
+  const keyWords = Array.isArray(target.matchedWords) && target.matchedWords.length
+    ? target.matchedWords.filter((w) => w.length >= 3)
+    : specWords;
+  const matchesTargetWords = (txt) => {
+    const low = String(txt || '').toLowerCase();
+    if (!low) return false;
+    if (low === String(target.text || '').toLowerCase()) return true;
+    const wSet = new Set(recall.words(low));
+    return keyWords.length > 0 && keyWords.every((w) => wSet.has(w));
+  };
+
+  let personName = '';
+  try {
+    if (plan.op === 'forget') {
+      if (target.section === 'preferences') {
+        p.memory.preferences = (p.memory.preferences || []).filter((it, idx) => idx !== target.index && !matchesTargetWords(it && it.text));
+      } else if (target.section === 'events') {
+        p.memory.events = (p.memory.events || []).filter((it, idx) => idx !== target.index && !matchesTargetWords(it && it.text));
+      } else if (target.section === 'current') {
+        p.memory.current = (p.memory.current || []).filter((it, idx) => idx !== target.index && !matchesTargetWords(it && it.text));
+      } else if (target.section === 'stories') {
+        const per = p.memory.people && p.memory.people[target.personIndex];
+        if (per && Array.isArray(per.stories)) {
+          personName = per.name || '';
+          per.stories = per.stories.filter((s, idx) => idx !== target.storyIndex && !matchesTargetWords(s && s.text));
+        }
+      }
+      p.memory.topics = (p.memory.topics || []).filter((t) => !matchesTargetWords(t && t.text));
+      p.memory.threads = (p.memory.threads || []).filter((t) => t.kind === 'reminder' || !matchesTargetWords(t && t.text));
+    } else if (plan.op === 'correct') {
+      const rep = clip(plan.replacementText, 200);
+      if (target.section === 'preferences' && p.memory.preferences && p.memory.preferences[target.index]) {
+        p.memory.preferences[target.index] = { ...p.memory.preferences[target.index], text: rep, told: date };
+      } else if (target.section === 'events' && p.memory.events && p.memory.events[target.index]) {
+        p.memory.events[target.index] = { ...p.memory.events[target.index], text: rep, told: date };
+      } else if (target.section === 'current' && p.memory.current && p.memory.current[target.index]) {
+        p.memory.current[target.index] = { ...p.memory.current[target.index], text: rep, told: date };
+      } else if (target.section === 'stories') {
+        const per = p.memory.people && p.memory.people[target.personIndex];
+        if (per && Array.isArray(per.stories) && per.stories[target.storyIndex]) {
+          personName = per.name || '';
+          per.stories[target.storyIndex] = { ...per.stories[target.storyIndex], text: rep, told: date };
+        }
+      }
+      p.memory.topics = (p.memory.topics || []).filter((t) => !matchesTargetWords(t && t.text));
+      p.memory.threads = (p.memory.threads || []).map((t) => (t.kind !== 'reminder' && matchesTargetWords(t && t.text) ? { ...t, text: rep } : t));
+    }
+
+    save(p);
+    // Verify the stored result by reading back directly from disk before confirming
+    const diskRaw = JSON.parse(fs.readFileSync(file(id), 'utf8'));
+    const diskMem = diskRaw && diskRaw.memory ? diskRaw.memory : null;
+    if (!diskMem) throw new Error('disk memory missing');
+    const collectTexts = (mem) => [
+      ...(mem.preferences || []).map((x) => x.text),
+      ...(mem.events || []).map((x) => x.text),
+      ...(mem.current || []).map((x) => x.text),
+      ...(mem.people || []).flatMap((pe) => (pe.stories || []).map((s) => s.text)),
+    ].map((s) => String(s || '').toLowerCase());
+    const diskTexts = collectTexts(diskMem);
+    const oldStillThere = diskTexts.includes(String(target.text || '').toLowerCase());
+    const newPresent = plan.op === 'correct' ? diskTexts.includes(String(plan.replacementText || '').toLowerCase()) : true;
+    if (oldStillThere || !newPresent) throw new Error('disk verification mismatch');
+  } catch (e) {
+    p.memory = JSON.parse(beforeSnap);
+    return { op: plan.op, status: 'failed', oldFact: target.fact, error: String(e && e.message || 'write failed') };
+  }
+
+  // Record suppression tombstone and scrub pending lines so pending extraction never restores the old fact
+  const list = suppressedByProfile.get(id) || [];
+  list.push({
+    op: plan.op,
+    section: target.section,
+    who: target.who,
+    personName,
+    oldText: target.text,
+    coreWords: keyWords,
+    replacement: plan.op === 'correct' ? clip(plan.replacementText, 200) : '',
+    told: date,
+  });
+  suppressedByProfile.set(id, list);
+  try {
+    const pend = readPending(id);
+    if (pend.length) {
+      const filtered = pend.filter((l) => !l.text || !matchesTargetWords(l.text));
+      if (filtered.length !== pend.length) {
+        if (filtered.length) fs.writeFileSync(pendingFile(id), filtered.map((l) => JSON.stringify(l)).join('\n') + '\n');
+        else fs.rmSync(pendingFile(id), { force: true });
+      }
+    }
+  } catch { /* ignore pending scrub error */ }
+
+  // Update dependent recall state on the active session while preserving Fix 1.2 callbackUsed once-only counter
+  const s = opts.session;
+  if (s) {
+    if (s.profile && s.profile.id === id) s.profile.memory = p.memory;
+    s._changedPrefs = s._changedPrefs || new Set();
+    for (const w of specWords) s._changedPrefs.add(w);
+    if (s._lastCallback && s._lastCallback.fact === target.fact) s._lastCallback = null;
+    if (s.callbackShown && s.callbackShown.fact === target.fact) s.callbackShown = null;
+    if (s.focus && s.focus.callback && s.focus.callback.fact === target.fact) s.focus.callback = null;
+    if (s._mentionedCallbacks instanceof Set) s._mentionedCallbacks.delete(target.fact);
+  }
+
+  const newFact = plan.op === 'correct'
+    ? `${target.who ? `${target.who}: ` : ''}${clip(plan.replacementText, 200)}; told ${date}`
+    : null;
+  return { op: plan.op, status: 'verified', oldFact: target.fact, newFact, section: target.section };
+}
+
+module.exports = { listProfiles, createProfile, deleteProfile, load, startCall, appendTurn, noteNames, endCall, flushPending, recoverAll, profileNote, markAsked, addReminder, deliverReminder, reopenReminders, applyMemoryEdit, suppressedByProfile, today, GENDERS };
