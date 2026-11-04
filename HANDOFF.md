@@ -1,4 +1,33 @@
-# READ THIS FIRST: WEB CALL BUG FIX (Bugs 1–4 + 5) (4 Nov 2026; working tree on top of `62c5bd7`, uncommitted, NOT pushed)
+# READ THIS FIRST: WEB VOICE SILENT REGRESSION FIX (4 Nov 2026; working tree on top of `13faa4e` / `e25a544`, uncommitted, NOT pushed)
+
+This section supersedes EVERY older live/deployment/status line below.
+
+## Web Voice Silent Regression Fix Summary (`public/app.js`, `call.js`, `test/mms-voice.test.js`)
+- **Files changed in this job:**
+  - `public/app.js`
+  - `call.js`
+  - `test/mms-voice.test.js`
+  - `HANDOFF.md`
+  *(All 4 fixes from `e25a544` are preserved. No changes were made to `app/`, `server.js` WhatsApp invite endpoint, `public/family.html`, `public/family.js`, scam, medicine, quiet-hours, demo, or wipe code.)*
+- **Exact Root Cause (with file + line numbers before edit in `e25a544`):**
+  1. **Primary cause — Suspect (a) `pumpDeviceVoice` infinite `speechSynthesis.cancel()` loop (`public/app.js:488-501`) and synchronous `u.onend` re-entry (`public/app.js:519-528`):**
+     - At `public/app.js:495-500`, `pumpDeviceVoice(c)` checked `if (speechSynthesis.speaking || speechSynthesis.pending)` when `c.activeUtterance` was `null`, called `speechSynthesis.cancel()`, set `lastTtsCancelAt = Date.now()`, scheduled `setTimeout(() => pumpDeviceVoice(c), 45)`, and returned early without shifting `c.ttsQueue` or calling `speechSynthesis.speak(u)`.
+     - On macOS Chrome/Safari, `speechSynthesis.cancel()` takes 600–1482 ms of IPC to `speechsynthesisd` to clear `.speaking` (or `.speaking` stays stuck `true` in the renderer until a new `speak(u)` is called). Because `pumpDeviceVoice` re-checked `speechSynthesis.speaking || speechSynthesis.pending` every 45 ms without bounding cancel attempts, it called `speechSynthesis.cancel()` every 45 ms in an **infinite loop** and never reached `speechSynthesis.speak(u)` (`public/app.js:537`).
+     - Additionally, at `public/app.js:528` (`u.onend = () => advance(false)`), `advance(false)` synchronously called `pumpDeviceVoice(c)` while still inside the browser's `onend` dispatch stack (where Chromium/WebKit still reports `speechSynthesis.speaking === true`), immediately triggering the cancel loop on the second sentence of a greeting or reply.
+     - **Fix:** `pumpDeviceVoice(c)` cancels at most once per utterance (`c.ttsCancelTried = true`, skipping a redundant cancel if `stopPlayback()` already cancelled within 200 ms), waits 45 ms, and on the next pass resets `c.ttsCancelTried = false` and calls `speechSynthesis.speak(u)` even if `speechSynthesis.speaking` is still `true`; and `advance(false)` schedules `pumpDeviceVoice(c)` on the next macrotask (`setTimeout(..., 0)`) so the browser exits `onend` first.
+  2. **Secondary causes checked & fixed (Suspects b–e):**
+     - **Suspect (b) (`public/app.js:575-593` & `896, 908`):** `endCall()` set `call = null` at `public/app.js:896` before calling `stopPlayback()` at `public/app.js:908`, so `if (call)` inside `stopPlayback()` (`public/app.js:583`) was `false` and left `c.ttsPumpTimer` / `c.ttsQueue` / `c.activeUtterance` uncleaned. Fixed by accepting `target = call` in `stopPlayback(target = call)` and passing `stopPlayback(c)` in `endCall()`, and avoiding unconditional `speechSynthesis.cancel()` in `startCall()` (`public/app.js:850`) when nothing is speaking.
+     - **Suspect (c) (`public/app.js:479-488`, `684`, `693`, `737-751`):** When Chrome's `getVoices()` was still `[]` before `voiceReady()` resolved, `pumpDeviceVoice` could prematurely fall back before `c.voiceReadyPromise` resolved; and if `voiceReady()` resolved with `c.pickedVoice = null` (`c.deviceVoice = false`) before the server's `ev.deviceVoice = true` greeting `'speak'`/`'caption'` arrived at `public/app.js:684, 693`, `if (c.deviceVoice)` skipped `feedDevicePiece` without requesting Meta MMS `respeak`. Fixed by awaiting `c.voiceReadyPromise` when voices are still loading and calling `requestMmsFallback(c, ev.piece || ev.text)` whenever `ev.deviceVoice` arrives after `c.deviceVoice` became `false`.
+     - **Suspect (d) (`public/app.js:424`, `452-460`):** `duck(c)` and `openGate(c)` cleared `c.gate.timer` without setting `c.gate.timer = null`. Fixed by resetting `c.gate.timer = null`.
+     - **Suspect (e) (`call.js:1836-1892`, `1995-2020`):** Guarded `greet()` with `this._greetingInFlight = true` (cleared in `finally`, which drains `this.pending`) so `respond()` cannot abort an in-flight greeting if a noise turn completes during greeting generation.
+- **Pre-fix vs. Post-fix Test Evidence (`test/mms-voice.test.js`):**
+  - Before fix: `✖ Web browser speechSynthesis simulation (Suspects a-d) ... AssertionError [ERR_ASSERTION]: (1) first queued utterance reached speechSynthesis.speak() even when speaking was stuck true at pump start (actual: false, expected: true)`.
+  - After fix: `✔ Web browser speechSynthesis simulation (Suspects a-d): reaches speak() when speaking=true at pump start, drains queue in order with no infinite cancel loop, and requests MMS fallback when no device voice is picked`.
+  - Full web call / voice / turn-queue suite (`node --test test/mms-voice.test.js test/lead.test.js test/voice-uplink.test.js test/thinktimer.test.js test/interrupt.test.js test/specreuse.test.js test/natural.test.js test/silence.test.js test/incall.test.js test/reconnect.test.js`): **77 passed, 0 failed** (77 total).
+
+---
+
+# ARCHIVED: WEB CALL BUG FIX (Bugs 1–4 + 5) (4 Nov 2026; working tree on top of `62c5bd7`, uncommitted, NOT pushed)
 
 This section supersedes EVERY older live/deployment/status line below.
 

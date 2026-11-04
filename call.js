@@ -1848,47 +1848,56 @@ class Call {
   async greet(hour, readyGate = null) {
     if (this.greeted) return; // once per call, at the start only
     this.greeted = true;
+    this._greetingInFlight = true;
     const myGen = ++this.gen;
     this.abort = new AbortController();
     this.responding = true;
-    let greetReadyToSpeak = false;
-    if (!readyGate) this.send({ type: 'thinking' });
-    else readyGate.then(() => { if (myGen === this.gen && !this.closed && !greetReadyToSpeak) this.send({ type: 'thinking' }); });
-    let line;
-    const greetAt = Date.now();
-    if (this.callStages) this.callStages.greetStartMs = greetAt - (this.startAt || greetAt);
-    const rem = this.outreach && this.outreach.kind === 'reminder' ? care.findReminder(this.profile.id, this.outreach.reminderId) : null;
-    let pre = null;   // the first line of a reminder or welfare call, written while the phone rang (prefetchReminderLine / prefetchWelfareLine): used when it is for THIS call, otherwise written now as before
-    const welfareOut = Boolean(this.outreach && this.outreach.kind === 'welfare');
-    if ((rem || welfareOut) && this.prefetched) { try { pre = await this.prefetched; } catch { console.log('greeting prefetch failed', JSON.stringify({ fallback: 'written now' })); } if (pre && (rem ? pre.rid !== rem.id : pre.kind !== 'welfare')) pre = null; }
     try {
-      if (pre && rem) { line = pre.line; this.awaitTask = pre.awaitTask; this.reminderFacts = pre.reminderFacts; }
-      else if (pre) line = pre.line;
-      else if (rem) line = await this.reminderLine(rem, this.abort.signal);
-      else line = await this.dynamicLine({ pool: 'greeting', signal: this.abort.signal, what: this.greetingNote(hour), sentences: 2 });
-      if (readyGate) await readyGate;
-    } catch (e) {
+      let greetReadyToSpeak = false;
+      if (!readyGate) this.send({ type: 'thinking' });
+      else readyGate.then(() => { if (myGen === this.gen && !this.closed && !greetReadyToSpeak) this.send({ type: 'thinking' }); });
+      let line;
+      const greetAt = Date.now();
+      if (this.callStages) this.callStages.greetStartMs = greetAt - (this.startAt || greetAt);
+      const rem = this.outreach && this.outreach.kind === 'reminder' ? care.findReminder(this.profile.id, this.outreach.reminderId) : null;
+      let pre = null;   // the first line of a reminder or welfare call, written while the phone rang (prefetchReminderLine / prefetchWelfareLine): used when it is for THIS call, otherwise written now as before
+      const welfareOut = Boolean(this.outreach && this.outreach.kind === 'welfare');
+      if ((rem || welfareOut) && this.prefetched) { try { pre = await this.prefetched; } catch { console.log('greeting prefetch failed', JSON.stringify({ fallback: 'written now' })); } if (pre && (rem ? pre.rid !== rem.id : pre.kind !== 'welfare')) pre = null; }
+      try {
+        if (pre && rem) { line = pre.line; this.awaitTask = pre.awaitTask; this.reminderFacts = pre.reminderFacts; }
+        else if (pre) line = pre.line;
+        else if (rem) line = await this.reminderLine(rem, this.abort.signal);
+        else line = await this.dynamicLine({ pool: 'greeting', signal: this.abort.signal, what: this.greetingNote(hour), sentences: 2 });
+        if (readyGate) await readyGate;
+      } catch (e) {
+        if (myGen !== this.gen || this.closed) return;
+        return this.fatal(e.message);
+      }
       if (myGen !== this.gen || this.closed) return;
-      return this.fatal(e.message);
+      greetReadyToSpeak = true;
+      const sparkDoneMs = Date.now() - greetAt;
+      this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: sparkDoneMs, sparkFirstMs: line.sparkFirstMs ?? sparkDoneMs, tries: line.tries || 1, lineAt: Date.now(), ...(pre ? { prefetched: true, prefetchMs: pre.ms } : {}) };   // milliseconds and a count, never a word (wabridge logs it)
+      if (this.callStages) {
+        this.callStages.greetSparkFirstMs = line.sparkFirstMs ?? sparkDoneMs;
+        this.callStages.greetSparkDoneMs = sparkDoneMs;
+        this.callStages.greetTries = line.tries || 1;
+        this.callStages.greetSpeakSentMs = Date.now() - (this.startAt || greetAt);
+        console.log('call stages', JSON.stringify(this.callStages));
+      }
+      care.addLine(this.profile.id, rem ? (rem.social ? 'social' : 'reminder') : 'greeting', line.said);
+      this.history.push({ role: 'assistant', content: line.said });
+      this.mirror('maya', line.said);
+      if (this.outreach && this.outreach.kind === 'reminder' && !(rem && rem.social)) { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
+      if (!rem) this.startPrethink();   // Spark thinks about the likeliest routine answer while the greeting is spoken (when MAYA_PRETHINK=1)
+      await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem && !rem.social ? 1 : 2, bright: !rem && this.greetingPlain === true });
+      if (!this.noVoice) warmLeads();   // the short lead-in clips are rendered once, after the first voiced greeting (not at server start); a no-voice call never does
+    } finally {
+      this._greetingInFlight = false;
+      if (!this.closed && this.pending.length && !this.holdTimer) {
+        this.holdTimer = setTimeout(() => this.respond(0), 20);
+        if (this.holdTimer.unref) this.holdTimer.unref();
+      }
     }
-    if (myGen !== this.gen || this.closed) return;
-    greetReadyToSpeak = true;
-    const sparkDoneMs = Date.now() - greetAt;
-    this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: sparkDoneMs, sparkFirstMs: line.sparkFirstMs ?? sparkDoneMs, tries: line.tries || 1, lineAt: Date.now(), ...(pre ? { prefetched: true, prefetchMs: pre.ms } : {}) };   // milliseconds and a count, never a word (wabridge logs it)
-    if (this.callStages) {
-      this.callStages.greetSparkFirstMs = line.sparkFirstMs ?? sparkDoneMs;
-      this.callStages.greetSparkDoneMs = sparkDoneMs;
-      this.callStages.greetTries = line.tries || 1;
-      this.callStages.greetSpeakSentMs = Date.now() - (this.startAt || greetAt);
-      console.log('call stages', JSON.stringify(this.callStages));
-    }
-    care.addLine(this.profile.id, rem ? (rem.social ? 'social' : 'reminder') : 'greeting', line.said);
-    this.history.push({ role: 'assistant', content: line.said });
-    this.mirror('maya', line.said);
-    if (this.outreach && this.outreach.kind === 'reminder' && !(rem && rem.social)) { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
-    if (!rem) this.startPrethink();   // Spark thinks about the likeliest routine answer while the greeting is spoken (when MAYA_PRETHINK=1)
-    await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem && !rem.social ? 1 : 2, bright: !rem && this.greetingPlain === true });
-    if (!this.noVoice) warmLeads();   // the short lead-in clips are rendered once, after the first voiced greeting (not at server start); a no-voice call never does
   }
 
   // ---- the daily chat they agreed to (social.js): the pickup opening. Spark writes it; code only keeps it varied, short, free of invented facts and free of the reminder wording. ----
@@ -2005,6 +2014,7 @@ class Call {
       this.holdTimer = setTimeout(() => this.respond(holdMs), 350);
       return;
     }
+    if (this._greetingInFlight) return;
     if (this._inRespond) {
       // A new turn completed while an earlier reply was still being written: abort the stale draft so the finally block drains pending in order.
       if (this.abort) this.abort.abort();

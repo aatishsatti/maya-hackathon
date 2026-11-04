@@ -424,6 +424,166 @@ test('Web call Bugs 1-4: echo suppression across playbackStart/playbackDone, no 
   care.stop();
 });
 
+test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() when speaking=true at pump start, drains queue in order with no infinite cancel loop, and requests MMS fallback when no device voice is picked', async () => {
+  const vm = require('node:vm');
+  const appSrc = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+
+  function makeEnv({ voices, stuckSpeakingOnCancel = false }) {
+    const els = {};
+    const getEl = (id) => {
+      if (!els[id]) els[id] = { id, dataset: { state: 'idle', muted: 'false' }, textContent: '', hidden: false, setAttribute() {}, addEventListener() {} };
+      return els[id];
+    };
+    const wsSent = [];
+    let lastWs = null;
+    class FakeWebSocket {
+      constructor() {
+        this.readyState = 1;
+        this.bufferedAmount = 0;
+        lastWs = this;
+        setImmediate(() => { if (this.onopen) this.onopen(); });
+      }
+      send(d) { if (typeof d === 'string') wsSent.push(JSON.parse(d)); }
+      close() {}
+    }
+    FakeWebSocket.OPEN = 1;
+
+    let cancelCount = 0;
+    const spokenUtterances = [];
+    const speechSynthesis = {
+      speaking: stuckSpeakingOnCancel,
+      pending: false,
+      paused: false,
+      getVoices: () => voices,
+      addEventListener() {},
+      cancel() {
+        cancelCount += 1;
+        if (!stuckSpeakingOnCancel) {
+          this.speaking = false;
+          this.pending = false;
+        }
+      },
+      resume() { this.paused = false; },
+      speak(u) {
+        this.speaking = true;
+        spokenUtterances.push(u);
+      },
+    };
+    class FakeUtterance {
+      constructor(text) { this.text = text; this.onend = null; this.onerror = null; }
+    }
+    class FakeAudioContext {
+      constructor() {
+        this.sampleRate = 16000;
+        this.currentTime = 0;
+        this.state = 'running';
+        this.destination = {};
+        this.audioWorklet = { addModule: async () => {} };
+      }
+      createAnalyser() { return { fftSize: 1024, getFloatTimeDomainData() {} }; }
+      createMediaStreamSource() { return { connect() { return { connect() {} }; } }; }
+      createGain() { return { gain: { value: 1, cancelScheduledValues() {}, setTargetAtTime() {}, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() { return { connect() {} }; } }; }
+      createOscillator() { return { frequency: { value: 440 }, connect() {}, start() {}, stop() {} }; }
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    }
+    class FakeAudioWorkletNode {
+      constructor() { this.port = { onmessage: null }; }
+      connect() { return { connect() {} }; }
+      disconnect() {}
+    }
+    const sandbox = {
+      window: null,
+      document: {
+        body: { dataset: {} },
+        getElementById: getEl,
+      },
+      navigator: {
+        mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }], getAudioTracks: () => [{ enabled: true, stop() {} }] }) },
+      },
+      MediaRecorder: Object.assign(function () {}, { isTypeSupported: () => true }),
+      AudioContext: FakeAudioContext,
+      AudioWorkletNode: FakeAudioWorkletNode,
+      WebSocket: FakeWebSocket,
+      SpeechSynthesisUtterance: FakeUtterance,
+      speechSynthesis,
+      location: { protocol: 'https:', host: 'maya.test' },
+      Intl,
+      Date,
+      Math,
+      JSON,
+      Promise,
+      Set,
+      Map,
+      Float32Array,
+      Uint8Array,
+      Int16Array,
+      Event: class {},
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      requestAnimationFrame: () => {},
+      addEventListener() {},
+      dispatchEvent() {},
+      fetch: async () => ({ ok: true, json: async () => ({ mode: 'real' }) }),
+      console: { log() {}, warn() {}, error() {} },
+    };
+    sandbox.window = sandbox;
+    sandbox.window.mayaProfile = { id: '197abefc', name: 'Henry', setLive() {} };
+    vm.runInNewContext(appSrc, sandbox);
+    return { sandbox, els, wsSent, getWs: () => lastWs, speechSynthesis, spokenUtterances, getCancelCount: () => cancelCount };
+  }
+
+  // Case 1, 2, 3: speechSynthesis.speaking is stuck true at pump start (and stays true across cancel() and inside onend)
+  const env1 = makeEnv({
+    voices: [{ name: 'Samantha', lang: 'en-US' }],
+    stuckSpeakingOnCancel: true,
+  });
+  await new Promise((r) => setTimeout(r, 15));
+  env1.sandbox.mayaStartCall();
+  await new Promise((r) => setTimeout(r, 25));
+  const ws1 = env1.getWs();
+  ws1.onmessage({ data: JSON.stringify({ type: 'ready', resume: 'tok1' }) });
+  ws1.onmessage({ data: JSON.stringify({ type: 'speak', text: 'Hello Henry.', piece: 'Hello Henry.', deviceVoice: true, hold: 0 }) });
+  ws1.onmessage({ data: JSON.stringify({ type: 'caption', text: 'Hello Henry. How are you feeling today?', piece: 'How are you feeling today?', deviceVoice: true }) });
+  ws1.onmessage({ data: JSON.stringify({ type: 'audioEnd' }) });
+
+  // Wait 160 ms (more than 3 x 45 ms ticks): must NOT loop cancel() forever, and first utterance MUST have reached speak()
+  await new Promise((r) => setTimeout(r, 160));
+  assert.ok(env1.spokenUtterances.length >= 1, '(1) first queued utterance reached speechSynthesis.speak() even when speaking was stuck true at pump start');
+  assert.ok(env1.getCancelCount() <= 2, `(3) no infinite cancel loop (cancelCount=${env1.getCancelCount()})`);
+  assert.equal(env1.spokenUtterances[0].text, 'Hello Henry.');
+
+  // Trigger onend of utterance 1 while speechSynthesis.speaking is STILL true (Chrome/WebKit behavior inside onend)
+  env1.speechSynthesis.speaking = true;
+  env1.spokenUtterances[0].onend();
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(env1.spokenUtterances.length, 2, '(2) second queued utterance reached speak() after first completed');
+  assert.equal(env1.spokenUtterances[1].text, 'How are you feeling today?', '(2) queue drains in exact order');
+  env1.speechSynthesis.speaking = false;
+  env1.spokenUtterances[1].onend();
+  await new Promise((r) => setTimeout(r, 20));
+  env1.sandbox.mayaEndCall();
+
+  // Case 4: When no female English device voice is available (pickVoice() -> null), fallback to Meta MMS is requested for the greeting
+  const env2 = makeEnv({
+    voices: [{ name: 'Alex', lang: 'en-US' }], // male voice only -> pickVoice() returns null
+    stuckSpeakingOnCancel: false,
+  });
+  await new Promise((r) => setTimeout(r, 15));
+  env2.sandbox.mayaStartCall();
+  await new Promise((r) => setTimeout(r, 25));
+  const ws2 = env2.getWs();
+  ws2.onmessage({ data: JSON.stringify({ type: 'ready', resume: 'tok2' }) });
+  // Simulate server sending greeting with deviceVoice: true (e.g. if server started before deviceVoice:false arrived)
+  ws2.onmessage({ data: JSON.stringify({ type: 'speak', text: 'Hello Henry!', piece: 'Hello Henry!', deviceVoice: true, hold: 0 }) });
+  await new Promise((r) => setTimeout(r, 30));
+  const fallbackMsgs = env2.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false && m.respeak === 'Hello Henry!');
+  assert.equal(fallbackMsgs.length, 1, '(4) fallback to Meta MMS server voice with respeak is requested when no female device voice is picked');
+  env2.sandbox.mayaEndCall();
+});
+
 
 
 

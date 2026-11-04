@@ -419,7 +419,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   function duck(c) {
     c.ducked = true;
     setMaster(c, DUCK_GAIN, 0.01);
-    if (c.gate && !c.gate.open) { c.gate.paused = true; clearTimeout(c.gate.timer); } // not playing yet: hold the start
+    if (c.gate && !c.gate.open) { c.gate.paused = true; clearTimeout(c.gate.timer); c.gate.timer = null; } // not playing yet: hold the start
     if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify({ type: 'duck' }));
     console.log('duck', Date.now());
     clearTimeout(c.duckFailsafe);
@@ -452,6 +452,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   function openGate(c) {
     const g = c.gate;
     if (!g || g.open || g.paused) return;
+    clearTimeout(g.timer);
+    g.timer = null;
     g.open = true;
     for (const b of g.held) playChunk(c, b);
     g.held = [];
@@ -478,6 +480,16 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (c && (!u || c.activeUtterance === u)) c.activeUtterance = null;
   }
 
+  function requestMmsFallback(c, text) {
+    const clean = String(text || '').trim();
+    c.deviceVoice = false;
+    c.sentDeviceVoice = false;
+    captionEl.textContent = captionEl.textContent.replace(/^Maya \(device browser voice\):/, 'Maya (Meta MMS server voice fallback):');
+    if (clean && c.ws && c.ws.readyState === WebSocket.OPEN) {
+      c.ws.send(JSON.stringify({ type: 'deviceVoice', on: false, respeak: clean }));
+    }
+  }
+
   function pumpDeviceVoice(c) {
     if (call !== c) return;
     clearTimeout(c.ttsPumpTimer);
@@ -488,29 +500,28 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       return;
     }
     if (!c.pickedVoice) c.pickedVoice = pickVoice();
+    if (!c.pickedVoice && !c.voiceReadyDone && c.voiceReadyPromise && window.speechSynthesis) {
+      c.voiceReadyPromise.then(() => { if (call === c) pumpDeviceVoice(c); });
+      return;
+    }
     if (!window.speechSynthesis || !c.pickedVoice) {
       const rest = c.ttsQueue.splice(0, c.ttsQueue.length).join(' ').trim();
-      c.deviceVoice = false;
-      c.sentDeviceVoice = false;
-      captionEl.textContent = captionEl.textContent.replace(/^Maya \(device browser voice\):/, 'Maya (Meta MMS server voice fallback):');
-      if (rest && c.ws && c.ws.readyState === WebSocket.OPEN) {
-        c.ws.send(JSON.stringify({ type: 'deviceVoice', on: false, respeak: rest }));
+      requestMmsFallback(c, rest);
+      return;
+    }
+    // If the browser speech engine still reports speaking/pending with no active utterance of ours, cancel at most ONCE
+    // and wait 45 ms; if the browser's speaking flag is stuck true after that cancel, proceed to speak() so it can never loop.
+    if ((speechSynthesis.speaking || speechSynthesis.pending) && !c.ttsCancelTried) {
+      c.ttsCancelTried = true;
+      const sinceCancel = Date.now() - lastTtsCancelAt;
+      if (sinceCancel >= 200) {
+        try { speechSynthesis.cancel(); } catch { /* ignore */ }
+        lastTtsCancelAt = Date.now();
       }
+      c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), Math.max(15, 45 - Math.min(45, Date.now() - lastTtsCancelAt)));
       return;
     }
-    // Never call speechSynthesis.speak() in the same tick as speechSynthesis.cancel() (macOS Chrome/Safari async cancel race).
-    const sinceCancel = Date.now() - lastTtsCancelAt;
-    if (sinceCancel < 45) {
-      c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 45 - sinceCancel);
-      return;
-    }
-    // If the browser speech engine is wedged with no active utterance of ours, flush it once and speak after the 45 ms cooldown.
-    if (speechSynthesis.speaking || speechSynthesis.pending) {
-      try { speechSynthesis.cancel(); } catch { /* ignore */ }
-      lastTtsCancelAt = Date.now();
-      c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 45);
-      return;
-    }
+    c.ttsCancelTried = false;
     if (speechSynthesis.paused) {
       try { speechSynthesis.resume(); } catch { /* ignore */ }
     }
@@ -534,11 +545,15 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     const advance = (timedOut = false) => {
       if (!deviceUtterances.has(u) && c.activeUtterance !== u) return;
       clearActiveUtterance(c, u);
+      c.ttsCancelTried = false;
       if (timedOut && window.speechSynthesis) {
         try { speechSynthesis.cancel(); } catch { /* ignore */ }
         lastTtsCancelAt = Date.now();
+        if (call === c) c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 45);
+        return;
       }
-      if (call === c) pumpDeviceVoice(c);
+      // Schedule on next tick so browser finishes its onend dispatch and clears speechSynthesis.speaking naturally.
+      if (call === c) c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 0);
     };
     u.onend = () => advance(false);
     u.onerror = () => advance(false);
@@ -572,10 +587,10 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (!g.timer && !g.paused) g.timer = setTimeout(() => openGate(c), g.holdMs);
   }
 
-  function stopPlayback() {
+  function stopPlayback(target = call) {
     for (const src of voiceSources) { src.onended = null; try { src.stop(); } catch { /* already ended */ } }
     voiceSources.clear();
-    const hadDeviceSpeech = deviceUtterances.size > 0 || Boolean(call && ((call.ttsQueue && call.ttsQueue.length > 0) || call.activeUtterance));
+    const hadDeviceSpeech = deviceUtterances.size > 0 || Boolean(target && ((target.ttsQueue && target.ttsQueue.length > 0) || target.activeUtterance));
     for (const u of deviceUtterances) {
       clearTimeout(u._watchdog);
       clearInterval(u._keepalive);
@@ -583,19 +598,20 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       u.onerror = null;
     }
     deviceUtterances.clear();
-    if (call) {
-      clearTimeout(call.ttsPumpTimer);
-      call.ttsPumpTimer = null;
-      call.ttsQueue = [];
-      call.activeUtterance = null;
-      call.browserSpeakingNotified = false;
+    if (target) {
+      clearTimeout(target.ttsPumpTimer);
+      target.ttsPumpTimer = null;
+      target.ttsQueue = [];
+      target.activeUtterance = null;
+      target.ttsCancelTried = false;
+      target.browserSpeakingNotified = false;
     }
     if (window.speechSynthesis && (hadDeviceSpeech || speechSynthesis.speaking || speechSynthesis.pending)) {
       try { speechSynthesis.cancel(); } catch { /* ignore */ }
       lastTtsCancelAt = Date.now();
     }
     nextPlayTime = 0;
-    if (call && call.gate) { clearTimeout(call.gate.timer); call.gate = null; }
+    if (target && target.gate) { clearTimeout(target.gate.timer); target.gate = null; }
   }
 
   function playChunk(c, buf) {
@@ -686,15 +702,17 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
           ? `Maya (device browser voice): ${ev.text}`
           : `Maya (Meta MMS server voice fallback): ${ev.text}`;
         if (c.deviceVoice) feedDevicePiece(c, ev.piece || ev.text);
+        else if (ev.deviceVoice) requestMmsFallback(c, ev.piece || ev.text);
         break;
       case 'unduck': unduck(c); break;
       case 'caption':
-        if (orb.dataset.state === 'speaking' || c.deviceVoice) {
+        if (orb.dataset.state === 'speaking' || c.deviceVoice || ev.deviceVoice) {
           if (orb.dataset.state !== 'speaking') setState('speaking');
           captionEl.textContent = c.deviceVoice
             ? `Maya (device browser voice): ${ev.text}`
             : `Maya (Meta MMS server voice fallback): ${ev.text}`;
           if (c.deviceVoice && ev.piece) feedDevicePiece(c, ev.piece);
+          else if (!c.deviceVoice && ev.deviceVoice && ev.piece) requestMmsFallback(c, ev.piece);
         }
         break;
       case 'audioEnd':
@@ -714,7 +732,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       case 'stopped':
         c.leadActive = false;
         console.log('stopped', Date.now());
-        stopPlayback(); c.voiceDone = false;
+        stopPlayback(c); c.voiceDone = false;
         c.ducked = false; clearTimeout(c.duckFailsafe); setMaster(c, 1, 0.01);
         if (orb.dataset.state === 'speaking') setState('listening', 'hearing');
         break;
@@ -737,10 +755,12 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     c.callStartAt = c.callStartAt || Date.now();
     c.clientStages = { socketConnectMs: null, voiceReadyMs: null, beepMs: null, firstSpeakEventMs: null, firstDeviceVoiceStartMs: null, serverStages: null };
     c.pickedVoice = pickVoice();
+    c.voiceReadyDone = Boolean(!window.speechSynthesis || c.pickedVoice || speechSynthesis.getVoices().length > 0);
     c.deviceVoice = Boolean(window.speechSynthesis && (c.pickedVoice || speechSynthesis.getVoices().length === 0));
     const tVoice0 = Date.now();
-    voiceReady().then(() => {
+    c.voiceReadyPromise = voiceReady().then(() => {
       if (myGen !== gen || call !== c) return;
+      c.voiceReadyDone = true;
       c.clientStages.voiceReadyMs = Date.now() - tVoice0;
       c.pickedVoice = pickVoice();
       const resolved = Boolean(window.speechSynthesis && c.pickedVoice);
@@ -844,7 +864,10 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     const myGen = ++gen;
     showError('');
     captionEl.textContent = '';
-    if (window.speechSynthesis) { speechSynthesis.cancel(); if (speechSynthesis.paused) speechSynthesis.resume(); }
+    if (window.speechSynthesis) {
+      if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); lastTtsCancelAt = Date.now(); }
+      if (speechSynthesis.paused) speechSynthesis.resume();
+    }
     callState.start();
     setLive(true);
     setState('idle', 'starting');
@@ -913,7 +936,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       }
       if (c.ws) { c.ws.onclose = null; c.ws.onmessage = null; try { c.ws.close(); } catch { /* ignore */ } }
       if (c.tap) { c.tap.port.onmessage = null; c.tap.disconnect(); }
-      stopPlayback();
+      stopPlayback(c);
       c.stream.getTracks().forEach((t) => { t.onended = null; t.stop(); });
       if (c.longObs) { try { c.longObs.disconnect(); } catch { /* ignore */ } }
       if (c.micStats) console.log('mic uplink', c.micStats);   // counts only: frames sent, frames dropped while backed up, main-thread stalls over 50 ms and the worst one
