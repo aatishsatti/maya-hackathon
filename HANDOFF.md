@@ -1,3 +1,32 @@
+# WEB VOICE ON CHROME: ROOT-CAUSE SEARCH + HARDENED CHAIN (after `309c61a`, working tree, uncommitted, NOT pushed, NOT deployed)
+**Files:** `public/app.js`, `test/mms-voice.test.js`, `HANDOFF.md`. NOT touched: server/WhatsApp/app (Flutter)/cancel/abort/scam/medicine/quiet/demo/template. No server voice for web (none is female-proven).
+
+## Live evidence (real Chrome 157 on this Mac, Darwin 25.6, not mocks)
+- Voice probe page in a headed Chrome (throwaway profile): `getVoices()` = **0** at page load, `voiceschanged` fires at ~660 ms with **199** voices. Samantha `onstart` 46 ms, Karen 20 ms, "Google US English" (remote) 679 ms. Headless Chrome lists 0 voices (useless for this).
+- The REAL `public/app.js` served to real Chrome with only the WebSocket/mic/config faked (user-gesture click, real speechSynthesis/AudioContext): greeting + second turn, with and without a 300 ms hold, speak in **Samantha, onstart 3-22 ms**, orb idle -> thinking -> speaking -> listening, no error. So on this Mac the device-voice path WORKS with the current code.
+- Forced failures in the same real Chrome: first voice never starts -> alternate female voice (Flo) starts **1 s later and speaks**; every voice never starts -> text in ~3.4 s with an on-screen report and the orb back to listening.
+- **NOT reproduced:** the user's live failure (laptop + phone, normal + incognito). The Chrome extension tools were not available in this session, so I could not read the live page's voice list. The exact failing browser/voice list is still UNKNOWN. Prior notes say the user's Chrome showed only Google remote voices ("local Apple voices not in Chrome"); that is the leading suspect but UNPROVEN.
+
+## Why it can fail live (ranked by what the evidence supports; none proven on the user's device)
+1. Only remote "Google ..." voices present (incognito disables the Google network-voice component; phones expose Google/code names): the old 900/1000 ms start guard failed a network voice that needs ~700 ms+ to start, then every other voice, then fell to text (Fix #4) / male MMS (before).
+2. Android/phone voice names are codes ("en-us-x-sfg"), which no name in `FEMALE_NAMES` matched -> no female voice -> text.
+3. Chrome's speech service stale/slow after idle: one failure then everything failed in a row.
+4. Tests never covered the real startup order (0 voices, then `voiceschanged`): the mock returned voices synchronously. The real-Chrome harness did, and that path works.
+
+## What changed in `public/app.js`
+- Start guard: local voice 1000 ms, remote (network) voice 2500 ms.
+- Chain: primary female voice -> ONE alternate female voice -> the chain started over ONCE (single attempt, voices un-blacklisted, 400 ms pause) -> text. Worst case ~3.4 s before text, never silent, never a server voice.
+- Android voice codes for female (`sfg|tpf|iob|tpc|gba|gbg|rjs|aua|auc|end|ene`, same list as `MainActivity.kt`), never the male codes (`iom|iol|tpd|sfb|gbd|gbb|aub|aud|enc|ena`).
+- Diagnostics: each failure logs `maya-voice: failed <voice> <reason>`; the voice list is logged at call start (`maya-voice: voices`); when it falls to text the screen says "Maya's voice could not start on this browser, so her words are shown as text. (<voice>: <reason>; ...)" and the console logs the English voice list and user agent. **Next live failure will print the exact voice list and reasons: open DevTools console or read that red line.**
+
+## Tests (targeted)
+`mms-voice` 9/0 (case 5 rewritten: failed primary -> alternate female voice; alternate fails -> one last chain attempt; then text, orb listening, error report on screen), `novoice` 8/0, `interrupt` 4/0, `prompt` 60/0. Harness scripts live outside the repo (scratchpad `chrome/`), not committed.
+
+## NOT live-proven
+Web voice on the user's real laptop Chrome (normal + incognito) and phone; whether the failing cause is the remote-voice stall; the Android code matching on a real phone; WhatsApp/app unchanged (not retested here).
+
+---
+
 # WHATSAPP CALLS KEEP THE SERVER VOICE (follow-up to `2801eda`, working tree, uncommitted, NOT pushed)
 Fix #4 (`2801eda`) turned the server (MMS) voice off inside `call.js`, but WhatsApp phone calls run the same `Call` class through `wabridge.js`, so they lost their voice. Restored for WhatsApp calls ONLY:
 - `wabridge.js`: one line, `this.socket.whatsapp = true` (marks a WhatsApp phone call socket).

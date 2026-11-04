@@ -253,6 +253,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     'Victoria', 'Moira', 'Tessa', 'Serena', 'Flo', 'Shelley', 'Sandy', 'Kathy', 'Nicky',
     'Zira', 'Aria', 'Jenny', 'Joanna', 'Google US English', 'Female'];
   const failedVoices = new Set();
+  const ANDROID_FEMALE = /-x-(?:sfg|tpf|iob|tpc|gba|gbg|rjs|aua|auc|end|ene)\b/i;
+  const ANDROID_MALE = /-x-(?:iom|iol|tpd|sfb|gbd|gbb|aub|aud|enc|ena)\b/i;
 
   function matchesFemaleName(voiceName, target) {
     const n = String(voiceName || '');
@@ -273,6 +275,9 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
         const any = pool.find((v) => matchesFemaleName(v.name, name));
         if (any) return any;
       }
+      // Android Chrome names its Google voices by code ("en-us-x-sfg"): the same female codes the Maya app's own picker uses (MainActivity.kt femaleTags); the male codes are never matched.
+      const code = pool.find((v) => ANDROID_FEMALE.test(v.name) && !ANDROID_MALE.test(v.name));
+      if (code) return code;
     }
     return null;
   }
@@ -503,6 +508,13 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     clearTimeout(c.respeakTimer); c.respeakTimer = null; c.pendingRespeak = '';
     c.ttsQueue = [];
     if (clean) captionEl.textContent = `Maya (text only, her voice is unavailable): ${clean}`;
+    if (!c.voiceReported) {   // once per call: say exactly what the browser did, so a failing browser/voice list is visible live
+      c.voiceReported = true;
+      const en = window.speechSynthesis ? speechSynthesis.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang)).map((v) => `${v.name}${v.localService === false ? ' (remote)' : ''}`) : [];
+      const why = (c.voiceFailLog || []).slice(-4).join('; ') || (en.length ? 'no female English voice among: ' + en.slice(0, 8).join(', ') : 'this browser lists no English voices');
+      console.warn('maya-voice: text only.', JSON.stringify({ why, englishVoices: en, ua: navigator.userAgent }));
+      showError(`Maya's voice could not start on this browser, so her words are shown as text. (${why})`);
+    }
     c.voiceDone = true;
     finishIfDone(c);
   }
@@ -563,17 +575,30 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       c.ws.send(JSON.stringify({ type: 'playbackStart' }));
     }
     let startedAt = 0;
-    const handleFailure = () => {
+    const handleFailure = (reason = 'error') => {
       if (!deviceUtterances.has(u) && c.activeUtterance !== u) return;
-      if (c.pickedVoice && c.pickedVoice.name) failedVoices.add(c.pickedVoice.name);
+      const vname = c.pickedVoice && c.pickedVoice.name;
+      if (vname) failedVoices.add(vname);
+      (c.voiceFailLog = c.voiceFailLog || []).push(`${vname || 'no voice'}: ${reason}`);
+      console.warn('maya-voice: failed', vname, reason);
       clearActiveUtterance(c, u);
       c._failStreak = (c._failStreak || 0) + 1;
       c.pickedVoice = pickVoice();   // the next female voice that has not failed (always a female name, never the system default)
-      if (c.pickedVoice && c._failStreak <= 3) {
+      if (c.pickedVoice && c._failStreak <= 1) {   // the primary voice failed: ONE alternate female voice is tried (1 s each at most)
         c.ttsQueue.unshift(clean);
         c.forceCancelOnce = true;
         if (call === c) c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 0);
         return;
+      }
+      if (!c._chainRetried) {   // every voice failed once: Chrome's speech service is often just slow or stale after idle. Start the whole chain over ONCE before giving up to text.
+        c._chainRetried = true; c._failStreak = 1; failedVoices.clear();   // one more try of the chain: a single attempt, then text
+        c.pickedVoice = pickVoice();
+        if (c.pickedVoice) {
+          c.ttsQueue.unshift(clean);
+          c.forceCancelOnce = true;
+          if (call === c) c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 400);
+          return;
+        }
       }
       c._failStreak = 0;
       const rest = [clean, ...(c.ttsQueue || [])].join(' ').trim();
@@ -596,15 +621,17 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     };
     u.onstart = () => {
       startedAt = Date.now();
-      c._failStreak = 0;
+      c._failStreak = 0; c._chainRetried = false;
       clearTimeout(u._startGuard);
     };
     u.onend = () => advance(false);
-    u.onerror = () => handleFailure();
+    u.onerror = (e) => handleFailure((e && e.error) || 'error');
     // If the device voice has not started within 1000 ms, the next female device voice is tried; when none is left the reply is shown as text (never a server voice).
+    // A network (remote) voice such as Chrome's "Google US English" needs a round trip before it starts: it gets 2500 ms, a local voice 1000 ms.
+    const startGuardMs = c.pickedVoice.localService === false ? 2500 : 1000;
     u._startGuard = setTimeout(() => {
-      if (!startedAt && c.activeUtterance === u) handleFailure();
-    }, 1000);
+      if (!startedAt && c.activeUtterance === u) handleFailure(`did not start in ${startGuardMs} ms`);
+    }, startGuardMs);
     const guardMs = Math.max(4000, Math.min(18000, clean.length * 120 + 2500));
     u._watchdog = setTimeout(() => advance(true), guardMs);
     u._keepalive = setInterval(() => {
@@ -827,6 +854,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       c.voiceReadyDone = true;
       c.clientStages.voiceReadyMs = Date.now() - tVoice0;
       c.pickedVoice = pickVoice();
+      try { console.info('maya-voice: voices', JSON.stringify({ picked: c.pickedVoice && c.pickedVoice.name, english: speechSynthesis.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang)).map((v) => [v.name, v.lang, v.localService]) })); } catch { /* ignore */ }
       const resolved = true;
       c.deviceVoice = resolved;
       if (c.sentDeviceVoice !== undefined && c.sentDeviceVoice !== resolved && c.ws && c.ws.readyState === WebSocket.OPEN) {

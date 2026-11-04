@@ -638,10 +638,14 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
   assert.equal(env3.spokenUtterances[1].voice.name, 'Google US English');
   assert.equal(env3.spokenUtterances[1].text, 'Good afternoon Henry.');
   assert.equal(env3.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false).length, 0, '(5) no server voice requested');
-  // the alternate fails too -> text only, orb returns to listening
+  // the alternate fails too -> the chain is started over ONCE (a single attempt), then text only with a visible report; the orb returns to listening
   env3.spokenUtterances[1].onerror({ error: 'synthesis-failed' });
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(env3.spokenUtterances.length, 3, '(5) one last attempt of the chain before giving up');
+  env3.spokenUtterances[2].onerror({ error: 'synthesis-failed' });
   await new Promise((r) => setTimeout(r, 40));
   assert.equal(env3.els.orb.dataset.state, 'listening', '(5) every female voice failed: text only, orb not stuck');
+  assert.match(env3.els.error ? env3.els.error.textContent : '', /voice could not start/i, '(5) the failure is reported on screen with the voices tried');
   assert.equal(env3.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false).length, 0, '(5) still no server voice');
   env3.sandbox.mayaEndCall();
 });
