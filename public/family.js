@@ -367,6 +367,8 @@
     renderActivity(v.activity); renderSchedule(v.welfareSchedule);
     $('waLink').hidden = Boolean(v.linked && v.optIn);
     waWindowClosed = Boolean(v.linked && v.optIn && !v.windowOpen); later(renderSummary);
+    $('waInviteBox').hidden = !v.linked;
+    $('waInviteBtn').hidden = !waWindowClosed;
     $('waNote').hidden = !v.linked;
     waOk = Boolean(v.linked && v.optIn && v.configured); $('waTest').hidden = false; applyWhere();   // the Maya app needs no WhatsApp: the sheet is always there, only WhatsApp and Both wait for the link
     $('waCap').textContent = capText(v.calls);
@@ -385,6 +387,20 @@
     const r = await waCall(`/api/whatsapp/${id}/link`, 'POST', { phone: $('waPhone').value, optIn: $('waOpt').checked });
     if (!r.ok) return showErr(r.j.error || 'Could not link.');
     showErr(''); $('waPhone').value = ''; $('waOpt').checked = false; loadWa();
+  });
+  $('waInviteBtn').addEventListener('click', async () => {
+    $('waInviteLine').textContent = 'Sending…';
+    const r = await waCall(`/api/whatsapp/${id}/invite`, 'POST');
+    if (!r.ok) { $('waInviteLine').textContent = r.j.error || 'Could not send.'; return; }
+    $('waInviteLine').textContent = 'Sent as WhatsApp approved maya_reminder template with Got it. Ask them to tap Got it or write back, then the window opens.';
+    loadWa();
+  });
+  $('waUnlinkBtn').addEventListener('click', async () => {
+    if (!confirm('Unlink WhatsApp for this person? They will stop getting WhatsApp messages until you link a number again.')) return;
+    const r = await waCall(`/api/whatsapp/${id}`, 'DELETE');
+    if (!r.ok) { $('waInviteLine').textContent = r.j.error || 'Could not unlink.'; return; }
+    $('waInviteLine').textContent = 'WhatsApp unlinked.';
+    loadWa();
   });
   // "Call them now (test)": the server places ONE call and says a fixed sentence; this only shows what the server says really happened, polling its label for a minute.
   const TEST_STATE = { starting: 'starting', requested: 'asked WhatsApp to ring them', ringing: 'ringing', answered: 'answered', rejected: 'they rejected it', 'no answer': 'no answer, hung up', completed: 'answered, sentence said, hung up', finished: 'answered, the call finished and Maya hung up', ended: 'ended', failed: 'failed (see the server log)', paused: "WhatsApp refused it (its call limit): nothing rang" };

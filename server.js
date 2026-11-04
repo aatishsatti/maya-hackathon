@@ -205,6 +205,7 @@ async function handleWhatsapp(req, res, url) {
       if (req.method === 'POST') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, { schedule: care.welfareScheduleStart(a, { everyMin: body.everyMin, every: body.every, unit: body.unit, via: body.via, channel: body.channel }) }); }
       if (req.method === 'DELETE') return sendJson(res, 200, { stopped: care.welfareScheduleStop(a) });
     }
+    if (req.method === 'POST' && b === 'invite') { const v = whatsapp.view(a); if (v.windowOpen) return sendJson(res, 400, { error: 'Already can message on WhatsApp, no invitation needed.' }); return sendJson(res, 200, await whatsapp.sendOut(a, { kind: 'text', text: '', who: 'family', useTemplate: true })); }
     if (req.method === 'POST' && b === 'link') { const body = await readJson(req); if (!body) return sendJson(res, 400, { error: 'Bad request' }); return sendJson(res, 200, whatsapp.link(a, body.phone, body.optIn)); }
   } catch (e) { return sendJson(res, e.status || 500, { error: e.message, ...(e.needsTemplate ? { needsTemplate: true, windowClosed: true } : e.windowClosed ? { windowClosed: true } : {}) }); }
   return sendJson(res, 404, { error: 'Not found' });
