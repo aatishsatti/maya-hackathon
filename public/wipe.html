@@ -9,6 +9,7 @@
 <body>
 <h1>Wipe test profiles</h1>
 <p>Demo only. This page is not linked from the dashboard. It deletes <strong>every</strong> profile except the pinned demo senior, across all accounts. This cannot be undone.</p>
+<p>Note: the list below shows only this account's seniors (the profiles API is filtered in demo mode). The wipe itself deletes all profiles on the server except the demo senior, not just the ones shown here. After wiping, the result box lists exactly what was deleted.</p>
 <p id="status">Loading…</p>
 <ul id="list"></ul>
 <button id="wipe" type="button" disabled>Wipe all test profiles, keep demo senior</button>
@@ -22,7 +23,7 @@ async function load() {
   document.getElementById('status').textContent = demo.demo ? ('Demo senior: ' + (keep ? keep.name + ' (' + keep.id + ')' : 'not set up yet')) : 'Demo mode is OFF — wipe is disabled.';
   document.getElementById('list').innerHTML = list.map(p => '<li>' + p.name + ' (' + p.id + ')' + (keep && p.id === keep.id ? ' — KEEP' : '') + '</li>').join('');
   const btn = document.getElementById('wipe');
-  btn.disabled = !(demo.demo && keep && list.length > 1);
+  btn.disabled = !(demo.demo && keep);
 }
 document.getElementById('wipe').addEventListener('click', async () => {
   const out = document.getElementById('out');
