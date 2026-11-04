@@ -2,6 +2,15 @@
 // speech-presentation markup stripping after safety/feel processing, and interruption stopping playback.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const mmsTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'maya-mms-voice-'));
+process.env.MAYA_DATA_DIR = path.join(mmsTmpDir, 'profiles');
+process.env.MAYA_CARE_DIR = path.join(mmsTmpDir, 'care');
+process.env.MAYA_MEDIA_DIR = path.join(mmsTmpDir, 'media');
+
 const brain = require('../brain');
 const chat = require('../chat');
 
@@ -170,5 +179,111 @@ test('Web call primary device/browser voice (deviceVoice: true): skips server MM
   assert.match(appSrc, /Maya \(device browser voice\):/, 'web primary device voice is honestly labelled in public/app.js');
   assert.match(appSrc, /Maya \(Meta MMS server voice fallback\):/, 'MMS fallback when device voice is unavailable is clearly labelled in public/app.js');
 });
+
+test('End-to-end call latency stages: First Call vs Second Call (no 7-8s beep delay from Call 1 flushPending) and Greeting vs Normal Reply, plus deviceVoice post-voiceReady fallback correction', async () => {
+  const transcribe = require('../transcribe');
+  const memory = require('../memory');
+  const care = require('../care');
+  const { Call } = require('../call');
+
+  const origOpenTranscribe = transcribe.openTranscribe;
+  const suffix = Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('');
+  const uniqueName = `LatencySenior${suffix}`;
+  const profile = memory.createProfile(uniqueName, 'male');
+
+  try {
+    // --- CALL 1: Greeting + 1 user turn, then hang up (which triggers memory.endCall -> flushPending) ---
+    const call1Events = [];
+    const ws1 = {
+      readyState: 1,
+      send(d) { if (typeof d === 'string') call1Events.push({ at: Date.now(), ev: JSON.parse(d) }); },
+      close() {},
+    };
+    const call1 = new Call(ws1, 'test-key');
+    clearInterval(call1.endTimer);
+    const call1StartAt = Date.now();
+    // Simulate Call 1 start + greeting + 1 user turn recorded in pending file
+    memory.startCall(profile.id, call1.callId, 'America/New_York');
+    memory.appendTurn(profile.id, call1.callId, { label: 'A', who: uniqueName, text: 'I had cinnamon tea today.', userSaid: true });
+    call1.profile = memory.load(profile.id);
+    call1.callStarted = true;
+    call1.deviceVoice = true;
+    call1.startAt = call1StartAt;
+    call1.callStages = { startReceivedAt: call1StartAt, flushPendingWaitMs: 0, flushPendingTotalMs: 0, transcribeReadyMs: 12, greetStartMs: 1, greetSparkFirstMs: 30, greetSparkDoneMs: 35, greetTries: 1, greetSpeakSentMs: 36 };
+    call1.end();
+
+    // Simulate an in-flight 700ms (representing 7s live) memory extraction from Call 1 on memory.flushPending
+    const origFlush = memory.flushPending;
+    let slowFlushResolved = false;
+    memory.flushPending = () => new Promise((resolve) => {
+      setTimeout(() => { slowFlushResolved = true; resolve(); }, 700);
+    });
+
+    // --- CALL 2: Starts while Call 1's memory.flushPending is still in flight ---
+    const call2Events = [];
+    let readyBeepAt = null;
+    const ws2 = {
+      readyState: 1,
+      send(d) {
+        if (typeof d === 'string') {
+          const ev = JSON.parse(d);
+          const at = Date.now();
+          call2Events.push({ at, ev });
+          if (ev.type === 'ready' && readyBeepAt === null) readyBeepAt = at;
+        }
+      },
+      close() {},
+    };
+    const call2 = new Call(ws2, 'test-key');
+    clearInterval(call2.endTimer);
+    // Stub greet on Call 2 to simulate a 40ms Spark greeting while openMeta runs
+    call2.openMeta = function (m) {
+      const hour = Number(m.localHour);
+      const startGreetWhenReady = new Promise((r) => { this._onTranscribeReady = r; });
+      this.callStages.greetStartMs = Date.now() - this.startAt;
+      setTimeout(() => {
+        this.callStages.transcribeReadyMs = Date.now() - this.startAt;
+        this.send({ type: 'ready', resume: this.token, stages: { flushPendingWaitMs: this.callStages.flushPendingWaitMs, transcribeReadyMs: this.callStages.transcribeReadyMs } });
+        if (this._onTranscribeReady) { const r = this._onTranscribeReady; this._onTranscribeReady = null; r(); }
+      }, 15);
+      (async () => {
+        await new Promise((r) => setTimeout(r, 40));
+        await startGreetWhenReady;
+        this.callStages.greetSparkFirstMs = 35;
+        this.callStages.greetSparkDoneMs = 40;
+        this.callStages.greetTries = 1;
+        this.callStages.greetSpeakSentMs = Date.now() - this.startAt;
+        this.send({ type: 'speak', text: 'Hello again! How is your afternoon going?', piece: 'Hello again!', deviceVoice: true, hold: 0 });
+      })();
+    };
+
+    const call2StartAt = Date.now();
+    call2.onBrowser(JSON.stringify({ type: 'start', sampleRate: 16000, localHour: 14, tz: 'America/New_York', profileId: profile.id, deviceVoice: true }), false);
+    await new Promise((r) => setTimeout(r, 140));
+    const call2BeepMs = readyBeepAt - call2StartAt;
+    console.log('CALL1_VS_CALL2_STAGES', JSON.stringify({
+      call1Stages: call1.callStages,
+      call2Stages: call2.callStages,
+      call2BeepMs,
+      slowFlushResolvedWhenCall2Spoke: slowFlushResolved,
+    }));
+    assert.ok(call2.callStages.flushPendingWaitMs <= 65, `Call 2 flushPendingWaitMs (${call2.callStages.flushPendingWaitMs}ms) is bounded to ~50ms instead of waiting 700ms+ for Call 1 extraction`);
+    assert.ok(call2BeepMs < 100, `Call 2 ready/chime beep (${call2BeepMs}ms) fires immediately without waiting for Call 1 flushPending`);
+    assert.equal(slowFlushResolved, false, 'Call 2 connected, beeped, and spoke before Call 1 slow flushPending finished');
+
+    // Verify post-voiceReady deviceVoice correction: if voiceReady resolves with no female voice (on: false), server flips deviceVoice to false and falls back to MMS
+    assert.equal(call2.deviceVoice, true);
+    call2.onBrowser(JSON.stringify({ type: 'deviceVoice', on: false }), false);
+    assert.equal(call2.deviceVoice, false, 'server switches deviceVoice to false when voiceReady correction reports no female device voice');
+
+    await new Promise((r) => setTimeout(r, 600));
+    memory.flushPending = origFlush;
+    call2.end();
+  } finally {
+    transcribe.openTranscribe = origOpenTranscribe;
+    care.stop();
+  }
+});
+
 
 

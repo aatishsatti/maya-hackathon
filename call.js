@@ -696,12 +696,22 @@ class Call {
       if (this.noVoice) console.log(this.fakeAudio ? 'call noVoice+fakeAudio: TTS is skipped; a synthetic voice is used' : 'call noVoice: TTS is skipped for this call');
       else if (this.deviceVoice) console.log('call deviceVoice: web primary voice is device/browser speechSynthesis (OS feature); server MMS skipped');
       this.starting = true; this.startAt = Date.now();   // the start message arrived (greeting timing log)
+      this.callStages = { startReceivedAt: this.startAt, flushPendingWaitMs: 0, flushPendingTotalMs: 0, transcribeReadyMs: null, greetStartMs: null, greetSparkFirstMs: null, greetSparkDoneMs: null, greetTries: 0, greetSpeakSentMs: null };
       care.callStarting(this.profile.id);   // from now on this person is on a call: a daily chat due in the next moments is skipped, not rung
       // Maya rang them and they pressed Accept: the id must match a live ring for THIS profile, else it is an ordinary call.
       if ((m.reason === 'callback' || m.reason === 'reminder' || m.reason === 'welfare') && typeof m.outreachId === 'string') this.outreach = care.claim(this.profile.id, m.outreachId);
-      // Words a crashed or unfinished earlier call left behind are filed first, so this call knows them.
-      memory.flushPending(this.profile.id).then(() => {
+      // Words a crashed or unfinished earlier call left behind are filed in the background. Wait at most 50 ms before opening the line so a 6-7 s
+      // Spark memory extraction from a previous call never delays the second call's ready/chime beep or greeting; refresh memory in place when done.
+      const flushT0 = Date.now();
+      const flushDone = memory.flushPending(this.profile.id).then(() => {
+        this.callStages.flushPendingTotalMs = Date.now() - flushT0;
+        if (this.closed || !this.profile) return;
+        const fresh = memory.load(this.profile.id);
+        if (fresh && fresh.memory) this.profile.memory = fresh.memory;
+      });
+      Promise.race([flushDone, sleep(50)]).then(() => {
         if (this.closed) return;
+        this.callStages.flushPendingWaitMs = Date.now() - flushT0;
         memory.startCall(this.profile.id, this.callId, this.tz);
         this.callStarted = true;
         this.shortGreeting = care.callCount(this.profile.id) >= SHORT_GREETING_AFTER_CALLS && !this.outreach; // decided before this call counts
@@ -719,8 +729,19 @@ class Call {
   openMeta(m, rate) {
     {
       this.resampler = new Resampler(rate);
+      const hour = Number(m.localHour);
+      // Start writing the greeting in parallel with the Meta Transcribe WebSocket handshake so Transcribe connect (~600-900 ms) and Spark greeting generation overlap.
+      this.startWarm();
+      const startGreetWhenReady = new Promise((resolve) => { this._onTranscribeReady = resolve; });
+      this.greet(hour, startGreetWhenReady);
       this.meta = openTranscribe(this.apiKey, {
-        onReady: () => { liveCalls.set(this.token, this); this.startMicFeed(); this.send({ type: 'ready', resume: this.token }); this.startWarm(); this.greet(Number(m.localHour)); },
+        onReady: () => {
+          if (this.callStages) this.callStages.transcribeReadyMs = Date.now() - (this.startAt || Date.now());
+          liveCalls.set(this.token, this);
+          this.startMicFeed();
+          this.send({ type: 'ready', resume: this.token, ...(this.callStages ? { stages: { flushPendingWaitMs: this.callStages.flushPendingWaitMs, transcribeReadyMs: this.callStages.transcribeReadyMs } } : {}) });
+          if (this._onTranscribeReady) { const r = this._onTranscribeReady; this._onTranscribeReady = null; r(); }
+        },
         onEvent: (ev) => this.onMeta(ev),
         onClose: (code, reason) => {
           if (this.closed) return;
@@ -746,6 +767,15 @@ class Call {
       // check in, reconfirm or hang up on someone who chose to be muted; unmuting starts the wait afresh.
       this.muted = m.on === true;
       if (this.muted) this.cancelSilence(); else if (!this.responding && this.greeted) this.armSilence();
+    } else if (m.type === 'deviceVoice') {
+      // Browser voiceReady() resolved after 'start': update deviceVoice and fall back to server Meta MMS if no female device voice was found.
+      this.deviceVoice = !this.noVoice && m.on === true;
+      if (!this.deviceVoice) {
+        this.startWarm();
+        if (typeof m.respeak === 'string' && m.respeak.trim() && !this.noVoice) {
+          this.speakReply(fixedReply(m.respeak.trim()), null, this.gen, { record: false }).catch(() => {});
+        }
+      }
     }
   }
 
@@ -953,7 +983,9 @@ class Call {
   // Before the person has said a word, Spark writes the reply to the one routine thing a greeting most often gets back
   // ("I'm fine, thank you" / "Hello Maya"), from the same roster (memory, reminders, notes) as any reply. It is spoken ONLY if the
   // first words really heard match that class exactly (lead.prethinkClass); otherwise it is dropped unheard.
+  // Gated behind MAYA_PRETHINK=1 (default OFF) because firing 5 concurrent Spark streams during the greeting throttles the live connection.
   startPrethink() {
+    if (process.env.MAYA_PRETHINK !== '1') return;
     if (this.pre || this.outreach || this.ticketInCall || this.hadActiveFlag || this.safety || this.health) return;
     this.pre = new Map();
     for (const [k, c] of Object.entries(lead.PRETHINK)) {
@@ -1485,6 +1517,7 @@ class Call {
   cancelSilence() {
     clearTimeout(this.closeTimer);
     clearTimeout(this.silenceTimer);
+    clearTimeout(this.quietPrefetchTimer);
     if (this.quietPrefetch) { this.quietPrefetch.abort.abort(); this.quietPrefetch = null; }
   }
 
@@ -1503,10 +1536,19 @@ class Call {
     if (this.closed || this.suddenReported || this.muted) return;
     const stage = this.silenceStage;
     const wait = Math.max(0, this.playUntil - Date.now()) + this.silenceWait(stage);
-    const abort = new AbortController();
-    const promise = this.quietLine(stage, abort.signal);
-    promise.catch(() => {});
-    this.quietPrefetch = { stage, abort, promise };
+    const prefetchDelay = Math.max(0, wait - 8000);
+    const startPrefetch = () => {
+      if (this.closed || this.suddenReported || this.muted) return;
+      const abort = new AbortController();
+      const promise = this.quietLine(stage, abort.signal);
+      promise.catch(() => {});
+      this.quietPrefetch = { stage, abort, promise };
+    };
+    if (prefetchDelay === 0) startPrefetch();
+    else {
+      this.quietPrefetchTimer = setTimeout(startPrefetch, prefetchDelay);
+      if (this.quietPrefetchTimer.unref) this.quietPrefetchTimer.unref();
+    }
     this.silenceTimer = setTimeout(() => this.fireSilence(), wait);
   }
 
@@ -1521,9 +1563,13 @@ class Call {
     let full;
     let said;
     let tries = 0;   // Spark calls this line took (every rewrite is another call): reported with the greeting timing
+    let sparkFirstMs = null;
+    const t0 = Date.now();
     for (let attempt = 0; attempt < 4; attempt++) {
       tries = attempt + 1;
-      full = await sparkStream(ask, this.roster(note), signal, () => {});
+      full = await sparkStream(ask, this.roster(note), signal, () => {
+        if (sparkFirstMs === null) sparkFirstMs = Date.now() - t0;
+      });
       said = sentences === 1 ? firstSentence(stripTags(full)) : firstSentences(stripTags(full), sentences);
       if (/good night/i.test(said) && pool === 'greeting') { note += ' "Good night" is only a goodbye. Use "Hello" or "Good evening".'; continue; }
       if (pool === 'greeting' && nameNextToHello(said, this.profile.name)) { note += ' Do not put their name right next to the hello; leave the name out or place it later in the sentence.'; continue; }
@@ -1536,7 +1582,7 @@ class Call {
       note += ` ${bad}`;
     }
     if (pool === 'greeting') said = said.replace(/good night/gi, 'Good evening').replace(HEARD_YOU, (m) => (/voice/i.test(m) ? 'to talk to you' : 'to talk to you')); // last-resort guards: never a hello, never claims to have heard them
-    return { full, said, tries };
+    return { full, said, tries, sparkFirstMs };
   }
 
   async quietLine(stage, signal) {
@@ -1616,15 +1662,16 @@ class Call {
 
   // The first words of a call. Written by Spark; a call-back or reminder pickup has its own purpose, a known profile
   // gets a short greeting, a first/unknown call stays warm. Never repeats a greeting from the last 3 days.
-  async greet(hour) {
+  async greet(hour, readyGate = null) {
     if (this.greeted) return; // once per call, at the start only
     this.greeted = true;
     const myGen = ++this.gen;
     this.abort = new AbortController();
     this.responding = true;
-    this.send({ type: 'thinking' });
+    if (!readyGate) this.send({ type: 'thinking' });
     let line;
     const greetAt = Date.now();
+    if (this.callStages) this.callStages.greetStartMs = greetAt - (this.startAt || greetAt);
     const rem = this.outreach && this.outreach.kind === 'reminder' ? care.findReminder(this.profile.id, this.outreach.reminderId) : null;
     let pre = null;   // the first line of a reminder or welfare call, written while the phone rang (prefetchReminderLine / prefetchWelfareLine): used when it is for THIS call, otherwise written now as before
     const welfareOut = Boolean(this.outreach && this.outreach.kind === 'welfare');
@@ -1634,17 +1681,27 @@ class Call {
       else if (pre) line = pre.line;
       else if (rem) line = await this.reminderLine(rem, this.abort.signal);
       else line = await this.dynamicLine({ pool: 'greeting', signal: this.abort.signal, what: this.greetingNote(hour), sentences: 2 });
+      if (readyGate) await readyGate;
     } catch (e) {
       if (myGen !== this.gen || this.closed) return;
       return this.fatal(e.message);
     }
     if (myGen !== this.gen || this.closed) return;
-    this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: Date.now() - greetAt, tries: line.tries || 1, lineAt: Date.now(), ...(pre ? { prefetched: true, prefetchMs: pre.ms } : {}) };   // milliseconds and a count, never a word (wabridge logs it)
+    if (readyGate) this.send({ type: 'thinking' });
+    const sparkDoneMs = Date.now() - greetAt;
+    this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: sparkDoneMs, sparkFirstMs: line.sparkFirstMs ?? sparkDoneMs, tries: line.tries || 1, lineAt: Date.now(), ...(pre ? { prefetched: true, prefetchMs: pre.ms } : {}) };   // milliseconds and a count, never a word (wabridge logs it)
+    if (this.callStages) {
+      this.callStages.greetSparkFirstMs = line.sparkFirstMs ?? sparkDoneMs;
+      this.callStages.greetSparkDoneMs = sparkDoneMs;
+      this.callStages.greetTries = line.tries || 1;
+      this.callStages.greetSpeakSentMs = Date.now() - (this.startAt || greetAt);
+      console.log('call stages', JSON.stringify(this.callStages));
+    }
     care.addLine(this.profile.id, rem ? (rem.social ? 'social' : 'reminder') : 'greeting', line.said);
     this.history.push({ role: 'assistant', content: line.said });
     this.mirror('maya', line.said);
     if (this.outreach && this.outreach.kind === 'reminder' && !(rem && rem.social)) { this.awaitAck = this.outreach.reminderId; this.reminderReply = { gen: myGen, said: line.said }; }
-    if (!rem) this.startPrethink();   // Spark thinks about the likeliest routine answer while the greeting is spoken
+    if (!rem) this.startPrethink();   // Spark thinks about the likeliest routine answer while the greeting is spoken (when MAYA_PRETHINK=1)
     await this.speakReply(fixedReply(line.full), null, myGen, { greeting: true, maxSentences: rem && !rem.social ? 1 : 2, bright: !rem && this.greetingPlain === true });
     if (!this.noVoice) warmLeads();   // the short lead-in clips are rendered once, after the first voiced greeting (not at server start); a no-voice call never does
   }

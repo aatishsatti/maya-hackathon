@@ -462,7 +462,19 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
 
   function playDevicePiece(c, text) {
     const clean = String(text || '').trim();
-    if (!clean || !window.speechSynthesis || !c.pickedVoice) return;
+    if (!clean) return;
+    if (!c.pickedVoice) c.pickedVoice = pickVoice();
+    if (!window.speechSynthesis || !c.pickedVoice) {
+      // No female English device voice is available after voiceReady: switch to server Meta MMS fallback and request synthesis of this piece so the call is never silent.
+      c.deviceVoice = false;
+      c.sentDeviceVoice = false;
+      captionEl.textContent = captionEl.textContent.replace(/^Maya \(device browser voice\):/, 'Maya (Meta MMS server voice fallback):');
+      if (c.ws && c.ws.readyState === WebSocket.OPEN) {
+        c.ws.send(JSON.stringify({ type: 'deviceVoice', on: false, respeak: clean }));
+      }
+      return;
+    }
+    if (speechSynthesis.paused) speechSynthesis.resume();
     const u = new SpeechSynthesisUtterance(clean);
     u.voice = c.pickedVoice;
     u.lang = c.pickedVoice.lang;
@@ -473,6 +485,10 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     u.onend = () => { deviceUtterances.delete(u); finishIfDone(c); };
     u.onerror = () => { deviceUtterances.delete(u); finishIfDone(c); };
     speechSynthesis.speak(u);
+    if (c.clientStages && c.clientStages.firstDeviceVoiceStartMs === null) {
+      c.clientStages.firstDeviceVoiceStartMs = Date.now() - c.callStartAt;
+      console.log('web call stages', c.clientStages);
+    }
   }
 
   function feedDevicePiece(c, text) {
@@ -550,7 +566,11 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       c.thinkTimer = setTimeout(() => { if (call === c) endCall('Maya did not answer in time. Please call again.'); }, THINK_TIMEOUT_MS);
     }
     switch (ev.type) {
-      case 'ready': c.ready = true; c.token = ev.resume; c.lostAt = 0; clearTimeout(c.slowTimer); c.slowTimer = null; c.slowShown = false; chime(c); break;
+      case 'ready':
+        c.ready = true; c.token = ev.resume; c.lostAt = 0; clearTimeout(c.slowTimer); c.slowTimer = null; c.slowShown = false;
+        if (c.clientStages) { c.clientStages.beepMs = Date.now() - c.callStartAt; c.clientStages.serverStages = ev.stages || null; }
+        chime(c);
+        break;
       case 'resumed': // the server gave this call back after the line dropped: carry on
         c.ready = true; c.lostAt = 0; c.attempt = 0; clearTimeout(c.attemptTimer); clearTimeout(c.slowTimer); c.slowTimer = null; c.slowShown = false;
         if (callState.muted && c.ws.readyState === WebSocket.OPEN) { c.ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; }
@@ -568,6 +588,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
         // lead: a short acknowledgement while Maya is still writing the real reply. The orb stays in its thinking colours.
         c.leadActive = Boolean(ev.lead);
         if (ev.lead) { setState('thinking'); break; }
+        if (c.clientStages && c.clientStages.firstSpeakEventMs === null) c.clientStages.firstSpeakEventMs = Date.now() - c.callStartAt;
         setState('speaking');
         captionEl.textContent = c.deviceVoice
           ? `Maya (device browser voice): ${ev.text}`
@@ -620,17 +641,29 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   const LINE_LOST_MSG = 'The connection to Maya ended. Please call again.';
 
   async function startReal(c, myGen) {
+    c.callStartAt = c.callStartAt || Date.now();
+    c.clientStages = { socketConnectMs: null, voiceReadyMs: null, beepMs: null, firstSpeakEventMs: null, firstDeviceVoiceStartMs: null, serverStages: null };
+    c.pickedVoice = pickVoice();
+    c.deviceVoice = Boolean(window.speechSynthesis && (c.pickedVoice || speechSynthesis.getVoices().length === 0));
+    const tVoice0 = Date.now();
+    voiceReady().then(() => {
+      if (myGen !== gen || call !== c) return;
+      c.clientStages.voiceReadyMs = Date.now() - tVoice0;
+      c.pickedVoice = pickVoice();
+      const resolved = Boolean(window.speechSynthesis && c.pickedVoice);
+      c.deviceVoice = resolved;
+      if (c.sentDeviceVoice !== undefined && c.sentDeviceVoice !== resolved && c.ws && c.ws.readyState === WebSocket.OPEN) {
+        c.ws.send(JSON.stringify({ type: 'deviceVoice', on: resolved }));
+        c.sentDeviceVoice = resolved;
+      }
+    });
+    c.attempt = 0; c.lostAt = 0; c.lastRx = Date.now();
+    openSocket(c, myGen, false);
     try { await c.ctx.audioWorklet.addModule('/mic-worklet.js'); }
     catch { endCall('Maya could not start the microphone. Please reload the page and try again.'); return; }
     if (myGen !== gen) return;
-    if (c.micCtx) { try { await c.micCtx.audioWorklet.addModule('/mic-worklet.js'); } catch { try { c.micCtx.close(); } catch { /* ignore */ } c.micCtx = null; } }   // decided BEFORE the socket opens: the start message carries the mic's rate
+    if (c.micCtx) { try { await c.micCtx.audioWorklet.addModule('/mic-worklet.js'); } catch { try { c.micCtx.close(); } catch { /* ignore */ } c.micCtx = null; } }
     if (myGen !== gen) return;
-    await voiceReady();
-    if (myGen !== gen) return;
-    c.pickedVoice = pickVoice();
-    c.deviceVoice = Boolean(window.speechSynthesis && c.pickedVoice);
-    c.attempt = 0; c.lostAt = 0; c.lastRx = Date.now();
-    openSocket(c, myGen, false);
     c.master = c.ctx.createGain(); // Maya's voice goes through this so her volume can dip instantly
     c.out = c.ctx.createGain();    // then through this: the Speaker button (a browser cannot choose the earpiece, so Speaker off is a quieter voice)
     c.out.gain.value = speakerOn ? 1 : SPEAKER_OFF_GAIN;
@@ -673,8 +706,11 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     c.lastRx = Date.now();
     ws.onopen = () => {
       if (myGen !== gen || c.ws !== ws) return;
+      if (c.clientStages && c.clientStages.socketConnectMs === null) c.clientStages.socketConnectMs = Date.now() - c.callStartAt;
       if (resume) { ws.send(JSON.stringify({ type: 'resume', token: c.token })); return; }
-      ws.send(JSON.stringify({ type: 'start', sampleRate: (c.micCtx || c.ctx).sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId, deviceVoice: Boolean(c.deviceVoice) }));
+      const dv = Boolean(c.deviceVoice);
+      c.sentDeviceVoice = dv;
+      ws.send(JSON.stringify({ type: 'start', sampleRate: (c.micCtx || c.ctx).sampleRate, localHour: new Date().getHours(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, profileId: window.mayaProfile && window.mayaProfile.id, reason: c.reason, outreachId: c.outreachId, deviceVoice: dv }));
       if (callState.muted) { ws.send(JSON.stringify({ type: 'mute', on: true })); c.sentMute = true; } // muted while the line was still connecting
     };
     ws.onmessage = (m) => {
@@ -715,6 +751,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     const myGen = ++gen;
     showError('');
     captionEl.textContent = '';
+    if (window.speechSynthesis) { speechSynthesis.cancel(); if (speechSynthesis.paused) speechSynthesis.resume(); }
     callState.start();
     setLive(true);
     setState('idle', 'starting');
