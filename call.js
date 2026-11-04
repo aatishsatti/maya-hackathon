@@ -1668,7 +1668,9 @@ class Call {
     const myGen = ++this.gen;
     this.abort = new AbortController();
     this.responding = true;
+    let greetReadyToSpeak = false;
     if (!readyGate) this.send({ type: 'thinking' });
+    else readyGate.then(() => { if (myGen === this.gen && !this.closed && !greetReadyToSpeak) this.send({ type: 'thinking' }); });
     let line;
     const greetAt = Date.now();
     if (this.callStages) this.callStages.greetStartMs = greetAt - (this.startAt || greetAt);
@@ -1687,7 +1689,7 @@ class Call {
       return this.fatal(e.message);
     }
     if (myGen !== this.gen || this.closed) return;
-    if (readyGate) this.send({ type: 'thinking' });
+    greetReadyToSpeak = true;
     const sparkDoneMs = Date.now() - greetAt;
     this.greetTiming = { startMs: greetAt - (this.startAt || greetAt), sparkMs: sparkDoneMs, sparkFirstMs: line.sparkFirstMs ?? sparkDoneMs, tries: line.tries || 1, lineAt: Date.now(), ...(pre ? { prefetched: true, prefetchMs: pre.ms } : {}) };   // milliseconds and a count, never a word (wabridge logs it)
     if (this.callStages) {

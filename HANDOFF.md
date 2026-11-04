@@ -1,4 +1,42 @@
-# READ THIS FIRST: CURRENT STATE (written 3 Nov 2026, before /clear; this section supersedes the older status lines below)
+# READ THIS FIRST: GREETING TIMER REGRESSION FIX + APPROVED SCOPE DECISIONS (4 Nov 2026; working tree on top of `99df56c`, uncommitted, NOT pushed, NOT deployed; live authority = `99df56c`)
+
+This section supersedes EVERY older live/deployment/status line below. The older sections are history, not permission to deploy or restore a removed service.
+
+## Current authority and boundaries
+- Aatish's live authority: `99df56c` (50 ms pre-connect memory-flush bound, parallel greeting, prethink default OFF, `deviceVoice` correction). Locally verified checkout: `render-test` on top of `99df56c`. Local `main` is `15f64f0`; neither branch was moved and no remote was contacted in this job.
+- Auto-deploy is ON: push = deploy. This job makes NO commit, push, deploy, branch change, or Render change. Muse must verify before any push is considered.
+- Voice routing is LOCKED: web female device/browser primary with the existing MMS fallback; app/WhatsApp Meta MMS `facebook/mms-tts-eng`. ElevenLabs and Tavily are BANNED at runtime. Do not use older research or voice sections as permission to reintroduce either.
+- Preserve medicine refusal (natural, healthcare-provider/doctor referral, no researched clinical findings), quiet hours available and OFF unless explicitly true, duplicate reminder semantics, Fix 1.2 memory, scheduling/confirmation/safety, senior menu and family dashboard. Code supplies principles/facts, Spark writes, code checks and alone saves/acts; no new supplied sentences outside already-approved fixed strings.
+- Mathew `fbde4db7` is the TEST senior, not the demo senior. His daily call remains 2:12 PM. No existing profile or schedule was read from data or changed, and no test senior was deleted. No app folder changes.
+
+## Scope decisions — APPROVED BY AATISH (do NOT build beyond them)
+1. **Scam:** Keep existing flow — assess facts already given, ask only missing facts after (`scam.js:89-93`, `official.js:210-232`, `test/smart.test.js:66-80`). Do **NOT** build a mandatory interview before every assessment.
+2. **Delivery-channel:** Normal reminders ask no channel question (`setrem.js:348-377`). **Exception kept:** an explicit WhatsApp request when WhatsApp is unlinked asks if the app is fine (`setrem.js:375-376,544`); `test/setrem.test.js` (`setrem-ask-channel`) expects it.
+3. **Fixed opening fallback:** The daily-call social opening fallback list (`call.js:1726`) is approved as a fixed-string exception, like the bye line. Do **NOT** remove it.
+
+## Greeting timer regression from `99df56c` — FIXED (`call.js`, `test/mms-voice.test.js`)
+- **Regression in `99df56c`:** `greet(hour, readyGate)` suppressed its initial `thinking` event until after `dynamicLine` finished (`call.js:1665-1690`), so on a live call where `ready` cleared the browser's wait timer (`public/app.js:562-573`), the browser's 30-second `THINK_TIMEOUT_MS` watchdog never started while Spark was generating the greeting, allowing a stalled greeting to run up to Spark's 120 s stream timeout.
+- **Fix (`call.js:1665-1690`):** In `greet(hour, readyGate = null)`, when `readyGate` is provided, register `readyGate.then(() => { if (myGen === this.gen && !this.closed && !greetReadyToSpeak) this.send({ type: 'thinking' }); })` at the start of `greet` and set `greetReadyToSpeak = true` right before `speakReply`. When `openTranscribe.onReady` fires in `openMeta` (`call.js:733-740`), it sends `ready` first and immediately resolves `readyGate`, which emits `thinking` right after `ready` **while Spark greeting generation is still in flight**, starting the browser's 30-second greeting watchdog immediately without emitting a second `thinking` event after Spark finishes. Keeps Transcribe handshake and Spark greeting generation in parallel, keeps the 50 ms `flushPending` bound, keeps voice routing (web female device primary, app/WhatsApp MMS), and keeps cancellation and reminder-pickup semantics intact.
+- **Production-path event-order test (`test/mms-voice.test.js`):** Added `Production-path greeting event order: openMeta + greet emits ready -> thinking while Spark greeting is still in flight, then speak -> audioEnd when Spark finishes`, exercising the real `call.onBrowser` -> `call.openMeta` -> `call.greet` -> `call.dynamicLine` path with `sparkStream` held open on a gate when `openTranscribe.onReady` fires, asserting `['ready', 'thinking']` while Spark is still pending and `['ready', 'thinking', 'speak', 'audioEnd']` once Spark completes.
+
+## Exact targeted results per suite
+| Suite | Tests | Pass | Fail | Skipped | Cancelled |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `test/mms-voice.test.js` | 6 | 6 | 0 | 0 | 0 |
+| `test/novoice.test.js` | 8 | 8 | 0 | 0 | 0 |
+| `test/thinktimer.test.js` | 3 | 3 | 0 | 0 | 0 |
+| `test/recall.test.js` | 34 | 34 | 0 | 0 | 0 |
+| `test/smart.test.js` | 19 | 19 | 0 | 0 | 0 |
+| `test/specreuse.test.js` | 18 | 18 | 0 | 0 | 0 |
+| **Total** | **88** | **88** | **0** | **0** | **0** |
+
+## Working tree left for Muse
+- Tracked files modified in working tree: `call.js`, `test/mms-voice.test.js`, `HANDOFF.md`.
+- Uncommitted, unpushed, and undeployed for Muse verification.
+
+---
+
+# ARCHIVED STATUS (written 3 Nov 2026; superseded by READ THIS FIRST above)
 - **DO NOT DEPLOY `3ce0328` (it still contains the WITHDRAWN medical research). The medicine removal is the commit on top of it (see the MEDICINE: TOTAL RESEARCH REMOVAL section below, pushed to both branches, not deployed). Deploy only that newer commit. Live is still `402e690`.**
 - **LIVE is `f51d541`** (code = `25d2f11` style-only speculation reuse on top of `9e3879a`; `f51d541` is docs only). Live labels on an ordinary turn are `[smart-style, smart-app-state, smart-shape]` (COMPANION + CONTRACT + STATE_CARDS on), so live guesses never match (eligible = 0 under the style-only rule). Newer work on top (pushed 8471f7a, not deployed): see the sections SPECULATION: OFF-RELEASE REVIEW and SPECULATION FIX (1) just below. `9e3879a` IS deployed; live is NOT `dc7f2c9`. Newest local commit is `394c05a` unless a later one is listed below. Code commit `9e3879a`, parent `dc7f2c9`, pushed to BOTH `origin/main` and `origin/render-test` (both = `9e3879a`). Chain on top of `c4e8a1c`: `c5d5ca8` (state card + CARDS/GUARD/DECISION), `5560134` (state flag isolation), `d4210c7` (voice save repair + compact prompt), `dc7f2c9` (change + written readback repair), `9e3879a` (bounded scheduling repair + quiet hours default OFF).
 - **`9e3879a` holds:** (1) bounded scheduling repair: code-owned daily-call context, valid/unconsumed offers only, negation and questions never change anything, stopped-call restart question covering restart + exact time, write result read from storage (saved / failed / uncertain), `state.checkScheduling` (bounded meaning of scheduling replies), plain state-based fallbacks; (2) **quiet hours default OFF**: `care.js quietOn = p.quietHours === true` (ON only when set true on purpose; undefined = OFF; explicit true stays ON, explicit false stays OFF; toggle, dashboard text and held-item release unchanged).

@@ -285,5 +285,98 @@ test('End-to-end call latency stages: First Call vs Second Call (no 7-8s beep de
   }
 });
 
+test('Production-path greeting event order: openMeta + greet emits ready -> thinking while Spark greeting is still in flight, then speak -> audioEnd when Spark finishes', async () => {
+  const memory = require('../memory');
+  const care = require('../care');
+  const suffix = Array.from({ length: 6 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('');
+  const profile = memory.createProfile(`GreetOrder${suffix}`, 'female');
+
+  // Patch transcribe.openTranscribe and brain.sparkStream BEFORE re-requiring call.js so Call.prototype.openMeta and dynamicLine use the production code path
+  const transcribePath = require.resolve('../transcribe');
+  const transcribeMod = require('../transcribe');
+  const origOpenTranscribe = transcribeMod.openTranscribe;
+  const origSparkStream = brain.sparkStream;
+  const callPath = require.resolve('../call');
+  const savedCallCache = require.cache[callPath];
+
+  let transcribeOpenedAt = null;
+  let transcribeReadyFiredAt = null;
+  let sparkStartedAt = null;
+  let releaseSpark = null;
+  const sparkGate = new Promise((r) => { releaseSpark = r; });
+
+  transcribeMod.openTranscribe = (_key, handlers) => {
+    transcribeOpenedAt = Date.now();
+    setTimeout(() => {
+      transcribeReadyFiredAt = Date.now();
+      handlers.onReady('SESSION-PROD');
+    }, 15);
+    return {
+      get ready() { return true; },
+      sendPcm() {},
+      close() {},
+    };
+  };
+  brain.sparkStream = async (_history, _roster, _signal, onDelta) => {
+    sparkStartedAt = Date.now();
+    await sparkGate;
+    const text = '[[feel: emotion=neutral intensity=1 intent=chat concern=none pain=0]] Hello there, it is lovely to talk with you!';
+    if (onDelta) onDelta(text);
+    return text;
+  };
+
+  delete require.cache[callPath];
+  const { Call } = require('../call');
+
+  const sentEvents = [];
+  const ws = {
+    readyState: 1,
+    send(d) {
+      if (typeof d === 'string') sentEvents.push({ at: Date.now(), ev: JSON.parse(d) });
+    },
+    close() {},
+  };
+  const call = new Call(ws, 'test-key');
+  clearInterval(call.endTimer);
+
+  try {
+    call.onBrowser(JSON.stringify({
+      type: 'start',
+      sampleRate: 16000,
+      localHour: 10,
+      tz: 'America/New_York',
+      profileId: profile.id,
+      deviceVoice: true,
+    }), false);
+
+    // Wait for openTranscribe.onReady (15ms) while Spark greeting is still blocked on sparkGate
+    await new Promise((r) => setTimeout(r, 45));
+
+    assert.ok(sparkStartedAt !== null && transcribeOpenedAt !== null, 'Spark greeting and Transcribe handshake both started in parallel');
+    assert.ok(transcribeReadyFiredAt !== null, 'Transcribe onReady has fired');
+    assert.deepEqual(
+      sentEvents.map((x) => x.ev.type),
+      ['ready', 'thinking'],
+      'ready -> thinking emitted in order WHILE Spark greeting is still pending (so browser 30s watchdog starts immediately)',
+    );
+
+    // Now let Spark finish the greeting and verify speak -> audioEnd follow with no duplicate thinking event
+    releaseSpark();
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.deepEqual(
+      sentEvents.map((x) => x.ev.type),
+      ['ready', 'thinking', 'speak', 'audioEnd'],
+      'production greeting path emits exact ready -> thinking -> speak -> audioEnd ordering',
+    );
+  } finally {
+    call.end();
+    care.stop();
+    transcribeMod.openTranscribe = origOpenTranscribe;
+    brain.sparkStream = origSparkStream;
+    if (savedCallCache) require.cache[callPath] = savedCallCache;
+  }
+});
+
 
 
