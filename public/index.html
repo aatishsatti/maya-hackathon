@@ -12,16 +12,21 @@
   <!-- One calm, see-through backdrop behind the call page and the incoming-call page. -->
   <div class="backdrop" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i></div>
 
-  <!-- The start screen: shown ONLY when this browser has no senior linked. The same three doors as the app. There is no list of people anywhere. -->
+  <!-- The start screen: shown ONLY when this browser has no senior linked. The same three doors as the app (or, in demo mode only, Talk to Maya and Family Dashboard). There is no list of people anywhere. -->
   <main id="start" class="shell picker" hidden>
     <h1 class="brand">Maya</h1>
     <p class="pick-title">Your friendly companion, made by the Maya team.</p>
-    <div class="start-doors">
+    <!-- Demo-only: when MAYA_DEMO_MODE=on (default OFF), show only these two buttons on the start screen and hide the login doors below. -->
+    <div id="demoDoors" class="start-doors" hidden>
+      <button id="demoTalk" class="pick-btn door-btn primary" type="button">Talk to Maya</button>
+      <button id="demoDash" class="pick-btn door-btn" type="button">Family Dashboard</button>
+    </div>
+    <div id="loginDoors" class="start-doors">
       <a id="doorLogin" class="pick-btn door-btn primary" href="/login.html">Log in</a>
       <a id="doorSignup" class="pick-btn door-btn" href="/login.html#signup">Sign up</a>
       <button id="doorCode" class="pick-btn door-btn" type="button">Enter code</button>
     </div>
-    <p class="start-note">Log in or sign up is for the family. If your family sent you a link or a code, tap Enter code.</p>
+    <p id="startNote" class="start-note">Log in or sign up is for the family. If your family sent you a link or a code, tap Enter code.</p>
     <form id="codeForm" class="add-form" hidden>
       <label>The code, or the whole link <input id="codeIn" type="text" maxlength="120" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
       <button id="codeGo" class="pick-btn door-btn primary" type="submit">Open my chat</button>

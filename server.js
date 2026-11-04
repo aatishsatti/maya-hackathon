@@ -90,8 +90,8 @@ async function handleCare(req, res, url) {
   if (!sameOrigin(req)) return sendJson(res, 403, { error: 'Forbidden' });
   const parts = url.pathname.split('/').filter(Boolean).slice(2); // after /api/care
   const [a, b, c, d] = parts;
-  if (req.method === 'GET' && a === 'overview') { if (!needFamily(req, res, null)) return; const mine = familyLoginOn() ? new Set(accounts.seniorsOf(familyOf(req))) : null; return sendJson(res, 200, { seniors: care.overview().filter((x) => !mine || mine.has(x.id)) }); }
-  if (req.method === 'GET' && a === 'events') { if (!needFamily(req, res, null)) return; const fam = familyLoginOn() ? familyOf(req) : null; return openStream(req, res, (r) => care.attachFamily(r, fam ? (id) => accounts.owns(fam, id) : null)); }
+  if (req.method === 'GET' && a === 'overview') { if (!needFamily(req, res, null)) return; const fam = dashFamilyOf(req); const mine = familyLoginOn() && fam ? new Set(accounts.seniorsOf(fam)) : null; return sendJson(res, 200, { seniors: care.overview().filter((x) => !mine || mine.has(x.id)) }); }
+  if (req.method === 'GET' && a === 'events') { if (!needFamily(req, res, null)) return; const fam = familyLoginOn() ? dashFamilyOf(req) : null; return openStream(req, res, (r) => care.attachFamily(r, fam ? (id) => accounts.owns(fam, id) : null)); }
   if (!/^[a-f0-9]{8}$/.test(a || '') || !care.get(a)) return sendJson(res, 404, { error: 'Not found' });
   // The senior's own routes (the live stream, the push token, the activity ping, delivered / seen, declining a ring, the notification buttons) stay open: the senior has no login. Everything else here is the family's.
   const seniorRoute = (b === 'events' || b === 'device' || b === 'activity' || b === 'notifications' || (b === 'outreach' && d === 'decline') || b === 'ack');
@@ -214,13 +214,40 @@ async function handleWhatsapp(req, res, url) {
 // The lock is ON by default on a real (hosted) server: nobody can list people or open a dashboard without a family login, and a family sees only its own people. 'off' (or mock mode, local development and the tests)
 // leaves it open. MAYA_FAMILY_LOGIN=on forces it on anywhere.
 const familyLoginOn = () => process.env.MAYA_FAMILY_LOGIN === 'on' || (MODE === 'real' && process.env.MAYA_FAMILY_LOGIN !== 'off');
+// Demo-only: config flag (default OFF). When MAYA_DEMO_MODE=on, the web start screen shows Talk to Maya and Family Dashboard without a login screen.
+const demoModeOn = () => /^(on|1|true|yes)$/i.test(String(process.env.MAYA_DEMO_MODE || process.env.DEMO_MODE || '').trim());
+function demoResolved() {
+  // Demo-only: resolves the demo senior and demo account dynamically from existing data (never creates dummy data or hardcodes an id).
+  const all = memory.listProfiles();
+  const wantSenior = String(process.env.MAYA_DEMO_SENIOR || '').trim().toLowerCase();
+  const wantAcc = String(process.env.MAYA_DEMO_ACCOUNT || '').trim().toLowerCase();
+  if (wantSenior) {
+    const s = all.find((p) => p.id === wantSenior || p.name.toLowerCase() === wantSenior) || null;
+    const owners = s ? accounts.ownersOf(s.id) : [];
+    return { senior: s ? { id: s.id, name: s.name } : null, account: wantAcc || owners[0] || null };
+  }
+  if (wantAcc) {
+    const ids = accounts.seniorsOf(wantAcc);
+    const owned = all.filter((p) => ids.includes(p.id));
+    const s = owned[owned.length - 1] || all[all.length - 1] || null;
+    return { senior: s ? { id: s.id, name: s.name } : null, account: wantAcc };
+  }
+  const withOwner = all.filter((p) => accounts.ownersOf(p.id).length > 0);
+  const s = withOwner[withOwner.length - 1] || all[all.length - 1] || null;
+  const owners = s ? accounts.ownersOf(s.id) : [];
+  return { senior: s ? { id: s.id, name: s.name } : null, account: owners[0] || null };
+}
+const demoFamily = () => (demoModeOn() ? demoResolved().account : null);
 const secureReq = (req) => (req.headers['x-forwarded-proto'] || '').split(',')[0] === 'https';
 // The signed-in family for this request (a username) or null.
 const familyOf = (req) => accounts.fromRequest(req);
+// Demo-only fallback: uses the signed-in session first, or the demo account when MAYA_DEMO_MODE=on and no session cookie is present.
+const dashFamilyOf = (req) => accounts.fromRequest(req) || demoFamily();
 // A family-only route for senior `id` (or, with id null, any signed-in family). Sends the refusal itself and returns false when not allowed. With the switch off it lets everything through, as before.
 function needFamily(req, res, id) {
   if (!familyLoginOn()) return true;
-  const u = familyOf(req);
+  const u = dashFamilyOf(req);
+  if (!u && demoModeOn()) return true;   // demo-only: allow dashboard without login when demo mode is ON
   if (!u) { sendJson(res, 401, { error: 'Please log in as family.' }); return false; }
   if (id && !accounts.owns(u, id)) { sendJson(res, 403, { error: 'This is not one of your family members.' }); return false; }
   return true;
@@ -243,6 +270,12 @@ async function handleFamily(req, res, url) {
   }
   if (req.method === 'POST' && what === 'logout') { res.setHeader('Set-Cookie', accounts.clearCookie(secureReq(req))); return sendJson(res, 200, { ok: true }); }
   if (req.method === 'GET' && what === 'session') return sendJson(res, 200, { username: familyOf(req) });   // asked by the login page: never an error when nobody is signed in
+  if (req.method === 'GET' && what === 'me' && demoModeOn() && !familyOf(req)) {
+    // Demo-only: allow the family dashboard's Family Members sheet to read the demo account's seniors without login.
+    const df = demoFamily();
+    const list = df ? accounts.seniorsOf(df).map((id) => memory.load(id)).filter(Boolean) : memory.listProfiles();
+    return sendJson(res, 200, { username: df || 'demo', seniors: list.map((p) => ({ id: p.id, name: p.name, mode: care.view(p.id).mode })) });
+  }
   const u = familyOf(req);
   if (!u) return sendJson(res, 401, { error: 'Please log in as family.' });
   if (req.method === 'POST' && what === 'device') { const body = await readJson(req, 4096); if (!body) return sendJson(res, 400, { error: 'Bad request' }); try { accounts.addDevice(u, body.platform, body.token); console.log('push', JSON.stringify({ event: 'family device registered', platform: body.platform, ready: push.configured(body.platform) })); return sendJson(res, 200, { ok: true, ready: push.configured(body.platform) }); } catch (e) { return fail(e); } }   // the family's phone, so a ring reaches it while the app is closed
@@ -271,7 +304,12 @@ async function handleFamily(req, res, url) {
 async function handleApi(req, res, url) {
   if (url.pathname.startsWith('/api/family/')) return handleFamily(req, res, url);
   if (url.pathname === '/api/config' && req.method === 'GET') {
-    return sendJson(res, 200, { mode: MODE, commit: COMMIT });
+    return sendJson(res, 200, { mode: MODE, commit: COMMIT, ...(demoModeOn() ? { demo: true } : {}) });
+  }
+  // Demo-only: start screen asks if demo mode is ON (default OFF) and, when ON, which demo senior Talk to Maya opens.
+  if ((url.pathname === '/api/senior/demo' || url.pathname === '/api/demo') && req.method === 'GET') {
+    if (!demoModeOn()) return sendJson(res, 200, { demo: false });
+    return sendJson(res, 200, { demo: true, profile: demoResolved().senior });
   }
   // Profiles (family setup). Names and gender only; each profile has its own memory file.
   // The senior door asks who this phone is by the id in its link (the id is the key: it is never listed anywhere). Name only.
@@ -286,9 +324,11 @@ async function handleApi(req, res, url) {
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
   if (url.pathname === '/api/profiles' && req.method === 'GET') {
-    if (!familyLoginOn()) return sendJson(res, 200, { profiles: memory.listProfiles() });
-    const u = familyOf(req); if (!u) return sendJson(res, 401, { error: 'Please log in as family.' });   // nobody can list everyone's seniors
-    return sendJson(res, 200, { profiles: memory.listProfiles().filter((p) => accounts.owns(u, p.id)) });
+    if (!familyLoginOn()) return sendJson(res, 200, { profiles: memory.listProfiles(), ...(demoModeOn() ? { demo: true } : {}) });
+    const u = dashFamilyOf(req);
+    if (!u && demoModeOn()) return sendJson(res, 200, { profiles: memory.listProfiles(), demo: true });   // demo-only: no login screen in demo mode
+    if (!u) return sendJson(res, 401, { error: 'Please log in as family.' });   // nobody can list everyone's seniors
+    return sendJson(res, 200, { profiles: memory.listProfiles().filter((p) => accounts.owns(u, p.id)), ...(demoModeOn() ? { demo: true } : {}) });
   }
   if (url.pathname === '/api/profiles' && req.method === 'POST') {
     if (familyLoginOn()) return sendJson(res, 403, { error: 'A family member is added from the family page, after logging in.' });

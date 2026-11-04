@@ -629,7 +629,8 @@
       showLink();
     } catch { box.replaceChildren(el('div', 'empty', 'Could not load the family.')); }
   }
-  const logout = () => fetch('/api/family/logout', { method: 'POST' }).finally(() => location.replace('/login.html'));
+  let demoMode = false;   // Demo-only: when server has MAYA_DEMO_MODE=on (default OFF), stay off login.html
+  const logout = () => fetch('/api/family/logout', { method: 'POST' }).finally(() => location.replace(demoMode ? '/' : '/login.html'));
   if ($('logoutBtn2').addEventListener) $('logoutBtn2').addEventListener('click', logout);
   if ($('logoutTop').addEventListener) $('logoutTop').addEventListener('click', logout);
   // The link and the code for the person on screen: Copy link, Copy code, and Share (the phone's own share sheet where the browser has one).
@@ -730,9 +731,10 @@
   }
 
   api('/api/profiles').then((b) => {
+    demoMode = Boolean(b && b.demo);
     const ps = b.profiles || [];
     people = ps;
-    if (!ps.length) { location.replace('/login.html#add'); return; }   // a new family: add the first family member
+    if (!ps.length) { if (demoMode) { $('skel').hidden = true; showErr('Demo profile is not set up yet.'); return; } location.replace('/login.html#add'); return; }   // a new family: add the first family member
     $('who').replaceChildren(...ps.map((p) => { const o = el('option', null, p.name); o.value = p.id; return o; }));
     const saved = ps.find((p) => p.id === store.get());
     $('who').value = (saved || ps[0]).id;

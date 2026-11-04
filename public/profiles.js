@@ -4,8 +4,18 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const start = $('start'), callScreen = $('callScreen'), err = $('startError');
+  const demoDoors = $('demoDoors'), loginDoors = $('loginDoors'), startNote = $('startNote');
   const api = { id: null, name: null, setLive() {}, signOut: null };
   window.mayaProfile = api;
+
+  // Demo-only: when MAYA_DEMO_MODE=on on the server (default OFF), the start screen shows only Talk to Maya and Family Dashboard.
+  let demoOn = false, demoSenior = null;
+  function applyDemoDoors() {
+    if (demoDoors) demoDoors.hidden = !demoOn;
+    if (loginDoors) loginDoors.hidden = demoOn;
+    if (startNote) startNote.hidden = demoOn;
+    if (demoOn && $('codeForm')) $('codeForm').hidden = true;
+  }
 
   const store = {
     get() { try { return localStorage.getItem('mayaProfile'); } catch { return null; } },
@@ -26,9 +36,31 @@
     window.dispatchEvent(new Event('maya-profile'));
     callScreen.hidden = true; start.hidden = false;
     $('codeForm').hidden = true; $('codeIn').value = ''; say('');
+    applyDemoDoors();
   }
   // Sign out: this browser forgets the senior link and goes back to the start screen. The person's profile and chat on the server are untouched; the link or the code brings it all back.
   api.signOut = () => { store.set(''); showStart(); };
+
+  // Demo-only: check server demo flag (default OFF) and wire the two start-screen buttons.
+  const demoCheck = fetch('/api/senior/demo').then((r) => (r.ok ? r.json() : null)).then((d) => {
+    demoOn = Boolean(d && d.demo);
+    demoSenior = d && d.profile ? d.profile : null;
+    applyDemoDoors();
+    return d;
+  }).catch(() => null);
+  if ($('demoTalk')) $('demoTalk').addEventListener('click', async () => {
+    say('');
+    if (!demoSenior) await demoCheck;
+    if (!demoSenior) {
+      const d = await fetch('/api/senior/demo').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      if (d && d.profile) demoSenior = d.profile;
+    }
+    if (!demoSenior) { say('Demo profile is not set up yet.'); return; }
+    choose(demoSenior);
+  });
+  if ($('demoDash')) $('demoDash').addEventListener('click', () => {
+    location.href = '/family.html';
+  });
 
   // The id out of what a person typed or pasted: "a1b2c3d4", "/s/a1b2c3d4" or the whole link. null when it is not one.
   const codeFrom = (text) => { const m = /^(?:https?:\/\/[^\s/]+\/s\/|\/s\/|s\/)?([a-f0-9]{8})$/.exec(String(text).trim().toLowerCase().replace(/\/+$/, '')); return m ? m[1] : null; };

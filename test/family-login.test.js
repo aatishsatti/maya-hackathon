@@ -94,3 +94,33 @@ test('the family live stream is per family: only that family\'s seniors reach it
   const mine = got((id) => id === 'aaaaaaaa'); assert.match(mine, /aaaaaaaa/); assert.doesNotMatch(mine, /bbbbbbbb/);
   const all = got(null); assert.match(all, /aaaaaaaa/); assert.match(all, /bbbbbbbb/);
 });
+
+test('demo mode flag (MAYA_DEMO_MODE): default OFF keeps family routes locked; ON exposes demo senior and demo account dashboard without login while keeping login routes working', async () => {
+  const sOff = await startServer({ MAYA_FAMILY_LOGIN: 'on' });
+  try {
+    const dOff = await (await fetch(`${sOff.base}/api/senior/demo`)).json();
+    assert.deepEqual(dOff, { demo: false }, 'demo mode is OFF by default');
+    assert.equal((await J(sOff.base, '/api/profiles')).status, 401);
+  } finally { sOff.stop(); }
+
+  const sOn = await startServer({ MAYA_FAMILY_LOGIN: 'on', MAYA_DEMO_MODE: 'on' });
+  try {
+    const up = await J(sOn.base, '/api/family/signup', { method: 'POST', body: { username: 'demo.family', password: 'a good password' } });
+    assert.equal(up.status, 200);
+    const cookie = /maya_family=[^;]+/.exec(up.headers.get('set-cookie'))[0];
+    const add = await J(sOn.base, '/api/family/seniors', { method: 'POST', body: { name: 'Clara', tz: 'Europe/London', mode: 'cautious', consent: true } }, cookie);
+    assert.equal(add.status, 200);
+    const { profile } = await add.json();
+
+    // Without any login cookie: Talk to Maya resolves the demo senior and Family Dashboard loads the demo account
+    const demo = await (await fetch(`${sOn.base}/api/senior/demo`)).json();
+    assert.deepEqual(demo, { demo: true, profile: { id: profile.id, name: 'Clara' } });
+    const profs = await J(sOn.base, '/api/profiles');
+    assert.equal(profs.status, 200);
+    assert.deepEqual((await profs.json()).profiles.map((p) => p.id), [profile.id]);
+    assert.equal((await J(sOn.base, `/api/care/${profile.id}`)).status, 200, 'demo dashboard opens without login cookie');
+    assert.equal((await J(sOn.base, '/api/family/me')).status, 200);
+    // Normal login route still works
+    assert.equal((await J(sOn.base, '/api/family/login', { method: 'POST', body: { username: 'demo.family', password: 'a good password' } })).status, 200);
+  } finally { sOn.stop(); }
+});
