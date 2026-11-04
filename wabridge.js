@@ -48,6 +48,7 @@ class PhoneBridge {
     this.mic = new Mic({ sink: (frame) => this.toCall(frame), log });
     this.socket = new PhoneSocket({ onEvent: (m) => this.onEvent(m), onVoice: (b) => this.onVoice(b), onClose: (code) => this.finish(code === 1000 ? 'maya hung up' : 'fatal') });
     this.socket.outbound = outbound;
+    this.socket.whatsapp = true;   // marks a WhatsApp phone call: call.js keeps the server (MMS) voice for these ONLY; web/app calls never use it (their voice is the female device voice, else text)
     this.call = newCall(this.socket, apiKey);
     if (prefetch && this.call) this.call.prefetched = prefetch;
   }

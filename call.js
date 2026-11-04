@@ -491,7 +491,7 @@ const SILENCE_FEED_MS = 100;     // whenever the browser's audio stops arriving,
 
 // Fix #4. An AbortError ("This operation was aborted") is a cancelled request, never a reason to end a call: an interrupt, a correction or a newer reply cancels the one before it.
 const isAbortErr = (e) => Boolean(e) && (e.name === 'AbortError' || e.code === 'ABORT_ERR' || e.code === 20 || /operation was aborted|^aborted$|AbortError/i.test(String(e.message || e)));
-// Locked: Maya's voice is NEVER male. Meta MMS (facebook/mms-tts-eng) is one voice and it is male, and Meta ships no female server voice, so the server does not speak on a web/app call.
+// Locked: Maya's voice is NEVER male on web/app. Meta MMS (facebook/mms-tts-eng) is one voice and it is male, and Meta ships no female server voice, so the server does not speak on a web/app call (WhatsApp phone calls keep it: see Call.serverVoiceOn).
 // The female voice is the device/browser one (client). Only a server voice proven female may be switched on: MAYA_SERVER_VOICE=female-proven. Default OFF.
 const serverVoiceAllowed = () => process.env.MAYA_SERVER_VOICE === 'female-proven';
 
@@ -652,6 +652,9 @@ class Call {
   }
 
   send(obj) { this.ws.send(JSON.stringify(obj)); }
+
+  // The server (MMS) voice speaks on WhatsApp phone calls only (wabridge marks its socket); a web/app call never uses it (male voice): device female voice, else text.
+  serverVoiceOn() { return Boolean(this.ws && this.ws.whatsapp === true) || serverVoiceAllowed(); }
 
   fatal(message) {
     if (this.closed) return;
@@ -836,7 +839,7 @@ class Call {
       if (!this.deviceVoice) {
         this.startWarm();
         const toSpeak = (typeof m.respeak === 'string' && m.respeak.trim()) ? m.respeak.trim() : '';
-        if (toSpeak && (!this.noVoice || this.fakeAudio) && (this.noVoice || serverVoiceAllowed())) {   // no female server voice: nothing is synthesized, the text is already on screen
+        if (toSpeak && (!this.noVoice || this.fakeAudio) && (this.noVoice || this.serverVoiceOn())) {   // no female server voice: nothing is synthesized, the text is already on screen
           if (!this.abort || this.abort.signal.aborted) this.abort = new AbortController();
           this.responding = true;
           this.speakReply(fixedReply(toSpeak), null, this.gen, { record: false, greeting: true, maxSentences: 3 }).catch(() => {});
@@ -2429,7 +2432,7 @@ class Call {
           this.lastSaidAt = Date.now();
           const holdExtra = !started && !leadIn && holdBack ? HOLD_BACK_MS : 0;
           this.playUntil = Math.max(this.playUntil, this.lastSaidAt) + holdExtra + spoken.length * (bye ? 150 : 75);
-        } else if (!this.noVoice && !serverVoiceAllowed()) { job.err = new Error('No female server voice is available'); job.done = true; }   // never the male MMS voice
+        } else if (!this.noVoice && !this.serverVoiceOn()) { job.err = new Error('No female server voice is available'); job.done = true; }   // never the male MMS voice
         else if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no TTS request
         else (this.noVoice ? fakeSpeech(tagged, signal, onVoiceChunk) : streamSpeech(tagged, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });

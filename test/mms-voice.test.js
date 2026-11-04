@@ -664,5 +664,9 @@ test('Fix #4 server: an AbortError never ends a call; the server never synthesiz
   await c2.speakReply(require('../reply').fixedReply('Hello there.'), null, c2.gen, { record: false, greeting: true, maxSentences: 2 });
   assert.ok(!frames.some((f) => Buffer.isBuffer(f) || f instanceof Uint8Array), 'no audio frame was sent by the server');
   assert.ok(frames.some((f) => typeof f === 'string' && /ttsFailed/.test(f)), 'the text is delivered (ttsFailed carries it for a device voice)');
+  // WhatsApp phone calls (wabridge marks its socket) keep the server voice; web/app calls never do
+  const wa = new Call({ readyState: 1, send() {}, close() {}, whatsapp: true, outbound: false }, 'test-key'); clearInterval(wa.endTimer);
+  assert.equal(wa.serverVoiceOn(), true, 'a WhatsApp call may use the server voice'); assert.equal(c2.serverVoiceOn(), false, 'a web/app call may not'); wa.end();
+  assert.match(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'wabridge.js'), 'utf8'), /this\.socket\.whatsapp = true/, 'the bridge marks its socket');
   c2.end(); c.end(); care.stop();
 });

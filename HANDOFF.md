@@ -1,3 +1,12 @@
+# WHATSAPP CALLS KEEP THE SERVER VOICE (follow-up to `2801eda`, working tree, uncommitted, NOT pushed)
+Fix #4 (`2801eda`) turned the server (MMS) voice off inside `call.js`, but WhatsApp phone calls run the same `Call` class through `wabridge.js`, so they lost their voice. Restored for WhatsApp calls ONLY:
+- `wabridge.js`: one line, `this.socket.whatsapp = true` (marks a WhatsApp phone call socket).
+- `call.js`: `Call.serverVoiceOn()` = socket marked `whatsapp` OR env `MAYA_SERVER_VOICE=female-proven`. The two server-voice gates (`respeak` and `speakReply`) use it. Web and app calls (no mark) still never use the server voice: female device voice, else text. The male MMS voice on WhatsApp calls is as live before Fix #4 (still the open "never male" issue, unchanged, decision pending).
+- Not changed: `chat.js`, `whatsapp.js`, template, invite, unlink, message delivery, 24 h window, web/app fallback.
+- Tests (targeted): `mms-voice` 9/0 (new assertion: a `whatsapp`-marked Call may use the server voice, a web/app Call may not, the bridge marks its socket), `novoice` 8/0, `interrupt` 4/0, `prompt` 60/0. `wabridge.test.js` hangs in this environment and was NOT run, so the real call-audio path through the bridge is NOT proven by a test. NOT live-proven: a real WhatsApp call speaking again.
+
+---
+
 # READ THIS FIRST: FIX #4 (WEB VOICE GUARANTEE + ABORT NEVER ENDS A CALL) + CANCEL FALSE-CONFIRMATION (4 Nov 2026; working tree on top of `5f468b8`, uncommitted, NOT pushed, NOT deployed)
 
 This section supersedes EVERY older live/deployment/status line below. Argon quit with zero Fix #4 changes; this job is the only builder. Muse verifies the diff before any push.
