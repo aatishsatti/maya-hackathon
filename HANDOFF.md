@@ -1,3 +1,44 @@
+# READY FOR MUSE VERIFICATION, NOT PUSHED (working tree on top of `84fe439`; NOT committed, NOT pushed, NOT deployed)
+**Waiting for: Muse diff verification, then Aatish's push words, then Aatish hearing web voice live on his own Chrome 156 / phone. Web voice is NOT called fixed.**
+
+## Comment-only follow-up (code unchanged)
+`public/app.js` line 509 and line 637 comments now say 3500 ms (local voice) / 4500 ms (network voice) instead of 1000 ms. Code guard unchanged: `localService === false ? 4500 : 3500`; chain unchanged (worst case before text ~10.5 s). The remaining "1000 ms" text at lines 638-639 is the evidence note about the OLD guard, not a stale claim. RETRY_MS, PING_MS, MIN_BLOB, the speechSynthesis fallback and the watchdog formula were not touched.
+
+## Full-suite result (measured, per file, 150 s timeout each, because `node --test test/*.test.js` HANGS on `wabridge.test.js` and never finishes; the first full run was stopped after 21 min)
+Working tree: 1013 tests, 958 pass, 51 fail, 4 skipped, 0 cancelled. 14 of 106 files exit non-zero: background, chat, harvey-fixes, medical (timeout), mms-voice, privacy, researchgate, researchreuse, scam-flow, setrem, stopcalls, wabridge (timeout), web, whatsapp (timeout).
+Clean export of `84fe439` (git archive, no .git/models/data): same totals 1013 / 958 / 51 / 4 and the same 14 files. So the 51 failures are NOT caused by this change; they are failures present at HEAD in this environment (research/web-lookup, medicine, privacy-page, whatsapp/wabridge hang). I did not investigate their cause. Caveat: the HEAD copy is not a perfect baseline (it lacks the MMS model files and git metadata, so `mms-tts-eng` and "data/media git ignores" tests fail there only).
+Targeted: mms-voice 9/0 (4 consecutive reruns on the working tree), novoice 8/0, interrupt 4/0, prompt 60/0 (3 skipped).
+
+## The mms-voice 7 pass / 2 fail flake: names CAPTURED this time (seen once in the 106-file sequential run; 9/0 on the next 4 reruns)
+1. `End-to-end call latency stages: First Call vs Second Call (no 7-8s beep delay from Call 1 flushPending) and Greeting vs Normal Reply, plus deviceVoice post-voiceReady fallback correction` — assertion "Call 2 ready/chime beep (101ms) fires immediately without waiting for Call 1 flushPending" (actual false, expected true).
+2. `Production-path greeting event order: openMeta + greet emits ready -> thinking while Spark greeting is still in flight, then speak -> audioEnd when Spark finishes` — assertion "Spark greeting and Transcribe handshake both started in parallel" (actual false).
+Both are timing-sensitive call/greeting-order tests, not the start-guard case 6. Cause NOT proven (timing under load is the likely suspect, not shown). Not fixed.
+
+## `Memory update failed: Meta Spark failed (HTTP 401 invalid_api_key)`
+Appears in passing mms-voice runs too (and in the failing run, once). It is test-environment noise from having no valid key; it does not explain the flake (the 9/0 runs print it as well).
+
+---
+
+# WEB VOICE ROOT CAUSE PROVEN FROM THE USER'S OWN CHROME: START GUARD TOO SHORT (after `84fe439`, working tree, uncommitted, NOT pushed, NOT deployed)
+**File changed:** `public/app.js` (start guard), `test/mms-voice.test.js` (new case 6), `HANDOFF.md`. Not touched: `call.js`, `whatsapp.js`, `wabridge.js`, `social.js`, app, scam, medicine, quiet, demo, template, the echo gate, the status line.
+
+## Evidence (user's own Chrome console, live `84fe439`, Chrome 156.0.0.0, Mac OS X 10_15_7, 199 voices)
+`maya-voice: voices` picked Samantha (local). Then, verbatim: `failed Samantha did not start in 1000 ms`, `failed Flo (English (United States)) did not start in 1000 ms`, `failed Samantha did not start in 1000 ms`, then `text only` with the same three reasons. The voices exist and are local; the OS speech service on that Mac is SLOW to fire `onstart` (more than 1 s, plausibly because the mic is live). The old 1000 ms guard cancelled a voice that would have spoken and the alternates failed identically.
+
+## Fix
+Start guard: local voice **3500 ms** (was 1000), network/remote voice **4500 ms** (was 2500). `onerror` still fails a voice at once. Chain unchanged (primary -> one alternate -> one chain retry -> text), so the worst case before text is now ~10 s on a Mac whose speech never starts; a voice that is merely slow now speaks.
+
+## Tested in real Chrome 157 on this Mac
+- Forced slow start (real `speak()` delayed 2000 ms, same real Chrome): NEW guard: Samantha `onstart +2037 ms`, speaks, no failure. OLD 1000 ms guard, same test: Samantha fails -> Flo fails -> Samantha fails -> text, orb listening: **the user's exact cascade reproduced**.
+- Real call, real Chrome, real mic, real Render backend (local fixed `public/` through a proxy): greeting + 3 spoken lines from me (Mac `say`), replies in order, device voice every time, 0 `maya-voice: failed`/`text only`, no self-reply, no "You:" echo of her own words, clean end. My scripted lines 4-5 landed while she was speaking and were (by design of the echo gate) not heard, so this run is 3 user turns, not 5.
+- Unit test: `mms-voice` case 6: a local voice whose `onstart` comes after 1500 ms is not abandoned and no alternate is tried.
+
+## Tests (targeted): `mms-voice` 9/0, `novoice` 8/0, `interrupt` 4/0, `prompt` 60/0 (3 skipped). NOTE: on the FIRST run right after an edit `mms-voice` showed 7 pass / 2 fail twice (here and before the `84fe439` push) and 9/0 on every rerun; I could not capture the two failing names. Unexplained, likely cold start (model load/timing); not reproduced.
+
+## NOT live-proven: the user's laptop and phone Chrome hearing the voice with this guard. Do NOT call web voice fixed until the user hears it. If his Chrome still fails, read the new `maya-voice: failed ... did not start in 3500 ms` line: that would mean his speech service does not start at all, not just slowly.
+
+---
+
 # WEB VOICE: ECHO CUT-OFF FIXED; USER'S CHROME SILENCE STILL UNPROVEN (after `b9088e1`; commit "Web voice echo gate + status line fix")
 **Status in one line: the echo cut-off is fixed and proven in real Chrome; web voice is NOT claimed fixed. The user's laptop/phone Chrome silence is still unproven and needs his own console test (`speechSynthesis.speak(new SpeechSynthesisUtterance('test'))`, the `maya-voice:` lines and any red line).**
 **File changed:** `public/app.js` only (plus this note). Not touched: `call.js`, `whatsapp.js`, `wabridge.js`, `social.js`, scam, medicine, quiet, demo, template, iOS.

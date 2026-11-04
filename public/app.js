@@ -506,7 +506,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (c && (!u || c.activeUtterance === u)) c.activeUtterance = null;
   }
 
-  // Voice guarantee (Fix #4). Order: device female voice -> alternate device female voice (up to 3 tries, each given 1000 ms to start) -> text, retried on the next reply.
+  // Voice guarantee (Fix #4). Order: device female voice -> alternate device female voice (up to 3 tries, each given 3500 ms (local voice) / 4500 ms (network voice) to start) -> text, retried on the next reply.
   // The server NEVER speaks on a web call: the only server voice (Meta MMS eng) is male, and Maya's voice is never male. So there is no server-voice step here.
   function voiceUnavailable(c, text) {
     const clean = String(c.lastTurnText || text || '').trim();
@@ -634,9 +634,11 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     };
     u.onend = () => advance(false);
     u.onerror = (e) => handleFailure((e && e.error) || 'error');
-    // If the device voice has not started within 1000 ms, the next female device voice is tried; when none is left the reply is shown as text (never a server voice).
-    // A network (remote) voice such as Chrome's "Google US English" needs a round trip before it starts: it gets 2500 ms, a local voice 1000 ms.
-    const startGuardMs = c.pickedVoice.localService === false ? 2500 : 1000;
+    // If the device voice has not started within 3500 ms (local) / 4500 ms (network), the next female device voice is tried; when none is left the reply is shown as text (never a server voice).
+    // LIVE-PROVEN on the user's own Chrome (156, Mac): the voices are all there and local, but Samantha did not fire onstart within 1000 ms (the OS speech service is slow to start while the
+    // mic is live), so a 1000 ms guard cancelled a voice that would have spoken and the retries failed the same way. A voice that is slow but working must be given time: 3500 ms for a
+    // local voice, 4500 ms for a network (remote) voice such as "Google US English". onerror still fails a voice at once.
+    const startGuardMs = c.pickedVoice.localService === false ? 4500 : 3500;
     u._startGuard = setTimeout(() => {
       if (!startedAt && c.activeUtterance === u) handleFailure(`did not start in ${startGuardMs} ms`);
     }, startGuardMs);

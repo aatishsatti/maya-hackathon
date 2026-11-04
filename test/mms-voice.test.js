@@ -648,6 +648,25 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
   assert.match(env3.els.error ? env3.els.error.textContent : '', /voice could not start/i, '(5) the failure is reported on screen with the voices tried');
   assert.equal(env3.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false).length, 0, '(5) still no server voice');
   env3.sandbox.mayaEndCall();
+
+  // Case 6 (live-proven on the user's Chrome 156): a local voice that is merely SLOW (onstart ~1.5 s) is a working voice. The start guard (3500 ms local) must not cancel it or try another voice.
+  const env4 = makeEnv({ voices: [{ name: 'Samantha', lang: 'en-US', localService: true }, { name: 'Flo (English (United States))', lang: 'en-US', localService: true }], stuckSpeakingOnCancel: false });
+  await new Promise((r) => setTimeout(r, 15));
+  env4.sandbox.mayaStartCall();
+  await new Promise((r) => setTimeout(r, 25));
+  const ws4 = env4.getWs();
+  ws4.onmessage({ data: JSON.stringify({ type: 'ready', resume: 'tok4' }) });
+  ws4.onmessage({ data: JSON.stringify({ type: 'speak', text: 'Hello Henry.', piece: 'Hello Henry.', deviceVoice: true, hold: 0 }) });
+  ws4.onmessage({ data: JSON.stringify({ type: 'audioEnd' }) });
+  await new Promise((r) => setTimeout(r, 1500));   // longer than the old 1000 ms guard
+  assert.equal(env4.spokenUtterances.length, 1, '(6) the slow voice was not abandoned: still the one utterance');
+  assert.equal(env4.spokenUtterances[0].voice.name, 'Samantha');
+  env4.spokenUtterances[0].onstart(); env4.spokenUtterances[0].onend();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(env4.spokenUtterances.length, 1, '(6) no alternate voice was needed');
+  assert.ok(!(env4.els.error && /could not start/i.test(env4.els.error.textContent)), '(6) no text-only report');
+  assert.equal(env4.els.orb.dataset.state, 'listening', '(6) finished normally');
+  env4.sandbox.mayaEndCall();
 });
 
 test('Fix #4 server: an AbortError never ends a call; the server never synthesizes a (male) MMS voice unless a female one is proven', async () => {
