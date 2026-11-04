@@ -472,11 +472,13 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
     class FakeUtterance {
       constructor(text) { this.text = text; this.onend = null; this.onerror = null; }
     }
+    const playedSources = [];
+    let ctxResumed = 0;
     class FakeAudioContext {
       constructor() {
         this.sampleRate = 16000;
         this.currentTime = 0;
-        this.state = 'running';
+        this.state = 'suspended';
         this.destination = {};
         this.audioWorklet = { addModule: async () => {} };
       }
@@ -484,7 +486,20 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
       createMediaStreamSource() { return { connect() { return { connect() {} }; } }; }
       createGain() { return { gain: { value: 1, cancelScheduledValues() {}, setTargetAtTime() {}, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() { return { connect() {} }; } }; }
       createOscillator() { return { frequency: { value: 440 }, connect() {}, start() {}, stop() {} }; }
-      resume() { return Promise.resolve(); }
+      createBuffer(_channels, length, sampleRate) {
+        return { length, sampleRate, duration: length / sampleRate, copyToChannel() {} };
+      }
+      createBufferSource() {
+        const src = {
+          buffer: null,
+          onended: null,
+          connect() {},
+          start() { playedSources.push(src); },
+          stop() {},
+        };
+        return src;
+      }
+      resume() { ctxResumed += 1; this.state = 'running'; return Promise.resolve(); }
       close() { return Promise.resolve(); }
     }
     class FakeAudioWorkletNode {
@@ -532,43 +547,56 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
     sandbox.window = sandbox;
     sandbox.window.mayaProfile = { id: '197abefc', name: 'Henry', setLive() {} };
     vm.runInNewContext(appSrc, sandbox);
-    return { sandbox, els, wsSent, getWs: () => lastWs, speechSynthesis, spokenUtterances, getCancelCount: () => cancelCount };
+    return { sandbox, els, wsSent, getWs: () => lastWs, speechSynthesis, spokenUtterances, playedSources, getCtxResumed: () => ctxResumed, getCancelCount: () => cancelCount };
   }
 
-  // Case 1, 2, 3: speechSynthesis.speaking is stuck true at pump start (and stays true across cancel() and inside onend)
+  // Case 1, 2, 3: speechSynthesis.speaking is stuck true at pump start (and stays true across cancel() and inside onend);
+  // local female voice (Ava, localService:true) is picked ahead of remote Google US English (localService:false)
   const env1 = makeEnv({
-    voices: [{ name: 'Samantha', lang: 'en-US' }],
+    voices: [
+      { name: 'Google US English', lang: 'en-US', localService: false },
+      { name: 'Ava (Enhanced)', lang: 'en-US', localService: true },
+    ],
     stuckSpeakingOnCancel: true,
   });
   await new Promise((r) => setTimeout(r, 15));
   env1.sandbox.mayaStartCall();
   await new Promise((r) => setTimeout(r, 25));
+  assert.ok(env1.getCtxResumed() >= 1, 'playback AudioContext is resumed inside startCall user gesture');
   const ws1 = env1.getWs();
   ws1.onmessage({ data: JSON.stringify({ type: 'ready', resume: 'tok1' }) });
   ws1.onmessage({ data: JSON.stringify({ type: 'speak', text: 'Hello Henry.', piece: 'Hello Henry.', deviceVoice: true, hold: 0 }) });
   ws1.onmessage({ data: JSON.stringify({ type: 'caption', text: 'Hello Henry. How are you feeling today?', piece: 'How are you feeling today?', deviceVoice: true }) });
   ws1.onmessage({ data: JSON.stringify({ type: 'audioEnd' }) });
 
-  // Wait 160 ms (more than 3 x 45 ms ticks): must NOT loop cancel() forever, and first utterance MUST have reached speak()
-  await new Promise((r) => setTimeout(r, 160));
-  assert.ok(env1.spokenUtterances.length >= 1, '(1) first queued utterance reached speechSynthesis.speak() even when speaking was stuck true at pump start');
-  assert.ok(env1.getCancelCount() <= 2, `(3) no infinite cancel loop (cancelCount=${env1.getCancelCount()})`);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(env1.spokenUtterances.length >= 1, '(1) first queued utterance reached speechSynthesis.speak()');
+  assert.equal(env1.spokenUtterances[0].voice.name, 'Ava (Enhanced)', 'local female voice is preferred over remote Google US English');
+  assert.ok(env1.getCancelCount() <= 1, `(3) no infinite cancel loop (cancelCount=${env1.getCancelCount()})`);
   assert.equal(env1.spokenUtterances[0].text, 'Hello Henry.');
+  assert.equal(env1.els.orb.dataset.state, 'speaking', 'orb stays in speaking state while device voice is playing');
 
-  // Trigger onend of utterance 1 while speechSynthesis.speaking is STILL true (Chrome/WebKit behavior inside onend)
+  // Trigger onstart + onend of utterance 1 while speechSynthesis.speaking is STILL true (Chrome/WebKit behavior inside onend)
+  if (env1.spokenUtterances[0].onstart) env1.spokenUtterances[0].onstart();
   env1.speechSynthesis.speaking = true;
   env1.spokenUtterances[0].onend();
-  await new Promise((r) => setTimeout(r, 120));
+  await new Promise((r) => setTimeout(r, 60));
   assert.equal(env1.spokenUtterances.length, 2, '(2) second queued utterance reached speak() after first completed');
   assert.equal(env1.spokenUtterances[1].text, 'How are you feeling today?', '(2) queue drains in exact order');
+  if (env1.spokenUtterances[1].onstart) env1.spokenUtterances[1].onstart();
   env1.speechSynthesis.speaking = false;
   env1.spokenUtterances[1].onend();
   await new Promise((r) => setTimeout(r, 20));
+  assert.equal(env1.els.orb.dataset.state, 'listening', 'orb flips back to listening only after the last utterance completes');
   env1.sandbox.mayaEndCall();
 
-  // Case 4: When no female English device voice is available (pickVoice() -> null), fallback to Meta MMS is requested for the greeting
+  // Case 4: When pickVoice() returns null (or when u.onerror fires on a broken browser voice), fallback to Meta MMS
+  // coalesces speak+caption into one respeak request, keeps orb in 'speaking' across the initial empty 'audioEnd',
+  // server Call synthesizes MMS audio and streams binary PCM, client plays it via AudioBufferSourceNode, and orb flips to 'listening' only when audio finishes.
+  const { Call } = require('../call');
+  const care = require('../care');
   const env2 = makeEnv({
-    voices: [{ name: 'Alex', lang: 'en-US' }], // male voice only -> pickVoice() returns null
+    voices: [{ name: 'Alex', lang: 'en-US', localService: true }], // male voice only -> pickVoice() returns null
     stuckSpeakingOnCancel: false,
   });
   await new Promise((r) => setTimeout(r, 15));
@@ -576,12 +604,70 @@ test('Web browser speechSynthesis simulation (Suspects a-d): reaches speak() whe
   await new Promise((r) => setTimeout(r, 25));
   const ws2 = env2.getWs();
   ws2.onmessage({ data: JSON.stringify({ type: 'ready', resume: 'tok2' }) });
-  // Simulate server sending greeting with deviceVoice: true (e.g. if server started before deviceVoice:false arrived)
+  // Simulate server sending 2-sentence greeting with deviceVoice: true followed immediately by empty audioEnd
   ws2.onmessage({ data: JSON.stringify({ type: 'speak', text: 'Hello Henry!', piece: 'Hello Henry!', deviceVoice: true, hold: 0 }) });
-  await new Promise((r) => setTimeout(r, 30));
-  const fallbackMsgs = env2.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false && m.respeak === 'Hello Henry!');
-  assert.equal(fallbackMsgs.length, 1, '(4) fallback to Meta MMS server voice with respeak is requested when no female device voice is picked');
+  ws2.onmessage({ data: JSON.stringify({ type: 'caption', text: 'Hello Henry! How are you today?', piece: 'How are you today?', deviceVoice: true }) });
+  ws2.onmessage({ data: JSON.stringify({ type: 'audioEnd' }) });
+  assert.equal(env2.els.orb.dataset.state, 'speaking', 'orb stays in speaking state while MMS fallback respeak is pending (does not snap to listening on initial empty audioEnd)');
+
+  await new Promise((r) => setTimeout(r, 35));
+  const fallbackMsgs = env2.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false && m.respeak);
+  assert.equal(fallbackMsgs.length, 1, '(4) coalesced into exactly 1 fallback respeak message');
+  assert.equal(fallbackMsgs[0].respeak, 'Hello Henry! How are you today?', '(4) full turn text is requested for MMS respeak');
+
+  // Feed that exact fallback message into server Call (with fakeAudio enabled so no network call is needed) and pipe server frames to client ws2
+  const srvCall = new Call({
+    readyState: 1,
+    send(frame) {
+      if (typeof frame === 'string') ws2.onmessage({ data: frame });
+      else ws2.onmessage({ data: frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength) });
+    },
+    close() {},
+  }, 'test-key');
+  clearInterval(srvCall.endTimer);
+  srvCall.profile = require('../memory').load('197abefc');
+  srvCall.noVoice = true;
+  srvCall.fakeAudio = true;
+  srvCall.deviceVoice = true;
+  srvCall.abort = null; // even if abort is null or aborted, deviceVoice fallback creates a fresh AbortController
+  srvCall.onBrowserMessage(fallbackMsgs[0]);
+
+  for (let i = 0; i < 40 && env2.playedSources.length === 0; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.ok(env2.playedSources.length >= 1, '(4) MMS fallback audio chunks reached client and started playing via AudioContext buffer source');
+  assert.equal(env2.els.orb.dataset.state, 'speaking', 'orb remains speaking while MMS audio buffer is playing');
+  // Wait for server speakReply to finish sending audioEnd, then finish playing all buffered sources
+  await new Promise((r) => setTimeout(r, 450));
+  for (const src of [...env2.playedSources]) {
+    if (src.onended) src.onended();
+  }
+  assert.equal(env2.els.orb.dataset.state, 'listening', 'orb flips to listening after MMS fallback audio finishes playing');
+  srvCall.end();
+  care.stop();
   env2.sandbox.mayaEndCall();
+
+  // Case 5: When a picked browser voice fires u.onerror at runtime (e.g. broken remote voice in Chrome),
+  // it does NOT silently snap orb to listening — it triggers MMS respeak fallback and plays server MMS audio.
+  const env3 = makeEnv({
+    voices: [{ name: 'Google US English', lang: 'en-US', localService: false }],
+    stuckSpeakingOnCancel: false,
+  });
+  await new Promise((r) => setTimeout(r, 15));
+  env3.sandbox.mayaStartCall();
+  await new Promise((r) => setTimeout(r, 25));
+  const ws3 = env3.getWs();
+  ws3.onmessage({ data: JSON.stringify({ type: 'ready', resume: 'tok3' }) });
+  ws3.onmessage({ data: JSON.stringify({ type: 'speak', text: 'Good afternoon Henry.', piece: 'Good afternoon Henry.', deviceVoice: true, hold: 0 }) });
+  ws3.onmessage({ data: JSON.stringify({ type: 'audioEnd' }) });
+  assert.equal(env3.spokenUtterances.length, 1);
+  // Simulate Chrome firing u.onerror 2 ms after speak(u)
+  env3.spokenUtterances[0].onerror({ error: 'synthesis-failed' });
+  assert.equal(env3.els.orb.dataset.state, 'speaking', 'orb stays speaking when u.onerror triggers MMS fallback');
+  await new Promise((r) => setTimeout(r, 35));
+  const fb3 = env3.wsSent.filter((m) => m.type === 'deviceVoice' && m.on === false && m.respeak === 'Good afternoon Henry.');
+  assert.equal(fb3.length, 1, 'u.onerror triggers MMS respeak fallback');
+  env3.sandbox.mayaEndCall();
 });
 
 

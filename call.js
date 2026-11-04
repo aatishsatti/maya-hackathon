@@ -819,12 +819,15 @@ class Call {
       this.playUntil = Date.now();
       if (!this.responding && this.greeted && !this.muted && !this.pending.length && !this.curTurn) this.armSilence();
     } else if (m.type === 'deviceVoice') {
-      // Browser voiceReady() resolved after 'start': update deviceVoice and fall back to server Meta MMS if no female device voice was found.
+      // Browser voiceReady() resolved after 'start' or browser speechSynthesis failed: update deviceVoice and fall back to server Meta MMS if no female device voice was found.
       this.deviceVoice = !this.noVoice && m.on === true;
       if (!this.deviceVoice) {
         this.startWarm();
-        if (typeof m.respeak === 'string' && m.respeak.trim() && !this.noVoice) {
-          this.speakReply(fixedReply(m.respeak.trim()), null, this.gen, { record: false }).catch(() => {});
+        const toSpeak = (typeof m.respeak === 'string' && m.respeak.trim()) ? m.respeak.trim() : '';
+        if (toSpeak && (!this.noVoice || this.fakeAudio)) {
+          if (!this.abort || this.abort.signal.aborted) this.abort = new AbortController();
+          this.responding = true;
+          this.speakReply(fixedReply(toSpeak), null, this.gen, { record: false, greeting: true, maxSentences: 3 }).catch(() => {});
         }
       }
     }

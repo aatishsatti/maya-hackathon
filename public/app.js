@@ -249,19 +249,30 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   const VOICE_VOLUME = 1.0;
   const VOICE_RATE = 1.0;
   const VOICE_PITCH = 1.0;
-  const FEMALE_NAMES = ['Samantha', 'Google US English', 'Ava', 'Allison', 'Susan', 'Karen',
-    'Victoria', 'Zira', 'Aria', 'Jenny', 'Joanna', 'Moira', 'Tessa', 'Serena', 'Female'];
+  const FEMALE_NAMES = ['Samantha', 'Ava', 'Allison', 'Susan', 'Karen',
+    'Victoria', 'Moira', 'Tessa', 'Serena', 'Flo', 'Shelley', 'Sandy', 'Kathy', 'Nicky',
+    'Zira', 'Aria', 'Jenny', 'Joanna', 'Google US English', 'Female'];
+  const failedVoices = new Set();
+
+  function matchesFemaleName(voiceName, target) {
+    const n = String(voiceName || '');
+    return n.startsWith(target) || n.includes(target);
+  }
 
   function pickVoice() {
     if (!window.speechSynthesis) return null;
-    const en = speechSynthesis.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang));
-    for (const name of FEMALE_NAMES) {
-      const us = en.find((v) => /^en[-_]US$/i.test(v.lang) && v.name.startsWith(name));
-      if (us) return us;
-    }
-    for (const name of FEMALE_NAMES) {
-      const any = en.find((v) => v.name.startsWith(name));
-      if (any) return any;
+    const en = speechSynthesis.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang) && !failedVoices.has(v.name));
+    // Prefer local OS voices (v.localService !== false, e.g. macOS Samantha) over remote browser voices (e.g. Google US English) that can fail or stall.
+    const localEn = en.filter((v) => v.localService !== false);
+    for (const pool of [localEn, en]) {
+      for (const name of FEMALE_NAMES) {
+        const us = pool.find((v) => /^en[-_]US$/i.test(v.lang) && matchesFemaleName(v.name, name));
+        if (us) return us;
+      }
+      for (const name of FEMALE_NAMES) {
+        const any = pool.find((v) => matchesFemaleName(v.name, name));
+        if (any) return any;
+      }
     }
     return null;
   }
@@ -471,8 +482,10 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
 
   function clearActiveUtterance(c, u) {
     if (u) {
+      clearTimeout(u._startGuard);
       clearTimeout(u._watchdog);
       clearInterval(u._keepalive);
+      u.onstart = null;
       u.onend = null;
       u.onerror = null;
       deviceUtterances.delete(u);
@@ -481,13 +494,25 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   }
 
   function requestMmsFallback(c, text) {
-    const clean = String(text || '').trim();
+    const clean = String(c.lastTurnText || text || '').trim();
     c.deviceVoice = false;
     c.sentDeviceVoice = false;
+    c.mmsFallbackPending = Boolean(clean);
+    c.voiceDone = false;
+    if (c.ctx && c.ctx.state === 'suspended') c.ctx.resume().catch(() => {});
+    if (orb.dataset.state !== 'speaking') setState('speaking');
     captionEl.textContent = captionEl.textContent.replace(/^Maya \(device browser voice\):/, 'Maya (Meta MMS server voice fallback):');
-    if (clean && c.ws && c.ws.readyState === WebSocket.OPEN) {
-      c.ws.send(JSON.stringify({ type: 'deviceVoice', on: false, respeak: clean }));
-    }
+    if (!clean) return;
+    c.pendingRespeak = clean;
+    clearTimeout(c.respeakTimer);
+    c.respeakTimer = setTimeout(() => {
+      c.respeakTimer = null;
+      const toSend = c.pendingRespeak;
+      c.pendingRespeak = '';
+      if (toSend && c.ws && c.ws.readyState === WebSocket.OPEN) {
+        c.ws.send(JSON.stringify({ type: 'deviceVoice', on: false, respeak: toSend }));
+      }
+    }, 15);
   }
 
   function pumpDeviceVoice(c) {
@@ -509,10 +534,11 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       requestMmsFallback(c, rest);
       return;
     }
-    // If the browser speech engine still reports speaking/pending with no active utterance of ours, cancel at most ONCE
-    // and wait 45 ms; if the browser's speaking flag is stuck true after that cancel, proceed to speak() so it can never loop.
-    if ((speechSynthesis.speaking || speechSynthesis.pending) && !c.ttsCancelTried) {
+    // Only cancel before speaking if a previous utterance watchdog explicitly requested a flush (c.forceCancelOnce),
+    // or if speaking was stuck true at call start and we haven't tried once yet.
+    if ((speechSynthesis.speaking || speechSynthesis.pending) && !c.ttsCancelTried && c.forceCancelOnce) {
       c.ttsCancelTried = true;
+      c.forceCancelOnce = false;
       const sinceCancel = Date.now() - lastTtsCancelAt;
       if (sinceCancel >= 200) {
         try { speechSynthesis.cancel(); } catch { /* ignore */ }
@@ -522,6 +548,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       return;
     }
     c.ttsCancelTried = false;
+    c.forceCancelOnce = false;
     if (speechSynthesis.paused) {
       try { speechSynthesis.resume(); } catch { /* ignore */ }
     }
@@ -538,15 +565,34 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     u.pitch = VOICE_PITCH;
     c.activeUtterance = u;
     deviceUtterances.add(u);
+    if (orb.dataset.state !== 'speaking') setState('speaking');
     if (!c.browserSpeakingNotified && c.ws && c.ws.readyState === WebSocket.OPEN) {
       c.browserSpeakingNotified = true;
       c.ws.send(JSON.stringify({ type: 'playbackStart' }));
     }
+    let startedAt = 0;
+    const handleFailure = () => {
+      if (!deviceUtterances.has(u) && c.activeUtterance !== u) return;
+      if (c.pickedVoice && c.pickedVoice.name) failedVoices.add(c.pickedVoice.name);
+      clearActiveUtterance(c, u);
+      c.pickedVoice = pickVoice();
+      if (c.pickedVoice && !c._retriedVoice) {
+        c._retriedVoice = true;
+        c.ttsQueue.unshift(clean);
+        c.forceCancelOnce = true;
+        if (call === c) c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 0);
+        return;
+      }
+      const rest = [clean, ...(c.ttsQueue || [])].join(' ').trim();
+      c.ttsQueue = [];
+      requestMmsFallback(c, rest);
+    };
     const advance = (timedOut = false) => {
       if (!deviceUtterances.has(u) && c.activeUtterance !== u) return;
       clearActiveUtterance(c, u);
       c.ttsCancelTried = false;
       if (timedOut && window.speechSynthesis) {
+        c.forceCancelOnce = true;
         try { speechSynthesis.cancel(); } catch { /* ignore */ }
         lastTtsCancelAt = Date.now();
         if (call === c) c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 45);
@@ -555,8 +601,16 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       // Schedule on next tick so browser finishes its onend dispatch and clears speechSynthesis.speaking naturally.
       if (call === c) c.ttsPumpTimer = setTimeout(() => pumpDeviceVoice(c), 0);
     };
+    u.onstart = () => {
+      startedAt = Date.now();
+      clearTimeout(u._startGuard);
+    };
     u.onend = () => advance(false);
-    u.onerror = () => advance(false);
+    u.onerror = () => handleFailure();
+    // If Chrome's speechSynthesis is wedged and never fires onstart or onend within 900 ms, fall back to server Meta MMS audio for this turn.
+    u._startGuard = setTimeout(() => {
+      if (!startedAt && c.activeUtterance === u) handleFailure();
+    }, 900);
     const guardMs = Math.max(4000, Math.min(18000, clean.length * 120 + 2500));
     u._watchdog = setTimeout(() => advance(true), guardMs);
     u._keepalive = setInterval(() => {
@@ -590,10 +644,12 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   function stopPlayback(target = call) {
     for (const src of voiceSources) { src.onended = null; try { src.stop(); } catch { /* already ended */ } }
     voiceSources.clear();
-    const hadDeviceSpeech = deviceUtterances.size > 0 || Boolean(target && ((target.ttsQueue && target.ttsQueue.length > 0) || target.activeUtterance));
+    const hadDeviceSpeech = deviceUtterances.size > 0 || Boolean(target && target.activeUtterance);
     for (const u of deviceUtterances) {
+      clearTimeout(u._startGuard);
       clearTimeout(u._watchdog);
       clearInterval(u._keepalive);
+      u.onstart = null;
       u.onend = null;
       u.onerror = null;
     }
@@ -601,12 +657,19 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (target) {
       clearTimeout(target.ttsPumpTimer);
       target.ttsPumpTimer = null;
+      clearTimeout(target.respeakTimer);
+      target.respeakTimer = null;
+      target.pendingRespeak = '';
+      target.mmsFallbackPending = false;
       target.ttsQueue = [];
       target.activeUtterance = null;
       target.ttsCancelTried = false;
+      target.forceCancelOnce = false;
       target.browserSpeakingNotified = false;
     }
-    if (window.speechSynthesis && (hadDeviceSpeech || speechSynthesis.speaking || speechSynthesis.pending)) {
+    // Only call speechSynthesis.cancel() when we actually had an active utterance of ours playing;
+    // calling cancel() before a normal turn on macOS Chrome triggers an async speechsynthesisd cancel that kills the new utterance.
+    if (window.speechSynthesis && hadDeviceSpeech) {
       try { speechSynthesis.cancel(); } catch { /* ignore */ }
       lastTtsCancelAt = Date.now();
     }
@@ -615,6 +678,9 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   }
 
   function playChunk(c, buf) {
+    if (c.ctx && c.ctx.state === 'suspended') c.ctx.resume().catch(() => {});
+    c.mmsFallbackPending = false;
+    if (orb.dataset.state !== 'speaking' && !c.leadActive) setState('speaking');
     const i16 = new Int16Array(buf.buffer, buf.byteOffset, buf.byteLength >> 1);
     const f32 = new Float32Array(i16.length);
     for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
@@ -631,8 +697,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
   }
 
   function finishIfDone(c) {
-    const queuedTts = Boolean(c && ((c.ttsQueue && c.ttsQueue.length > 0) || c.activeUtterance));
-    if (call === c && c.voiceDone && !hasHeldAudio(c) && !queuedTts && voiceSources.size === 0 && deviceUtterances.size === 0 && orb.dataset.state === 'speaking') {
+    const queuedTts = Boolean(c && ((c.ttsQueue && c.ttsQueue.length > 0) || c.activeUtterance || c.ttsPumpTimer));
+    if (call === c && c.voiceDone && !c.mmsFallbackPending && !hasHeldAudio(c) && !queuedTts && voiceSources.size === 0 && deviceUtterances.size === 0 && orb.dataset.state === 'speaking') {
       c.voiceDone = false;
       c.browserSpeakingNotified = false;
       if (c.ws && c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify({ type: 'playbackDone' }));
@@ -696,27 +762,29 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
         // lead: a short acknowledgement while Maya is still writing the real reply. The orb stays in its thinking colours.
         c.leadActive = Boolean(ev.lead);
         if (ev.lead) { setState('thinking'); break; }
+        if (c.ctx && c.ctx.state === 'suspended') c.ctx.resume().catch(() => {});
         if (c.clientStages && c.clientStages.firstSpeakEventMs === null) c.clientStages.firstSpeakEventMs = Date.now() - c.callStartAt;
+        c.lastTurnText = ev.text || ev.piece || '';
         setState('speaking');
         captionEl.textContent = c.deviceVoice
           ? `Maya (device browser voice): ${ev.text}`
           : `Maya (Meta MMS server voice fallback): ${ev.text}`;
         if (c.deviceVoice) feedDevicePiece(c, ev.piece || ev.text);
-        else if (ev.deviceVoice) requestMmsFallback(c, ev.piece || ev.text);
+        else if (ev.deviceVoice) requestMmsFallback(c, ev.text || ev.piece);
         break;
       case 'unduck': unduck(c); break;
       case 'caption':
-        if (orb.dataset.state === 'speaking' || c.deviceVoice || ev.deviceVoice) {
-          if (orb.dataset.state !== 'speaking') setState('speaking');
-          captionEl.textContent = c.deviceVoice
-            ? `Maya (device browser voice): ${ev.text}`
-            : `Maya (Meta MMS server voice fallback): ${ev.text}`;
-          if (c.deviceVoice && ev.piece) feedDevicePiece(c, ev.piece);
-          else if (!c.deviceVoice && ev.deviceVoice && ev.piece) requestMmsFallback(c, ev.piece);
-        }
+        c.lastTurnText = ev.text || c.lastTurnText || '';
+        setState('speaking');
+        captionEl.textContent = c.deviceVoice
+          ? `Maya (device browser voice): ${ev.text}`
+          : `Maya (Meta MMS server voice fallback): ${ev.text}`;
+        if (c.deviceVoice && ev.piece) feedDevicePiece(c, ev.piece);
+        else if (!c.deviceVoice && ev.deviceVoice) requestMmsFallback(c, ev.text || ev.piece);
         break;
       case 'audioEnd':
         c.leadActive = false;
+        if (c.mmsFallbackPending) break; // waiting for server MMS respeak audio: do not flip orb to listening on the initial empty deviceVoice audioEnd
         c.voiceDone = true; finishIfDone(c);
         if (ev.timing) console.log('latency', ev.timing);
         break;
@@ -788,6 +856,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     // The microphone gets its OWN 16 kHz context (the same rate the app sends), so the uplink is a third of what a 48 kHz page sent and the frames come about every 64 ms (live: stalls of 300 to 1080 ms,
     // frames expected every 50 to 100 ms). Maya's voice and the orb stay on the page's own context. If this browser will not make a 16 kHz context, the page's own is used, as before.
     const mic = c.micCtx || c.ctx;
+    if (c.ctx.state === 'suspended') c.ctx.resume().catch(() => {});
     if (mic.state === 'suspended') mic.resume().catch(() => {});
     const tap = new AudioWorkletNode(mic, 'mic-tap');
     c.tap = tap;
@@ -830,6 +899,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       if (myGen !== gen || c.ws !== ws) return;
       c.lastRx = Date.now();
       if (typeof m.data === 'string') { try { onServerEvent(c, JSON.parse(m.data)); } catch { /* ignore */ } return; }
+      c.mmsFallbackPending = false;
+      if (orb.dataset.state !== 'speaking' && !c.leadActive) setState('speaking');
       if (orb.dataset.state === 'speaking' || c.leadActive) feedChunk(c, new Uint8Array(m.data)); // a lead-in line plays while the orb is still in its thinking colours
     };
     ws.onclose = () => lineLost(c, ws, myGen);
@@ -864,9 +935,8 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     const myGen = ++gen;
     showError('');
     captionEl.textContent = '';
-    if (window.speechSynthesis) {
-      if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); lastTtsCancelAt = Date.now(); }
-      if (speechSynthesis.paused) speechSynthesis.resume();
+    if (window.speechSynthesis && speechSynthesis.paused) {
+      try { speechSynthesis.resume(); } catch { /* ignore */ }
     }
     callState.start();
     setLive(true);
@@ -876,18 +946,20 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
       endCall('This browser cannot use the microphone here. Try Chrome or Safari on localhost or https.');
       return;
     }
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch {
+      ctx.close().catch(() => {});
       if (myGen === gen) endCall('Maya could not use the microphone. Please allow microphone access and try again.');
       return;
     }
-    if (myGen !== gen) { stream.getTracks().forEach((t) => t.stop()); return; } // ended while asking
-
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (myGen !== gen) { ctx.close().catch(() => {}); stream.getTracks().forEach((t) => t.stop()); return; } // ended while asking
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     let micCtx = null;
     try { const m = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: MIC_RATE }); if (m.sampleRate === MIC_RATE) micCtx = m; else m.close().catch(() => {}); } catch { /* an older browser: the page's own context carries the mic */ }
     const analyser = ctx.createAnalyser();

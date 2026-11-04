@@ -1,4 +1,42 @@
-# READ THIS FIRST: WEB VOICE SILENT REGRESSION FIX (4 Nov 2026; working tree on top of `13faa4e` / `e25a544`, uncommitted, NOT pushed)
+# READ THIS FIRST: WEB CALL FIX #3 — REAL CHROME VOICE + MMS FALLBACK + ORB STATE (4 Nov 2026; working tree on top of `5829f6f`, uncommitted, NOT pushed)
+
+This section supersedes EVERY older live/deployment/status line below.
+
+## Web Call Fix #3 Summary (`public/app.js`, `call.js`, `test/mms-voice.test.js`)
+- **Files changed in this job:**
+  - `public/app.js`
+  - `call.js`
+  - `test/mms-voice.test.js`
+  - `HANDOFF.md`
+  *(Zero changes to `app/lib`, `app/android`, `whatsapp.js`, `server.js` WhatsApp endpoints, `public/family.html`, `public/family.js`, scam, medicine, quiet-hours, demo, or wipe code.)*
+- **Exact Root Causes (Checked 1–6 in Order, with File + Line Numbers before Edit in `5829f6f`):**
+  1. **Item 1 (Start `deviceVoice` flag — `public/app.js:746-749`, `813-815`, `call.js:750`):**
+     - `startReal` sets `c.deviceVoice` and sends `deviceVoice: Boolean(c.deviceVoice)` in `'start'`; `call.js:750` sets `this.deviceVoice = !this.noVoice && m.deviceVoice === true`.
+  2. **Item 2 (`pickVoice()` & macOS Chrome remote vs. local voice — `public/app.js:252-267`):**
+     - `FEMALE_NAMES` (`public/app.js:252`) put `'Google US English'` (`localService: false`, Chrome's remote network TTS service that frequently fires `u.onerror` or stalls in Chrome) ahead of local macOS voices (`Ava`, `Allison`, `Susan`, `Karen`, `Victoria`, `Flo`, `Shelley`, `Sandy`) and used `v.name.startsWith(name)` only (missing `"Samantha (Enhanced)"` / `"Apple Samantha"`).
+     - Fixed `pickVoice()` to prefer local OS voices (`v.localService !== false`) first, match `v.name.startsWith(name) || v.name.includes(name)`, and exclude any voice that fails at runtime (`failedVoices`).
+  3. **Item 3 (Speak branch — `speechSynthesis.cancel()` killing new utterances & `u.onerror` silently dropping voice in 2 ms — `public/app.js:500-510`, `539-540`, `588-591`, `863`):**
+     - In `5829f6f`, `startCall()` (`public/app.js:863`), `stopPlayback()` (`public/app.js:588`), and `pumpDeviceVoice()` (`public/app.js:500`) called `speechSynthesis.cancel()` even when `hadDeviceSpeech` was `false`, and only waited `45 ms` before calling `speechSynthesis.speak(u)`. On macOS Chrome, `speechSynthesis.cancel()` takes 600–1482 ms in `speechsynthesisd` and cancels the utterance queued at 45 ms, firing `u.onerror` / `u.onend` with zero sound.
+     - Worse, `u.onerror = () => advance(false)` (`public/app.js:540`) treated a synthesis error identically to normal completion: within 2 ms of `'speak'`, `advance(false)` emptied the queue and called `finishIfDone(c)` -> `setState('listening')` without retrying another voice or calling `requestMmsFallback`!
+     - Fixed by never calling `speechSynthesis.cancel()` in `startCall()`, `stopPlayback()` (when `!hadDeviceSpeech`), or `pumpDeviceVoice()` (unless recovering from a timeout via `c.forceCancelOnce`), and wiring `u.onerror` + a 900 ms `u._startGuard` (`onstart` watchdog) to `handleFailure()`, which retries an alternate local voice or immediately triggers `requestMmsFallback(c, rest)`.
+  4. **Item 4 (MMS fallback race & server `speakReply` error — `public/app.js:472-480`, `624-631`, `686-705`, `820` & `call.js:818-826`, `2370-2380`):**
+     - When `requestMmsFallback` ran for a `deviceVoice: true` reply:
+       (a) The server's initial empty `'audioEnd'` (sent 1 ms after `'speak'`/`'caption'` because `call.js:2424` sets `job.done = true` immediately for `deviceVoice`) arrived at `public/app.js:702` while `voiceSources.size === 0` (before the server could synthesize the MMS `respeak`), so `finishIfDone(c)` (`public/app.js:624`) immediately flipped `orb.dataset.state` to `'listening'`; then when the server's binary MMS audio chunks arrived 350 ms later, `ws.onmessage` (`if (orb.dataset.state === 'speaking') feedChunk(...)` at `public/app.js:820`) **dropped every binary MMS chunk** because `orb.dataset.state` was `'listening'`!
+       (b) `'speak'` and `'caption'` called `requestMmsFallback` separately (`public/app.js:686, 697`), sending two competing `respeak` requests where the second `'speak'` event wiped out the first sentence's audio.
+       (c) On the server (`call.js:823`), `this.speakReply(fixedReply(m.respeak.trim()), null, this.gen, { record: false })` did not pass `greeting: true, maxSentences: 3` (so `speakReply` capped `maxSentences = 1` and re-ran `this.applyBeat` on already-written text) and did not guard `if (!this.abort || this.abort.signal.aborted) this.abort = new AbortController()`.
+     - Fixed by coalescing `requestMmsFallback` over 15 ms using full turn text (`c.lastTurnText`), holding `c.mmsFallbackPending = true` so the initial empty `'audioEnd'` is ignored until MMS audio arrives, flipping `orb.dataset.state` to `'speaking'` when binary MMS chunks arrive, and passing `{ record: false, greeting: true, maxSentences: 3 }` with a live `AbortController` in `call.js:825`.
+  5. **Item 5 (`AudioContext` user-gesture resume — `public/app.js:788-789`, `871`):**
+     - `c.ctx` (the playback `AudioContext`) was created at `public/app.js:871` *after* `await navigator.mediaDevices.getUserMedia(...)`, and `startReal` (`public/app.js:788`) only called `mic.resume()` on `mic = c.micCtx || c.ctx`. Because `c.micCtx` (16 kHz) was non-null on Chrome, `c.ctx.resume()` was never called, leaving playback suspended.
+     - Fixed by creating and resuming `ctx` synchronously inside `startCall()` before `await getUserMedia`, and also resuming `c.ctx` in `startReal`, `case 'speak':`, `requestMmsFallback`, and `playChunk`.
+  6. **Item 6 (Orb state staying at `"Maya is listening"` — `public/app.js:624-631`, `680-706`, `820`):**
+     - The orb appeared stuck at `"Maya is listening"` because `setState('speaking')` at `0 ms` was immediately overwritten by `finishIfDone(c)` -> `setState('listening')` at `~2 ms` (within the same 16 ms display frame) whenever `u.onerror` fired or when the initial empty `'audioEnd'` arrived during MMS fallback.
+     - Fixed: `setState('speaking')` is maintained throughout `speak`, `caption`, `pumpDeviceVoice`, `requestMmsFallback` (`c.mmsFallbackPending`), and binary `playChunk` playback, flipping back to `'listening'` only when `c.voiceDone && !c.mmsFallbackPending && !hasHeldAudio(c) && !queuedTts && voiceSources.size === 0 && deviceUtterances.size === 0`.
+- **Automated Test Results:**
+  - `node --test test/mms-voice.test.js test/lead.test.js test/voice-uplink.test.js test/thinktimer.test.js test/interrupt.test.js test/specreuse.test.js test/natural.test.js test/silence.test.js test/incall.test.js test/reconnect.test.js`: **77 passed, 0 failed** (77 total).
+
+---
+
+# ARCHIVED: WEB VOICE SILENT REGRESSION FIX (4 Nov 2026; working tree on top of `13faa4e` / `e25a544`, uncommitted, NOT pushed)
 
 This section supersedes EVERY older live/deployment/status line below.
 
