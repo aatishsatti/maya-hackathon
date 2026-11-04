@@ -1,3 +1,26 @@
+# WEB VOICE: ECHO CUT-OFF FIXED; USER'S CHROME SILENCE STILL UNPROVEN (after `b9088e1`; commit "Web voice echo gate + status line fix")
+**Status in one line: the echo cut-off is fixed and proven in real Chrome; web voice is NOT claimed fixed. The user's laptop/phone Chrome silence is still unproven and needs his own console test (`speechSynthesis.speak(new SpeechSynthesisUtterance('test'))`, the `maya-voice:` lines and any red line).**
+**File changed:** `public/app.js` only (plus this note). Not touched: `call.js`, `whatsapp.js`, `wabridge.js`, `social.js`, scam, medicine, quiet, demo, template, iOS.
+
+## What was tested (real, not faked)
+Real Chrome 157 on this Mac (macOS Darwin 25.6), driven over the DevTools protocol with a throwaway profile; the REAL live site https://maya-singapore.onrender.com (commit `b9088e1`, mode real, demo true); real clicks on "Talk to Maya" and the call button (real input events, so a real user gesture); REAL microphone (permission granted through the protocol, the Mac's own mic); real Transcribe + Spark; no faked WebSocket, mic or config. My lines were spoken by the Mac (`say`) through its speakers into its mic.
+- Mic permission: `granted`. Chrome voices at call start: 199 (en-US local: Samantha, Flo, Shelley, Sandy, Eddy, Grandma, Grandpa, Fred, Albert, Bahh, Bells, ... plus en-GB, en-IN; no remote-only list). `maya-voice: voices {"picked":"Samantha", ...}`. **No `maya-voice: failed` / `text only` line and no red line in any run.**
+- **Voice SPOKE** in the real Chrome call (`speechSynthesis.speaking` true, caption "Maya (device browser voice): ..."), audible (her own words came back through the mic as transcript).
+
+## What differs from the user's failing browser: NOT PROVEN
+The user reports it speaks in the Chrome I open but not in their own. Same Mac, same speakers, same server, same code, so the difference is in THEIR browser instance (profile state/extensions/site sound setting/tab muted/an earlier voice failure) or the way they start the call. I cannot attach to their Chrome profile, and no `maya-voice:` console line or red line has been captured from it. **Cause of the user's silence: NOT proven.** The only needed evidence: in their Chrome, DevTools console (Cmd+Option+J) during the call: the `maya-voice:` lines and any red text on screen; and whether `speechSynthesis.speak(new SpeechSynthesisUtterance('test'))` typed into that console is audible.
+
+## A real bug that WAS proven, and fixed: Maya cut off by her own echo
+Real Chrome + real mic + speakers (and any phone on speaker): her voice is `speechSynthesis`, played by the OS speech service OUTSIDE Chrome's echo cancellation, so the mic hears her. The server reads her words as the person ("You: And there Maya is popping properly"), logs `duck` then `stopped`, the client cancels her voice, and the orb drops to listening: in the run that mirrored the user's (talking early, "Maya." / "Hello, Maya."), her voice started at 4.0 s and was cut by ~4.8 s, then she answered her own echo ("Haha, yep I'm here and loud and clear"). That matches "words show as text, no voice, orb listening, she replies to herself".
+- **Fix (`public/app.js`, `deviceVoiceEchoGate`):** while her device voice plays, plus a 400 ms echo tail, silence (same-length zero frame) is sent up instead of the mic. Counted in `mic uplink` as `gated`.
+- **Trade-off, plainly:** on the WEB a person cannot talk over her mid-sentence (their words during her speech are not sent). **Status line fixed (web only, `public/app.js` `speaking:`):** was "Maya is speaking. You can talk any time to stop her.", now "Maya is speaking. Please wait until she finishes, then talk." The Maya app (Flutter) wording and interrupt behaviour are untouched.
+- **Proven in real Chrome (local fixed `public/` served through a proxy to the REAL Render backend):** talk-early run: she spoke her full line (2.4 s) with no self-echo transcript and no `stopped` during her speech; 5-line run: she spoke every turn, 0 `maya-voice: failed`/`text only`, no self-reply, no "You:" lines of her own words, call ended cleanly. My scripted lines were open-loop, so ones that landed while she spoke were (by design) not heard.
+
+## Tests (targeted): `mms-voice` 9/0, `novoice` 8/0, `interrupt` 4/0, `prompt` 60/0. No unit test for the echo gate (the mock has no worklet).
+## NOT live-proven: the user's own laptop Chrome (normal/incognito) and phone Chrome; that the echo gate fixes THEIR silence (it fixes a real, reproduced cut-off, but their cause is unproven).
+
+---
+
 # WEB VOICE ON CHROME: ROOT-CAUSE SEARCH + HARDENED CHAIN (after `309c61a`, working tree, uncommitted, NOT pushed, NOT deployed)
 **Files:** `public/app.js`, `test/mms-voice.test.js`, `HANDOFF.md`. NOT touched: server/WhatsApp/app (Flutter)/cancel/abort/scam/medicine/quiet/demo/template. No server voice for web (none is female-proven).
 

@@ -132,7 +132,7 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     listening: 'Maya is listening.',
     hearing: 'I hear you.',
     thinking: 'Maya is thinking.',
-    speaking: 'Maya is speaking. You can talk any time to stop her.',
+    speaking: 'Maya is speaking. Please wait until she finishes, then talk.',   // web only: while her device voice plays the mic sends silence (echo gate), so talking over her is not heard
     reconnecting: 'The line dropped. Reconnecting...',
   };
 
@@ -485,7 +485,15 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     if (!g.timer && !g.paused) g.timer = setTimeout(() => openGate(c), g.holdMs);
   }
 
+  // True while Maya's device voice is (or is about to be) audible, and for ECHO_TAIL_MS after: the mic must not carry her own voice back to the server.
+  const ECHO_TAIL_MS = 400;
+  function deviceVoiceEchoGate(c) {
+    if (!c || !c.deviceVoice) return false;
+    return Boolean(c.activeUtterance || deviceUtterances.size > 0 || (c.ttsQueue && c.ttsQueue.length) || c.ttsPumpTimer || hasHeldAudio(c) || Date.now() < (c.micQuietUntil || 0));
+  }
+
   function clearActiveUtterance(c, u) {
+    if (c) c.micQuietUntil = Date.now() + ECHO_TAIL_MS;
     if (u) {
       clearTimeout(u._startGuard);
       clearTimeout(u._watchdog);
@@ -895,7 +903,12 @@ if (typeof module !== 'undefined') module.exports = { MayaOrbLevels, MayaCallSta
     tap.port.onmessage = (e) => {
       if (!(c.ready && c.ws && c.ws.readyState === WebSocket.OPEN)) return;
       if (c.ws.bufferedAmount > MIC_BACKLOG_BYTES) { c.micStats.dropped += 1; return; }
-      c.micStats.sent += 1; c.ws.send(e.data.buffer);
+      c.micStats.sent += 1;
+      // LIVE-PROVEN (real Chrome, real mic): the browser's own voice (speechSynthesis) is played by the OS speech service, outside Chrome's echo cancellation, so the mic hears Maya,
+      // the server reads her words as the person speaking, ducks and stops her, and her voice is cut within a second (she then answers her own echo). While her device voice plays
+      // (and for a short echo tail after), silence goes up instead of the mic, so she is never interrupted by herself. Trade-off: on the web the person cannot talk over her mid-sentence.
+      if (deviceVoiceEchoGate(c)) { c.micStats.gated = (c.micStats.gated || 0) + 1; c.ws.send(new ArrayBuffer(e.data.buffer.byteLength)); return; }
+      c.ws.send(e.data.buffer);
     };
     c.heartbeat = setInterval(() => {
       if (myGen !== gen || call !== c) return;
