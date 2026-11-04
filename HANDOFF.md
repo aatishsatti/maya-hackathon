@@ -1,4 +1,39 @@
-# READ THIS FIRST: MAYA ANDROID APP FIX BUNDLE (Items 1–8) (4 Nov 2026; working tree on top of `62c5bd7`, uncommitted, NOT pushed)
+# READ THIS FIRST: WEB CALL BUG FIX (Bugs 1–4 + 5) (4 Nov 2026; working tree on top of `62c5bd7`, uncommitted, NOT pushed)
+
+This section supersedes EVERY older live/deployment/status line below.
+
+## Web Call Bug Fix Summary (`public/app.js`, `call.js`, `test/mms-voice.test.js`)
+- **Files changed in this job:**
+  - `public/app.js`
+  - `call.js`
+  - `test/mms-voice.test.js`
+  - `HANDOFF.md`
+  *(No changes were made to `app/`, scam, medicine, quiet-hours, demo, or wipe code in this job.)*
+- **Exact Root Causes (with file + line numbers before edit):**
+  1. **Bug 1 (Maya replies by herself when the user said nothing):**
+     - `call.js:2289-2300` & `2418` (`speakReply`): With `this.deviceVoice === true`, the server marks `job.done = true` immediately (0 ms TTS wait) and sets `this.responding = false` and `this.lastSaidAt = Date.now()` as soon as Spark finishes generating text (~150 ms), while the browser's `speechSynthesis` plays out of the Mac speakers for the next 4–8 seconds. By the time the second half of Maya's speech plays on the Mac speakers, `this.playUntil` (`spoken.length * 70`, missing `HOLD_BACK_MS`) and `Date.now() - this.lastSaidAt > ECHO_WINDOW_MS` had expired or `this.sayingText` was overwritten (`call.js:2257`), disabling `isEcho(text)` (`call.js:776-784`).
+     - `call.js:776-784` (`isEcho`): Only checked exact consecutive 2-word bigrams against `this.sayingText`; when Mac AEC dropped a middle word of Maya's speaker output, bigram overlap fell below `0.7` and Maya's own voice was treated as user speech.
+     - `call.js:883-887` (`speechComplete`): When a false barge-in turn was dropped as echo/noise, `this.recoverTimer` (`call.js:763`, `RECOVER_AFTER_MS = 9000`) was NOT cleared, causing `recoverFromInterrupt()` (`call.js:766-773`) to speak `"Sorry, I got interrupted, can you say that again?"` 9 seconds later when the user said nothing; and `if (!this.pending.length) this.armSilence()` ran even when `this.responding` or `this.isSpeaking()` was true.
+  2. **Bug 2 (Maya misses what the user says, then replies to it AFTER the user says something else — 1 turn late, out of order):**
+     - `call.js:858-863` (`case 'speechEnd':`): Cleared `this.staleTimer` (`clearTimeout(this.staleTimer)`) when Meta sent `speechEnd`, without arming a fallback timer. Whenever `endpointTick()` (`call.js:1075`) did not fire (because steady Mac AGC mic floor > `0.02` kept updating `this.lastVoiceAt = now` on `call.js:678` without adapting `this.noiseFloor`, or because `looksComplete` on `call.js:72-81` returned `false` for 1–2 word replies and sentences ending in `"it"`) and Meta delayed `speechComplete`, the turn hung in `this.turns`/`this.curTurn` until the user spoke a second time.
+     - `call.js:801-808` (`case 'speechStart':`): Overwrote `this.curTurn` without completing any unspoken partial words still open in `this.curTurn` when Meta opened a new `turnId`, leaving the earlier turn in `this.turns` to complete mid-way through the next turn.
+     - `call.js:811-818` & `867-875` (`forcedOpen`): Required `heard.length > fo.base.length + 3` and literal `heard.startsWith(t.base)`, dropping short continuations (`"No"`, `"Ok"`, `"Yes"`) and breaking when Meta revised punctuation/casing in the prefix.
+  3. **Bug 3 (Overlapping: Maya speaks over the user, or multiple replies queue and overlap):**
+     - `call.js:1875-1990` (`respond`): `respond()` was not serialized (`_inRespond`) and did not wait when `this.curTurn` had actively changing user partials (`Date.now() - this.lastPartialChangeAt < 800`), allowing `respond()` for an earlier clause to start `speakReply` while the user was still speaking the next clause or while an earlier `respond()` was still in flight.
+  4. **Bug 4 (After a few exchanges, voice stops completely — proven in code: text captions continue while `speechSynthesis` voice stops):**
+     - **Does text reply continue when voice stops?** **Yes:** `public/app.js:600` (`case 'speak':`) and `public/app.js:610` (`case 'caption':`) update `captionEl.textContent` synchronously from WebSocket JSON before `feedDevicePiece` -> `playDevicePiece`, and `call.js:2290` sets `job.done = true` immediately for `deviceVoice`, so text replies continue on screen while browser `speechSynthesis` produces no audio.
+     - **Why voice stops (3 exact defects in `public/app.js`):**
+       - `public/app.js:536-541` (`finishIfDone`), `595` (`c.gate`), `609` (`case 'caption':`), `618` (`case 'audioEnd':`): On every `forceComplete` turn (`hold: 300`), `feedDevicePiece` holds sentence 1 in `c.gate.heldText` for 300 ms (`deviceUtterances.size === 0`). Because `call.js:2290` does not wait for TTS, `'audioEnd'` arrives at ~100–250 ms (while `c.gate.open` is still `false`). `finishIfDone(c)` checked `deviceUtterances.size === 0` without checking `hasHeldAudio(c)`, so it immediately set `c.voiceDone = false` and flipped `orb.dataset.state` to `'listening'` before the 300 ms gate opened; any `'caption'` arriving after that failed `if (orb.dataset.state === 'speaking')` (`public/app.js:609`) and dropped `ev.piece` silently.
+       - `public/app.js:518` (`stopPlayback`), `593` (`case 'speak':`), `490` (`playDevicePiece`): On every `'speak'` with `hold: 0`, `stopPlayback()` unconditionally called `speechSynthesis.cancel()` even when nothing was speaking, followed synchronously in the same tick by `speechSynthesis.speak(u)`. On macOS Chrome/Safari, synchronous `cancel()` + `speak()` in the same tick flushes the new utterance or wedges `speechSynthesis.speaking = true` permanently after a few turns.
+       - `public/app.js:479-490` (`playDevicePiece`): Queued multiple `SpeechSynthesisUtterance` objects directly into the browser's internal `speechSynthesis` queue with no sequential JS queue and no per-utterance watchdog if `onend` failed to fire.
+  5. **Bug 5 (Background log correlation — mic frames stalled 601–1482 ms, `speechEndToFirstAudioMs` ~11s):**
+     - Calling `speechSynthesis.cancel()` synchronously on every turn blocked the browser renderer main thread during macOS `speechsynthesisd` IPC (stalling `tap.port.onmessage` mic frame forwarding for 600–1482 ms), and turns stranded after `speechEnd` (`call.js:860`) or held by `MAX_HOLD_OPEN_MS = 8000` (`call.js:802`) inflated `now - timing.endedAt` (`speechEndToFirstAudioMs`) to ~9–11s.
+- **Automated test results:**
+  - `node --test test/mms-voice.test.js test/voice-uplink.test.js test/thinktimer.test.js test/interrupt.test.js test/lead.test.js test/specreuse.test.js test/natural.test.js test/silence.test.js test/incall.test.js test/reconnect.test.js`: **76 passed, 0 failed** (76 total).
+
+---
+
+# ARCHIVED: MAYA ANDROID APP FIX BUNDLE (Items 1–8) (4 Nov 2026; working tree on top of `62c5bd7`, uncommitted, NOT pushed)
 
 This section supersedes EVERY older live/deployment/status line below.
 

@@ -71,14 +71,46 @@ const MAX_HOLD_OPEN_MS = 8000;
 const DUPLICATE_WINDOW_MS = 8000;
 const SENTENCE_END = /[.?!]["')\]]*\s*$/;
 // Words a sentence cannot end on: if the last word is one of these the person is mid-thought.
-const DANGLING = new Set(['and', 'but', 'so', 'because', 'or', 'if', 'the', 'a', 'an', 'to', 'of', 'with', 'my', 'your', 'his', 'her', 'their', 'that', 'which', 'i', 'we', 'um', 'uh', 'like', 'then', 'when', 'for', 'in', 'on', 'at', 'is', 'are', 'was', 'be', 'about', 'it', 'as', 'than']);
+const DANGLING = new Set(['and', 'but', 'so', 'because', 'or', 'if', 'the', 'a', 'an', 'to', 'of', 'with', 'my', 'your', 'his', 'her', 'their', 'that', 'which', 'i', 'we', 'um', 'uh', 'like', 'then', 'when', 'for', 'in', 'on', 'at', 'is', 'are', 'was', 'be', 'about', 'as', 'than']);
+const COMPLETE_SINGLE_WORD = /^(?:yes|yeah|yep|no|nope|okay|ok|sure|fine|good|great|hello|hi|hey|bye|goodbye|thanks|stop|wait|pardon)$/i;
 // The focus setFocus() would give a turn with a style-only fact and no due thread, built WITHOUT its side effects (for a speculative guess).
 const pureFocus = (heard) => ({ text: String(heard || ''), full: STORY_ASK.test(heard) || RECALL_ASK.test(heard), thread: '' });
 function looksComplete(text) {
   const t = String(text || '').trim();
   if (SENTENCE_END.test(t)) return true;
   const words = t.toLowerCase().match(/[\p{L}\p{N}'\u2019]+/gu) || [];
+  if (words.length === 1) return COMPLETE_SINGLE_WORD.test(words[0]);
+  if (words.length === 2) return !DANGLING.has(words[0]) && !DANGLING.has(words[1]);
   return words.length >= 3 && !DANGLING.has(words[words.length - 1]);
+}
+// Strips the already-completed prefix `base` from a cumulative Meta transcript `heard`, even if Meta revised punctuation or casing in `base`.
+function stripForcedBase(heard, base) {
+  const h = String(heard || '').trim();
+  const b = String(base || '').trim();
+  if (!b || !h) return h;
+  if (h.startsWith(b)) return h.slice(b.length).replace(/^[\s,.;:!?-]+/, '').trim();
+  const bToks = b.toLowerCase().match(/[\p{L}\p{N}'\u2019]+/gu) || [];
+  if (!bToks.length) return h;
+  const re = /[\p{L}\p{N}'\u2019]+/gu;
+  let m;
+  let idx = 0;
+  let cutEnd = 0;
+  while ((m = re.exec(h)) !== null && idx < bToks.length) {
+    if (m[0].toLowerCase() === bToks[idx]) {
+      idx += 1;
+      cutEnd = m.index + m[0].length;
+    } else if (idx === 0) {
+      break;
+    } else {
+      // Allow a single revised token inside the prefix if the next token realigns
+      idx += 1;
+      cutEnd = m.index + m[0].length;
+    }
+  }
+  if (idx >= bToks.length && cutEnd > 0) {
+    return h.slice(cutEnd).replace(/^[\s,.;:!?-]+/, '').trim();
+  }
+  return h;
 }
 // Silence flow: after Maya finishes speaking, wait for the person before the next step. The first wait is
 // random 20-30 s per call (older people pause, and a fixed number would be predictable); then she reconfirms
@@ -671,8 +703,12 @@ class Call {
       if (peak >= BARGE_MIN_PEAK) this.lastLoudAt = now;
       this.hasMic = true;
       this.lastMicAt = now;
-      if (peak > Math.max(0.02, this.noiseFloor * 3)) this.lastVoiceAt = now;          // clearly above the room
-      else this.noiseFloor = this.noiseFloor * 0.98 + peak * 0.02;                      // learn the room
+      if (peak > Math.max(0.02, this.noiseFloor * 3)) {
+        this.lastVoiceAt = now; // clearly above the room
+        if (!this.curTurn && peak < 0.045) this.noiseFloor = Math.min(0.025, this.noiseFloor * 0.995 + peak * 0.005); // adapt to steady AGC room hum when no turn is open
+      } else {
+        this.noiseFloor = this.noiseFloor * 0.98 + peak * 0.02; // learn the room
+      }
       const pcm = this.resampler.process(f32);
       if (pcm.length) this.meta.sendPcm(pcm);
       return;
@@ -774,6 +810,14 @@ class Call {
       // check in, reconfirm or hang up on someone who chose to be muted; unmuting starts the wait afresh.
       this.muted = m.on === true;
       if (this.muted) this.cancelSilence(); else if (!this.responding && this.greeted) this.armSilence();
+    } else if (m.type === 'playbackStart') {
+      this.browserPlaying = true;
+      this.cancelSilence();
+    } else if (m.type === 'playbackDone') {
+      this.browserPlaying = false;
+      this.lastSaidAt = Date.now();
+      this.playUntil = Date.now();
+      if (!this.responding && this.greeted && !this.muted && !this.pending.length && !this.curTurn) this.armSilence();
     } else if (m.type === 'deviceVoice') {
       // Browser voiceReady() resolved after 'start': update deviceVoice and fall back to server Meta MMS if no female device voice was found.
       this.deviceVoice = !this.noVoice && m.on === true;
@@ -789,7 +833,7 @@ class Call {
   // Stops Maya at once: aborts Spark/TTS and tells the browser to drop queued audio.
   // Maya is audible while Spark/the voice are still working AND while the browser is still playing
   // audio the server has already finished sending (the server streams faster than real time).
-  isSpeaking() { return this.responding || Date.now() < this.playUntil; }
+  isSpeaking() { return this.responding || Boolean(this.browserPlaying) || Date.now() < this.playUntil; }
 
   interrupt() {
     if (!this.isSpeaking()) return;
@@ -798,6 +842,7 @@ class Call {
     this.gen += 1;
     if (this.abort) this.abort.abort();
     this.responding = false;
+    this.browserPlaying = false;
     this.playUntil = 0;
     this.bargeSince = 0;
     clearTimeout(this.duckTimer);
@@ -820,11 +865,28 @@ class Call {
     const heard = realTokens(text);
     if (heard.length < 2) return false;
     if (!this.isSpeaking() && Date.now() - this.lastSaidAt > ECHO_WINDOW_MS) return false;
+    const combinedSaid = `${this.prevSayingText || ''} ${this.sayingText || ''}`.trim();
+    if (!combinedSaid) return false;
     // Her echo repeats her words in order; a person who merely uses the same topic words does not.
     const pairs = (words) => words.slice(1).map((w, i) => `${words[i]} ${w}`);
-    const mine = new Set(pairs(tokens(this.sayingText)));
+    const mine = new Set(pairs(tokens(combinedSaid)));
     const theirs = pairs(tokens(text));
-    return theirs.length > 0 && theirs.filter((p) => mine.has(p)).length / theirs.length >= ECHO_OVERLAP;
+    if (theirs.length > 0 && theirs.filter((p) => mine.has(p)).length / theirs.length >= ECHO_OVERLAP) return true;
+    // On deviceVoice (OS speechSynthesis over speakers), AEC can drop a middle word while keeping her words in sequence.
+    if (this.deviceVoice) {
+      const mineSeq = realTokens(combinedSaid);
+      let pos = 0;
+      let matched = 0;
+      for (const w of heard) {
+        const idx = mineSeq.indexOf(w, pos);
+        if (idx !== -1) {
+          matched += 1;
+          pos = idx + 1;
+        }
+      }
+      if (matched >= 2 && matched / heard.length >= 0.8) return true;
+    }
+    return false;
   }
 
   // Called with every non-empty partial transcript.
@@ -843,6 +905,12 @@ class Call {
     if (TURN_DEBUG && ev.type !== 'transcript' && ev.type !== 'audioProgress') dbg(ev.type, JSON.stringify({ id: ev.turnId, syn: ev.synthetic, txt: ev.transcript, forced: this.forcedOpen && this.forcedOpen.base, pending: this.pending.length }));
     switch (ev.type) {
       case 'speechStart': {
+        // If an earlier turn still had unspoken words open when Meta started a new turnId, complete it first so it is never orphaned or answered out of order.
+        if (this.curTurn && this.curTurn.partial && realTokens(this.curTurn.partial).length) {
+          const prev = this.curTurn;
+          this.curTurn = null;
+          this.forceComplete(prev);
+        }
         clearTimeout(this.holdTimer);
         if (this.pending.length) this.holdTimer = setTimeout(() => this.respond(MAX_HOLD_OPEN_MS), MAX_HOLD_OPEN_MS);
         this.dropSpec();
@@ -856,7 +924,8 @@ class Call {
         let t = this.curTurn;
         const heard = (ev.transcript || '').trim();
         const fo = this.forcedOpen;
-        if (!t && fo && heard.length > fo.base.length + 3) {
+        const restAfterForced = fo ? stripForcedBase(heard, fo.base) : heard;
+        if (!t && fo && realTokens(restAfterForced).length >= 1) {
           // The person kept talking in a Meta turn we had already completed: start the next turn from the new words.
           t = this.curTurn = { partial: '', spans: [], text: null, base: fo.base };
           this.turns.set(fo.id, t);
@@ -864,7 +933,7 @@ class Call {
         }
         if (!t) break;
         const before = t.partial;
-        t.partial = t.base && heard.startsWith(t.base) ? heard.slice(t.base.length).trim() : heard;
+        t.partial = t.base ? stripForcedBase(heard, t.base) : heard;
         if (t.partial !== before) this.lastPartialChangeAt = Date.now();
         if (t.partial) {
           this.considerBargeIn(t.partial);
@@ -889,7 +958,12 @@ class Call {
         if (this.forcedOpen && this.forcedOpen.id === ev.turnId && !this.turns.has(ev.turnId)) break; // already completed here
         clearTimeout(this.staleTimer);
         const t = this.turns.get(ev.turnId);
-        if (t) t.endedAt = Date.now();
+        if (t) {
+          t.endedAt = Date.now();
+          // Meta's own VAD ended the speech: if speechComplete does not follow within 900 ms, complete the turn here so it never hangs until the next turn.
+          this.staleTimer = setTimeout(() => { if (this.curTurn === t) this.forceComplete(t); }, 900);
+          if (this.staleTimer.unref) this.staleTimer.unref();
+        }
         this.send({ type: 'speechEnd' });
         break;
       }
@@ -897,14 +971,20 @@ class Call {
         clearTimeout(this.staleTimer);
         if (!ev.synthetic && this.forcedOpen && this.forcedOpen.id === ev.turnId) {
           const continued = this.turns.has(ev.turnId);
+          const oldBase = this.forcedOpen.base;
           this.forcedOpen = null;
-          if (!continued) break; // Meta caught up with a turn we already answered
+          if (!continued) {
+            const tail = stripForcedBase(ev.transcript || '', oldBase);
+            if (!realTokens(tail).length) break; // Meta caught up with a turn we already answered
+            const extraTurn = { partial: tail, spans: this.lastLabel ? [{ label: this.lastLabel, end: tail.length }] : [], base: oldBase, endedAt: Date.now() };
+            this.turns.set(ev.turnId, extraTurn);
+          }
         }
         const t = this.turns.get(ev.turnId) || { partial: '', spans: [] };
         this.turns.delete(ev.turnId);
         if (this.curTurn === t) this.curTurn = null; // turn is over: its partial buffer is done
         let said = (ev.transcript || '').trim();
-        if (t.base && said.startsWith(t.base)) said = said.slice(t.base.length).trim();
+        if (t.base) said = stripForcedBase(said, t.base);
         t.text = this.collapseRepeat(said);
         t.completedAt = Date.now();
         dbg('turn text', JSON.stringify(t.text), 'from final', JSON.stringify(ev.transcript), 'base', JSON.stringify(t.base), 'partial', JSON.stringify(t.partial));
@@ -914,9 +994,10 @@ class Call {
           || (this.lastAnswered && this.lastAnswered.key === key && t.completedAt - this.lastAnswered.at < DUPLICATE_WINDOW_MS));
         if (!t.text || dup || !realTokens(t.text).length || this.isEcho(t.text)) {
           dbg('DROPPED turn text', JSON.stringify(t.text), 'dup', Boolean(dup), 'echo', this.isEcho(t.text), 'base', JSON.stringify(t.base), 'said', JSON.stringify(ev.transcript));
+          clearTimeout(this.recoverTimer);
           if (this.pending.length) { clearTimeout(this.holdTimer); this.holdTimer = setTimeout(() => this.respond(0), HOLD_TRAILING_MS); } // keep the wait going
           else if (!this.isSpeaking()) this.send({ type: 'idle' });
-          if (!this.pending.length) this.armSilence(); // that was not a usable answer: keep counting the quiet
+          if (!this.pending.length && !this.responding && !this.isSpeaking()) this.armSilence(); // that was not a usable answer: keep counting the quiet
           break;
         }
         this.pending.push(t);
@@ -1914,13 +1995,28 @@ class Call {
   }
 
   async respond(holdMs) {
+    clearTimeout(this.holdTimer);
+    this.holdTimer = null;
     clearTimeout(this.recoverTimer);
     this.cancelSilence();
+    if (this.closed || !this.pending.length) return;
+    // If the person is actively mid-utterance in a new turn right now, wait briefly so both parts are answered together instead of speaking over them.
+    if (this.curTurn && this.curTurn.partial && realTokens(this.curTurn.partial).length && this.lastPartialChangeAt && Date.now() - this.lastPartialChangeAt < 800) {
+      this.holdTimer = setTimeout(() => this.respond(holdMs), 350);
+      return;
+    }
+    if (this._inRespond) {
+      // A new turn completed while an earlier reply was still being written: abort the stale draft so the finally block drains pending in order.
+      if (this.abort) this.abort.abort();
+      return;
+    }
+    this._inRespond = true;
     this.silenceStage = 0; // they spoke: the silence steps start over
     const turns = this.pending;
     this.pending = [];
-    if (!turns.length || this.closed) return;
+    if (!turns.length || this.closed) { this._inRespond = false; return; }
     const mySeq = this.turnSeq = (this.turnSeq || 0) + 1;   // a rewrite of a blocked draft changes gen but not this: only a NEW turn does
+    try {
     dbg('RESPOND to', JSON.stringify(turns.map((t) => t.text)));
     let extra = this.careNotes(turns.map((t) => t.text).join(' '));
     this.checkIds = care.checkDueIds(this.profile.id);   // lookups due for this reply (care.checkFacts puts them in the facts)
@@ -2019,6 +2115,13 @@ class Call {
     finally {
       this.focus = null; this.reminderShown = null; this.callbackShown = null; this.seenShown = false; this.safetyFreshShown = false; this.healthFreshShown = false; this.scamReply = null; this.scamAskFor = null; this.officialNow = null;
       if (this.scamOwed) { this.scamLater = { scam: this.scamOwed, at: Date.now() }; this.scamOwed = null; }   // cut off before it was heard: the next reply carries the warning again
+    }
+    } finally {
+      this._inRespond = false;
+      if (!this.closed && this.pending.length && !this.holdTimer) {
+        this.holdTimer = setTimeout(() => this.respond(0), 20);
+        if (this.holdTimer.unref) this.holdTimer.unref();
+      }
     }
   }
 
@@ -2214,6 +2317,7 @@ class Call {
   async speakReply(rs, timing, myGen, { record = false, greeting = false, hangup = false, bye = false, onDone = null, stripGreeting = false, holdBack = false, maxSentences = 1, bright = false, lead: leadIn = null } = {}) {
     this._q = 0; this._cats = null;
     const signal = this.abort.signal;
+    if (this.sayingText) this.prevSayingText = this.sayingText;
     this.sayingText = '';
     this.playUntil = leadIn ? leadIn.endsAt : 0;   // a lead-in line may still be playing
     const jobs = [];
@@ -2298,7 +2402,8 @@ class Call {
           }
           sentAny = true;
           this.lastSaidAt = Date.now();
-          this.playUntil = Math.max(this.playUntil, this.lastSaidAt) + spoken.length * (bye ? 150 : 70);
+          const holdExtra = !started && !leadIn && holdBack ? HOLD_BACK_MS : 0;
+          this.playUntil = Math.max(this.playUntil, this.lastSaidAt) + holdExtra + spoken.length * (bye ? 150 : 75);
         } else if (this.noVoice && !this.fakeAudio) job.done = true;   // no-voice test call: the words go out as text events, there is no audio and no TTS request
         else (this.noVoice ? fakeSpeech(tagged, signal, onVoiceChunk) : streamSpeech(tagged, signal, onVoiceChunk, said.length ? said.join(' ').slice(-300) : undefined, next || undefined))
           .then(() => { job.done = true; }, (e) => { job.err = e; job.done = true; });

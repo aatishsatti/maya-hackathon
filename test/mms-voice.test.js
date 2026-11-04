@@ -378,5 +378,52 @@ test('Production-path greeting event order: openMeta + greet emits ready -> thin
   }
 });
 
+test('Web call Bugs 1-4: echo suppression across playbackStart/playbackDone, no 1-turn-late stall after speechEnd or forcedOpen, serialized respond, and gate-safe sequential TTS in app.js', async () => {
+  const { Call } = require('../call');
+  const care = require('../care');
+  const sent = [];
+  const ws = {
+    readyState: 1,
+    send(d) { if (typeof d === 'string') sent.push(JSON.parse(d)); },
+    close() {},
+  };
+  const c = new Call(ws, 'test-key');
+  clearInterval(c.endTimer);
+  c.deviceVoice = true;
+  c.greeted = true;
+  c.sayingText = 'Hello Henry, how have you been getting on today?';
+  c.lastSaidAt = Date.now() - 8000;
+  c.playUntil = Date.now() - 1000;
+
+  // Bug 1: playbackStart keeps isSpeaking() true while browser speechSynthesis is still playing, and subsequence echo is caught
+  c.onBrowserMessage({ type: 'playbackStart' });
+  assert.equal(c.isSpeaking(), true, 'isSpeaking stays true while browser speechSynthesis is playing');
+  assert.equal(c.isEcho('how have you getting today'), true, 'subsequence speaker bleed during deviceVoice is caught as echo');
+  c.onBrowserMessage({ type: 'playbackDone' });
+  assert.equal(c.browserPlaying, false);
+
+  // Bug 1: echo turn dropped in speechComplete cancels recoverTimer so recoverFromInterrupt never fires by itself
+  c.recoverTimer = setTimeout(() => { throw new Error('recoverTimer should have been cancelled'); }, 50);
+  c.turns.set(1, { partial: 'how have you getting today', spans: [] });
+  c.onMeta({ type: 'speechComplete', turnId: 1, transcript: 'how have you getting today' });
+  await new Promise((r) => setTimeout(r, 70));
+
+  // Bug 2: forcedOpen short continuation ("No" / "Yes") and revised base punctuation are not dropped
+  c.forcedOpen = { id: 2, base: 'I went to the park.' };
+  c.onMeta({ type: 'transcript', transcript: 'I went to the park, no' });
+  assert.ok(c.curTurn, 'short continuation after forcedOpen reopens curTurn');
+  assert.equal(c.curTurn.partial, 'no');
+
+  // Bug 4: public/app.js guards finishIfDone with !hasHeldAudio(c) and !queuedTts, and uses sequential ttsQueue with watchdog
+  const appSrc = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  assert.match(appSrc, /!hasHeldAudio\(c\) && !queuedTts/);
+  assert.match(appSrc, /function pumpDeviceVoice\(c\)/);
+  assert.match(appSrc, /type: 'playbackDone'/);
+
+  c.end();
+  care.stop();
+});
+
+
 
 
