@@ -57,6 +57,8 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   CallSession? _live; // the call on screen, so the system call screen's hang-up can end it
   bool _callRouteOpen = false; // the call page is on screen (a call set aside to the chat has none)
   String? _liveOutreach;
+  AppLifecycleState _lifecycle = AppLifecycleState.resumed;
+  Future<void>? _threadLoad;
 
   @override
   void initState() {
@@ -77,6 +79,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     _events?.stop();
     _ringTimer?.cancel();
     _ringEnd?.cancel();
+    NativeCall.instance.stopBell();
     _recTimer?.cancel();
     _ampSub?.cancel();
     _rec?.dispose();
@@ -93,7 +96,21 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _pid != null && !_inCall) _loadThread();
+    _lifecycle = state;
+    final id = _pid;
+    if (state == AppLifecycleState.resumed) {
+      if (id != null) {
+        if (_events == null) _startEvents(id);
+        unawaited(Api.postJson('/api/care/$id/activity').catchError((_) => null));
+        if (!_inCall) _loadThread();
+      }
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden || state == AppLifecycleState.detached) {
+      // Stop the SSE stream when the app is minimized or the screen is locked so the server knows the app is closed and sends FCM pushes for calls and messages.
+      _eventSub?.cancel();
+      _eventSub = null;
+      _events?.stop();
+      _events = null;
+    }
   }
 
   Future<void> _boot() async {
@@ -108,27 +125,35 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     if (id != null) _attach(id);
   }
 
-  // A ring that reached a CLOSED phone (a push -> the system call screen): Accept joins the same live call as an in-app Accept.
+  Future<void> _openFromNativeRing(String oid) async {
+    if (!mounted) return;
+    if (_live != null && _live!.ended) _finishCall();
+    if (_inCall) return;
+    _dropIncoming();
+    final id = _pid ?? await Store.profileId();
+    if (id != null) {
+      _pid ??= id;
+      if (_events == null) _startEvents(id);
+      unawaited(Api.postJson('/api/care/$id/activity').catchError((_) => null));
+    }
+    final kind = NativeCall.instance.kindOf(oid);   // callback | reminder | welfare: what rang
+    await NativeCall.instance.audioReady();         // iOS: the call audio is on before the microphone opens
+    if (!mounted || _inCall) return;
+    unawaited(_startCall(reason: kind, outreachId: oid.isEmpty ? null : oid));
+  }
+
+  // A ring that reached a CLOSED phone (a push -> the system call screen): Accept or tapping the call notification joins the live call directly.
   void _listenNative(String id) {
-    _nativeAccept ??= NativeCall.instance.accepted.listen((oid) async {
-      if (!mounted || _inCall) return;
-      _dropIncoming();
-      final kind = NativeCall.instance.kindOf(oid);   // callback | reminder | welfare: what rang
-      await NativeCall.instance.audioReady();         // iOS: the call audio is on before the microphone opens
-      if (!mounted || _inCall) return;
-      _startCall(reason: kind, outreachId: oid);
-    });
+    _nativeAccept ??= NativeCall.instance.accepted.listen(_openFromNativeRing);
     _nativeEnd ??= NativeCall.instance.ended.listen((_) => _live?.hangUp());
-    // The call notification of a closed app was tapped: the ring is still going on the server, so connect again; it is announced at once and the Accept / Decline card shows (nothing is answered or lost by looking).
-    _nativeRing ??= NativeCall.instance.ring.listen((_) {
-      final pid = _pid;
-      if (!mounted || pid == null || _inCall || _incoming != null) return;
-      _attach(pid);
-    });
+    // Tapping the closed-app call notification opens the call itself and marks the senior reachable so a lost tap never counts as a miss.
+    _nativeRing ??= NativeCall.instance.ring.listen(_openFromNativeRing);
     // A text or a voice-note notification was tapped: the chat opens on it, and a voice note plays.
     _nativeOpened ??= NativeCall.instance.opened.listen((o) async {
       await _loadThread();
-      if (!mounted || o.via != 'voice') return;
+      if (!mounted) return;
+      _toBottom();
+      if (o.via != 'voice') return;
       String? id = o.messageId.isEmpty ? null : o.messageId;
       if (id == null) {
         for (final m in _messages.reversed) {
@@ -159,17 +184,29 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
     }
   }
 
-  void _attach(String id) {
+  void _startEvents(String id) {
     _eventSub?.cancel();
     _events?.stop();
     final ev = _events = SeniorEvents(id);
     _eventSub = ev.stream.listen(_onEvent);
     ev.start();
+  }
+
+  void _attach(String id) {
+    _startEvents(id);
     _listenNative(id);
     _loadThread();
   }
 
-  Future<void> _loadThread() async {
+  Future<void> _loadThread() {
+    final inflight = _threadLoad;
+    if (inflight != null) return inflight;
+    final fut = _doLoadThread();
+    _threadLoad = fut.whenComplete(() => _threadLoad = null);
+    return _threadLoad!;
+  }
+
+  Future<void> _doLoadThread() async {
     final id = _pid;
     if (id == null) return;
     try {
@@ -195,6 +232,16 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
       case 'incoming':
         Api.postJson('/api/care/$id/notifications/${e.data['notifId']}/delivered').catchError((_) => null);
         if (_inCall) return; // never ring over a live call
+        final ringMs = (e.data['ringMs'] as num?)?.toInt() ?? 30000;
+        if (_lifecycle != AppLifecycleState.resumed) {
+          NativeCall.instance.showIncoming(
+            outreachId: '${e.data['outreachId'] ?? ''}',
+            kind: '${e.data['kind'] ?? 'reminder'}',
+            ringMs: ringMs,
+          );
+        } else {
+          NativeCall.instance.startBell(ringMs: ringMs);
+        }
         // The system call screen is NOT taken down here. A closed app is rung by the system (full-screen on a locked phone); opening it to show this card used to cancel that very notification a moment
         // later, and the call screen vanished after about two seconds and only came back on unlock. An open app is never pushed a system ring, so there is nothing to dismiss: the system ring goes
         // down when the person answers or declines, when the server ends the ring, or when its own ring time is over.
@@ -216,12 +263,18 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
         if (m != null && !_messages.any((x) => x.id == m.id)) {
           setState(() => _messages.add(m));
           HapticFeedback.selectionClick();
+          if (m.fromMaya && _lifecycle != AppLifecycleState.resumed) {
+            NativeCall.instance.showMessage(via: m.kind == 'voice' ? 'voice' : 'text', what: 'reminder', messageId: m.id);
+          }
         }
         break;
       case 'notice':
         Api.postJson('/api/care/$id/notifications/${e.data['notifId']}/delivered').catchError((_) => null);
         setState(() => _notice = e.data);
         HapticFeedback.mediumImpact();
+        if (_lifecycle != AppLifecycleState.resumed) {
+          NativeCall.instance.showMessage(via: 'text', what: '${e.data['kind'] ?? 'reminder'}');
+        }
         break;
     }
   }
@@ -229,6 +282,7 @@ class _SeniorScreenState extends State<SeniorScreen> with WidgetsBindingObserver
   void _dropIncoming() {
     final oid = _incoming?['outreachId'];
     if (oid != null) NativeCall.instance.dismiss('$oid');   // answered, declined or ended: the system ring goes down WITH the card
+    NativeCall.instance.stopBell();
     _ringTimer?.cancel();
     _ringEnd?.cancel();
     if (mounted) setState(() => _incoming = null);

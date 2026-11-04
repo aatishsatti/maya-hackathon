@@ -87,12 +87,22 @@ class FakeMic implements MicSource {
 class FakeVoice implements VoiceSink {
   final _idle = StreamController<bool>.broadcast();
   int primed = 0;
+  int pcmBytes = 0;
+  final List<String> spoken = [];
   @override
   Stream<bool> get idle => _idle.stream;
   @override
-  void add(Uint8List pcm) {}
+  void add(Uint8List pcm) {
+    pcmBytes += pcm.length;
+  }
   @override
-  void finish() {}
+  void say(String text, {bool flush = false}) {
+    spoken.add('${flush ? 'F' : 'A'}:$text');
+  }
+  @override
+  void finish() {
+    if (spoken.isNotEmpty) scheduleMicrotask(() => !_idle.isClosed ? _idle.add(true) : null);
+  }
   @override
   Future<void> stop() async {}
   @override
@@ -293,5 +303,53 @@ void main() {
     expect(l.read(), greaterThan(0.5), reason: 'her voice is playing, loud');
     l.voiceReset();
     expect(l.read(), lessThan(0.1), reason: 'interrupted: it stops at once');
+  });
+
+  test('Android deviceVoice: sends deviceVoice:true on start, speaks pieces via device TTS, and never plays server MMS binary audio', () async {
+    final v = FakeVoice();
+    final s = CallSession(profileId: 'abcdef12', useDeviceVoice: true, mic: FakeMic(), voice: v);
+    await s.start();
+    await until(() => s.phase == CallPhase.live);
+    expect(srv.firstMessages.first['deviceVoice'], isTrue);
+    final ws = srv.sockets.last;
+    ws.add(Uint8List(4800)); // binary server MMS frame: must be ignored when deviceVoice is true
+    ws.add(jsonEncode({'type': 'speak', 'text': 'Hello Henry.', 'piece': 'Hello Henry.', 'deviceVoice': true}));
+    ws.add(jsonEncode({'type': 'caption', 'text': 'Hello Henry. How are you feeling today?', 'piece': 'How are you feeling today?', 'deviceVoice': true}));
+    ws.add(jsonEncode({'type': 'audioEnd'}));
+    await until(() => v.spoken.length == 2);
+    expect(v.spoken, ['F:Hello Henry.', 'A:How are you feeling today?']);
+    expect(v.pcmBytes, 0, reason: 'server MMS binary audio is never used for app voice');
+    await s.hangUp();
+    expect(s.ended, isTrue);
+    s.dispose();
+  });
+
+  test('voice hangup and manual End button: both end the call cleanly even if the server only replies Okay', () async {
+    for (final phrase in ['hang up', 'please hang up', 'Can you hang up?', 'Could you end the call please?', 'hang up the phone', 'disconnect']) {
+      expect(CallSession.voiceEndIntent(phrase), 'stop', reason: phrase);
+    }
+    for (final phrase in ['goodbye', 'Okay, bye', 'I have to go', 'You can hang up now', 'talk to you later', "that's all for now"]) {
+      expect(CallSession.voiceEndIntent(phrase), 'bye', reason: phrase);
+    }
+    for (final phrase in ["please don't hang up", 'hang up the washing, will you?', 'he said bye']) {
+      expect(CallSession.voiceEndIntent(phrase), isNull, reason: phrase);
+    }
+
+    // Live call voice hangup when server replies "Okay." without sending hangup:
+    final v = FakeVoice();
+    final r = FakeRoute();
+    final s = CallSession(profileId: 'abcdef12', useDeviceVoice: true, mic: FakeMic(), voice: v, route: r);
+    await s.start();
+    await until(() => s.phase == CallPhase.live);
+    final ws = srv.sockets.last;
+    ws.add(jsonEncode({'type': 'partial', 'text': 'Can you hang up please?'}));
+    ws.add(jsonEncode({'type': 'speechEnd'}));
+    ws.add(jsonEncode({'type': 'speak', 'text': 'Okay.', 'piece': 'Okay.', 'deviceVoice': true}));
+    ws.add(jsonEncode({'type': 'audioEnd'}));
+    await until(() => s.ended);
+    expect(s.endMessage, isNull);
+    expect(s.endDetail, contains('the person ended the call by voice'));
+    expect(r.calls.last, 'release');
+    s.dispose();
   });
 }

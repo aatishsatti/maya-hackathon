@@ -162,6 +162,7 @@ class NativeCall {
         break;
       case 'ring':
         CallLog.add('native: the call notification was tapped');
+        if (a['kind'] is String) _kinds['${a['outreachId']}'] = a['kind'] as String;
         _ring.add('${a['outreachId'] ?? ''}');
         break;
       case 'opened':
@@ -186,9 +187,25 @@ class NativeCall {
   /// The live call finished: end the system call too.
   Future<void> callEnded(String outreachId) => _tell('callEnded', outreachId);
 
-  Future<void> _tell(String m, String oid) async {
+  /// Ring the phone's audible bell while an incoming-call card is on screen.
+  Future<void> startBell({int ringMs = 30000}) => _invoke('startBell', {'ringMs': ringMs});
+
+  /// Stop the phone's audible bell.
+  Future<void> stopBell() => _invoke('stopBell', const {});
+
+  /// Post the system incoming-call notification if a ring reached the app while not in the foreground.
+  Future<void> showIncoming({required String outreachId, required String kind, int ringMs = 30000}) =>
+      _invoke('showIncoming', {'outreachId': outreachId, 'kind': kind, 'ringMs': ringMs});
+
+  /// Post the system message notification if a text or voice note reached the app while not in the foreground.
+  Future<void> showMessage({required String via, required String what, String? messageId}) =>
+      _invoke('showMessage', {'via': via, 'what': what, 'messageId': ?messageId});
+
+  Future<void> _tell(String m, String oid) => _invoke(m, {'outreachId': oid});
+
+  Future<void> _invoke(String m, Map<String, Object?> args) async {
     try {
-      await channel.invokeMethod(m, {'outreachId': oid});
+      await channel.invokeMethod(m, args);
     } on MissingPluginException {
       // no native side
     } on PlatformException {

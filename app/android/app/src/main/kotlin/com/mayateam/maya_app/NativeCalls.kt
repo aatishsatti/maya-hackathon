@@ -8,10 +8,16 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -27,13 +33,17 @@ object NativeCalls {
     const val EXTRA_ACTION = "maya_action"
     const val EXTRA_OUTREACH = "maya_outreach"
     const val EXTRA_KIND = "maya_kind"   // callback | reminder | welfare: the reason the call is joined with
-    private const val CHANNEL = "maya_calls"
-    private const val MESSAGES = "maya_messages"
+    private const val CHANNEL = "maya_calls_v2"
+    private const val MESSAGES = "maya_messages_v2"
     const val EXTRA_VIA = "maya_via"               // text | voice
     const val EXTRA_MESSAGE = "maya_message"       // the chat message id of a voice note
     private val main = Handler(Looper.getMainLooper())
     private var ch: MethodChannel? = null
     private val queue = ArrayList<Pair<String, Map<String, Any>>>()
+    private var ringtone: Ringtone? = null
+    private var ringingUntil: Long = 0L
+    private var ringTick: Runnable? = null
+    private var ringStop: Runnable? = null
 
     fun attach(c: MethodChannel?) { if (c != null) { ch = c; val q = ArrayList(queue); queue.clear(); for ((n, m) in q) emit(n, m) } }
     fun emit(name: String, data: Map<String, Any>) = main.post { val c = ch; if (c == null) queue.add(name to data) else c.invokeMethod(name, data) }
@@ -111,28 +121,103 @@ object NativeCalls {
 
     private fun idOf(oid: String) = oid.hashCode()
 
+    private fun wakeScreen(ctx: Context, ms: Long = 10000L) {
+        try {
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
+            val wl = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "maya:incoming")
+            wl.setReferenceCounted(false)
+            wl.acquire(ms)
+        } catch (e: Exception) { /* ignore if wake lock not permitted */ }
+    }
+
+    private fun vibratorOf(ctx: Context): Vibrator? {
+        return try {
+            if (Build.VERSION.SDK_INT >= 31) (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            else @Suppress("DEPRECATION") (ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator)
+        } catch (e: Exception) { null }
+    }
+
+    fun startRinging(ctx: Context, ringMs: Long = 30000L) {
+        val app = ctx.applicationContext
+        main.post {
+            stopRinging(app)
+            ringingUntil = System.currentTimeMillis() + ringMs
+            try {
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val r = RingtoneManager.getRingtone(app, uri)
+                r?.audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                if (Build.VERSION.SDK_INT >= 28) r?.isLooping = true
+                ringtone = r
+            } catch (e: Exception) { ringtone = null }
+            val tick = object : Runnable {
+                override fun run() {
+                    if (System.currentTimeMillis() >= ringingUntil) { stopRinging(app); return }
+                    try {
+                        val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        if (am.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                            val r = ringtone
+                            if (r != null && !r.isPlaying) r.play()
+                        }
+                        if (am.ringerMode != AudioManager.RINGER_MODE_SILENT) {
+                            val v = vibratorOf(app)
+                            if (Build.VERSION.SDK_INT >= 26) v?.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
+                            else @Suppress("DEPRECATION") v?.vibrate(500)
+                        }
+                    } catch (e: Exception) { /* ignore audio/vibrator error */ }
+                    main.postDelayed(this, 1500L)
+                }
+            }
+            ringTick = tick
+            tick.run()
+            val stop = Runnable { stopRinging(app) }
+            ringStop = stop
+            main.postDelayed(stop, ringMs)
+        }
+    }
+
+    fun stopRinging(ctx: Context) {
+        main.post {
+            ringingUntil = 0L
+            ringTick?.let { main.removeCallbacks(it) }; ringTick = null
+            ringStop?.let { main.removeCallbacks(it) }; ringStop = null
+            try { ringtone?.stop() } catch (e: Exception) {}
+            ringtone = null
+            try { vibratorOf(ctx.applicationContext)?.cancel() } catch (e: Exception) {}
+        }
+    }
+
     fun show(ctx: Context, oid: String, ringMs: Long, kind: String) {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             val c = NotificationChannel(CHANNEL, "Maya calls", NotificationManager.IMPORTANCE_HIGH)
-            c.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build())
-            c.enableVibration(true); nm.createNotificationChannel(c)
+            c.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            c.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            c.enableVibration(true)
+            c.vibrationPattern = longArrayOf(0, 800, 600, 800, 600)
+            nm.createNotificationChannel(c)
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         fun open(action: String, code: Int): PendingIntent {
-            val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_ACTION, action).putExtra(EXTRA_OUTREACH, oid).putExtra(EXTRA_KIND, kind)
+            val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra(EXTRA_ACTION, action).putExtra(EXTRA_OUTREACH, oid).putExtra(EXTRA_KIND, kind)
             return PendingIntent.getActivity(ctx, idOf(oid) + code, i, flags)
         }
         val decline = PendingIntent.getBroadcast(ctx, idOf(oid) + 3, Intent(ctx, DeclineReceiver::class.java).putExtra(EXTRA_OUTREACH, oid), flags)
         val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, CHANNEL) else @Suppress("DEPRECATION") Notification.Builder(ctx)
         b.setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle("Maya").setContentText("Maya is calling").setCategory(Notification.CATEGORY_CALL)
-            .setOngoing(true).setAutoCancel(false).setFullScreenIntent(open("ring", 1), true).setContentIntent(open("ring", 1))
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setOngoing(true).setAutoCancel(false).setFullScreenIntent(open("ring", 1), true).setContentIntent(open("accept", 4))
             .addAction(Notification.Action.Builder(null, "Decline", decline).build())
             .addAction(Notification.Action.Builder(null, "Accept", open("accept", 2)).build())
         if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(ringMs)
         val n = b.build()
         n.flags = n.flags or Notification.FLAG_INSISTENT   // the ringtone repeats until the call is answered, declined or times out, like a phone call (a plain notification sound plays once)
+        wakeScreen(ctx, ringMs)
         nm.notify(idOf(oid), n)
+        startRinging(ctx, ringMs)
     }
 
     // A text or a voice note that found the app closed. The notification says only who it is from and what it is; the words are read in the chat, which is where a tap goes
@@ -147,13 +232,19 @@ object NativeCalls {
 
     private fun messageChannel(ctx: Context): NotificationManager {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(MESSAGES, "Maya messages", NotificationManager.IMPORTANCE_HIGH))
+        if (Build.VERSION.SDK_INT >= 26) {
+            val c = NotificationChannel(MESSAGES, "Maya messages", NotificationManager.IMPORTANCE_HIGH)
+            c.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            c.enableVibration(true)
+            c.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            nm.createNotificationChannel(c)
+        }
         return nm
     }
 
     // The tap target: the chat, on this very message (a voice note plays).
     private fun openChat(ctx: Context, via: String, messageId: String?, code: Int): PendingIntent {
-        val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_ACTION, "message").putExtra(EXTRA_VIA, via)
+        val i = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra(EXTRA_ACTION, "message").putExtra(EXTRA_VIA, via)
         if (messageId != null) i.putExtra(EXTRA_MESSAGE, messageId)
         return PendingIntent.getActivity(ctx, code, i, immutable())
     }
@@ -165,7 +256,7 @@ object NativeCalls {
         val title = if (what == "welfare") "Check-in from your family" else "Reminder from your family"
         val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, MESSAGES) else @Suppress("DEPRECATION") Notification.Builder(ctx)
         b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(title).setContentText(if (via == "voice") "Maya sent you a voice note. Tap to listen." else "Maya has a message for you. Tap to read it.")
-            .setCategory(Notification.CATEGORY_MESSAGE).setAutoCancel(true).setContentIntent(open)
+            .setCategory(Notification.CATEGORY_MESSAGE).setVisibility(Notification.VISIBILITY_PUBLIC).setAutoCancel(true).setContentIntent(open)
         fun ack(label: String): Notification.Action {
             val pi = PendingIntent.getBroadcast(ctx, code + 11, Intent(ctx, AckReceiver::class.java).putExtra(EXTRA_NID, code).putExtra(EXTRA_WHAT, what).putExtra(EXTRA_VIA, via).putExtra(EXTRA_MESSAGE, messageId), immutable())
             return Notification.Action.Builder(null, label, pi).build()
@@ -182,6 +273,7 @@ object NativeCalls {
             "welfare" -> b.addAction(ack("I'm okay")).addAction(reply())
             else -> b.addAction(reply()).addAction(openAction("Open chat"))
         }
+        wakeScreen(ctx, 4000L)
         nm.notify(code, b.build())
     }
 
@@ -189,7 +281,7 @@ object NativeCalls {
     fun status(ctx: Context, nid: Int, text: String, via: String, messageId: String?, done: Boolean) {
         val nm = messageChannel(ctx)
         val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, MESSAGES) else @Suppress("DEPRECATION") Notification.Builder(ctx)
-        b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle("Maya").setContentText(text).setCategory(Notification.CATEGORY_MESSAGE).setOnlyAlertOnce(true).setAutoCancel(true)
+        b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle("Maya").setContentText(text).setCategory(Notification.CATEGORY_MESSAGE).setVisibility(Notification.VISIBILITY_PUBLIC).setOnlyAlertOnce(true).setAutoCancel(true)
             .setContentIntent(openChat(ctx, via, messageId, nid))
         if (done && Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(4000)
         nm.notify(nid, b.build())
@@ -207,8 +299,19 @@ object NativeCalls {
         } catch (e: Exception) { null }
     }
 
-    fun cancel(ctx: Context, oid: String) { (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(idOf(oid)) }
-    fun dismiss(ctx: Context, oid: String?) { if (oid != null) cancel(ctx, oid) }
+    // Tapping a closed-app ring immediately marks the senior reachable on the server so a lost tap never counts as a miss.
+    fun touchServer(ctx: Context) {
+        thread { postJson(ctx, { pid -> "/api/care/$pid/activity" }, "{}", 8000) }
+    }
+
+    fun cancel(ctx: Context, oid: String) {
+        stopRinging(ctx)
+        (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(idOf(oid))
+    }
+    fun dismiss(ctx: Context, oid: String?) {
+        stopRinging(ctx)
+        if (oid != null) cancel(ctx, oid)
+    }
 
     // Decline, straight to the server: POST /api/care/<profile>/outreach/<id>/decline (the same call the in-app Decline makes).
     fun declineToServer(ctx: Context, oid: String) {

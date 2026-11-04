@@ -1,15 +1,16 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/services.dart';
 
-/// Plays Maya's live voice. The server sends raw PCM16 (24 kHz, mono) faster than real time; it is gathered and played as
-/// short WAV pieces, back to back. The first piece starts after about a quarter of a second of audio, and everything that
-/// arrives while it plays becomes the next piece, so a reply has at most a seam or two. stop() clears everything at once.
+/// Plays Maya's live voice. On Android, Maya uses the phone's female Google TTS voice (deviceVoice: true, zero server MMS).
 /// What a call needs from the speaker (so a test can stand in for the phone's audio).
 abstract class VoiceSink {
   Stream<bool> get idle;
   void add(Uint8List pcm);
+  void say(String text, {bool flush = false}) {}
   void finish();
   Future<void> stop();
   Future<void> prime();
@@ -21,14 +22,37 @@ class VoicePlayer implements VoiceSink {
   static const int _firstBytes = rate * 2 ~/ 4; // 250 ms
   static const Duration _flushAfter = Duration(milliseconds: 160);
 
+  /// Channel to Android's OS TextToSpeech (MainActivity.kt). Tests can replace it.
+  static MethodChannel ttsChannel = const MethodChannel('maya/tts');
+  static bool useDeviceTts = Platform.isAndroid;
+  static final Set<VoicePlayer> _activeTtsPlayers = <VoicePlayer>{};
+  static bool _ttsHandlerBound = false;
+
+  static void _bindTtsHandler() {
+    if (_ttsHandlerBound) return;
+    _ttsHandlerBound = true;
+    ttsChannel.setMethodCallHandler((c) async {
+      if (c.method == 'done' && c.arguments is Map) {
+        final id = '${(c.arguments as Map)['id'] ?? ''}';
+        for (final p in List<VoicePlayer>.from(_activeTtsPlayers)) {
+          p._onTtsDone(id);
+        }
+      }
+      return null;
+    });
+  }
+
   final AudioPlayer _player;
   final void Function(String)? _log;
-  int _pieces = 0;
+  int _pieces = 0, _ttsSeq = 0;
   DateTime? _replyStart, _lastEnd;
   final BytesBuilder _buf = BytesBuilder(copy: false);
   StreamSubscription<void>? _doneSub;
   Timer? _flush;
   bool _playing = false, _closed = false, _priming = false;
+  bool _usedTts = false, _ttsFinished = false;
+  final Set<String> _ttsPending = <String>{};
+  final Map<String, Timer> _ttsGuards = <String, Timer>{};
   final StreamController<bool> _idle = StreamController<bool>.broadcast();
 
   // ignore: prefer_initializing_formals
@@ -37,13 +61,30 @@ class VoicePlayer implements VoiceSink {
       _lastEnd = DateTime.now();
       _next();
     });
+    if (useDeviceTts) {
+      _bindTtsHandler();
+      _activeTtsPlayers.add(this);
+    }
   }
 
-  /// Plays a tenth of a second of silence through the same path. The first real word of a call used to be the very first sound the
-  /// phone had to start (and the output route may change), which is where a first word can break up; this takes that start-up away.
+  /// Warms the voice path when the call is ready. On Android this warms the OS Google TTS female voice.
   @override
   Future<void> prime() async {
-    if (_closed || _playing || _buf.isNotEmpty) return;
+    if (_closed) return;
+    if (useDeviceTts) {
+      try {
+        final res = await ttsChannel.invokeMethod<dynamic>('warm');
+        if (res is Map) {
+          _log?.call('device TTS warmed: engine=${res['engine']} voice=${res['voice']}');
+        } else {
+          _log?.call('device TTS warmed');
+        }
+      } catch (_) {
+        _log?.call('device TTS warm skipped');
+      }
+      return;
+    }
+    if (_playing || _buf.isNotEmpty) return;
     try {
       _playing = true;
       _priming = true;
@@ -59,14 +100,60 @@ class VoicePlayer implements VoiceSink {
   /// true when nothing is playing and nothing is waiting.
   @override
   Stream<bool> get idle => _idle.stream;
-  bool get isIdle => !_playing && _buf.isEmpty;
+  bool get isIdle => !_playing && _buf.isEmpty && _ttsPending.isEmpty;
 
-  /// Speaker, with the microphone open at the same time (a call).
+  /// Call audio context (never forces speakerphone on Android so Earpiece and Bluetooth headset routing in MainActivity are never overridden).
   static Future<void> configureForCall() async {
     await AudioPlayer.global.setAudioContext(AudioContext(
       iOS: AudioContextIOS(category: AVAudioSessionCategory.playAndRecord, options: const {AVAudioSessionOptions.defaultToSpeaker, AVAudioSessionOptions.allowBluetooth}),
-      android: const AudioContextAndroid(isSpeakerphoneOn: true, stayAwake: true, contentType: AndroidContentType.speech, usageType: AndroidUsageType.voiceCommunication, audioFocus: AndroidAudioFocus.gain),
+      android: const AudioContextAndroid(isSpeakerphoneOn: false, stayAwake: true, contentType: AndroidContentType.speech, usageType: AndroidUsageType.voiceCommunication, audioFocus: AndroidAudioFocus.gain),
     ));
+  }
+
+  @override
+  void say(String text, {bool flush = false}) {
+    if (_closed) return;
+    final clean = text.trim();
+    if (clean.isEmpty) return;
+    _usedTts = true;
+    if (flush) {
+      for (final t in _ttsGuards.values) {
+        t.cancel();
+      }
+      _ttsGuards.clear();
+      _ttsPending.clear();
+      _ttsFinished = false;
+      _replyStart = DateTime.now();
+      _pieces = 0;
+    }
+    final id = 'tts_${++_ttsSeq}';
+    _ttsPending.add(id);
+    _playing = true;
+    _pieces++;
+    final started = DateTime.now();
+    _log?.call('device TTS piece $_pieces (${clean.length} chars, flush=$flush, +${started.difference(_replyStart ?? started).inMilliseconds} ms)');
+    final guardMs = (clean.length * 95 + 1200).clamp(1800, 18000);
+    _ttsGuards[id] = Timer(Duration(milliseconds: guardMs), () => _onTtsDone(id));
+    unawaited(() async {
+      try {
+        await ttsChannel.invokeMethod<void>('speak', {'text': clean, 'flush': flush, 'id': id, 'call': true});
+      } catch (_) {
+        _onTtsDone(id);
+      }
+    }());
+  }
+
+  void _onTtsDone(String id) {
+    if (_closed) return;
+    _ttsGuards.remove(id)?.cancel();
+    if (!_ttsPending.remove(id)) return;
+    if (_ttsPending.isEmpty) {
+      _playing = false;
+      if (_ttsFinished && !_closed) {
+        _ttsFinished = false;
+        _idle.add(true);
+      }
+    }
   }
 
   @override
@@ -92,6 +179,15 @@ class VoicePlayer implements VoiceSink {
   /// The reply is complete: whatever is left plays now, even if it is short.
   @override
   void finish() {
+    if (_usedTts) {
+      _ttsFinished = true;
+      if (_ttsPending.isEmpty && !_closed) {
+        _playing = false;
+        _ttsFinished = false;
+        _idle.add(true);
+      }
+      return;
+    }
     if (!_playing && _buf.isNotEmpty) _next();
   }
 
@@ -123,19 +219,42 @@ class VoicePlayer implements VoiceSink {
   Future<void> stop() async {
     _flush?.cancel();
     _buf.clear();
-    final was = _playing;
+    for (final t in _ttsGuards.values) {
+      t.cancel();
+    }
+    _ttsGuards.clear();
+    final hadTts = _ttsPending.isNotEmpty;
+    _ttsPending.clear();
+    _ttsFinished = false;
+    final was = _playing || hadTts;
     _playing = false;
+    if (useDeviceTts || _usedTts) {
+      try {
+        await ttsChannel.invokeMethod<void>('stop');
+      } catch (_) {}
+    }
     try {
       await _player.stop();
     } catch (_) {}
-    if (was) _idle.add(true);
+    if (was && !_closed) _idle.add(true);
   }
 
   @override
   Future<void> dispose() async {
     _closed = true;
+    _activeTtsPlayers.remove(this);
     _flush?.cancel();
+    for (final t in _ttsGuards.values) {
+      t.cancel();
+    }
+    _ttsGuards.clear();
+    _ttsPending.clear();
     await _doneSub?.cancel();
+    if (useDeviceTts || _usedTts) {
+      try {
+        await ttsChannel.invokeMethod<void>('stop');
+      } catch (_) {}
+    }
     try {
       await _player.stop();
       await _player.dispose();

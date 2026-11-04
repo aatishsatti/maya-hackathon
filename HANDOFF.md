@@ -1,4 +1,38 @@
-# READ THIS FIRST: CORRECT & FORGET + BOUNDED IN-CONVERSATION INITIATIVE (4 Nov 2026; working tree on top of `0ef685b`, uncommitted, NOT pushed, NOT deployed; live authority = `0ef685b`)
+# READ THIS FIRST: MAYA ANDROID APP FIX BUNDLE (Items 1–8) (4 Nov 2026; working tree on top of `62c5bd7`, uncommitted, NOT pushed)
+
+This section supersedes EVERY older live/deployment/status line below.
+
+## App Fix Bundle Summary (`com.mayateam.maya_app`, live server `https://maya-singapore.onrender.com` at `62c5bd7`)
+- **Files changed (App Fix Bundle):**
+  - `app/android/app/src/main/AndroidManifest.xml`
+  - `app/android/app/src/main/kotlin/com/mayateam/maya_app/MainActivity.kt`
+  - `app/android/app/src/main/kotlin/com/mayateam/maya_app/NativeCalls.kt`
+  - `app/lib/services/native_call.dart`
+  - `app/lib/services/voice_player.dart`
+  - `app/lib/services/call_session.dart`
+  - `app/lib/senior/senior_screen.dart`
+  - `app/test/call_session_test.dart`
+  - `HANDOFF.md`
+  *(Existing uncommitted demo-flag changes in `server.js`, `public/index.html`, `public/profiles.js`, `public/family.js`, `test/family-login.test.js`, `test/web-parity.test.js` were preserved untouched.)*
+- **APK built:** **YES** — `app/build/app/outputs/flutter-apk/app-release.apk` (58.7 MB, `flutter build apk --release` succeeded).
+- **APK installed on Samsung Galaxy Fold 8:** **NO** — `adb devices -l` returned empty (`List of devices attached` with no device connected over USB/ADB to this Mac).
+- **Automated verification:**
+  - `flutter analyze`: 0 issues.
+  - `flutter test`: **51 passed, 0 failed, 4 skipped**.
+  - Node tests (`node --test test/push.test.js test/social.test.js test/appfix.test.js test/natural.test.js`): **57 passed, 0 failed**.
+- **What was implemented across Items 1–8 (awaiting physical Fold 8 install & live retest before claiming live PASS):**
+  1. **Female Android Google TTS (`MainActivity.kt`, `voice_player.dart`, `call_session.dart`, `AndroidManifest.xml`):** `CallSession` sends `'deviceVoice': true` in `{type: 'start'}` (same protocol and latency as web), ignores binary server MMS frames on Android, and speaks `speak`/`caption` pieces through OS `TextToSpeech` bound to `"com.google.android.tts"` with a female English voice (`pickFemaleEnglishVoice`, preferring local `en-US` female voices like `en-us-x-sfg` and excluding male voices) on `USAGE_VOICE_COMMUNICATION` / `STREAM_VOICE_CALL`.
+  2. **Closed-app ring (`NativeCalls.kt`, `senior_screen.dart`):** `SeniorScreen.didChangeAppLifecycleState` closes the `/api/events/senior/<id>` SSE stream whenever `state != AppLifecycleState.resumed` (`paused`/`hidden`/`detached`) so the server sees `reached === 0` and sends the FCM push when minimized or locked; `NativeCalls.show` uses channel `maya_calls_v2` with `VISIBILITY_PUBLIC`, `wakeScreen`, and a continuous native `Ringtone` + `Vibrator` loop (`startRinging`/`stopRinging`) that does not cut off after 1s and rings audibly on the unlock screen and in-app (`startBell`).
+  3. **Tap on closed-app ring (`NativeCalls.kt`, `MainActivity.kt`, `native_call.dart`, `senior_screen.dart`):** `setContentIntent` is `open("accept", 4)` and both `"accept"` and `"ring"` pass `outreachId` + `kind` to `_openFromNativeRing`, which opens `CallScreen` (the call itself, never the normal home screen) and immediately calls `touchServer` / `/api/care/$id/activity` + reconnects SSE (`noteReachable`) so a lost tap never counts as a miss or triggers a false two-miss pause.
+  4. **Call-back (`senior_screen.dart`, `NativeCalls.kt`, `call_session.dart`):** Closing SSE on background/lock ensures fresh call-backs on Henry with the app closed receive the FCM incoming call push at the scheduled time, ring continuously, and open straight into `CallScreen` when tapped.
+  5. **Voice hangup & manual End button (`call_session.dart`):** `CallSession.voiceEndIntent` + `isMayaFarewell` detect polite/direct voice hangup commands (`"hang up"`, `"can you hang up?"`, `"please end the call"`, `"goodbye"`, `"okay bye"`, etc.) and cleanly end the call as soon as TTS finishes (even if the server only replies `"Okay."`), while the manual End button (`hangUp()`) immediately stops TTS/mic, releases the audio route, and closes the WebSocket with code `1000`.
+  6. **Closed-app text and voice message notifications (`senior_screen.dart`, `NativeCalls.kt`):** Stopping SSE when backgrounded ensures the server sends FCM `type: "message"` pushes when minimized/locked; `NativeCalls.showMessage` uses `maya_messages_v2` with `VISIBILITY_PUBLIC`, sound, vibration, and `wakeScreen`; tapping opens the chat, scrolls to the bottom, and auto-plays voice notes.
+  7. **Speaker/earpiece sensor & Bluetooth headset protection (`MainActivity.kt`, `voice_player.dart`):** `VoicePlayer.configureForCall` sets `isSpeakerphoneOn: false` so `audioplayers` never overrides Earpiece or Bluetooth; `MainActivity` registers an `AudioDeviceCallback` and checks `availableCommunicationDevices` + `GET_DEVICES_OUTPUTS` so choosing Earpiece or Speaker never overrides a connected Bluetooth/external headset for the rest of the call, while toggling Earpiece/Speaker without a headset switches `TYPE_BUILTIN_EARPIECE` (with `PROXIMITY_SCREEN_OFF_WAKE_LOCK`) and `TYPE_BUILTIN_SPEAKER` (proximity wake lock released).
+  8. **Welfare call (`senior_screen.dart`, `NativeCalls.kt`, `MainActivity.kt`, `call_session.dart`):** With the app closed/minimized, a family welfare check call triggers the FCM incoming push (`kind: "welfare"`), rings with lock-screen/heads-up notification, opens `CallScreen` on tap with `reason: "welfare"`, speaks in the female Google TTS voice, and hangs up cleanly by voice or End button.
+
+---
+
+# ARCHIVED: CORRECT & FORGET + BOUNDED IN-CONVERSATION INITIATIVE (4 Nov 2026; working tree on top of `0ef685b`, uncommitted, NOT pushed, NOT deployed; live authority = `0ef685b`)
 
 This section supersedes EVERY older live/deployment/status line below. The older sections are history, not permission to deploy or restore a removed service.
 

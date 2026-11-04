@@ -93,6 +93,23 @@ class CallLevels {
     }
   }
 
+  /// A piece of Maya's device TTS voice: builds a smooth speaking envelope for the orb while the OS TTS speaks.
+  void voiceText(String text) {
+    final clean = text.trim();
+    if (clean.isEmpty) return;
+    final now = DateTime.now();
+    final start = _playStart;
+    if (start == null || now.isAfter(start.add(Duration(milliseconds: _env.length * 20 + 200)))) {
+      _env.clear();
+      _playStart = now.add(const Duration(milliseconds: 80));
+    }
+    final frames = ((clean.length * 65) ~/ 20).clamp(12, 600);
+    for (var i = 0; i < frames; i++) {
+      final w = 0.55 + 0.3 * math.sin(i * 0.45) + 0.15 * math.cos(i * 0.19);
+      _env.add(w.clamp(0.15, 0.95));
+    }
+  }
+
   /// Maya stopped (interrupted or finished).
   void voiceReset() {
     _env.clear();
@@ -125,11 +142,61 @@ class CallSession extends ChangeNotifier {
   final String profileId;
   final String? reason, outreachId;
   final bool autoStart; // false only in tests that look at the call screen without opening a line
+  final bool? useDeviceVoice; // defaults to VoicePlayer.useDeviceTts (true on Android)
   final MicSource? mic; // tests only
   final VoiceSink? voice; // tests only
   final AudioRouteSink? route; // tests only
   final Duration deadAfter, pingEvery; // how long the line may be silent, and how often it is pinged
-  CallSession({required this.profileId, this.reason, this.outreachId, this.autoStart = true, this.mic, this.voice, this.route, this.deadAfter = const Duration(seconds: 12), this.pingEvery = const Duration(seconds: 5)});
+  CallSession({
+    required this.profileId,
+    this.reason,
+    this.outreachId,
+    this.autoStart = true,
+    this.useDeviceVoice,
+    this.mic,
+    this.voice,
+    this.route,
+    this.deadAfter = const Duration(seconds: 12),
+    this.pingEvery = const Duration(seconds: 5),
+  });
+
+  bool get deviceVoice => useDeviceVoice ?? VoicePlayer.useDeviceTts;
+
+  static final RegExp _stopNowRe = RegExp(
+    r"^(?:(?:please|just|ok|okay|all right|alright|maya|hey maya|now|can you|could you|will you|would you|can we|let's|let us|i want to|i'd like to|i am going to|i'm going to|time to)\s+)*(?:stop(?: (?:the|this) call)?|hang up|end (?:(?:the|this|our) )?(?:phone )?call|close (?:the|this) call|disconnect)(?:\s+(?:now|please|maya|the call|this call|the phone|for me|it|thanks|thank you))*$",
+  );
+  static final RegExp _byeWordsRe = RegExp(
+    r"\b(?:good ?bye|bye(?: bye)?|good ?night|see you(?: later| soon)?|talk (?:to you )?(?:later|soon)|take care|i have to go|i must go|i need to go|got to go|gotta go|you can (?:hang up|go now|go)|hang up now|let you go|we are done|we're done|that's all(?: for now| maya| thanks| thank you)?|that is all(?: for now| maya| thanks| thank you)?|(?:please )?hang up(?: the (?:call|phone)| maya| now| please)*$)\b",
+  );
+  static final RegExp _notExitRe = RegExp(
+    r"\b(?:don'?t|do not|never|not yet|wait|if|when|whenever|unless|whether|would|could|suppose|imagine|kidding|joking|jk|haha|lol|said|says|saying|told|tell|asked)\b",
+  );
+  static final RegExp _questionWordsRe = RegExp(
+    r"\b(?:who|what|why|how|when|where|which|can you|could you|would you|will you|do you|did you|are you|is it|is there|but|actually|one thing|one more|also|however)\b",
+  );
+  static final RegExp _mayaFarewellRe = RegExp(
+    r"\b(?:good ?bye|bye(?:-bye| bye)?|hang(?:ing)? up|let you go|talk (?:to you )?(?:soon|later)|speak (?:to you )?soon)\b|\b(?:good night|take care)\W*$",
+    caseSensitive: false,
+  );
+
+  /// Recognizes when the person ends the call by voice ('stop' or 'bye'), matching call.js plus natural polite hangup requests.
+  static String? voiceEndIntent(String? text) {
+    final raw = (text ?? '').trim();
+    if (raw.isEmpty || RegExp(r'["“”]').hasMatch(raw)) return null;
+    final w = raw.toLowerCase().replaceAll(RegExp(r'[\u2018\u2019]'), "'").replaceAll(RegExp(r"[^a-z' ]"), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (w.isEmpty) return null;
+    final n = w.split(' ').length;
+    if (n > 14) return null;
+    if (!RegExp(r"\b(?:don'?t|do not|never|not yet|wait)\b").hasMatch(w) && _stopNowRe.hasMatch(w)) return 'stop';
+    if (!_byeWordsRe.hasMatch(w) || raw.contains('?') || _notExitRe.hasMatch(w) || _questionWordsRe.hasMatch(w)) return null;
+    return 'bye';
+  }
+
+  static bool isMayaFarewell(String? text) {
+    final t = (text ?? '').trim();
+    if (t.isEmpty || RegExp(r'\?\W*$').hasMatch(t)) return false;
+    return _mayaFarewellRe.hasMatch(t);
+  }
 
   final CallLevels levels = CallLevels(); // how loud each voice is, for the orb
   CallPhase phase = CallPhase.connecting;
@@ -148,9 +215,11 @@ class CallSession extends ChangeNotifier {
   bool _routeCounted = false;
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<bool>? _idleSub;
-  Timer? _heartbeat, _thinkWatch, _retryTimer, _attemptTimer;
+  Timer? _heartbeat, _thinkWatch, _retryTimer, _attemptTimer, _voiceEndTimer;
   VoiceSink? _player;
   bool _ready = false, _speaking = false, _closing = false;
+  String _lastHeard = '';
+  String? _pendingVoiceEnd;
   String? _token; // the server gives it at 'ready': a new socket that shows it gets the SAME call back (the server holds a call 20 s after its line is lost)
   DateTime _lastRx = DateTime.now();
   DateTime? _startedAt, _lostAt;
@@ -188,6 +257,12 @@ class CallSession extends ChangeNotifier {
       await _route.setSpeaker(true); // on answer: the loudspeaker, before Maya says a word (an app-open call and a call answered from a closed app both start here)
       _idleSub = player.idle.listen((_) {
         if (!_speaking || ended) return;
+        if (_pendingVoiceEnd != null) {
+          final how = _pendingVoiceEnd!;
+          _pendingVoiceEnd = null;
+          _finish(null, 'the person ended the call by voice ($how)');
+          return;
+        }
         if (orb == OrbState.speaking) _setOrb(OrbState.listening); // her voice has finished playing
       });
       await _openSocket(resume: false);
@@ -240,6 +315,7 @@ class CallSession extends ChangeNotifier {
         'profileId': profileId,
         'reason': ?reason,
         'outreachId': ?outreachId,
+        if (deviceVoice) 'deviceVoice': true,
       }));
     }
   }
@@ -278,7 +354,7 @@ class CallSession extends ChangeNotifier {
       }
       _onEvent(ev);
     } else if (data is List<int>) {
-      if (_speaking) {
+      if (_speaking && !deviceVoice) {
         final bytes = data is Uint8List ? data : Uint8List.fromList(data);
         levels.voiceChunk(bytes);
         _player?.add(bytes);
@@ -297,6 +373,17 @@ class CallSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _armVoiceEndFallback(Duration wait) {
+    _voiceEndTimer?.cancel();
+    _voiceEndTimer = Timer(wait, () {
+      if (!ended && _pendingVoiceEnd != null) {
+        final how = _pendingVoiceEnd!;
+        _pendingVoiceEnd = null;
+        _finish(null, 'the person ended the call by voice ($how)');
+      }
+    });
+  }
+
   void _onEvent(Map<String, dynamic> ev) {
     final t = ev['type'];
     _watchThinking(t == 'thinking' || t == 'speechEnd');
@@ -306,7 +393,7 @@ class CallSession extends ChangeNotifier {
         _ready = true;
         phase = CallPhase.live;
         _setOrb(OrbState.listening);
-        CallLog.add('ready after $_elapsedMs ms (token ${_token == null ? 'MISSING: a lost line cannot be resumed' : 'kept'})');
+        CallLog.add('ready after $_elapsedMs ms (token ${_token == null ? 'MISSING: a lost line cannot be resumed' : 'kept'}, deviceVoice=$deviceVoice)');
         unawaited(_player?.prime()); // warm the audio path now, so her first word is not the first sound the phone has to start
         notifyListeners();
         break;
@@ -325,6 +412,7 @@ class CallSession extends ChangeNotifier {
         _finish('The connection to Maya ended. Please call again.', 'the server no longer had the call (resumeFailed)');
         break;
       case 'speak':
+        if (ev['lead'] == true && deviceVoice) break; // never play server MMS lead-in clips on Android
         if (ev['cont'] != true) {
           _player?.stop();
           levels.voiceReset();
@@ -334,37 +422,82 @@ class CallSession extends ChangeNotifier {
           _setOrb(OrbState.thinking);
         } else {
           _setOrb(OrbState.speaking);
-          caption = 'Maya: ${ev['text'] ?? ''}';
+          final shown = '${ev['text'] ?? ''}';
+          caption = 'Maya: $shown';
+          final piece = (ev['piece'] ?? (deviceVoice ? ev['text'] : null))?.toString().trim() ?? '';
+          if (piece.isNotEmpty) {
+            _player?.say(piece, flush: ev['cont'] != true);
+            levels.voiceText(piece);
+          }
+          if (isMayaFarewell(shown)) {
+            _pendingVoiceEnd ??= 'bye';
+          }
+          if (_pendingVoiceEnd != null) {
+            _armVoiceEndFallback(Duration(milliseconds: (shown.length * 110 + 1800).clamp(2200, 9000)));
+          }
           notifyListeners();
         }
         break;
       case 'caption':
         if (orb == OrbState.speaking) {
-          caption = 'Maya: ${ev['text'] ?? ''}';
+          final shown = '${ev['text'] ?? ''}';
+          caption = 'Maya: $shown';
+          final piece = (ev['piece'])?.toString().trim() ?? '';
+          if (piece.isNotEmpty) {
+            _player?.say(piece, flush: false);
+            levels.voiceText(piece);
+          }
+          if (isMayaFarewell(shown)) {
+            _pendingVoiceEnd ??= 'bye';
+          }
+          if (_pendingVoiceEnd != null) {
+            _armVoiceEndFallback(Duration(milliseconds: (shown.length * 110 + 1800).clamp(2200, 9000)));
+          }
           notifyListeners();
         }
         break;
       case 'audioEnd':
         _player?.finish();
+        if (_pendingVoiceEnd != null && !deviceVoice && (_player == null || (_player is VoicePlayer && (_player as VoicePlayer).isIdle))) {
+          _armVoiceEndFallback(const Duration(milliseconds: 900));
+        }
         break;
       case 'ttsFailed':
         caption = 'Maya: ${ev['text'] ?? ''}'; // her voice failed for this line: the words are shown, nothing is pretended
         CallLog.add('her voice failed for one line (${ev['error'] ?? 'no reason'})');
         _setOrb(OrbState.listening);
+        if (_pendingVoiceEnd != null) _armVoiceEndFallback(const Duration(milliseconds: 600));
         notifyListeners();
         break;
       case 'speechStart':
+        _lastHeard = '';
+        _pendingVoiceEnd = null;
+        _voiceEndTimer?.cancel();
         if (orb != OrbState.speaking) _setOrb(OrbState.listening);
         break;
       case 'partial':
-        caption = 'You: ${ev['text'] ?? ''}';
+        final text = '${ev['text'] ?? ''}';
+        _lastHeard = text.trim();
+        _pendingVoiceEnd = voiceEndIntent(_lastHeard);
+        caption = 'You: $text';
         notifyListeners();
         break;
       case 'speechEnd':
       case 'thinking':
+        if (_pendingVoiceEnd == 'stop') {
+          _armVoiceEndFallback(const Duration(milliseconds: 1800));
+        } else if (_pendingVoiceEnd == 'bye') {
+          _armVoiceEndFallback(const Duration(milliseconds: 5500));
+        }
         if (orb != OrbState.speaking) _setOrb(OrbState.thinking);
         break;
       case 'idle':
+        if (_pendingVoiceEnd != null) {
+          final how = _pendingVoiceEnd!;
+          _pendingVoiceEnd = null;
+          _finish(null, 'the person ended the call by voice ($how)');
+          break;
+        }
         if (orb != OrbState.speaking) _setOrb(OrbState.listening);
         break;
       case 'stopped':
@@ -451,6 +584,7 @@ class CallSession extends ChangeNotifier {
     _thinkWatch?.cancel();
     _retryTimer?.cancel();
     _attemptTimer?.cancel();
+    _voiceEndTimer?.cancel();
     _micSub?.cancel();
     _idleSub?.cancel();
     unawaited(_mic?.stop());
