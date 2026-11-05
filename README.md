@@ -1,6 +1,7 @@
 # Maya
 
-**⚠️ Judges — for web voice, please use Safari. Web voice works in Safari. In Chrome, we faced voice errors (Samantha / Flo failed with "did not start in 1000 ms" then "did not start in 3500 ms", then text only), so Chrome may show text only even though the app works. App voice (Android) and WhatsApp voice work separately, regardless of browser.**
+****Judges: Please use the Android APK as the primary way to try Maya. The reported web voice issue has been fixed, but if you encounter a browser-specific problem(in chrome), please continue in the Android app or in Safari(tested).**.**
+**Web voice was tested successfully in the tester’s Safari setup.**
 
 A warm, voice-first companion for senior citizens who live alone.
 
@@ -29,7 +30,7 @@ Maya is a voice-first companion for senior citizens who live alone and may not h
 **What Maya is NOT:**
 - Not a medical device, not a diagnosis tool, not a fall detector, not a location tracker, not an emergency/PSTN caller.
 - Not a WhatsApp feature — WhatsApp is ONE channel, Maya is a standalone product: app + phone calls + dashboard, WhatsApp integration live.
-- Not for Hindi/India audience only — English primary, Spanish next, French/Portuguese best-effort, Hindi one of many, Maya answers in the language spoken to.
+- - English is the demonstrated language. Other-language behaviour is best-effort unless a specific tested language and result are documented; broad multilingual capability is not claimed as live-proven.
 - Senior self-signup with a form is NOT built — it is vision only. Today, family/team creates the senior profile and gives the senior a link/code. Senior gets link/code + chat/call, not a dashboard.
 
 ## Try it — judges, no account needed for senior
@@ -44,7 +45,7 @@ Link form: `https://maya-singapore.onrender.com/s/96618dfe`
 4. Senior has no username, no password, no signup form.
 
 **On the web:**
-Open the link above, or the demo start screen. Demo is pre-logged-in for judging; production requires login. Family login details are NOT in this public README, to protect the demo senior. The submit form for this hackathon has no private/judges-only field, so no password is published here or there.
+Open the senior link above or the demo start screen. The judge deployment provides access to a shared fictional demo without a signup task. Outside this demo, family-dashboard access requires a family account; the senior’s personal link/code remains passwordless. Private family credentials are not published. The submit form for this hackathon has no private/judges-only field, so no password is published here or there.
 
 **Family dashboard:** Web pre-logged-in demo for judges, and app family login for family/team accounts. Family dashboard is view-only for senior-owned daily calls — family cannot cancel or change a senior's daily call without senior permission.
 
@@ -53,7 +54,7 @@ Open the link above, or the demo start screen. Demo is pre-logged-in for judging
 Every AI model the project itself calls at runtime is Meta. Development tools are credited separately below and are NOT runtime features.
 
 - **Brain / sentence-writing: Muse Spark, `muse-spark-1.3`.** Writes every reply, files memory after a call, reads photos, and checks for scams. Code supplies permitted facts only, never a sentence for Spark to copy, except approved fixed strings in code.
-- **Ears / hearing: Muse Voice Transcribe, `muse-voice-transcribe-1.0`.** Streamed for live calls, uploaded as a file for voice notes.
+- - **WhatsApp: WhatsApp Cloud API — Meta, and WhatsApp Business Calling API — Meta.** The reported live template configuration is `maya_reminder`, language `en`, with reminder text and a Got it quick reply. An inbound user reply/button response opens or refreshes the messaging window; sending an invitation alone does not. Calling requires separate active permission and is subject to Meta’s limits. The selected video demonstrates message receipt and incoming ringing. Maya does not use `hello_world`.
 - **WhatsApp: WhatsApp Cloud API — Meta, and WhatsApp Business Calling API — Meta.** Template `maya_reminder`, live language `en` (not `en_US`), variable `{{1}}` = reminder text, "Got it" quick-reply, 24-hour window opens on Got it. Maya never sends `hello_world`.
 - **Voice, current:**
   - **WhatsApp calls and voice notes: Meta MMS, `facebook/mms-tts-eng`, Meta open-source, self-hosted speech generation, male voice for English.** This is the current server voice on WhatsApp, disclosed here plainly.
@@ -65,18 +66,20 @@ Every AI model the project itself calls at runtime is Meta. Development tools ar
 
 ## What is proven, and what is not
 
-Proven beats below are from real logs + real recordings on Frank (`96618dfe`), Nov 5, 2026 IST, unless labelled Henry. Full matched logs are kept with the submission evidence.
+The evidence below concerns specific recorded sessions, not automatic verification of every feature in the latest deployment. Henry’s WhatsApp sessions are associated with build `309c61a`; Frank’s app, scam and plant sessions with `84fe439`. These associations are inferred from deployment timing because runtime logs do not print commit hashes.
+
+The retained Render export is partial: Nov 4 17:58:43–20:02:20 UTC, equivalent to Nov 4 23:28:43–Nov 5 01:32:20 IST. Video/log matches use recognised words, event order and available timing evidence. Maya’s spoken reply text is not logged; recordings establish that wording. Only selected, redacted evidence should be published.
 
 - **Daily-call set — Frank, Nov 5 00:39-00:41 IST:** Loneliness → daily-call offer → confirm → saved. Log labels: `social-offer`, `social-ask`, `social-confirm`, `social-saved`. Turn texts include "Nothing much. Just sitting by myself." / "Yeah, I'm always by myself." / "No one to talk to, you know," / "Yeah, sure. If you can do that." / "So, when can you call me?" / "Just call me at / one AM / 1 AM / every day starting today" / "Yes," / "Thank you Maya. I'm looking forward to talk to you". Call stages: `startReceivedAt 1793819385183`, `transcribeReadyMs 1091`, `greetSparkFirstMs 3871`.
 - **App incoming ring — Frank, Nov 5 01:00 IST:** `care ring profile 96618dfe kind reminder attempt 1 appOpen false`, Android push ring pushed ok true. Turns: "All good, Maya." / "Yes. It / is calm." / "Okay Maya, bye bye." Call stages: `startReceivedAt 1793820612596`, `transcribeReadyMs 1158`.
-- **Plant reminder — Frank, Nov 5 01:12 IST:** Reminder event app sent via text, reached true, voiceUnavailable false. Got-it acknowledgement is NOT claimed from this log alone.
+- - **Plant reminder — Frank:** A family-set plant reminder arrives in chat. The recording shows Got it changing to Marked as seen; a later dashboard screenshot shows the same task as Seen. The 01:12 IST application log establishes sending/reach only. The unrelated 01:32:20 IST “answered via app” event is not used as this reminder’s acknowledgement evidence. Seen means acknowledged, not proof the plant was watered.
 - **Scam, lottery/prize only, NOT bank — Frank, Nov 5 01:17-01:19 IST:** Turns: "Just sitting Maya you know I got a message saying that I have won a lottery" / "so they've given me a number to call" / "No, I haven't done that yet" / "I was thinking of calling it." / "No," + `care scam flag profile 96618dfe type prize scam` at 01:19:25 IST / "don't tell my family." at 01:19:27 IST. Result: dashboard-only yellow flag, NO topic-only alert sent — the correct No branch. Maya analyses whether something is a possible scam, never claims to detect every scam, never claims uniqueness.
 - **WhatsApp — Henry (`197abefc`), labelled separately, NOT Frank:** Text Nov 4 11:46:02 PM IST, call Nov 4 11:36:01 PM IST, call id `d00d6c`, duration 61 s, turns "Okay, Maya." / "Hello, Henry. How are you today?" / "That sounds lovely. Tell me more." Proven: text delivery + reply / 24h-window path via `maya_reminder`, rang/picked up/spoke/hung up. WhatsApp video in the backup is ring-only for the call clip, do NOT claim a full WhatsApp conversation from a ring-only clip. WhatsApp voice is male MMS, as disclosed above.
 
 **Web voice status:** Web voice echo cut-off is fixed in code (device voice plays, mic uplink sends silence plus 400 ms tail, so Maya does not answer her own echo; web status line: "Maya is speaking. Please wait until she finishes, then talk."). Web voice start guard was raised in dc4f79f (local 3500 ms, network 4500 ms, was 1000/2500 ms).
 - **Web voice works in Safari.** Judges testing web in Safari should hear device voice.
 - **In Chrome, we faced errors:** Samantha / Flo (English (United States)) failed with "did not start in 1000 ms" then "did not start in 3500 ms", then text only, on the tester's Chrome 156.
-- **App voice (Android native device voice, female) and WhatsApp voice (Meta MMS, male) are proven separately.**
+- **- Android app voice and WhatsApp voice were tested separately from web voice. Their results do not establish support on every device or browser..**
 
 ## Safety, alerts, reminders
 
@@ -89,16 +92,18 @@ Proven beats below are from real logs + real recordings on Frank (`96618dfe`), N
 
 ## Privacy and rules
 
-- Keys live in server environment variables only. Never in the repo, the frontend, the app bundle, or the logs.
+- - Runtime API credentials are configured server-side. Credentials must not be included in the repository, client bundles, screenshots or published logs. Publish only reviewed, redacted excerpts; keep unredacted originals private.
 - Family sees who, when, how many tries, and the kind of thing (for example "prize scam"), never what was said, never transcripts, audio, topics, or location.
 - If the person says no to telling family about a possible scam, no message, alert, or push is sent. The topic still appears as a yellow flag on the family dashboard. Saying no stops the notification, not the dashboard note.
-- Maya never diagnoses, gives medical advice, gives a phone number, or invents facts about the person, the weather, or the news.
-- Wipe page (`public/wipe.html`) is internal demo tooling, not product, not linked from the dashboard. After final deploy, demo keeps ONE clean fictional senior (Frank), pre-seeded only via family setup facts, never fake conversation history.
+- - Maya’s enforced boundaries prohibit diagnosis, medical advice, invented contact details and unsupported claims about the senior or current information. Code checks and prompting reduce these risks; they are not a guarantee of error-free model output.
+- - Demo maintenance is separate from the senior product. The public demo contains a fictional senior profile, setup facts and genuine test conversations—not fabricated conversation history. Maintenance tools are not judge-facing features.
 - Solo senior self-registration form is NOT built — vision only, in this README only, not in video claims.
 
 ## Run
+**Requires Node.js 22 or later.**
 
 ```
+npm install
 cp .env.example .env
 npm start
 ```
